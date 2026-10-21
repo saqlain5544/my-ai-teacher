@@ -14,6 +14,7 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
     private var pageErrors: [String] = []
     private var injected = false
     private var watchdogMode = false
+    private var shot: String?
     private var watchdog: WebWatchdog?
     private var restarted = false
     private static let loopingLesson = #"[{"id":"u","role":"user","blocks":[{"kind":"text","text":"q"}]},{"id":"a","role":"assistant","blocks":[{"kind":"text","text":"```visual\n<!-- title: Loop -->\n<script>setTimeout(() => { while (true) {} }, 200)</script>\n```"}]}]"#
@@ -32,6 +33,7 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             if args.contains("--dark") { app.appearance = NSAppearance(named: .darkAqua) }
             let t = WebTest(suite: suite, only: only)
             t.watchdogMode = args.contains("--watchdog")
+            t.shot = args.firstIndex(of: "--shot").flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil }
             t.start()
             current = t
             DispatchQueue.main.asyncAfter(deadline: .now() + 180) { print("TIMEOUT after 180 s in: \(t.running)"); exit(3) }
@@ -112,7 +114,23 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
                 let unexpected = pageErrors.filter { e in !expected.contains { e.contains($0) } }
                 for e in unexpected { print("  ✗ page error: \(e.prefix(400))") }
                 print("\n\(passed) passed, \(failed) failed, \(unexpected.count) unexpected page errors")
-                exit(failed == 0 && unexpected.isEmpty ? 0 : 1)
+                let code: Int32 = failed == 0 && unexpected.isEmpty ? 0 : 1
+                guard let shot else { exit(code) }
+                // --shot file.png: the page as rendered, for looking at (whole document height).
+                web.evaluateJavaScript("document.documentElement.scrollHeight") { [weak self] h, _ in
+                    guard let self else { exit(code) }
+                    let height = min(12000, max(400, (h as? Double) ?? 1400))
+                    self.window.setContentSize(NSSize(width: 900, height: height)); self.web.frame = NSRect(x: 0, y: 0, width: 900, height: height)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        let cfg = WKSnapshotConfiguration(); cfg.rect = NSRect(x: 0, y: 0, width: 900, height: height)
+                        self.web.takeSnapshot(with: cfg) { img, _ in
+                            if let img, let tiff = img.tiffRepresentation, let rep = NSBitmapImageRep(data: tiff), let png = rep.representation(using: .png, properties: [:]) {
+                                try? png.write(to: URL(fileURLWithPath: shot)); print("snapshot: \(shot)")
+                            }
+                            exit(code)
+                        }
+                    }
+                }
             default: break
             }
         default: break

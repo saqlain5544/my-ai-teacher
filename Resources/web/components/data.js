@@ -5,13 +5,7 @@
   const R = window.TeacherUI;
   const COLORS = ['#2f6fec', '#e5484d', '#30a46c', '#f76b15', '#8e4ec6', '#0d9488', '#d6409f', '#946800', '#5b5bd6', '#12a594'];
 
-  function parse(code) {
-    try { return JSON.parse(code); }
-    catch (e) {
-      // Tolerate trailing commas and single quotes.
-      try { return JSON.parse(code.replace(/,\s*([\]}])/g, '$1').replace(/'/g, '"')); } catch (_) { throw new Error('Invalid JSON: ' + e.message); }
-    }
-  }
+  const parse = code => R.parseLoose(code);
   const box = (cls, key, inner) => '<div class="comp ' + cls + '" data-key="' + key + '">' + inner + '</div>';
   const err = (ctx, name, e, code) => '<div class="comp comp-error"><div class="diagram-error">' + ctx.esc(name) + ': ' + ctx.esc(e.message) + '<pre>' + ctx.esc(code) + '</pre></div></div>';
   function safe(name, fn) {

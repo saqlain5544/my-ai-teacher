@@ -204,9 +204,46 @@
       return '<div class="svg-block" data-key="s' + hash(code) + '">' + DOMPurify.sanitize(code, { USE_PROFILES: { svg: true, svgFilters: true } }) + '</div>';
     }
     if (lang === 'math' || lang === 'katex') return tex(code, true);
+    // Models usually write interactive widgets (sliders, selects, canvases) as ```html: run them like a ```visual, in
+    // the sandbox, with the source one click away. Plain markup examples stay code.
+    if ((lang === 'html' || lang === 'htm') && R.fences.visual && /<(input|select|button|canvas|script|textarea|svg|details)\b/i.test(code)) {
+      if (isLastOpen) return R.fences.visual(code, ctx, { open: true });
+      return '<div class="html-live">' + R.fences.visual(code, ctx, {}) +
+        '<details class="visual-source"><summary>Show HTML</summary>' + renderCode(code, 'html', { streamingFence: true }) + '</details></div>';
+    }
     return renderCode(code, lang, isLastOpen ? { streamingFence: true } : env);
   }
 
+  // Diagrams in the app's own palette (light/dark), rounded, roomy, system font — not Mermaid's stock look.
+  function mermaidConfig() {
+    const dark = darkMQ.matches;
+    const P = dark
+      ? { bg: '#1e1e20', node: '#232b3d', border: '#5b8def', text: '#ececee', line: '#8b919c', c2: '#3b2c22', c3: '#1f3529', cluster: '#25252a', clusterB: '#3a3a42', note: '#3a3422',
+          scale: ['#2c4a8a', '#7a3b52', '#2f6b4f', '#7a5a1f', '#4b3b8a', '#1f6670', '#8a3f2c', '#5b6b2a', '#6b2f6b', '#2f5b8a', '#8a6a2f', '#3b6b6b'] }
+      : { bg: '#ffffff', node: '#eef3ff', border: '#7aa2f0', text: '#1d1d1f', line: '#8a8f98', c2: '#fdf0e6', c3: '#eaf7ef', cluster: '#f7f7fa', clusterB: '#e3e3ea', note: '#fff6d6',
+          scale: ['#dbe7ff', '#ffdfe7', '#d9f2e3', '#fff0cc', '#e7e0ff', '#d6f2f4', '#ffe2d6', '#eef3d2', '#f6dcf6', '#dcebff', '#fbe9d0', '#dff0ee'] };
+    const vars = {
+      fontFamily: '-apple-system, BlinkMacSystemFont, "SF Pro Text", sans-serif', fontSize: '15px', darkMode: dark,
+      background: P.bg, primaryColor: P.node, primaryBorderColor: P.border, primaryTextColor: P.text, secondaryColor: P.c2, tertiaryColor: P.c3,
+      lineColor: P.line, textColor: P.text, mainBkg: P.node, nodeBorder: P.border, clusterBkg: P.cluster, clusterBorder: P.clusterB,
+      edgeLabelBackground: P.bg, titleColor: P.text, noteBkgColor: P.note, noteTextColor: P.text, noteBorderColor: P.clusterB,
+      actorBkg: P.node, actorBorder: P.border, actorTextColor: P.text, signalColor: P.line, signalTextColor: P.text, labelBoxBkgColor: P.node,
+      pie1: P.scale[0], pie2: P.scale[1], pie3: P.scale[2], pie4: P.scale[3], pie5: P.scale[4], pie6: P.scale[5], pieStrokeColor: P.bg, pieOuterStrokeWidth: '0px',
+      pieTitleTextColor: P.text, pieSectionTextColor: P.text, pieLegendTextColor: P.text,
+    };
+    P.scale.forEach((c, i) => { vars['cScale' + i] = c; vars['cScaleLabel' + i] = P.text; });
+    return {
+      startOnLoad: false, securityLevel: 'strict', theme: 'base', look: 'neo', themeVariables: vars, suppressErrorRendering: true,
+      fontFamily: vars.fontFamily,
+      flowchart: { htmlLabels: true, curve: 'basis', padding: 14, nodeSpacing: 44, rankSpacing: 52, useMaxWidth: true },
+      sequence: { mirrorActors: false, actorMargin: 56, boxMargin: 8, messageFontSize: 14, noteFontSize: 13, useMaxWidth: true },
+      state: { useMaxWidth: true }, er: { useMaxWidth: true }, gantt: { useMaxWidth: true, barHeight: 24, fontSize: 14, sectionFontSize: 14 },
+      mindmap: { padding: 14, useMaxWidth: true }, pie: { textPosition: 0.72, useMaxWidth: true },
+      themeCSS: '.node rect, .node polygon, .node path, .cluster rect, rect.actor, .note { rx: 10px; ry: 10px; } ' +
+        '.node rect, .node polygon, .node circle, rect.actor, .mindmap-node rect, .mindmap-node path { filter: drop-shadow(0 1px 1.5px rgba(0,0,0,' + (dark ? '.45' : '.10') + ')); } ' +
+        '.mindmap-node line { stroke: transparent; } .label, .nodeLabel, .edgeLabel { font-weight: 500; } .flowchart-link, .relation, .messageLine0, .messageLine1, .transition { stroke-width: 1.6px; }',
+    };
+  }
   function ensureMermaid() {
     if (window.mermaid) return Promise.resolve();
     if (mermaidLoading) return mermaidLoading;
@@ -214,8 +251,7 @@
       const s = document.createElement('script');
       s.src = 'vendor/mermaid.min.js';
       s.onload = () => {
-        mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkMQ.matches ? 'dark' : 'default',
-          fontFamily: '-apple-system, BlinkMacSystemFont, sans-serif', flowchart: { htmlLabels: true, curve: 'basis' } });
+        mermaid.initialize(mermaidConfig());
         resolve();
       };
       s.onerror = reject;
@@ -232,20 +268,45 @@
     return src.replace(/(\b[\w-]+)(\[)(?![\[(\/\\"])([^\]\n]*)(\])/g, (m, id, o, inner, c) => q(id, o, inner, c))
       .replace(/(\b[\w-]+)(\{)(?![{"])([^}\n]*)(\})/g, (m, id, o, inner, c) => q(id, o, inner, c));
   }
+  // Mermaid draws in a hidden, laid-out sandbox (it needs real text metrics) that is emptied after every attempt, so a
+  // failed parse never leaves its error graphic in the page.
+  // Renders are queued: Mermaid keeps global state and breaks when two diagrams render at once (a reply with several).
+  let mermaidSandbox = null, mermaidQueue = Promise.resolve();
+  function renderOnce(src) {
+    const run = mermaidQueue.then(async () => {
+      if (!mermaidSandbox) {
+        mermaidSandbox = document.createElement('div');
+        mermaidSandbox.setAttribute('aria-hidden', 'true');
+        mermaidSandbox.style.cssText = 'position:absolute;left:-12000px;top:0;width:820px;visibility:hidden;pointer-events:none';
+        document.body.appendChild(mermaidSandbox);
+      }
+      const id = 'mmd' + (++mermaidSeq);
+      try { return await mermaid.render(id, src, mermaidSandbox); }
+      finally { document.querySelectorAll('#d' + id + ', #' + id + ', body > [id^="d' + id + '"]').forEach(n => n.remove()); }
+    });
+    mermaidQueue = run.catch(() => {});
+    return run;
+  }
   async function renderMermaid(src) {
-    try { return await mermaid.render('mmd' + (++mermaidSeq), src); }
+    try { return await renderOnce(src); }
     catch (e) {
-      document.querySelectorAll('#dmmd' + mermaidSeq + ', #mmd' + mermaidSeq).forEach(n => n.remove());
       const fixed = quoteLabels(src);
       if (fixed === src) throw e;
-      try { return await mermaid.render('mmd' + (++mermaidSeq), fixed); } catch (_) { throw e; }
+      try { return await renderOnce(fixed); } catch (_) { throw e; }
     }
+  }
+  // Wide diagrams scroll at a readable size instead of shrinking their text below 90%.
+  function fitDiagram(el) {
+    const svg = el.querySelector('svg'); if (!svg || !svg.viewBox || !svg.viewBox.baseVal) return;
+    const natural = svg.viewBox.baseVal.width, room = el.clientWidth - 24;
+    if (natural && room > 0 && natural * 0.9 > room) { svg.style.maxWidth = 'none'; svg.style.width = Math.round(natural * 0.9) + 'px'; }
   }
   function fillMermaid(el, key) {
     const r = mermaidSvg.get(key), code = mermaidSrc.get(key) || '';
     el.removeAttribute('data-pending');
     const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
     el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + r;
+    if (!r.error) fitDiagram(el);
   }
   async function processMermaid(root) {
     let blocks = Array.from(root.querySelectorAll('.mermaid-block[data-pending]'));
@@ -262,7 +323,6 @@
         try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); }
         catch (e) {
           mermaidSvg.set(key, { error: String((e && (e.message || e.str)) || e).split('\n')[0].slice(0, 300) });
-          document.querySelectorAll('#dmmd' + mermaidSeq + ', #mmd' + mermaidSeq).forEach(n => n.remove());
         }
       }
       if (el.isConnected && el.hasAttribute('data-pending')) fillMermaid(el, key);
@@ -790,7 +850,7 @@
   };
   darkMQ.addEventListener('change', () => {
     mermaidSvg.clear();
-    if (window.mermaid) mermaid.initialize({ startOnLoad: false, securityLevel: 'strict', theme: darkMQ.matches ? 'dark' : 'default' });
+    if (window.mermaid) mermaid.initialize(mermaidConfig());
     for (const m of S.messages) { const r = S.byId.get(m.id); if (r && r.el) { r.el.querySelectorAll('.md').forEach(n => { n._src = null; }); schedule(m.id); } }
   });
   post({ type: 'ready' });

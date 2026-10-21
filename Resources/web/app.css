@@ -206,6 +206,13 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .btn.primary:hover { filter: brightness(1.07); }
 .btn.danger { color: var(--bad); }
 .btn:disabled { opacity: .5; cursor: default; }
+.q-meta { display: flex; justify-content: space-between; gap: 8px; min-height: 1.1em; font-size: 0.78em; margin-top: 3px; }
+.q-err { color: var(--bad); }
+.q-count { color: var(--faint); margin-left: auto; }
+.q-text.invalid { border-color: var(--bad) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
+.visual-source { margin: -0.4em 0 0.8em; }
+.visual-source > summary { cursor: pointer; color: var(--muted); font-size: 0.85em; padding: 2px 4px; }
+.visual-source[open] > summary { margin-bottom: 4px; }
 .visual-paused { display: flex; align-items: center; gap: 10px; justify-content: center; height: 100%; color: var(--muted); font-size: 0.9em; padding: 12px; }
 /* A sub-agent's transcript in the side panel: nothing to reply to, edit or regenerate. */
 .read-only .msg-actions, .read-only .msg-error button { display: none; }

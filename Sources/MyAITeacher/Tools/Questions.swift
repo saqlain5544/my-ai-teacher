@@ -19,14 +19,16 @@ enum Questions {
         var props: [String: JSON] = [
             "type": ["type": "string", "enum": .array(types.map { .string($0) }), "description": """
                 Fields by type — choice types: options[] (+allow_other, multiple_choice: max_select); fill_blanks: text with {{}} per \
-                blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit; \
-                scale: min,max,labels[]; code: language,starter. Optional on all: hint, concept, placeholder.
+                blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit, min, max, \
+                integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter. \
+                Optional on all: hint, concept, placeholder. The app enforces these while the learner types.
                 """],
             "prompt": ["type": "string", "description": "Markdown/LaTeX question text."],
             "options": strs, "text": str, "blank_options": ["type": "array", "items": strs], "items": strs,
             "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
             "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "concept": str,
             "allow_other": ["type": "boolean"],
+            "min_length": ["type": "integer"], "max_length": ["type": "integer"], "pattern": str, "integer": ["type": "boolean"],
         ]
         if graded {
             props["answer"] = ["description": .string("Graded only. single_choice: index; multiple_choice: [indices]; true_false: bool; numeric: number (+tolerance); short_text: string|[accepted]; fill_blanks: [per blank: string|[alts]]; math: expression (checked symbolically). Omit for ordering/matching/long_text/code/drawing.")]

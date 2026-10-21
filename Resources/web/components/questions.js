@@ -78,9 +78,13 @@
         const v = g ? g.given : F.answers[qi];
         if (!active) return '<div class="q-given' + (mono ? ' mono' : '') + '">' + (v == null || v === '' ? '<span class="muted">(no answer)</span>' : ctx.esc(v)) + '</div>';
         const ph = ctx.esc(q.placeholder || (mono ? '' : 'Type your answer…'));
-        return multiline
-          ? '<textarea class="q-text' + (mono ? ' mono' : '') + '" data-q-input="' + qi + '" placeholder="' + ph + '" spellcheck="' + !mono + '"' + (mono ? ' rows="8"' : '') + '>' + ctx.esc(v == null ? (q.starter || '') : v) + '</textarea>'
-          : '<input type="text" class="q-text" data-q-input="' + qi + '" placeholder="' + ph + '" value="' + ctx.esc(v == null ? '' : v) + '">';
+        const max = limit(q, multiline);
+        const attrs = ' maxlength="' + max + '"' + (q.min_length ? ' data-minlen="' + (+q.min_length) + '"' : '') + (q.pattern ? ' data-pattern="' + ctx.esc(q.pattern) + '"' : '');
+        const val = v == null ? (multiline ? (q.starter || '') : '') : String(v);
+        return (multiline
+          ? '<textarea class="q-text' + (mono ? ' mono' : '') + '" data-q-input="' + qi + '" placeholder="' + ph + '" spellcheck="' + !mono + '"' + (mono ? ' rows="8"' : '') + attrs + '>' + ctx.esc(val) + '</textarea>'
+          : '<input type="text" class="q-text" data-q-input="' + qi + '" placeholder="' + ph + '" value="' + ctx.esc(val) + '"' + attrs + '>') +
+          '<div class="q-meta"><span class="q-err" data-err="' + qi + '"></span>' + (mono ? '' : '<span class="q-count" data-count="' + qi + '">' + val.length + ' / ' + max + '</span>') + '</div>';
       },
     };
   }
@@ -94,8 +98,11 @@
   T.numeric = {
     render(q, qi, F, ctx, active, g) {
       const v = g ? g.given : F.answers[qi];
-      return '<div class="q-numeric"><input type="text" inputmode="decimal" class="q-text" data-q-input="' + qi + '" placeholder="' + ctx.esc(q.placeholder || 'Number') + '" value="' + ctx.esc(v == null ? '' : v) + '"' + dis(active) + '>' +
-        (q.unit ? '<span class="q-unit">' + ctx.inline(q.unit) + '</span>' : '') + '</div>';
+      const range = q.min != null && q.max != null ? q.min + ' to ' + q.max : q.min != null ? '≥ ' + q.min : q.max != null ? '≤ ' + q.max : '';
+      return '<div class="q-numeric"><input type="text" inputmode="' + (q.integer ? 'numeric' : 'decimal') + '" class="q-text" data-q-input="' + qi + '" data-numeric="' + (q.integer ? 'int' : 'num') + '"' +
+        (q.min != null ? ' data-min="' + (+q.min) + '"' : '') + (q.max != null ? ' data-max="' + (+q.max) + '"' : '') +
+        ' placeholder="' + ctx.esc(q.placeholder || (q.integer ? 'Whole number' : 'Number') + (range ? ' (' + range + ')' : '')) + '" value="' + ctx.esc(v == null ? '' : v) + '"' + dis(active) + '>' +
+        (q.unit ? '<span class="q-unit">' + ctx.inline(q.unit) + '</span>' : '') + '</div><div class="q-meta"><span class="q-err" data-err="' + qi + '"></span></div>';
     },
   };
   T.math = {
@@ -306,6 +313,7 @@
     const id = toolOf(el), F = state(id);
     const card = el.closest('[data-tool-id]');
     collect(card, F);
+    if (!validate(card)) return;
     const n = card.querySelectorAll('.quiz-q').length;
     const answers = Array.from({ length: n }, (_, i) => {
       let a = F.answers[i];
@@ -343,6 +351,63 @@
     c.getContext('2d').clearRect(0, 0, c.width, c.height); const F = state(id); F.answers[qi(el)] = undefined; if (F.raw) F.raw[qi(el)] = null;
   });
 
+  // ── Typed input: numbers accept only numeric characters; text has length bounds and an optional pattern ──
+  const limit = (q, multiline) => Math.max(1, Math.min(+q.max_length || (multiline ? 5000 : 300), 100000));
+  const NUM_CHARS = { num: /[^0-9.,+\-eE\/ ]/g, int: /[^0-9\-]/g };
+  /** A number from what the learner typed: 3.5, -2, 1/2, 2,5 (decimal comma), 1e3; NaN when it isn't one. */
+  function toNumber(s) {
+    s = String(s).trim().replace(/\s+/g, '');
+    if (!s) return NaN;
+    const frac = /^([+-]?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/.exec(s);
+    if (frac) return +frac[2] ? +frac[1] / +frac[2] : NaN;
+    if (/^[+-]?\d+,\d+$/.test(s)) s = s.replace(',', '.');
+    else s = s.replace(/,(?=\d{3}(\D|$))/g, '');
+    return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s) ? Number(s) : NaN;
+  }
+  /** The problem with one field's value, or '' — what the learner sees under the field. */
+  function problem(inp) {
+    const v = inp.value, kind = inp.getAttribute('data-numeric');
+    if (kind) {
+      if (!v.trim()) return '';
+      const n = toNumber(v);
+      if (Number.isNaN(n)) return 'Enter a number' + (kind === 'int' ? ' (whole number)' : ' (e.g. 3.5, -2, 1/2)');
+      if (kind === 'int' && !Number.isInteger(n)) return 'Enter a whole number';
+      const lo = inp.getAttribute('data-min'), hi = inp.getAttribute('data-max');
+      if (lo != null && n < +lo) return 'Must be at least ' + lo;
+      if (hi != null && n > +hi) return 'Must be at most ' + hi;
+      return '';
+    }
+    const minlen = +inp.getAttribute('data-minlen') || 0, pat = inp.getAttribute('data-pattern');
+    if (v.trim() && v.trim().length < minlen) return 'At least ' + minlen + ' characters';
+    if (v.trim() && pat) { try { if (!new RegExp('^(?:' + pat + ')$').test(v.trim())) return 'Doesn\'t match the expected format'; } catch (_) {} }
+    return '';
+  }
+  function showProblem(card, inp, force) {
+    const qi = inp.getAttribute('data-q-input'), msg = problem(inp);
+    const show = msg && (force || inp._touched);
+    inp.classList.toggle('invalid', !!show);
+    inp.setAttribute('aria-invalid', show ? 'true' : 'false');
+    const e = card.querySelector('[data-err="' + qi + '"]'); if (e) e.textContent = show ? msg : '';
+    return msg;
+  }
+  /** Checks every field; marks the bad ones and focuses the first. True when the form can be sent. */
+  function validate(card) {
+    let first = null;
+    card.querySelectorAll('[data-q-input]').forEach(inp => { if (showProblem(card, inp, true) && !first) first = inp; });
+    if (first) first.focus();
+    return !first;
+  }
+  document.addEventListener('beforeinput', e => {
+    const t = e.target; if (!t || !t.getAttribute || !t.getAttribute('data-numeric') || !e.data) return;
+    if (NUM_CHARS[t.getAttribute('data-numeric')].test(e.data)) e.preventDefault();   // letters never get in
+    NUM_CHARS[t.getAttribute('data-numeric')].lastIndex = 0;
+  }, true);
+  document.addEventListener('focusout', e => {
+    const t = e.target; if (!t || !t.hasAttribute || !t.hasAttribute('data-q-input')) return;
+    const card = t.closest('[data-tool-id]'); if (!card) return;
+    t._touched = true; showProblem(card, t);
+  }, true);
+
   function collect(card, F) {
     card.querySelectorAll('[data-q-input]').forEach(inp => { F.answers[+inp.getAttribute('data-q-input')] = inp.value; });
     card.querySelectorAll('[data-q-other]').forEach(inp => { F.other[+inp.getAttribute('data-q-other')] = inp.value; });
@@ -358,6 +423,14 @@
   R.registerInput((e, ctx) => {
     const t = e.target; if (!t || !t.closest) return;
     const card = t.closest('[data-tool-id]'); if (!card) return;
+    const kind = t.getAttribute && t.getAttribute('data-numeric');
+    if (kind && NUM_CHARS[kind].test(t.value)) { t.value = t.value.replace(NUM_CHARS[kind], ''); }   // pasted text
+    if (kind) NUM_CHARS[kind].lastIndex = 0;
+    if (t.hasAttribute('data-q-input')) {
+      const c = card.querySelector('[data-count="' + t.getAttribute('data-q-input') + '"]');
+      if (c) c.textContent = t.value.length + ' / ' + t.getAttribute('maxlength');
+      if (t._touched) showProblem(card, t);
+    }
     const F = state(card.getAttribute('data-tool-id'));
     collect(card, F);
     if (t.hasAttribute('data-ask-text')) F.text = t.value;

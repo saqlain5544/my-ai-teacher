@@ -9,7 +9,7 @@
   const S = k => { let s = state.get(k); if (!s) { s = { open: new Set(), hint: new Set(), mark: {}, shown: 1, sent: false }; state.set(k, s); } return s; };
 
   function parse(code) {
-    const j = JSON.parse(code);
+    const j = R.parseLoose(code);
     return Array.isArray(j) ? { items: j } : { title: j.title, items: j.items || j.questions || j.cards || [] };
   }
 

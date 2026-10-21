@@ -140,8 +140,19 @@
       const blk = await until(() => { const b = $('.mermaid-block', el); return b && !b.hasAttribute('data-pending') && b; }, 'mermaid ' + kind, 8000);
       noErrors(blk, 'mermaid ' + kind);
       ok($('svg', blk), 'svg drawn');
+      ok(!document.body.textContent.includes('Syntax error in text'), 'no stray Mermaid error graphic');
+      const sz = parseFloat(getComputedStyle($('svg text, svg .nodeLabel, svg span', blk) || blk).fontSize) * ($('svg', blk).getBoundingClientRect().width / ($('svg', blk).viewBox.baseVal.width || 1));
+      ok(!(sz > 0) || sz >= 9, 'labels stay readable (≈' + Math.round(sz) + 'px)');
     });
   }
+  test('several diagrams in one reply all render (renders are queued)', async () => {
+    const el = show(Object.values(MERMAID).map(src => '```mermaid\n' + src + '\n```').join('\n\nText between.\n\n'));
+    await until(() => !$('.mermaid-block[data-pending]', el), 'all diagrams', 15000);
+    noErrors(el, 'gallery');
+    eq($$('.mermaid-block svg', el).length, Object.keys(MERMAID).length, 'every diagram drawn');
+    ok(!document.body.textContent.includes('Syntax error in text'), 'no stray Mermaid error graphic');
+  });
+
   test('mermaid survives re-rendering: styles and labels intact after reopening the lesson', async () => {
     const src = '```mermaid\nflowchart LR\n  A[Light energy] --> B{Chlorophyll}\n  B --> C[Glucose]\n```';
     let el = show(src);
@@ -249,7 +260,7 @@
   });
 
   test('invalid component JSON shows an inline error, not a crash', () => {
-    const el = show('```timeline\n[{"date": 1905, "title": oops}]\n```\n\nAfter.');
+    const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');
   });
 
@@ -265,6 +276,30 @@
     noErrors(el, 'facts lines');
     eq($$('.kv dt', el).map(d => d.textContent), ['A fraction is', 'Denominator (bottom)', 'Numerator']);
     eq($('.kv dd', el).textContent, 'equal pieces of one whole');
+  });
+
+  test('sloppy component JSON from real models parses', () => {
+    const cases = [
+      "{type: 'bar', labels: ['a','b'], series: [{data: [1, 2,],},],}",          // JS object literal
+      '{“type”: “bar”, “series”: [{“data”: [3, 4]}]}',                           // curly quotes
+      '// chart\n{"type":"line", /* note */ "series":[{"data":[1,NaN,3]}]}',     // comments, NaN
+      'Here is the chart:\n{"type":"bar","series":[{"data":[1,2]}]}\nHope it helps!',   // prose around
+      "{'type': 'pie', 'labels': ['x'], 'series': [{'data': [1]}], 'legend': True}", // Python dict
+    ];
+    for (const c of cases) {
+      const el = show('```chart\n' + c + '\n```');
+      noErrors(el, c.slice(0, 40)); ok($('.chart-block svg', el), 'chart for ' + c.slice(0, 40));
+    }
+    const p = show("```practice\n[{q: 'Two + two?', a: 'Four'},]\n```");
+    noErrors(p, 'practice loose'); eq($$('.pr-item', p).length, 1);
+    eq(window.TeacherUI.parseLoose('{a: "it\'s", b: [1, 2], c: None}'), { a: "it's", b: [1, 2], c: null });
+  });
+
+  test('```html widgets run sandboxed, with the source one click away', async () => {
+    const el = show('```html\n<input type="range" id="r" min="1" max="10"><select><option>a</option></select><span id="o"></span>\n<script>r.oninput = () => o.textContent = r.value</script>\n```\n\n```html\n<p>Just <b>markup</b></p>\n```');
+    await until(() => $('.html-live .visual iframe', el), 'widget runs');
+    ok($('.html-live details.visual-source .code-block[data-lang="html"]', el), 'source available');
+    eq($$('.html-live', el).length, 1, 'plain markup stays code'); ok($('.code-block[data-lang="html"]:not(.visual-source *)', el) || $$('.code-block[data-lang="html"]', el).length === 2, 'plain html shown as code');
   });
 
   test('tolerant JSON: trailing commas and single quotes', () => {
@@ -466,6 +501,39 @@
     ok(JSON.stringify(v[5]).includes('100'), 'blank: ' + JSON.stringify(v[5]));
     click($('[data-act="q-submit"]', $('[data-tool-id="qz1"]'))); eq(posts.filter(p => p.type === 'answer').length, 1, 'no double submit');
     T.interaction({ id: 'qz1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('question inputs enforce types and constraints', () => {
+    const qs = [
+      { type: 'numeric', prompt: 'Boiling point?', min: 0, max: 200, unit: '°C' },
+      { type: 'numeric', prompt: 'How many?', integer: true },
+      { type: 'short_text', prompt: 'Code?', min_length: 3, max_length: 6, pattern: '[A-Z]+' },
+    ];
+    const a = A([{ kind: 'toolUse', id: 'qv1', name: 'ask_learner', input: { title: 'Typed', questions: qs } }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'qv1', kind: 'ask', payload: { title: 'Typed', questions: qs } }, true);
+    const card = () => $('[data-tool-id="qv1"]');
+    const type = (sel, text) => {   // the way WebKit delivers typing: beforeinput (cancelable), then input
+      const inp = $(sel, card());
+      for (const ch of text) {
+        const ev = new InputEvent('beforeinput', { data: ch, inputType: 'insertText', bubbles: true, cancelable: true });
+        if (inp.dispatchEvent(ev)) { inp.value += ch; inp.dispatchEvent(new Event('input', { bubbles: true })); }
+      }
+      return inp;
+    };
+    eq(type('[data-q-input="0"]', 'abc12x.5').value, '12.5', 'letters never get into a number');
+    eq(type('[data-q-input="1"]', '3.7').value, '37', 'whole numbers only');
+    const t = type('[data-q-input="2"]', 'ab');
+    eq($('[data-count="2"]', card()).textContent, '2 / 6', 'counter'); eq(t.getAttribute('maxlength'), '6');
+    $('[data-q-input="0"]', card()).value = '250';
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    eq(posts.filter(p => p.type === 'answer').length, 0, 'blocked while invalid');
+    ok($('[data-err="0"]', card()).textContent.includes('at most 200'), 'range message: ' + $('[data-err="0"]', card()).textContent);
+    ok($('[data-err="2"]', card()).textContent.includes('At least 3'), 'length message');
+    $('[data-q-input="0"]', card()).value = '1/2'; $('[data-q-input="2"]', card()).value = 'ABCD';
+    click($('[data-act="q-submit"]', card()));
+    const ans = lastPost('answer'); ok(ans, 'sent once valid'); eq(ans.value.answers.slice(0, 3), ['1/2', '37', 'ABCD']);
+    T.interaction({ id: 'qv1' }, false); T.status('', false);
   });
 
   test('quiz results render graded review', () => {
