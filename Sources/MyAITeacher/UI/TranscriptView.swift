@@ -15,6 +15,7 @@ struct TranscriptView: NSViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.userContentController.addUserScript(WKUserScript(source: Self.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
+        if Telemetry.isEnabled { config.userContentController.addUserScript(WKUserScript(source: WebTelemetry.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)) }
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.suppressesIncrementalRendering = false
         let web = ClickThroughWebView(frame: .zero, configuration: config)
@@ -185,6 +186,8 @@ struct TranscriptView: NSViewRepresentable {
                 if let s = session { reset(s.messages, conversation: s.conversation) }
                 let q = queue; queue.removeAll()
                 q.forEach { run($0) }
+            case "telemetry":
+                WebTelemetry.handle(j, webView: web)
             case "open":
                 if let u = j["url"]?.string.flatMap(URL.init(string:)), ["http", "https", "mailto"].contains(u.scheme ?? "") { NSWorkspace.shared.open(u) }
             case "copy":

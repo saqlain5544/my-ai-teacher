@@ -16,6 +16,7 @@ struct SettingsView: View {
 
 struct GeneralSettings: View {
     @EnvironmentObject var settings: SettingsStore
+    @AppStorage(Telemetry.enabledKey) private var telemetryEnabled = true
     var body: some View {
         Form {
             Section("About you") {
@@ -31,6 +32,10 @@ struct GeneralSettings: View {
                 Stepper("Text size: \(Int(settings.value.fontSize)) pt", value: $settings.value.fontSize, in: 11...24)
                 Stepper("Max tool steps per turn: \(settings.value.maxToolTurns)", value: $settings.value.maxToolTurns, in: 5...200, step: 5)
                 Stepper("Summarise long lessons above \(settings.value.compactAtTokens / 1000)k tokens", value: $settings.value.compactAtTokens, in: 20_000...900_000, step: 10_000)
+            }
+            Section("Privacy") {
+                Toggle("Record local usage & performance telemetry (Insights)", isOn: $telemetryEnabled)
+                Text("Stays on this Mac in teacher.sqlite — nothing is ever sent anywhere. No message text is recorded.").font(.caption).foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)
