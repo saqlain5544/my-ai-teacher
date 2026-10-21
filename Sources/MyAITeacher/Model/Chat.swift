@@ -122,4 +122,8 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var reflectedCount: Int?
     var usage: Usage?
     var stats: ConversationStats?
+    /// Deferred tools this lesson has loaded (append-only).
+    var loadedTools: [String]?
+    /// Microcompaction epoch: blocks up to this message are trimmed in requests.
+    var trimmedThrough: String?
 }

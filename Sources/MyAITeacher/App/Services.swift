@@ -21,7 +21,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     var learnerLevel: String = ""
     var voiceIdentifier: String?
     var speechRate: Double = 0.5
-    var compactAtTokens = 120_000
+    var compactAtTokens = 48_000   // context budget (tokens)
     var showThinking = true
 
     init() {}
@@ -47,7 +47,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         learnerLevel = (try? c.decode(String.self, forKey: .learnerLevel)) ?? ""
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
-        compactAtTokens = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
+        let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
+        compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(savedBudget, 400_000)   // migrate the old default
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
     }
 }

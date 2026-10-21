@@ -15,7 +15,32 @@ struct OpenAIClient: LLMClient {
     let config: ProviderConfig
     let apiKey: String?
 
+    /// Models that rejected `reasoning: {enabled: false}` (learned at runtime; "off" then means the lowest effort).
+    nonisolated(unsafe) private static var mandatoryReasoning = Set<String>()
+    private static let lock = NSLock()
+    static func reasoningIsMandatory(_ model: String) -> Bool { lock.withLock { mandatoryReasoning.contains(model) } }
+
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+        guard request.thinking == .off, config.quirks.contains(.openrouterReasoning), !Self.reasoningIsMandatory(request.model) else {
+            return streamOnce(request)
+        }
+        // One retry if the endpoint says reasoning can't be disabled; nothing has been yielded at that point.
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await ev in streamOnce(request) { continuation.yield(ev) }
+                    continuation.finish()
+                } catch let e as HTTPError where e.status == 400 && e.body.localizedCaseInsensitiveContains("mandatory") {
+                    _ = Self.lock.withLock { Self.mandatoryReasoning.insert(request.model) }
+                    do { for try await ev in streamOnce(request) { continuation.yield(ev) }; continuation.finish() }
+                    catch { continuation.finish(throwing: error) }
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func streamOnce(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
         var headers = config.headers
         if let apiKey { headers["Authorization"] = "Bearer \(apiKey)" }
         let req = URLRequest.json(config.baseURL.joinedURL("/chat/completions"), body: buildBody(request), headers: headers)
@@ -133,6 +158,10 @@ struct OpenAIClient: LLMClient {
             body["tools"] = .array(r.tools.map { t in
                 ["type": "function", "function": ["name": .string(t.name), "description": .string(t.description), "parameters": t.schema]]
             })
+        }
+        // OpenRouter enables reasoning by default on many models, so "off" must be explicit (saves thousands of tokens).
+        if r.thinking == .off, q.contains(.openrouterReasoning) {
+            body["reasoning"] = Self.reasoningIsMandatory(r.model) ? ["effort": "low", "exclude": false] : ["enabled": false]
         }
         if r.thinking != .off {
             if q.contains(.reasoningEffort) { body["reasoning_effort"] = .string(r.thinking.rawValue) }

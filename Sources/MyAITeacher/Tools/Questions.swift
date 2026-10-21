@@ -6,36 +6,26 @@ enum Questions {
     static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
                         "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing"]
 
+    /// Compact schema: per-type fields are documented once in `type` instead of on every property.
     static func schema(graded: Bool) -> JSON {
+        let str: JSON = ["type": "string"], num: JSON = ["type": "number"]
+        let strs: JSON = ["type": "array", "items": str]
         var props: [String: JSON] = [
-            "type": Schema.string("Component type.", enum: types),
-            "prompt": Schema.string("Question text (Markdown/LaTeX; mark foreign-language spans with <span lang>)."),
-            "options": Schema.array(Schema.string("Option"), "single_choice / multiple_choice options."),
-            "text": Schema.string("fill_blanks: sentence with blanks written as {{}} e.g. \"Water boils at {{}} °C.\""),
-            "blank_options": Schema.array(Schema.array(Schema.string("Choice"), "Choices for one blank"), "fill_blanks: optional dropdown choices per blank."),
-            "items": Schema.array(Schema.string("Item"), "ordering: items IN THE CORRECT ORDER (the app shuffles them)."),
-            "pairs": Schema.array(Schema.array(Schema.string("Side"), "[left, right]"), "matching: correct pairs, each [left, right], e.g. [[\"chat\",\"cat\"],[\"chien\",\"dog\"]] (the app shuffles the right side)."),
-            "min": Schema.number("scale: minimum (default 1)."),
-            "max": Schema.number("scale: maximum (default 5)."),
-            "labels": Schema.array(Schema.string("Label"), "scale: [low label, high label], or one label per point."),
-            "max_select": Schema.integer("multiple_choice: maximum number of selections."),
-            "language": Schema.string("code: programming language."),
-            "starter": Schema.string("code: starter code."),
-            "unit": Schema.string("numeric: unit shown next to the input."),
-            "placeholder": Schema.string("Input placeholder."),
-            "hint": Schema.string("Optional hint the learner can reveal."),
-            "concept": Schema.string("Concept tested (for mastery tracking)."),
-            "allow_other": Schema.boolean("single/multiple choice: allow a typed answer too."),
+            "type": ["type": "string", "enum": .array(types.map { .string($0) }), "description": """
+                Fields by type — choice types: options[] (+allow_other, multiple_choice: max_select); fill_blanks: text with {{}} per \
+                blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit; \
+                scale: min,max,labels[]; code: language,starter. Optional on all: hint, concept, placeholder.
+                """],
+            "prompt": ["type": "string", "description": "Markdown/LaTeX question text."],
+            "options": strs, "text": str, "blank_options": ["type": "array", "items": strs], "items": strs,
+            "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
+            "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "concept": str,
+            "allow_other": ["type": "boolean"],
         ]
         if graded {
-            props["answer"] = ["description": .string("""
-                Correct answer. single_choice: option index; multiple_choice: array of indices; true_false: boolean; \
-                numeric: number; short_text: string or array of accepted strings; fill_blanks: array (per blank) of \
-                accepted strings or arrays of alternatives; math: expression (SymPy or LaTeX) checked for equivalence; \
-                omit for ordering/matching (defined by items/pairs) and for long_text/code/drawing (you grade those).
-                """)]
-            props["tolerance"] = Schema.number("numeric: absolute tolerance.")
-            props["explanation"] = Schema.string("Why the answer is correct; shown after submitting.")
+            props["answer"] = ["description": .string("Graded only. single_choice: index; multiple_choice: [indices]; true_false: bool; numeric: number (+tolerance); short_text: string|[accepted]; fill_blanks: [per blank: string|[alts]]; math: expression (checked symbolically). Omit for ordering/matching/long_text/code/drawing.")]
+            props["tolerance"] = num
+            props["explanation"] = ["type": "string", "description": "Shown after grading."]
         }
         return Schema.object(props, required: ["type", "prompt"])
     }
@@ -269,10 +259,10 @@ enum MathEquivalence {
 struct AskLearnerTool: Tool {
     let name = "ask_learner"
     let description = """
-    Show interactive question components in the chat and WAIT for the learner's reply. Use for diagnostics (level, goals), \
-    letting them choose a path, practice and reflection. Either a single quick choice (`question` + `options`) or a small \
-    form of `questions` with any component type: single_choice, multiple_choice, true_false, short_text, long_text, numeric, \
-    fill_blanks, ordering, matching, scale, code, math, drawing. Not graded — use `quiz` for graded checks.
+    Show interactive questions in the chat and WAIT for the learner. Quick choice: `question` + `options`. \
+    Form: `questions` (any type). Set `graded: true` for a quiz: include `answer`s; the app auto-grades \
+    (choice, true/false, numeric, short text, blanks, ordering, matching, symbolic math), updates mastery, and returns \
+    long text/code/drawings for you to grade. Use for diagnostics, choices, practice (aim ~85% success) and reflection.
     """
     let risk = ToolRisk.interactive
     var schema: JSON {
@@ -282,13 +272,15 @@ struct AskLearnerTool: Tool {
             "multi_select": Schema.boolean("Quick form: allow several options."),
             "allow_free_text": Schema.boolean("Quick form: allow a typed answer (default true)."),
             "title": Schema.string("Form title."),
-            "questions": Schema.array(Questions.schema(graded: false), "Form: one or more question components."),
-            "submit_label": Schema.string("Form: submit button text."),
+            "graded": Schema.boolean("Quiz mode: auto-grade with `answer`s."),
+            "subject": Schema.string("Subject (graded)."),
+            "questions": ["type": "array", "items": Questions.schema(graded: true)],
         ])
     }
     func summary(_ input: JSON) -> String { input["question"]?.string ?? input["title"]?.string ?? input["questions"]?[0]?["prompt"]?.string ?? "" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        if input["graded"]?.bool == true { return try await QuizTool().run(input, ctx) }
         var payload = input.object ?? [:]
         if let qs = input["questions"]?.array {
             let errs = Questions.validate(Questions.normalize(qs))

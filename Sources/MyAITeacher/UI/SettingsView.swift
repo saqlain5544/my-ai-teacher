@@ -30,7 +30,7 @@ struct GeneralSettings: View {
                 Toggle("Show the model's thinking", isOn: $settings.value.showThinking)
                 Stepper("Text size: \(Int(settings.value.fontSize)) pt", value: $settings.value.fontSize, in: 11...24)
                 Stepper("Max tool steps per turn: \(settings.value.maxToolTurns)", value: $settings.value.maxToolTurns, in: 5...200, step: 5)
-                Stepper("Summarise long lessons above \(settings.value.compactAtTokens / 1000)k tokens", value: $settings.value.compactAtTokens, in: 20_000...900_000, step: 10_000)
+                Stepper("Context budget: \(settings.value.compactAtTokens / 1000)k tokens (trims, then summarises)", value: $settings.value.compactAtTokens, in: 20_000...900_000, step: 10_000)
             }
         }
         .formStyle(.grouped)
@@ -108,7 +108,8 @@ struct ProvidersSettings: View {
         Task {
             do {
                 let list = try await ProviderCatalog.fetchModels(p, apiKey: KeyStore.shared.key(for: p))
-                app.models[p.id] = list.isEmpty ? p.suggestedModels : list
+                if !list.isEmpty { ModelCache.save(p.id, list) }
+                app.apply(p, list)
                 testResult = "✓ Connected — \(list.count) models"
             } catch {
                 testResult = "✗ \(error.localizedDescription)"

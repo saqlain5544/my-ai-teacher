@@ -203,17 +203,18 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         let client = provider.client(apiKey: key)
-        let tools = ToolRegistry.enabled(settings)
         if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
         var steps = 0
         while !Task.isCancelled && steps < settings.maxToolTurns {
             steps += 1
             await compactIfNeeded(client: client)
             setStatus(steps == 1 ? "Thinking…" : "Continuing…")
+            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [])
+            let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: requestMessages(), tools: tools.map(\.spec),
-                                     maxTokens: Self.maxTokens(provider: provider, model: conversation.model),
-                                     thinking: settings.thinking)
+                                     maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
+                                     thinking: info?.reasoning == false ? .off : settings.thinking)
             host.willRequest(&request, self)
             var assistant = ChatMessage(role: .assistant, blocks: [], model: conversation.model)
             var step = StepMetrics(provider: provider.id, model: conversation.model, startedAt: Date())
@@ -375,9 +376,11 @@ final class ChatSession: ObservableObject, Identifiable {
         func record(_ ok: Bool) {
             turn.tools.append(ToolMetric(name: name, duration: Date().timeIntervalSince(started), ok: ok, waitedForLearner: waited > 0 ? waited : nil))
         }
-        guard let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
+        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? []).contains { $0.name == name } || name == "quiz"
+        guard callable, let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
             record(false)
-            return .toolResult(id: callID, name: name, content: "Unknown or disabled tool `\(name)`. Available: \(ToolRegistry.enabled(settings).map(\.name).joined(separator: ", "))", isError: true)
+            let hint = ToolRegistry.deferred.contains { $0.name == name } ? " It is a deferred tool: call load_tools first." : ""
+            return .toolResult(id: callID, name: name, content: "Tool `\(name)` is not available.\(hint)", isError: true)
         }
         if input["_raw"] != nil {
             record(false)
@@ -411,6 +414,11 @@ final class ChatSession: ObservableObject, Identifiable {
             var meta = out.meta?.object ?? [:]
             meta["ms"] = .number(Date().timeIntervalSince(started) * 1000)
             if meta["write"]?.bool == true { turn.memoryWrites += 1 }
+            if let loaded = meta["loaded"]?.array?.compactMap(\.string) {
+                var cur = conversation.loadedTools ?? []
+                for n in loaded where !cur.contains(n) { cur.append(n) }
+                conversation.loadedTools = cur
+            }
             result = .toolResult(id: callID, name: name, content: spillIfLarge(out.text, name: name), isError: out.isError, images: out.images, meta: .object(meta))
         } catch is CancellationError {
             result = .toolResult(id: callID, name: name, content: "Cancelled.", isError: true)
@@ -440,31 +448,33 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func requestMessages() -> [ChatMessage] {
-        var msgs = messages.filter { !($0.role == .assistant && $0.blocks.isEmpty) }
-        msgs.removeAll { $0.role == .assistant && $0.error != nil && $0.toolUses.isEmpty && $0.plainText.isEmpty }
-        if let through = conversation.compactedThrough, let summary = conversation.compactSummary,
-           let cut = msgs.firstIndex(where: { $0.id == through }) {
-            let rest = Array(msgs[(cut + 1)...])
-            let head = ChatMessage(role: .user, blocks: [.text("<lesson_summary>\nThe earlier part of this lesson was summarised to save space:\n\n\(summary)\n</lesson_summary>")])
-            msgs = [head] + rest
-        }
-        return msgs
+        ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model)
     }
 
     private func estimateTokens() -> Int {
-        if let u = conversation.usage, u.input > 0 { return u.input + u.output / max(1, messages.count) }
-        let chars = requestMessages().reduce(0) { $0 + $1.blocks.reduce(0) { $0 + ($1.text?.count ?? 0) + ($1.input?.compact.count ?? 0) } }
-        return chars / 4
+        ContextPolicy.estimateTokens(requestMessages()) + (conversation.systemPrompt?.count ?? 0) / 4
+    }
+
+    private var contextBudget: Int {
+        ContextPolicy.budget(setting: settings.compactAtTokens,
+                             contextWindow: app.modelInfo(conversation.providerID, conversation.model)?.contextWindow)
     }
 
     private func compactIfNeeded(client: LLMClient) async {
-        guard estimateTokens() > settings.compactAtTokens, messages.count > 8 else { return }
+        let budget = contextBudget
+        // Tier 2 first: free and cheap. Advance the trim epoch when we pass 70% of the budget.
+        if estimateTokens() > budget * 7 / 10, let next = ContextPolicy.nextTrimPoint(messages, current: conversation.trimmedThrough) {
+            conversation.trimmedThrough = next
+            EventBus.publish(.notice(conversationID: id, text: "Trimmed bulky earlier tool output to keep the lesson fast."))
+        }
+        // Tier 3 only if still over budget.
+        guard estimateTokens() > budget, messages.count > 8 else { return }
         setStatus("Summarising earlier parts of the lesson…")
         var keepChars = 0
         var cut = messages.count
         for i in stride(from: messages.count - 1, through: 0, by: -1) {
             keepChars += messages[i].blocks.reduce(0) { $0 + ($1.text?.count ?? 0) + ($1.input?.compact.count ?? 0) }
-            if keepChars > 80_000 { cut = i; break }
+            if keepChars > budget * 4 * 3 / 10 { cut = i; break }   // keep ~30% of the budget verbatim
         }
         while cut < messages.count && (messages[cut].role != .user || messages[cut].isToolResultOnly) { cut += 1 }
         guard cut > 1, cut < messages.count else { return }
@@ -534,12 +544,18 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Helpers
 
-    static func maxTokens(provider: ProviderConfig, model: String) -> Int {
-        if AnthropicClient.isAdaptiveClaude(model) { return 64_000 }
-        switch provider.id {
-        case "groq", "cerebras", "ollama", "lmstudio": return 8192
-        default: return 16_384
+    /// Output cap: the provider's advertised limit when known, otherwise a conservative default.
+    nonisolated static func maxTokens(provider: ProviderConfig, model: String, info: ModelInfo? = nil) -> Int {
+        let fallback: Int
+        if AnthropicClient.isAdaptiveClaude(model) { fallback = 64_000 }
+        else {
+            switch provider.id {
+            case "groq", "cerebras", "ollama", "lmstudio": fallback = 8192
+            default: fallback = 16_384
+            }
         }
+        guard let m = info?.maxOutput, m > 0 else { return fallback }
+        return min(m, max(fallback, 16_384))
     }
 
     static func isTransient(_ error: Error) -> Bool {

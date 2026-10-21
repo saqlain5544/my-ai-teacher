@@ -27,7 +27,7 @@ struct ChatView: View {
             ToolbarItemGroup(placement: .primaryAction) {
                 ModePicker(session: session)
                 ModelPickerButton(session: session)
-                ThinkingPicker()
+                ThinkingPicker(session: session)
                 LessonInfoButton(session: session)
             }
         }
@@ -65,16 +65,24 @@ struct ModePicker: View {
 
 struct ThinkingPicker: View {
     @EnvironmentObject var settings: SettingsStore
+    @EnvironmentObject var app: AppModel
+    @ObservedObject var session: ChatSession
     var body: some View {
+        // From the provider's metadata: nil = unknown (offer all), false = the model can't reason.
+        let reasoning = app.modelInfo(session.conversation.providerID, session.conversation.model)?.reasoning
         Menu {
             Picker("Reasoning effort", selection: $settings.value.thinking) {
                 Text("Off").tag(ThinkingLevel.off)
-                Text("Low").tag(ThinkingLevel.low)
-                Text("Medium").tag(ThinkingLevel.medium)
-                Text("High").tag(ThinkingLevel.high)
+                if reasoning != false {
+                    Text("Low").tag(ThinkingLevel.low)
+                    Text("Medium").tag(ThinkingLevel.medium)
+                    Text("High").tag(ThinkingLevel.high)
+                }
             }.pickerStyle(.inline)
+            if reasoning == false { Text("This model doesn't support reasoning") }
         } label: {
-            Label("Thinking: \(settings.value.thinking.rawValue.capitalized)", systemImage: settings.value.thinking == .off ? "lightbulb" : "lightbulb.max")
+            let on = reasoning != false && settings.value.thinking != .off
+            Label("Thinking: \(on ? settings.value.thinking.rawValue.capitalized : "Off")", systemImage: on ? "lightbulb.max" : "lightbulb")
         }
         .help("Reasoning effort")
         .fixedSize()
@@ -151,6 +159,7 @@ struct ModelPickerPopover: View {
                             HStack {
                                 Text(m).font(.callout).lineLimit(1)
                                 Spacer()
+                                if let i = app.modelMeta[p.id]?[m] { ModelBadges(info: i) }
                                 if session.conversation.providerID == p.id && session.conversation.model == m {
                                     Image(systemName: "checkmark").foregroundStyle(Color.accentColor)
                                 }
@@ -222,5 +231,18 @@ struct LessonInfoView: View {
             Text(k).foregroundStyle(.secondary)
             Text(v).monospacedDigit().textSelection(.enabled)
         }
+    }
+}
+
+/// Compact facts from the provider's metadata: context size, reasoning, vision, free.
+struct ModelBadges: View {
+    let info: ModelInfo
+    var body: some View {
+        HStack(spacing: 4) {
+            if info.free == true { Text("free").font(.caption2.bold()).foregroundStyle(.green) }
+            if info.reasoning == true { Image(systemName: "lightbulb.max").font(.caption2) }
+            if info.vision == true { Image(systemName: "eye").font(.caption2) }
+            if let c = info.contextWindow { Text(c >= 1_000_000 ? "\(c / 1_000_000)M" : "\(c / 1000)k").font(.caption2.monospacedDigit()) }
+        }.foregroundStyle(.secondary)
     }
 }

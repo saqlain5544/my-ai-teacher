@@ -1,16 +1,33 @@
 import Foundation
 
 enum ToolRegistry {
-    static let all: [Tool] = [
-        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), MathTool(),
-        WebSearchTool(), WebFetchTool(), TodoWriteTool(), TaskTool(),
-        QuizTool(), AskLearnerTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(),
-        MemorySearchTool(), MemorySaveTool(), MemoryUpdateTool(), MemoryForgetTool(),
+    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage).
+    static let core: [Tool] = [
+        AskLearnerTool(), MathTool(), RunCodeTool(), ReadTool(), WriteTool(), EditTool(), LsTool(), BashTool(),
+        WebSearchTool(), WebFetchTool(), VisualTool(),
+        MemorySearchTool(), MemorySaveTool(), MemoryUpdateTool(), MemoryForgetTool(), LoadToolsTool(),
     ]
+    /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
+    static let deferred: [Tool] = [
+        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(),
+    ]
+    static let all: [Tool] = core + deferred + [QuizTool()]
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
     static func enabled(_ settings: AppSettings) -> [Tool] {
         all.filter { !settings.disabledTools.contains($0.name) }
+    }
+
+    /// Tools for a request: core + whatever this lesson has loaded (in load order, so the prefix only ever grows).
+    static func active(_ settings: AppSettings, loaded: [String]) -> [Tool] {
+        let off = Set(settings.disabledTools)
+        let extra = loaded.compactMap { name in deferred.first { $0.name == name } }
+        return (core + extra).filter { !off.contains($0.name) }
+    }
+
+    /// One line per deferred tool for the system prompt.
+    static var deferredIndex: String {
+        deferred.map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 
     /// Tools a research sub-agent may use without supervision.
@@ -85,5 +102,23 @@ struct TaskTool: Tool {
         }
         if finalText.isEmpty { finalText = "(The sub-agent stopped without a final report.)" }
         return ToolOutput(text: finalText)
+    }
+}
+
+
+/// Runtime tool discovery: loads deferred tools into the lesson.
+struct LoadToolsTool: Tool {
+    let name = "load_tools"
+    let description = "Load extra tools listed under “More tools” in your instructions. They become callable from your next step."
+    let risk = ToolRisk.readOnly
+    var schema: JSON { Schema.object(["names": Schema.array(Schema.string("Tool name"), "Tools to load.")], required: ["names"]) }
+    func summary(_ input: JSON) -> String { input["names"]?.array?.compactMap(\.string).joined(separator: ", ") ?? "" }
+    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        let wanted = input["names"]?.array?.compactMap(\.string) ?? []
+        let known = Set(ToolRegistry.deferred.map(\.name))
+        let ok = wanted.filter { known.contains($0) }, bad = wanted.filter { !known.contains($0) }
+        guard !ok.isEmpty else { return .error("Unknown tools: \(bad.joined(separator: ", ")). Loadable: \(known.sorted().joined(separator: ", ")).") }
+        return ToolOutput(text: "Loaded \(ok.joined(separator: ", ")). Call them from your next step." + (bad.isEmpty ? "" : " Unknown: \(bad.joined(separator: ", ")).") ,
+                          meta: ["loaded": .array(ok.map { .string($0) })])
     }
 }

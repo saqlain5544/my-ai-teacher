@@ -55,8 +55,9 @@ enum ProviderCatalog {
                        envKeys: [], defaultModel: "local-model", keyOptional: true),
     ]
 
-    /// Fetches the live model list. Results are cached in memory per provider.
-    static func fetchModels(_ p: ProviderConfig, apiKey: String?) async throws -> [String] {
+    /// Fetches the live model list with metadata. Parses the many provider shapes (OpenRouter, Anthropic, Gemini, Groq,
+    /// Mistral, OpenAI-compatible) into `ModelInfo`.
+    static func fetchModels(_ p: ProviderConfig, apiKey: String?) async throws -> [ModelInfo] {
         var req: URLRequest
         switch p.api {
         case .gemini:
@@ -79,21 +80,79 @@ enum ProviderCatalog {
         let status = (resp as? HTTPURLResponse)?.statusCode ?? 200
         guard status < 400 else { throw HTTPError(status: status, body: String(decoding: data, as: UTF8.self)) }
         guard let j = JSON.parse(data) else { return [] }
-        var ids: [String] = []
-        if p.api == .gemini {
-            for m in j["models"]?.array ?? [] {
-                let methods = m["supportedGenerationMethods"]?.array?.compactMap(\.string) ?? []
-                guard methods.contains("generateContent"), var name = m["name"]?.string else { continue }
-                if name.hasPrefix("models/") { name.removeFirst(7) }
-                if name.contains("tts") || name.contains("image") || name.contains("embedding") || name.contains("aqa") { continue }
-                ids.append(name)
-            }
-        } else {
-            for m in j["data"]?.array ?? [] { if let id = m["id"]?.string { ids.append(id) } }
+        let raw = (p.api == .gemini ? j["models"] : j["data"])?.array ?? []
+        let skip = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe", "realtime", "audio", "guard", "orpheus", "image", "sora", "rerank", "search-preview", "safety", "aqa"]
+        var seen = Set<String>()
+        return raw.compactMap { m -> ModelInfo? in
+            if p.api == .gemini, !(m["supportedGenerationMethods"]?.array?.contains("generateContent") ?? true) { return nil }
+            guard var id = m["id"]?.string ?? m["name"]?.string else { return nil }
+            if id.hasPrefix("models/") { id.removeFirst(7) }
+            if skip.contains(where: { id.lowercased().contains($0) }) || !seen.insert(id).inserted { return nil }
+            if m["capabilities"]?["completion_chat"]?.bool == false { return nil }
+            return ModelInfo.parse(id: id, m, provider: p)
+        }.sorted { $0.id < $1.id }
+    }
+}
+
+/// What we know about a model, from the provider's own /models response (nothing hard-coded except safe fallbacks).
+struct ModelInfo: Codable, Sendable, Hashable {
+    var id: String
+    var name: String?
+    var contextWindow: Int?
+    var maxOutput: Int?
+    var reasoning: Bool?
+    var efforts: [String]?
+    var vision: Bool?
+    var tools: Bool?
+    var free: Bool?
+    var inputPricePerM: Double?
+    var outputPricePerM: Double?
+
+    static func parse(id: String, _ m: JSON, provider p: ProviderConfig) -> ModelInfo {
+        var i = ModelInfo(id: id)
+        i.name = m["display_name"]?.string ?? m["displayName"]?.string ?? m["name"]?.string.flatMap { $0 == id || $0.hasPrefix("models/") ? nil : $0 }
+        i.contextWindow = m["context_length"]?.int ?? m["context_window"]?.int ?? m["inputTokenLimit"]?.int ?? m["max_input_tokens"]?.int
+            ?? m["max_context_length"]?.int ?? m["top_provider"]?["context_length"]?.int
+        i.maxOutput = m["top_provider"]?["max_completion_tokens"]?.int ?? m["max_completion_tokens"]?.int ?? m["outputTokenLimit"]?.int
+            ?? m["max_tokens"]?.int ?? m["max_output_length"]?.int
+        let params = (m["supported_parameters"]?.array ?? m["supported_features"]?.array ?? []).compactMap(\.string)
+        if !params.isEmpty {
+            i.reasoning = params.contains("reasoning") || params.contains("include_reasoning") || params.contains("reasoning_effort")
+            i.tools = params.contains("tools")
         }
-        // Hide non-chat models (audio, embeddings, image, moderation…).
-        let skip = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe", "realtime", "audio", "guard", "orpheus", "image", "sora", "rerank", "search-preview"]
-        ids = ids.filter { id in !skip.contains { id.lowercased().contains($0) } }
-        return Array(Set(ids)).sorted()
+        if let t = m["thinking"]?.bool { i.reasoning = t }
+        if let c = m["capabilities"], c.object != nil {
+            if let r = c["reasoning"]?.bool ?? c["thinking"]?["supported"]?.bool { i.reasoning = r }
+            if let v = c["vision"]?.bool ?? c["image_input"]?["supported"]?.bool { i.vision = v }
+            if let f = c["function_calling"]?.bool { i.tools = f }
+        }
+        if let inputs = (m["architecture"]?["input_modalities"] ?? m["input_modalities"])?.array?.compactMap(\.string) { i.vision = inputs.contains("image") }
+        if let pr = m["pricing"]?["prompt"]?.string.flatMap(Double.init), let co = m["pricing"]?["completion"]?.string.flatMap(Double.init) {
+            i.inputPricePerM = pr * 1_000_000; i.outputPricePerM = co * 1_000_000
+            i.free = pr == 0 && co == 0
+        }
+        if id.hasSuffix(":free") { i.free = true }
+        if AnthropicClient.isAdaptiveClaude(id) { i.reasoning = true; i.efforts = ["low", "medium", "high", "xhigh", "max"] }
+        else if i.reasoning == true { i.efforts = ["low", "medium", "high"] }
+        return i
+    }
+}
+
+/// Per-provider model metadata cache on disk (Application Support/models/<provider>.json).
+enum ModelCache {
+    private struct File: Codable { var fetched: Date; var models: [ModelInfo] }
+    static let ttl: TimeInterval = 24 * 3600
+    private static func url(_ id: String) -> URL {
+        let dir = AppPaths.support.appendingPathComponent("models", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        return dir.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".json")
+    }
+    static func load(_ id: String, maxAge: TimeInterval = ttl) -> [ModelInfo]? {
+        guard let d = try? Data(contentsOf: url(id)), let f = try? JSONDecoder().decode(File.self, from: d),
+              Date().timeIntervalSince(f.fetched) < maxAge else { return nil }
+        return f.models
+    }
+    static func save(_ id: String, _ models: [ModelInfo]) {
+        if let d = try? JSONEncoder().encode(File(fetched: Date(), models: models)) { try? d.write(to: url(id), options: .atomic) }
     }
 }

@@ -38,10 +38,40 @@ enum CLI {
             return 0
         }
 
-        let prompt = args.first(where: { !$0.hasPrefix("--") && args.firstIndex(of: $0).map { $0 == 0 || !args[$0 - 1].hasPrefix("--") } ?? false }) ?? "Say hello."
+        if args.contains("--models") {
+            let list: [ModelInfo]
+            do { list = try await ProviderCatalog.fetchModels(provider, apiKey: KeyStore.shared.key(for: provider)) }
+            catch { print("ERROR: \(error.localizedDescription)"); return 1 }
+            let needle = opt("--grep")
+            for m in list.filter({ needle == nil || $0.id.contains(needle!) }).prefix(40) {
+                print(m.id, "ctx", m.contextWindow ?? -1, "out", m.maxOutput ?? -1, "reason", m.reasoning.map { "\($0)" } ?? "?",
+                      "tools", m.tools.map { "\($0)" } ?? "?", "vision", m.vision.map { "\($0)" } ?? "?", m.free == true ? "FREE" : "")
+            }
+            return 0
+        }
+        if args.contains("--measure") {
+            // Approximate tokens as chars/4 (good enough to rank costs).
+            let sys = SystemPrompt.build(settings: AppSettings(), mode: .tutor, coreMemory: services.memory.coreBlock(), model: model)
+            print("system prompt: \(sys.count) chars ≈ \(sys.count / 4) tokens")
+            var total = 0
+            for t in ToolRegistry.all {
+                let n = t.description.count + t.schema.compact.count + t.name.count
+                total += n
+                print(String(format: "  %-16@ %6d chars ≈ %5d tok", t.name as NSString, n, n / 4))
+            }
+            let sent = ToolRegistry.core.reduce(0) { $0 + $1.description.count + $1.schema.compact.count + $1.name.count }
+            print("tools sent per request (core): \(sent) chars ≈ \(sent / 4) tokens; all registered: \(total / 4) tokens")
+            print("fixed prefix per request ≈ \((sys.count + sent) / 4) tokens")
+            return 0
+        }
+        if provider.id == "openrouter", !model.hasSuffix(":free"), !args.contains("--allow-paid") {
+            print("Refusing a paid OpenRouter model (\(model)); pass a :free model or --allow-paid."); return 2
+        }
+        let valued: Set<String> = ["--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
+        let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()
         let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model)
-        let tools = args.contains("--no-tools") ? [] : ToolRegistry.all.map(\.spec)
+        let tools = args.contains("--no-tools") ? [] : ToolRegistry.active(settings, loaded: []).map(\.spec)
         let thinking = opt("--thinking").flatMap(ThinkingLevel.init(rawValue:)) ?? .low
         let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text(prompt)])],
                              tools: tools, maxTokens: 8000, thinking: thinking)
@@ -65,7 +95,7 @@ enum CLI {
                 case .thinkingSignature(let s): FileHandle.standardError.write(Data("\n[signature \(s.prefix(12))…]\n".utf8))
                 case .toolCallStarted(let id, let name): print("\n[tool start \(name) \(id)]")
                 case .toolCallArgs: break
-                case .toolCall(let b): print("[tool call \(b.name ?? "") \(b.input?.compact.prefix(300) ?? "")]")
+                case .toolCall(let b): print("[tool call \(b.name ?? "") \(args.contains("--full") ? (b.input?.compact ?? "") : String(b.input?.compact.prefix(300) ?? ""))]")
                 case .usage(let u): print("\n[usage in=\(u.input) out=\(u.output) cacheRead=\(u.cacheRead) cacheWrite=\(u.cacheWrite)]")
                 case .stop(let r): print("[stop \(r)]")
                 }

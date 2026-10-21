@@ -27,6 +27,8 @@ final class AppModel: ObservableObject {
     @Published var accessPrompt: Workspace?
     @Published var models: [String: [String]] = [:]
     @Published var modelErrors: [String: String] = [:]
+    /// Provider metadata per model (context window, max output, reasoning, vision, pricing), from the provider's /models.
+    @Published var modelMeta: [String: [String: ModelInfo]] = [:]
     @Published var dueCount = 0
     @Published var memoryCount = 0
     @Published var searchResults: [String]? = nil
@@ -233,21 +235,37 @@ final class AppModel: ObservableObject {
     func hasKey(_ p: ProviderConfig) -> Bool { p.keyOptional || KeyStore.shared.key(for: p) != nil }
     var availableProviders: [ProviderConfig] { settings.providers.filter { hasKey($0) } }
 
+    /// Loads a provider's model list: disk cache (24 h) first, network otherwise. One request per provider per day.
     func loadModels(_ p: ProviderConfig, force: Bool = false) {
         if !force, models[p.id] != nil { return }
+        if !force, let cached = ModelCache.load(p.id) { apply(p, cached); return }
         guard hasKey(p) else { return }
         let key = KeyStore.shared.key(for: p)
         Task {
             do {
-                var list = try await ProviderCatalog.fetchModels(p, apiKey: key)
-                if list.isEmpty { list = p.suggestedModels }
-                models[p.id] = list
+                let list = try await ProviderCatalog.fetchModels(p, apiKey: key)
+                if !list.isEmpty { ModelCache.save(p.id, list) }
+                apply(p, list)
                 modelErrors[p.id] = nil
             } catch {
-                models[p.id] = p.suggestedModels.isEmpty ? [p.defaultModel] : p.suggestedModels
+                if let stale = ModelCache.load(p.id, maxAge: .infinity) { apply(p, stale) }
+                else { models[p.id] = p.suggestedModels.isEmpty ? [p.defaultModel] : p.suggestedModels }
                 modelErrors[p.id] = error.localizedDescription
             }
         }
+    }
+
+    func apply(_ p: ProviderConfig, _ list: [ModelInfo]) {
+        models[p.id] = list.isEmpty ? p.suggestedModels : list.map(\.id)
+        modelMeta[p.id] = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+    }
+
+    /// Metadata for a model, loading the provider's cached list on first use (no network when cached).
+    func modelInfo(_ providerID: String, _ model: String) -> ModelInfo? {
+        if modelMeta[providerID] == nil, let cached = ModelCache.load(providerID, maxAge: .infinity) {
+            modelMeta[providerID] = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        }
+        return modelMeta[providerID]?[model]
     }
 
     func modelList(_ p: ProviderConfig) -> [String] {

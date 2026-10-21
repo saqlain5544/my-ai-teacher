@@ -14,6 +14,7 @@ struct TranscriptView: NSViewRepresentable {
         config.processPool = Coordinator.pool
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
+        config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
         config.userContentController.addUserScript(WKUserScript(source: Self.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
         config.suppressesIncrementalRendering = false
@@ -156,6 +157,10 @@ struct TranscriptView: NSViewRepresentable {
         func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {}
 
         func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
+            // Sandboxed visual iframes: their srcdoc document loads; any other sub-frame navigation is dropped silently.
+            if action.targetFrame?.isMainFrame == false {
+                decisionHandler(action.request.url?.scheme == "about" ? .allow : .cancel); return
+            }
             if [.other, .reload].contains(action.navigationType), action.request.url?.isFileURL == true { decisionHandler(.allow); return }
             if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
             decisionHandler(.cancel)

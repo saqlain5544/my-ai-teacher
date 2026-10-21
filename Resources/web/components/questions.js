@@ -251,7 +251,7 @@
   }
 
   R.registerToolCard('quiz', (b, r, pend, ctx) => renderForm(b, r, pend, ctx, true));
-  R.registerToolCard('ask_learner', (b, r, pend, ctx) => (b.input && b.input.questions) ? renderForm(b, r, pend, ctx, false) : renderQuick(b, r, pend, ctx));
+  R.registerToolCard('ask_learner', (b, r, pend, ctx) => (b.input && b.input.questions) ? renderForm(b, r, pend, ctx, !!b.input.graded) : renderQuick(b, r, pend, ctx));
 
   // ── Actions & inputs ─────────────────────────────────────────────────
   const toolOf = el => { const t = el.closest('[data-tool-id]'); return t ? t.getAttribute('data-tool-id') : null; };
