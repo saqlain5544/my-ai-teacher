@@ -7,6 +7,12 @@ enum Questions {
                         "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing"]
 
     /// Compact schema: per-type fields are documented once in `type` instead of on every property.
+    /// The error for a call without questions, with a call that works (models fix a shown example; they repeat a bare error).
+    static let missingQuestions = """
+    No questions were sent. Call ask_learner again with either a quick question — {"question":"Which topic first?","options":["Cells","Atoms"]} — \
+    or a form/quiz with `questions` — {"graded":true,"title":"Atoms","questions":[{"type":"single_choice","prompt":"Charge of a proton?","options":["+1","0","-1"],"answer":0}]}
+    """
+
     static func schema(graded: Bool) -> JSON {
         let str: JSON = ["type": "string"], num: JSON = ["type": "number"]
         let strs: JSON = ["type": "array", "items": str]
@@ -280,7 +286,10 @@ struct AskLearnerTool: Tool {
     func summary(_ input: JSON) -> String { input["question"]?.string ?? input["title"]?.string ?? input["questions"]?[0]?["prompt"]?.string ?? "" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        if input["graded"]?.bool == true { return try await QuizTool().run(input, ctx) }
+        let hasForm = !(input["questions"]?.array ?? []).isEmpty, hasQuick = !(input["question"]?.string ?? "").isEmpty
+        if input["graded"]?.bool == true, hasForm { return try await QuizTool().run(input, ctx) }
+        // Some models send `graded` with no questions, or nothing at all: say exactly what to send (they repeat a bare error).
+        guard hasForm || hasQuick else { return .error(Questions.missingQuestions) }
         var payload = input.object ?? [:]
         if let qs = input["questions"]?.array {
             let errs = Questions.validate(Questions.normalize(qs))
@@ -327,7 +336,7 @@ struct QuizTool: Tool {
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let questions = Questions.normalize(input["questions"]?.array ?? [])
-        guard !questions.isEmpty else { return .error("A quiz needs at least one question.") }
+        guard !questions.isEmpty else { return .error(Questions.missingQuestions) }
         let errs = Questions.validate(questions)
         if !errs.isEmpty { return .error("Fix the quiz and call it again:\n" + errs.joined(separator: "\n")) }
         let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null,
@@ -356,7 +365,9 @@ struct QuizTool: Tool {
         ctx.services.study.recordQuiz(conversationID: ctx.conversationID, title: input["title"]?.string ?? "Quiz", topic: subject,
                                       score: score, total: autoTotal, data: ["questions": .array(questions), "answers": .array(answers)])
         EventBus.publish(.studyDataChanged)
-        var text = "Quiz \"\(input["title"]?.string ?? "")\" submitted. Auto-graded score: \(String(format: "%g", (score * 10).rounded() / 10))/\(autoTotal).\n"
+        var text = "Quiz \"\(input["title"]?.string ?? "")\" submitted. " + (autoTotal == 0
+            ? "Nothing could be auto-graded (no answer key), so grade every answer below.\n"
+            : "Auto-graded score: \(String(format: "%g", (score * 10).rounded() / 10))/\(autoTotal).\n")
         if let c = reply["confidence"]?.int { text += "Self-rated confidence before answering: \(c)/5.\n" }
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
         text += "\n" + lines.joined(separator: "\n")

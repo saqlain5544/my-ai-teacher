@@ -1,5 +1,5 @@
 // Multilingual text: per-block direction, per-run language tagging, script fonts, click-to-hear.
-// Runs after every render on freshly inserted DOM.
+// Runs after every render on freshly inserted DOM. (The page's own <html lang> is not a tagged run.)
 (function () {
   'use strict';
   const R = window.TeacherUI;
@@ -19,7 +19,7 @@
   const RTL_LANGS = /^(ar|he|fa|ur|ps|yi|dv|ku|sd|ug)\b/;
   const STRONG_RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/g;
   const STRONG_LTR = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿऀ-෿฀-๿぀-鿿가-힯]/g;
-  const SKIP = 'code, pre, .katex, .math-display, .math-inline, .fl, [lang], svg, .code-block, .mermaid-block, .plot-block, .comp, textarea, input, select, button, rt';
+  const SKIP = 'code, pre, .katex, .math-display, .math-inline, .fl, [lang]:not(html), svg, .code-block, .mermaid-block, .plot-block, .comp, textarea, input, select, button, rt';
 
   function scriptOf(ch) { for (const s of SCRIPTS) if (s.re.test(ch)) return s; return null; }
   function refineLang(lang, text) {

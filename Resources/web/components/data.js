@@ -34,6 +34,14 @@
     let series = spec.series || (spec.data ? [{ name: spec.name || '', data: spec.data }] : []);
     series = series.filter(s => s && Array.isArray(s.data) && s.data.length);
     if (!series.length) return '<div class="comp-error">This chart has no data.</div>';
+    // Points as {x, y} or [x, y] (common in model output) become labels + values, except for scatter.
+    if (type !== 'scatter') series = series.map(s => {
+      const pt = s.data.find(v => v != null);
+      if (pt == null || typeof pt !== 'object') return s;
+      const xy = v => Array.isArray(v) ? v : [v && (v.x != null ? v.x : v.label != null ? v.label : v.name), v && (v.y != null ? v.y : v.value)];
+      if (!spec.labels) spec = Object.assign({}, spec, { labels: s.data.map(v => String(xy(v)[0])) });
+      return Object.assign({}, s, { data: s.data.map(v => +xy(v)[1] || 0) });
+    });
     const labels = spec.labels || (series[0] ? series[0].data.map((_, i) => String(i + 1)) : []);
     const W = 640, H = 360, M = { l: 52, r: 16, t: spec.title ? 34 : 14, b: 46 };
     let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" role="img">';
@@ -157,16 +165,35 @@
   }));
 
   R.registerFence(['compare', 'comparison'], safe('comparison', (spec, ctx, code) => {
-    const cols = spec.columns || [], rows = spec.rows || [];
-    let h = '<table class="compare-table"><thead><tr><th></th>' + cols.map(c => '<th>' + ctx.inline(c) + '</th>').join('') + '</tr></thead><tbody>';
-    rows.forEach(r => { h += '<tr><th>' + ctx.inline(r[0]) + '</th>' + r.slice(1).map(c => '<td>' + ctx.inline(String(c)) + '</td>').join('') + '</tr>'; });
+    let cols = spec.columns || spec.headers || [];
+    // Rows may be objects keyed by column name.
+    const rows = (spec.rows || []).map(r => Array.isArray(r) ? r : r && typeof r === 'object' ? (cols.length ? cols.map(c => r[c] != null ? r[c] : '') : Object.values(r)) : [r]);
+    // If the columns already include the row-label header (as wide as a row), it goes in the corner.
+    const width = rows.reduce((m, r) => Math.max(m, r.length), 0);
+    let corner = '';
+    if (cols.length && cols.length === width) { corner = cols[0]; cols = cols.slice(1); }
+    let h = '<table class="compare-table"><thead><tr><th>' + ctx.inline(String(corner)) + '</th>' + cols.map(c => '<th>' + ctx.inline(String(c)) + '</th>').join('') + '</tr></thead><tbody>';
+    rows.forEach(r => { h += '<tr><th>' + ctx.inline(String(r[0] == null ? '' : r[0])) + '</th>' + r.slice(1).map(c => '<td>' + ctx.inline(String(c == null ? '' : c)) + '</td>').join('') + '</tr>'; });
     return box('compare md', 'cp' + ctx.hash(code), h + '</tbody></table>');
   }));
 
-  R.registerFence(['kv', 'facts', 'definitions'], safe('facts', (spec, ctx, code) => {
+  // Facts also come as plain lines ("term | meaning", "term: meaning"), not only JSON.
+  const kvLines = code => code.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
+    l = l.replace(/^[-*]\s+/, '');
+    const m = l.includes('|') ? /^(.+?)\s*\|\s*(.+)$/.exec(l) : /^(.+?)\s*(?::|—|\s-\s)\s*(.+)$/.exec(l);
+    return m ? [m[1].replace(/[:=\s]+$/, ''), m[2]] : null;
+  });
+  R.registerFence(['kv', 'facts', 'definitions'], (code, ctx, env) => {
+    if (!/^\s*[\[{]/.test(code) && !(env && env.open)) {
+      const rows = kvLines(code);
+      if (rows.length && rows.every(Boolean)) return box('kv', 'kv' + ctx.hash(code), '<dl>' + rows.map(([k, v]) => '<dt>' + ctx.inline(k) + '</dt><dd>' + ctx.inline(v) + '</dd>').join('') + '</dl>');
+    }
+    return factsJSON(code, ctx, env);
+  });
+  const factsJSON = safe('facts', (spec, ctx, code) => {
     const entries = Array.isArray(spec) ? spec.map(e => Array.isArray(e) ? e : [e.key || e.term, e.value || e.definition]) : Object.entries(spec);
     return box('kv', 'kv' + ctx.hash(code), '<dl>' + entries.map(([k, v]) => '<dt>' + ctx.inline(String(k)) + '</dt><dd>' + ctx.inline(typeof v === 'string' ? v : JSON.stringify(v)) + '</dd>').join('') + '</dl>');
-  }));
+  });
 
   // ── JSON tree & CSV ───────────────────────────────────────────────────
   function tree(v, ctx, depth) {
@@ -261,7 +288,8 @@
 
   // ── Sortable tables ───────────────────────────────────────────────────
   R.registerProcessor((root) => {
-    root.querySelectorAll('table').forEach(table => {
+    // `root` can itself be the table (a top-level block in a reply), which querySelectorAll would skip.
+    (root.matches && root.matches('table') ? [root] : Array.from(root.querySelectorAll('table'))).forEach(table => {
       if (table._sortable || !table.tHead || table.closest('.quiz, .compare')) return;
       table._sortable = true;
       Array.from(table.tHead.rows[0] ? table.tHead.rows[0].cells : []).forEach((th, col) => {
@@ -272,7 +300,9 @@
           const dir = th._dir = -(th._dir || -1);
           const rows = Array.from(body.rows);
           const val = r => { const t = (r.cells[col] ? r.cells[col].textContent : '').trim(); const n = parseFloat(t.replace(/[^0-9.\-eE]/g, '')); return isNaN(n) || !/\d/.test(t) ? t.toLowerCase() : n; };
-          rows.sort((a, b) => { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : 0) * dir; });
+          // Numbers before text, numbers numerically, text in the reader's collation.
+          const cmp = (x, y) => typeof x === 'number' && typeof y === 'number' ? x - y : typeof x === 'number' ? -1 : typeof y === 'number' ? 1 : x.localeCompare(y);
+          rows.sort((a, b) => cmp(val(a), val(b)) * dir);
           rows.forEach(r => body.appendChild(r));
           table.querySelectorAll('.sort-th').forEach(h => h.removeAttribute('data-dir'));
           th.setAttribute('data-dir', dir > 0 ? 'asc' : 'desc');

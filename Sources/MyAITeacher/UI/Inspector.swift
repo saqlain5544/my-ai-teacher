@@ -3,11 +3,12 @@ import WebKit
 import PDFKit
 import Combine
 
-/// Right-side panel: the lesson folder's files and an in-app web page viewer. Nothing here opens another app.
+/// Right-side panel: the lesson folder's files, an in-app web page viewer and the lesson's sub-agents.
+/// Nothing here opens another app.
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, page
+    case files, page, agents
     var id: String { rawValue }
-    var title: String { self == .files ? "Files" : "Page" }
+    var title: String { switch self { case .files: "Files"; case .page: "Page"; case .agents: "Agents" } }
 }
 
 struct InspectorPanel: View {
@@ -24,6 +25,7 @@ struct InspectorPanel: View {
             switch app.inspectorTab {
             case .files: FileExplorer(root: app.workspace.url, session: session)
             case .page: PageViewer()
+            case .agents: SubAgentPanel(conversationID: session?.id)
             }
         }
         .frame(minWidth: 260)

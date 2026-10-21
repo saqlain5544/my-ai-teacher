@@ -107,15 +107,48 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   usage, memories recalled/written, languages.
 * `ConversationStats` per lesson; `usage_log` per day × provider × model (Progress → Model usage).
 
+## Sub-agents
+* `task` runs `SubAgent`: its own context and loop (stream → bounded tools in parallel → repeat), recorded as a
+  `SubAgentRun` transcript. The right-hand panel's **Agents** tab renders it live with the lesson renderer (read-only);
+  it opens when a sub-agent starts, and the card in the lesson has **Open** and **Stop**.
+* The teacher may pick the sub-agent's model (`model`): the choices are the provider's fetched list (tool-capable),
+  free-only when the lesson's model is free, listed in the tool spec per lesson. Unknown ids are refused with the list.
+* Budget: 10 model calls or 120 s, then it is told to write its report from what it has; if it still won't, the
+  sources it read come back instead of nothing. Stop (its own, or the lesson's) ends it at once; the lesson gets the
+  partial findings. The trimmed transcript is kept in the tool result so a finished run can be reopened later.
+
+## Timeouts
+* Every tool has `timeout(_:)` (nil only for tools that wait for the learner); `runBounded` enforces it with
+  `withDeadline`, which returns on time even if the work ignores cancellation (it is abandoned, never awaited).
+  web_search 30 s, web_fetch 40 s, bash/run_code their own limit + margin, sub-agent budget + report.
+* A model stream that goes silent for 120 s fails (providers send keep-alives while thinking).
+
+## Frozen pages
+* Visuals run model-written JavaScript in sandboxed frames that share the transcript's process, so an endless loop
+  would freeze the lesson. `WebWatchdog` pings each transcript (and sub-agent) page every 2 s while its window is
+  visible; after 8 s without an answer it ends the web process, reloads, and the lesson renders again with visuals
+  paused behind ▶ Run (a notice says why). `MyAITeacher --webtest --watchdog` checks this end to end.
+
 ## Testing
-* `swift test` — unit tests (SSE/think-tag parsing, FSRS, BKT, grader, math equivalence, HTML→Markdown, workspaces, memory).
-* `MyAITeacher --cli "prompt" [--provider minimax] [--model …] [--thinking low] [--dump]` — headless provider call.
-* `MyAITeacher --cli --tool web_search '{"query":"…"}'` — run any tool headlessly.
-* `open --env MYAITEACHER_DEBUG=1 "build/My AI Teacher.app"` then `scripts/debug.sh '{"action":"snapshot","path":"/tmp/a.png"}'`
-  (also `send`, `pending`, `answer` by id/title, `eval`, `select`, `newLesson`, `openFolder`, `status`, `sessions`).
-  Logs: `~/Library/Logs/MyAITeacher.log` (includes web-view JS errors).
-* Renderer harness: serve the repo (`.claude/launch.json` → `web-renderer`), open `/Resources/web/index.html`,
-  load `/web-src/fixture.js`.
+* `scripts/e2e.sh [--live]` — the whole loop: build, unit tests, renderer suite (light + dark), and with `--live`
+  the scripted lessons. Run it after every change.
+* `swift test` — unit tests (SSE/think-tag parsing, FSRS, BKT, grader, math equivalence, HTML→Markdown, workspaces,
+  memory, deadlines, sub-agent model choice / failure / cancellation).
+* `MyAITeacher --webtest Tests/web/renderer.test.js [--dark] [--only name]` — loads the real transcript page in the
+  app's WebKit (offscreen) and runs ~60 tests: every fence and component, streaming frame by frame, sanitising,
+  tool cards, quiz answering, visuals, Mermaid re-render from cache, performance. Exits non-zero on any failure or
+  unexpected page error.
+* `scripts/e2e-live.py [--only name] [--keep] [--model x:free]` — live lessons on a free model in a throwaway profile
+  (`MYAITEACHER_HOME`, its own database, settings, folders and log; the learner's data is never touched). It starts a
+  second instance of the app bundle (window titled "(test profile)", stopped by its own pid), sends prompts, answers
+  questions and approvals by clicking the rendered cards, and checks each turn: errors, stuck spinners, undrawn
+  diagrams, failed tools, files changed on disk. Reports and snapshots land in the profile folder.
+* Debug hooks (`MYAITEACHER_DEBUG=1`): `MyAITeacher --post '{"action":"report","path":"/tmp/r.json"}'` (also
+  `snapshot`, `send`, `quick`, `stop`, `pending`, `answer` by id/title, `eval`, `select`, `newLesson`, `openFolder`,
+  `status`, `sessions`). Logs: `~/Library/Logs/MyAITeacher.log`, or `$MYAITEACHER_HOME/MyAITeacher.log`.
+* `MyAITeacher --cli "prompt" [--provider …] [--model …] [--thinking low] [--dump]` — headless provider call;
+  `--cli --tool web_search '{"query":"…"}'` runs any tool; `--cli --spec ask_learner` prints a tool's schema.
+  `MYAITEACHER_TRACE_SSE=1` prints every raw stream event (to tell a model's output from a parsing bug).
 
 ## Tool parity with Claude Code
 | Claude Code tool | My AI Teacher | Notes |
@@ -130,7 +163,7 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 | WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback) merged; news mode |
 | WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, pagination, 15-min cache |
 | TodoWrite | `todo_write` | rendered as a live checklist |
-| Task / Agent | `task` | sub-agent with its own context (read-only + web + math tools), parallelisable |
+| Task / Agent | `task` | sub-agent with its own context (read-only + web + math tools), parallelisable, model choosable, live in the Agents panel, stoppable |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |

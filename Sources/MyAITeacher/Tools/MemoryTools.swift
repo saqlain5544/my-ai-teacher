@@ -8,7 +8,7 @@ struct MemoryTool: Tool {
     var readOnly = false
     var description: String {
         readOnly ? "Search the learner's long-term memory."
-        : "Learner model. save ONE durable fact (kind=concept: content=name); never one-off/derivable details. Ids: 12, f3 folder, c7 concept."
+        : "Learner model. save ONE durable fact (kind=concept: concept=name, content=note); never one-off details. Ids: 12, f3 folder, c7 concept."
     }
     let risk = ToolRisk.readOnly
     var schema: JSON {
@@ -44,6 +44,15 @@ struct MemoryTool: Tool {
         return input["action"]?.string ?? (input["query"] != nil ? "search" : input["content"] != nil && input["id"] == nil ? "save" : "update")
     }
     static func id(_ input: JSON) -> String? { input["id"]?.string ?? input["id"]?.int.map(String.init) }
+    /// A short concept name from a longer description: its first clause, cut at a word boundary (≤ 60 chars).
+    static func conceptName(_ text: String) -> String {
+        let clause = text.components(separatedBy: CharacterSet(charactersIn: ".:;—\n(")).first?.trimmingCharacters(in: .whitespaces) ?? ""
+        let base = clause.isEmpty ? text : clause
+        guard base.count > 60 else { return base }
+        var out = ""
+        for w in base.split(separator: " ") where out.count + w.count + 1 <= 60 { out += (out.isEmpty ? "" : " ") + w }
+        return out.isEmpty ? String(base.prefix(60)) : out
+    }
     private static func list(_ j: JSON?) -> [String] {
         if let a = j?.array { return a.compactMap(\.string) }
         return (j?.string ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
@@ -66,13 +75,20 @@ struct MemoryTool: Tool {
             return ToolOutput(text: lines.joined(separator: "\n"), meta: ["ids": .array((found.map(\.id) + concepts.map(\.id)).map { .string($0) })])
 
         case "save":
-            let content = try input.req("content")
+            // A concept may come with just its name in `concept`.
+            let content = (input["content"]?.string).flatMap { $0.isEmpty ? nil : $0 } ?? input["concept"]?.string ?? ""
+            guard !content.isEmpty else { return .error("Missing `content` (or, for kind=concept, `concept`).") }
             let kindRaw = input["kind"]?.string ?? "fact"
-            let subjects = Self.list(input["subjects"])
+            let subjects = Self.list(input["subjects"]) + Self.list(input["subject"])   // models often write `subject`
             if kindRaw == "concept" || kindRaw == "knowledge" {
-                guard let id = hub.saveConcept(name: input["concept"]?.string ?? content, subjects: subjects, prerequisites: Self.list(input["needs"]),
+                // Models often describe the concept in `content`: the name is `concept`, or a short `content`, or its first
+                // clause; a longer description becomes the concept's summary instead of an error.
+                let named = input["concept"]?.string?.trimmingCharacters(in: .whitespaces) ?? ""
+                let name = !named.isEmpty ? named : content.count <= 80 ? content : Self.conceptName(content)
+                guard let id = hub.saveConcept(name: name, subjects: subjects, prerequisites: Self.list(input["needs"]),
+                                               summary: name == content ? nil : String(content.prefix(400)),
                                                status: kindRaw == "knowledge" ? "solid" : nil, origin: "inferred", source: ctx.conversationID)
-                else { return .error("Concept names must be short (≤ 80 chars).") }
+                else { return .error("Concept names must be short (≤ 80 chars): put a name like \"ionic bonding\" in `concept` and any detail in `content`.") }
                 return ToolOutput(text: "Concept #c\(id) saved.", meta: ["id": .string("c\(id)"), "write": true])
             }
             let kind = MemoryKind(rawValue: kindRaw) ?? .fact

@@ -305,6 +305,15 @@ final class MemoryModelTests: XCTestCase {
         XCTAssertTrue(o.text.contains("Mixes up mitosis"), o.text)
         o = try await tool.run(["action": "save", "kind": "fact", "content": "Keeps lab notes in this folder", "scope": "folder"], ctx)
         XCTAssertTrue(o.text.contains("#f"), o.text)
+        // A concept described at length in `content` (what models actually send) is saved, not rejected.
+        let long = "Knows atomic structure and ions; needs reinforcement on reading ion charges and on electron shells driving chemical stability."
+        o = try await tool.run(["action": "save", "kind": "concept", "content": .string(long), "subject": "chemistry"], ctx)
+        XCTAssertFalse(o.isError, o.text)
+        let saved = services.memory.concept(o.meta?["id"]?.string ?? "")
+        XCTAssertEqual(saved?.name, "Knows atomic structure and ions")
+        XCTAssertEqual(saved?.subjects, ["chemistry"])
+        XCTAssertTrue(saved?.summary?.contains("electron shells") == true)
+        XCTAssertEqual(MemoryTool.conceptName(String(repeating: "word ", count: 30)).count <= 60, true)
     }
 }
 

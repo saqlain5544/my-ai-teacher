@@ -20,6 +20,8 @@ struct HTTPError: LocalizedError, Sendable {
 /// Server‑sent‑events client built on a data delegate so chunks are parsed as they arrive
 /// (much cheaper than iterating `AsyncBytes` byte by byte).
 final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+    /// MYAITEACHER_TRACE_SSE=1 prints every raw event to stderr (provider debugging).
+    static let trace = ProcessInfo.processInfo.environment["MYAITEACHER_TRACE_SSE"] == "1"
     private var buffer = Data()
     private var errorBody = Data()
     private var status = 0
@@ -36,7 +38,7 @@ final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         AsyncThrowingStream { continuation in
             let client = SSEClient(continuation: continuation)
             let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 300
+            config.timeoutIntervalForRequest = 120   // silence limit; providers send keep-alives while thinking
             config.timeoutIntervalForResource = 3600
             config.requestCachePolicy = .reloadIgnoringLocalCacheData
             let queue = OperationQueue()

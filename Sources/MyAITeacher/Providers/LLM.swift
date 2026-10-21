@@ -107,6 +107,26 @@ struct PartialToolCall {
 }
 
 /// Splits `<think>…</think>` reasoning that some OpenAI-compatible models inline in content.
+/// Drops a model's raw control markers that some providers leak into text, e.g. DeepSeek's `<｜DSML｜function_calls>`
+/// or `<｜tool▁calls▁begin｜>` (full-width bars), even when a marker arrives split across chunks.
+struct MarkerFilter {
+    private var held = ""
+    private static let marker = try! NSRegularExpression(pattern: "</?｜[^<>\n]{0,80}>")
+
+    mutating func feed(_ chunk: String) -> String {
+        held += chunk
+        held = Self.marker.stringByReplacingMatches(in: held, range: NSRange(held.startIndex..., in: held), withTemplate: "")
+        // Hold back a possible unfinished marker at the end.
+        if let open = held.range(of: "<", options: .backwards), case let tail = held[open.lowerBound...], tail.count <= 82, !tail.contains(">"),
+           tail == "<" || tail == "</" || tail.hasPrefix("<｜") || tail.hasPrefix("</｜") {
+            let out = String(held[..<open.lowerBound]); held = String(held[open.lowerBound...]); return out
+        }
+        defer { held = "" }
+        return held
+    }
+    mutating func flush() -> String { defer { held = "" }; return held }
+}
+
 struct ThinkTagSplitter {
     private var inThink = false
     private var pending = ""
@@ -141,17 +161,22 @@ struct ThinkTagSplitter {
     mutating func flush() -> [StreamEvent] {
         var out: [StreamEvent] = []
         emit(pending, into: &out); pending = ""
+        emitText(markers.flush(), into: &out)
         return out
     }
 
+    private var markers = MarkerFilter()
+
     private mutating func emit(_ s: String, into out: inout [StreamEvent]) {
         guard !s.isEmpty else { return }
-        if inThink { out.append(.thinking(s)) }
-        else {
-            if !sawAnyText && s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
-            sawAnyText = true
-            out.append(.text(s))
-        }
+        if inThink { out.append(.thinking(s)) } else { emitText(markers.feed(s), into: &out) }
+    }
+
+    private mutating func emitText(_ s: String, into out: inout [StreamEvent]) {
+        guard !s.isEmpty else { return }
+        if !sawAnyText && s.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return }
+        sawAnyText = true
+        out.append(.text(s))
     }
 }
 

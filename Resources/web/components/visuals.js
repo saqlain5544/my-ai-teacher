@@ -90,9 +90,18 @@
   }
   const escapeHTML = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-  function mount(container) {
+  // After a visual froze the page (the app's watchdog restarted it), visuals wait for a click instead of running.
+  let paused = false;
+  R.pauseVisuals = on => { paused = !!on; };
+
+  function mount(container, force) {
     const body = container.querySelector('.visual-body');
     if (!body || body.querySelector('iframe')) return;
+    if (paused && !force) {
+      if (!body.querySelector('.visual-paused')) body.innerHTML = '<div class="visual-paused"><button class="btn" data-act="visual-run">▶ Run visual</button><span>Paused: a visual stopped responding earlier in this lesson.</span></div>';
+      return;
+    }
+    body.innerHTML = '';
     const fid = container.getAttribute('data-fid');
     const { html, libs } = JSON.parse(decodeURIComponent(body.getAttribute('data-src')));
     if (!body.style.height) body.style.height = Math.min(900, Math.max(80, +body.getAttribute('data-h') || 360)) + 'px';
@@ -141,8 +150,9 @@
     const c = el.closest('.visual'); const body = c.querySelector('.visual-body');
     const f = body.querySelector('iframe'); if (f) { frames.delete(c.getAttribute('data-fid')); f.remove(); }
     c.querySelector('.visual-error').hidden = true;
-    mount(c);
+    mount(c, !!f);
   });
+  R.registerAction('visual-run', el => { mount(el.closest('.visual'), true); });
   R.registerAction('visual-fix', (el, e, ctx) => {
     const c = el.closest('.visual');
     const title = c.querySelector('.visual-title').textContent.replace(/^◈\s*/, '');

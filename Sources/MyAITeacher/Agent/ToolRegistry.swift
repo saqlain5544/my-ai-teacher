@@ -57,58 +57,29 @@ struct TaskTool: Tool {
         ], required: ["description", "prompt"])
     }
     func summary(_ input: JSON) -> String { input["description"]?.string ?? "sub-agent" }
+    func timeout(_ input: JSON) -> Double? { SubAgent.budget + 120 }   // the report step comes after the budget
+
+    /// The spec with this lesson's choosable models listed under `model` (fetched per provider, never hard-coded).
+    static func spec(models: [String], current: String) -> ToolSpec {
+        let t = TaskTool()
+        guard models.count > 1, var props = t.schema["properties"]?.object, var obj = t.schema.object else { return t.spec }
+        props["model"] = Schema.string("Optional model for this sub-agent: a smaller, faster one for simple look-ups, a stronger one for hard " +
+                                       "analysis. Omit to use the lesson's model (\(current)). One of: " + models.prefix(30).joined(separator: ", ") +
+                                       (models.count > 30 ? " (and \(models.count - 30) more from this provider)" : ""))
+        obj["properties"] = .object(props)
+        return ToolSpec(name: t.name, description: t.description, schema: .object(obj))
+    }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let prompt = try input.req("prompt")
-        let system = """
-        You are a meticulous research sub-agent working for a tutor. Complete the brief using your tools, then reply with a \
-        concise, well-organised report (Markdown, LaTeX for math) that cites sources as markdown links. Don't ask questions; \
-        make reasonable assumptions and note them. Today is \(Date().formatted(date: .complete, time: .omitted)).
-        """
-        var messages = [ChatMessage(role: .user, blocks: [.text(prompt)])]
-        let tools = ToolRegistry.subagentTools
-        var steps = 0
-        var finalText = ""
-        while steps < 16 {
-            steps += 1
-            try Task.checkCancellation()
-            var assistant = ChatMessage(role: .assistant, blocks: [], model: ctx.model)
-            var text = ""
-            for try await ev in ctx.client.stream(LLMRequest(model: ctx.model, system: system, messages: messages, tools: tools.map(\.spec), maxTokens: 8192)) {
-                switch ev {
-                case .text(let t): text += t
-                case .toolCall(let b): assistant.blocks.append(b); ctx.progress("→ \(b.name ?? "") \(tools.first { $0.name == b.name }?.summary(b.input ?? .null) ?? "")\n")
-                default: break
-                }
+        var model = ctx.model
+        if let m = input["model"]?.string?.trimmingCharacters(in: .whitespaces), !m.isEmpty, m != ctx.model {
+            guard ctx.subAgentModels.isEmpty || ctx.subAgentModels.contains(m) else {
+                return .error("Model `\(m)` isn't available for sub-agents here. Choose one of: \(ctx.subAgentModels.prefix(30).joined(separator: ", ")), or omit `model`.")
             }
-            if !text.isEmpty { assistant.blocks.insert(.text(text), at: 0) }
-            messages.append(assistant)
-            let calls = assistant.toolUses
-            if calls.isEmpty { finalText = text; break }
-            let results = await withTaskGroup(of: (Int, Block).self) { group -> [Block] in
-                for (i, c) in calls.enumerated() {
-                    group.addTask {
-                        guard let tool = tools.first(where: { $0.name == c.name }) else {
-                            return (i, .toolResult(id: c.id ?? "", name: c.name ?? "", content: "Unknown tool", isError: true))
-                        }
-                        let sub = ToolContext(conversationID: ctx.conversationID, workspace: ctx.workspace, services: ctx.services,
-                                              interactions: ctx.interactions, toolCallID: c.id ?? "", client: ctx.client, model: ctx.model, progress: { _ in })
-                        do {
-                            let out = try await tool.run(c.input ?? .object([:]), sub)
-                            return (i, .toolResult(id: c.id ?? "", name: tool.name, content: truncateMiddle(out.text, max: 40_000), isError: out.isError, images: out.images))
-                        } catch {
-                            return (i, .toolResult(id: c.id ?? "", name: tool.name, content: error.localizedDescription, isError: true))
-                        }
-                    }
-                }
-                var out: [(Int, Block)] = []
-                for await r in group { out.append(r) }
-                return out.sorted { $0.0 < $1.0 }.map(\.1)
-            }
-            messages.append(ChatMessage(role: .user, blocks: results))
+            model = m
         }
-        if finalText.isEmpty { finalText = "(The sub-agent stopped without a final report.)" }
-        return ToolOutput(text: finalText)
+        return await SubAgent.run(brief: prompt, title: input["description"]?.string ?? "Sub-agent", model: model, ctx: ctx)
     }
 }
 

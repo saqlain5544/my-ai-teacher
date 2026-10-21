@@ -32,6 +32,8 @@ struct ToolContext: Sendable {
     let model: String
     /// Lets long-running tools stream progress text into their card.
     let progress: @Sendable (String) -> Void
+    /// Models the lesson may hand to a sub-agent (the provider's fetched list; free-only when the lesson is free).
+    var subAgentModels: [String] = []
 }
 
 protocol Tool: Sendable {
@@ -42,10 +44,27 @@ protocol Tool: Sendable {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput
     /// One-line human summary, shown on the tool card and in approval prompts.
     func summary(_ input: JSON) -> String
+    /// Hard limit for one call (seconds); nil = none (waits for the learner). Past it the call is abandoned and the
+    /// model gets an error it can act on, so a stalled site or process never hangs the lesson.
+    func timeout(_ input: JSON) -> Double?
 }
 
 extension Tool {
     var spec: ToolSpec { ToolSpec(name: name, description: description, schema: schema) }
+    func timeout(_ input: JSON) -> Double? {
+        switch risk {
+        case .interactive: nil
+        case .readOnly, .network: 60
+        case .write: 120
+        case .execute: 330      // processes carry their own (shorter) timeouts; this is the backstop
+        }
+    }
+    /// Runs the tool under its timeout.
+    func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        guard let limit = timeout(input) else { return try await run(input, ctx) }
+        let tool = self
+        return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+    }
     func summary(_ input: JSON) -> String {
         for k in ["command", "path", "file_path", "query", "url", "pattern", "title", "question", "concept", "action"] {
             if let s = input[k]?.string { return s }

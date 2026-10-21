@@ -282,7 +282,8 @@ struct StudyProgressView: View {
                             Text(q.title).lineLimit(1)
                             if let t = q.topic { Text(t).font(.caption).foregroundStyle(.secondary) }
                             Spacer()
-                            Text("\(Int(q.score))/\(q.total)").bold().foregroundStyle(q.total > 0 && q.score / Double(q.total) >= 0.8 ? .green : .primary)
+                            Text(q.total > 0 ? "\(String(format: "%g", q.score))/\(q.total)" : "teacher-graded").bold()
+                                .foregroundStyle(q.total > 0 && q.score / Double(q.total) >= 0.8 ? .green : q.total > 0 ? .primary : .secondary)
                             Text(q.date, format: .relative(presentation: .named)).font(.caption).foregroundStyle(.secondary).frame(width: 110, alignment: .trailing)
                         }
                         Divider()

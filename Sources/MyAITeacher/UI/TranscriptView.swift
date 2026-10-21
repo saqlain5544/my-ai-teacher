@@ -25,6 +25,7 @@ struct TranscriptView: NSViewRepresentable {
         web.setValue(false, forKey: "drawsBackground")
         web.allowsMagnification = true
         c.web = web
+        c.watchdog = WebWatchdog(web: web) { [weak c] in c?.pageHung() }
         DebugHooks.transcript = web
         let dir = AppPaths.webResources
         web.loadFileURL(dir.appendingPathComponent("index.html"), allowingReadAccessTo: dir)
@@ -50,6 +51,7 @@ struct TranscriptView: NSViewRepresentable {
     """
 
     static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
+        coordinator.watchdog?.stop()
         web.configuration.userContentController.removeScriptMessageHandler(forName: "bridge")
     }
 
@@ -57,6 +59,16 @@ struct TranscriptView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, TranscriptSink {
         static let pool = WKProcessPool()
         weak var web: WKWebView?
+        var watchdog: WebWatchdog?
+        /// Lessons whose page froze (a looping visual): their visuals wait for a click from then on.
+        private var pausedVisuals: Set<String> = []
+        private var hungNotice = false
+
+        func pageHung() {
+            if let id = session?.id { pausedVisuals.insert(id) }
+            hungNotice = true
+            ready = false   // calls queue until the restarted page says ready
+        }
         weak var session: ChatSession?
         private var ready = false
         private var queue: [String] = []
@@ -80,6 +92,7 @@ struct TranscriptView: NSViewRepresentable {
             let payload = JSON.array(messages.map(Self.encode))
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
             if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload() }
+            if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             run("T.reset(\(payload.compact), \(JSON.object(opts).compact))", replaceQueue: true)
             if ready {
                 web?.evaluateJavaScript("document.querySelectorAll('.msg').length + ' rendered / ' + document.body.scrollHeight + 'px'") { r, _ in
@@ -191,6 +204,10 @@ struct TranscriptView: NSViewRepresentable {
                 if let s = session { reset(s.messages, conversation: s.conversation) }
                 let q = queue; queue.removeAll()
                 q.forEach { run($0) }
+                if hungNotice {
+                    hungNotice = false
+                    run("T.notice('A visual stopped responding, so the lesson was reloaded with visuals paused. Use ▶ Run to try one again.')")
+                }
             case "telemetry":
                 WebTelemetry.handle(j, webView: web)
             case "open":
@@ -203,6 +220,17 @@ struct TranscriptView: NSViewRepresentable {
                 else { app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier, rate: app.settings.value.speechRate) }
             case "memory":
                 app.selection = .memory
+            case "agent":   // a sub-agent card: open it in the right-hand panel, or stop it
+                guard let id = j["id"]?.string, let s = session else { return }
+                let center = SubAgentCenter.shared
+                if j["op"]?.string == "stop" { center.run(id)?.stop(); return }
+                if center.run(id) == nil {
+                    let use = s.messages.flatMap(\.blocks).first { $0.kind == .toolUse && $0.id == id }
+                    let result = s.messages.flatMap(\.blocks).first { $0.kind == .toolResult && $0.id == id }
+                    guard let saved = result?.meta?["subagent"] else { return }
+                    _ = center.restore(id: id, conversationID: s.id, title: use?.input?["description"]?.string ?? "Sub-agent", saved: saved)
+                }
+                app.showSubAgent(id)
             case "answer":
                 if let id = j["id"]?.string { app.interactions.resolve(id, j["value"] ?? .null) }
             case "regenerate": session?.regenerate()
@@ -216,7 +244,7 @@ struct TranscriptView: NSViewRepresentable {
                     "simpler": "Can you explain that again more simply, with an everyday analogy?",
                     "deeper": "Let's go deeper — what's the more rigorous or advanced version of this?",
                     "example": "Give me another worked example, then a similar one for me to try.",
-                    "quiz": "Quiz me on what we just covered (use the quiz tool).",
+                    "quiz": "Quiz me on what we just covered with a short graded quiz.",
                     "flashcards": "Turn the key ideas from your last answer into flashcards for spaced repetition.",
                 ]
                 if let q = j["q"]?.string, let p = prompts[q] { session?.send(p) }

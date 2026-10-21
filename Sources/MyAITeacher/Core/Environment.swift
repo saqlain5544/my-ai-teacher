@@ -1,9 +1,14 @@
 import Foundation
 
 enum AppPaths {
+    /// Test profile: MYAITEACHER_HOME=/dir keeps the database, settings, default folder, quick questions and log under
+    /// that directory, so end-to-end runs never touch the learner's own data.
+    static let testHome: URL? = ProcessInfo.processInfo.environment["MYAITEACHER_HOME"].flatMap {
+        $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
+    }
     static let support: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        let url = base.appendingPathComponent("MyAITeacher", isDirectory: true)
+        let url = testHome?.appendingPathComponent("support", isDirectory: true) ?? base.appendingPathComponent("MyAITeacher", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -12,13 +17,13 @@ enum AppPaths {
     static var settings: URL { support.appendingPathComponent("settings.json") }
     /// Default workspace where the tutor's file/bash tools operate.
     static let workspace: URL = {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("AI Teacher Workspace", isDirectory: true)
+        let url = (testHome ?? FileManager.default.homeDirectoryForCurrentUser).appendingPathComponent("AI Teacher Workspace", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
     /// Lessons that don't belong to a folder ("Quick questions"). Full access by default.
     static let quickFolder: URL = {
-        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".teacher/no-dir-conversations", isDirectory: true)
+        let url = (testHome ?? FileManager.default.homeDirectoryForCurrentUser).appendingPathComponent(".teacher/no-dir-conversations", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
@@ -149,8 +154,8 @@ final class KeyStore: ObservableObject {
 /// Tiny append-only log at ~/Library/Logs/MyAITeacher.log (rotated at 2 MB).
 enum AppLog {
     private static let queue = DispatchQueue(label: "applog", qos: .utility)
-    static let url: URL = FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("Logs/MyAITeacher.log")
+    static let url: URL = AppPaths.testHome?.appendingPathComponent("MyAITeacher.log")
+        ?? FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/MyAITeacher.log")
 
     static func write(_ line: String) {
         let stamp = ISO8601DateFormatter().string(from: Date())

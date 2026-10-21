@@ -93,4 +93,44 @@ final class CoreTests: XCTestCase {
         let j = JSON(any: [NSNumber(value: 1), NSNumber(value: 0), NSNumber(value: 2.5), true, NSNumber(value: false)] as [Any])
         XCTAssertEqual(j, [1, 0, 2.5, true, false])
     }
+
+    // MARK: Deadlines (tools must never hang a lesson)
+
+    func testDeadlineReturnsTheResult() async throws {
+        let v = try await withDeadline(seconds: 5) { 42 }
+        XCTAssertEqual(v, 42)
+    }
+
+    func testDeadlineAbandonsWorkThatIgnoresCancellation() async {
+        let t0 = Date()
+        do {
+            _ = try await withDeadline(seconds: 0.3) { () async -> Int in
+                await withCheckedContinuation { (_: CheckedContinuation<Void, Never>) in }   // never resumes, ignores cancel
+                return 1
+            }
+            XCTFail("should time out")
+        } catch let e as TimeoutError {
+            XCTAssertEqual(e.seconds, 0.3)
+        } catch { XCTFail("wrong error \(error)") }
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 2)
+    }
+
+    func testDeadlineFollowsCallerCancellation() async {
+        let t0 = Date()
+        let task = Task { try await withDeadline(seconds: 30) { try await Task.sleep(nanoseconds: 20_000_000_000); return 1 } }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        task.cancel()
+        let r = await task.result
+        if case .success = r { XCTFail("should be cancelled") }
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 2)
+    }
+
+    func testToolTimeoutsCoverEveryNonInteractiveTool() {
+        for t in ToolRegistry.all {
+            let limit = t.timeout(.object([:]))
+            if t.risk == .interactive { XCTAssertNil(limit, t.name) } else { XCTAssertNotNil(limit, t.name); XCTAssertLessThanOrEqual(limit ?? 0, 700, t.name) }
+        }
+        XCTAssertEqual(WebSearchTool().timeout(.object([:])), 30)
+        XCTAssertGreaterThan(TaskTool().timeout(.object([:])) ?? 0, SubAgent.budget)
+    }
 }

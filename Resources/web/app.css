@@ -134,6 +134,11 @@ button { font: inherit; color: inherit; }
 /* Diagrams & plots */
 .mermaid-block, .plot-block, .svg-block { margin: 0.8em 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow-x: auto; text-align: center; }
 .mermaid-block svg { max-width: 100%; height: auto; }
+/* Edge labels knock out to the card behind them (Mermaid's dark theme puts light text on mid-grey, ~2.5:1). Mermaid's
+   own rules are id-scoped, hence !important. */
+.mermaid-block .edgeLabel, .mermaid-block .edgeLabel p, .mermaid-block .labelBkg { background-color: var(--bg) !important; color: var(--fg) !important; }
+.mermaid-block .edgeLabel rect, .mermaid-block rect.labelBkg { fill: var(--bg) !important; opacity: 1 !important; }
+.mermaid-block .edgeLabel text, .mermaid-block .edgeLabel tspan { fill: var(--fg) !important; }
 .diagram-tools { display: flex; justify-content: flex-end; gap: 4px; margin: -4px -4px 4px 0; }
 .diagram-tools button { border: 0; background: transparent; color: var(--faint); font-size: 0.75em; cursor: pointer; border-radius: 6px; padding: 2px 7px; }
 .diagram-tools button:hover { color: var(--fg); background: var(--card); }
@@ -201,6 +206,11 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .btn.primary:hover { filter: brightness(1.07); }
 .btn.danger { color: var(--bad); }
 .btn:disabled { opacity: .5; cursor: default; }
+.visual-paused { display: flex; align-items: center; gap: 10px; justify-content: center; height: 100%; color: var(--muted); font-size: 0.9em; padding: 12px; }
+/* A sub-agent's transcript in the side panel: nothing to reply to, edit or regenerate. */
+.read-only .msg-actions, .read-only .msg-error button { display: none; }
+.btn.mini { padding: 1px 9px; font-size: 0.82em; border-radius: 6px; }
+.tool .tool-acts { display: inline-flex; gap: 5px; margin: 0 6px; flex: none; }
 
 /* Quiz */
 .quiz { border: 1px solid var(--border); border-radius: 14px; background: var(--bg); box-shadow: var(--shadow); overflow: hidden; }

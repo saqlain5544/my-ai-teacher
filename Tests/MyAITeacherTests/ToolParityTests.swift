@@ -25,6 +25,48 @@ final class ToolParityTests: XCTestCase {
         try await ToolRegistry.byName[name]!.run(input, ctx)
     }
 
+    func testAskLearnerWithoutQuestionsSaysWhatToSend() async throws {
+        for input: JSON in [["graded": true, "title": "Atoms"], ["title": "Atoms"], [:]] {
+            let o = try await AskLearnerTool().run(input, ctx)   // returns at once: nothing to show, nothing to wait for
+            XCTAssertTrue(o.isError && o.text.contains("\"questions\":[{") && o.text.contains("\"options\""), o.text)
+        }
+    }
+
+    func testSubAgentModelChoiceIsListedAndChecked() async throws {
+        let spec = TaskTool.spec(models: ["a:free", "b:free"], current: "a:free")
+        XCTAssertTrue(spec.schema["properties"]?["model"]?["description"]?.string?.contains("b:free") == true)
+        XCTAssertNil(TaskTool.spec(models: [], current: "a").schema["properties"]?["model"], "no list, no choice")
+        var c = ctx!
+        c.subAgentModels = ["m", "small:free"]
+        let o = try await TaskTool().run(["description": "x", "prompt": "y", "model": "paid-big"], c)
+        XCTAssertTrue(o.isError && o.text.contains("small:free"), o.text)
+    }
+
+    func testSubAgentFailsCleanlyWhenItsProviderIsDown() async throws {
+        let o = try await TaskTool().run(["description": "Down", "prompt": "find x", "model": "m"], ctx)   // 127.0.0.1:1 refuses
+        XCTAssertTrue(o.isError && o.text.contains("failed"), o.text)
+        let run = await SubAgentCenter.shared.run("c")
+        let state = await run?.state, model = await run?.model
+        XCTAssertEqual(state, .failed); XCTAssertEqual(model, "m")
+        XCTAssertNotNil(o.meta?["subagent"]?["messages"]?.array, "transcript kept for reopening")
+    }
+
+    func testSubAgentStopsPromptlyWhenCancelled() async throws {
+        // A provider that never answers (non-routable address): only cancellation can end this.
+        let cfg = ProviderConfig(id: "hang", name: "hang", api: .openai, baseURL: "http://10.255.255.1:9", envKeys: [], defaultModel: "m")
+        let hanging = ToolContext(conversationID: "t", workspace: dir, services: ctx.services, interactions: ctx.interactions, toolCallID: "hang-1",
+                                  client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
+        let t0 = Date()
+        let task = Task { try await TaskTool().runBounded(["description": "Hang", "prompt": "x"], hanging) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        task.cancel()
+        _ = await task.result
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 3, "stop must not wait for the network")
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let state = await SubAgentCenter.shared.run("hang-1")?.state
+        XCTAssertEqual(state, .stopped)
+    }
+
     func testClaudeCodeEquivalentTools() async throws {
         // Read (cat -n, offset/limit)
         var o = try await run("read", ["path": "src/a.txt", "offset": 2, "limit": 1])

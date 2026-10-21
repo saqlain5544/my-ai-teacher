@@ -4,9 +4,14 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
-        NSApp.activate(ignoringOtherApps: true)
+        // A test-profile instance runs beside the learner's work and must never take the keyboard from them.
+        if AppPaths.testHome == nil { NSApp.activate(ignoringOtherApps: true) }
         NSWindow.allowsAutomaticWindowTabbing = false
         MainActor.assumeIsolated { DebugHooks.install() }
+        // Test runs stop exactly this instance (never the learner's copy of the same app).
+        if let home = AppPaths.testHome {
+            try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: home.appendingPathComponent("app.pid"), atomically: true, encoding: .utf8)
+        }
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
@@ -20,7 +25,8 @@ struct MyAITeacherApp: App {
     @StateObject private var app = AppModel.shared
 
     var body: some Scene {
-        WindowGroup("My AI Teacher") {
+        // A test-profile instance says so in its title, so it can't be mistaken for the learner's own window.
+        WindowGroup(AppPaths.testHome == nil ? "My AI Teacher" : "My AI Teacher (test profile)") {
             ContentView()
                 .environmentObject(app)
                 .environmentObject(app.settings)

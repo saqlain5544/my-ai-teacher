@@ -180,4 +180,16 @@ final class ProviderStreamTests: XCTestCase {
         XCTAssertEqual(sent?["output_config"]?["effort"]?.string, "medium")
         XCTAssertNil(sent?["temperature"])
     }
+
+    func testLeakedControlMarkersAreDroppedEvenWhenSplit() {
+        var sp = ThinkTagSplitter()
+        var text = ""
+        for chunk in ["Here are the facts.", "\n\n<｜DS", "ML｜ calls>\n", "x < 5 and y > 2", " done</｜DSML｜function_calls>"] {
+            for case .text(let t) in sp.feed(chunk) { text += t }
+        }
+        for case .text(let t) in sp.flush() { text += t }
+        XCTAssertEqual(text, "Here are the facts.\n\n\nx < 5 and y > 2 done")
+        var f = MarkerFilter()
+        XCTAssertEqual(f.feed("a < b"), "a < b", "a plain < is never held back")
+    }
 }

@@ -9,6 +9,7 @@ actor ShellState {
 }
 
 struct BashTool: Tool {
+    func timeout(_ input: JSON) -> Double? { Double(min(600, max(1, input["timeout"]?.int ?? 120))) + 20 }
     let name = "bash"
     let description = """
     Run a shell command (zsh) on the learner's Mac. The working directory persists between calls (starts in the workspace). \
@@ -48,6 +49,7 @@ struct BashTool: Tool {
 
 /// Runs a self-contained snippet in a scratch directory. Used by the tutor and by "Run" buttons on code blocks.
 struct RunCodeTool: Tool {
+    func timeout(_ input: JSON) -> Double? { Double(min(300, input["timeout"]?.int ?? 30)) + 60 }   // + compile time
     let name = "run_code"
     let description = """
     Execute a code snippet and return stdout/stderr. Languages: python, javascript, typescript, swift, c, cpp, go, rust, ruby, bash, java. \

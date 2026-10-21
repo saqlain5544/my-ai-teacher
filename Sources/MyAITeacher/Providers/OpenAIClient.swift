@@ -53,6 +53,7 @@ struct OpenAIClient: LLMClient {
                 var finish: String?
                 do {
                     for try await ev in SSEClient.stream(req) {
+                        if SSEClient.trace { FileHandle.standardError.write(Data(("SSE " + ev.data + "\n").utf8)) }
                         if ev.event == "__json__" { Self.emitNonStreaming(ev.data, continuation); continue }
                         if ev.data == "[DONE]" { break }
                         guard let j = JSON.parse(ev.data) else { continue }

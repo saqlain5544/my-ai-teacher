@@ -56,6 +56,8 @@ enum DebugHooks {
             case "insights": app.selection = .insights
             default: if let id = app.conversations.first?.id { app.selection = .lesson(id) }
             }
+        case "quick": app.quickQuestion()
+        case "stop": session?.stop(); AppLog.write("stopped")
         case "newLesson": app.newLesson(mode: cmd["mode"]?.string.flatMap(TeachingMode.init(rawValue:)) ?? .tutor)
         case "setModel":
             if let p = cmd["provider"]?.string, let m = cmd["model"]?.string { session?.setModel(providerID: p, model: m) }
@@ -72,6 +74,8 @@ enum DebugHooks {
             else if let p = cmd["reveal"]?.string { app.reveal(URL(fileURLWithPath: p)) }
             else { app.inspectorShown = cmd["show"]?.bool ?? !app.inspectorShown }
             AppLog.write("inspector shown=\(app.inspectorShown) tab=\(app.inspectorTab.rawValue)")
+        case "report":   // {"action":"report","path":"/tmp/r.json"}: lesson state + rendered-page health, for scripts/e2e-live.py
+            report(session, to: cmd["path"]?.string ?? "/tmp/myaiteacher-report.json")
         case "status":
             AppLog.write("status running=\(session?.isRunning ?? false) msgs=\(session?.messages.count ?? -1) status=\(session?.status ?? "-") error=\(session?.errorMessage ?? "-")")
         case "resize":
@@ -79,6 +83,45 @@ enum DebugHooks {
                 w.setFrame(NSRect(x: w.frame.minX, y: w.frame.minY, width: cmd["w"]?.double ?? 1240, height: cmd["h"]?.double ?? 840), display: true)
             }
         default: AppLog.write("unknown debug command: \(cmd.compact)")
+        }
+    }
+
+    /// Rendered-page health: visible error boxes, spinners still turning, diagrams never drawn, and the latest reply's text.
+    static let healthJS = """
+    (() => { const all = s => Array.from(document.querySelectorAll(s));
+      const last = document.querySelector('.msg.assistant.last');
+      return JSON.stringify({ messages: all('.msg').length,
+        errors: all('.comp-error, .diagram-error, .math-error, .katex-error, .msg-error, .visual-error:not([hidden])').map(e => e.textContent.trim().slice(0, 300)),
+        spinners: all('.tool .spinner').length, pendingDiagrams: all('.mermaid-block[data-pending]').length,
+        visuals: all('.visual iframe').length, katex: all('.katex').length, diagrams: all('.mermaid-block svg').length,
+        tables: all('.md table').length, practice: all('.practice').length, tools: all('[data-tool-id]').map(e => e.getAttribute('data-tool-id')),
+        lastText: last ? last.innerText.slice(-2000) : '' }); })()
+    """
+
+    static func report(_ session: ChatSession?, to path: String) {
+        let app = AppModel.shared
+        let clip = { (s: String?, n: Int) in s.map { JSON.string(String($0.prefix(n))) } ?? .null }
+        let msgs: [JSON] = (session?.messages ?? []).map { m in
+            .object(["role": .string(m.role.rawValue), "error": clip(m.error, 400), "model": clip(m.model, 80),
+                     "usage": m.usage.map { .object(["input": .number(Double($0.input)), "output": .number(Double($0.output)), "cacheRead": .number(Double($0.cacheRead))]) } ?? .null,
+                     "turn": m.turn.map { t in .object(["duration": .number(t.duration), "steps": .number(Double(t.steps))]) } ?? .null,
+                     "blocks": .array(m.blocks.map { b in
+                         .object(["kind": .string(b.kind.rawValue), "name": clip(b.name, 60), "id": clip(b.id, 60), "isError": .bool(b.isError ?? false),
+                                  "text": clip(b.text, 1200), "input": b.input.map { JSON.string(String($0.compact.prefix(600))) } ?? .null])
+                     })])
+        }
+        var out: [String: JSON] = [
+            "running": .bool(session?.isRunning ?? false), "status": clip(session?.status, 200), "error": clip(session?.errorMessage, 400),
+            "lesson": clip(session?.id, 60), "folder": .string(app.workspace.url.path), "messages": .array(msgs),
+            "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload]) }),
+        ]
+        let write = {
+            if let d = try? JSONEncoder().encode(JSON.object(out)) { try? d.write(to: URL(fileURLWithPath: path), options: .atomic) }
+        }
+        guard let web = transcript else { write(); return }
+        web.evaluateJavaScript(healthJS) { r, _ in
+            out["page"] = (r as? String).flatMap { JSON.parse($0) } ?? .null
+            write()
         }
     }
 

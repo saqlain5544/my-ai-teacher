@@ -6,7 +6,7 @@
   const thread = document.getElementById('thread');
   const statusEl = document.getElementById('status');
   const jumpEl = document.getElementById('jump');
-  const post = (msg) => { try { window.webkit.messageHandlers.bridge.postMessage(msg); } catch (e) { console.log('bridge', JSON.stringify(msg).slice(0, 200)); } };
+  const post = (msg) => { if (window.__onPost) window.__onPost(msg); try { window.webkit.messageHandlers.bridge.postMessage(msg); } catch (e) { console.log('bridge', JSON.stringify(msg).slice(0, 200)); } };
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const hash = (s) => { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
   const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
@@ -176,8 +176,11 @@
   const mermaidSvg = new Map(), mermaidSrc = new Map();
   let mermaidLoading = null, mermaidSeq = 0;
   function renderFence(tok, idx, tokens, env) {
-    const lang = (tok.info || '').trim().split(/\s+/)[0].toLowerCase();
-    const code = tok.content;
+    const info = (tok.info || '').trim(), lang = info.split(/\s+/)[0].toLowerCase();
+    let code = tok.content;
+    // Models sometimes put a component's JSON on the fence line itself (```steps [{"title":…}]): that is its content.
+    const rest = info.slice(lang.length).trim();
+    if (rest && /^[\[{]/.test(rest) && R.fences[lang]) code = rest + '\n' + code;
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;
     const custom = R.fences[lang];
     if (custom) { const out = custom(code, ctx, { open: isLastOpen }); if (out != null) return out; }
@@ -188,8 +191,9 @@
       if (isLastOpen) return '<div class="mermaid-block" data-key="' + key + '-p"><div class="diagram-pending">Drawing diagram…</div></div>';
       const done = mermaidSvg.get(key);
       if (done && done.error) return '<div class="mermaid-block" data-key="' + key + '">' + tools + '<div class="diagram-error">Diagram error: ' + esc(done.error) + '<pre>' + esc(code) + '</pre></div></div>';
-      if (done) return '<div class="mermaid-block" data-key="' + key + '">' + tools + done + '</div>';
-      return '<div class="mermaid-block" data-key="' + key + '" data-pending="1"><div class="diagram-pending">Drawing diagram…</div></div>';
+      // The SVG never passes through the HTML sanitizer (it strips Mermaid's <style> and <foreignObject> labels, leaving
+      // blank boxes): this is a placeholder that processMermaid fills, from the cache at once or after drawing.
+      return '<div class="mermaid-block" data-key="' + key + '" data-pending="1">' + (done ? '' : '<div class="diagram-pending">Drawing diagram…</div>') + '</div>';
     }
     if (lang === 'plot' || lang === 'graph' || lang === 'function-plot') {
       if (isLastOpen) return '<div class="plot-block" data-key="p-pending"><div class="diagram-pending">Plotting…</div></div>';
@@ -219,9 +223,35 @@
     });
     return mermaidLoading;
   }
+  // Models often leave flowchart labels with (), :, ", ; unquoted, which Mermaid rejects. On a parse error, quote those
+  // labels (what the author meant) and try once more; the first error stands if that fails too.
+  function quoteLabels(src) {
+    if (!/^\s*(flowchart|graph)\b/i.test(src)) return src;
+    const q = (id, open, inner, close) => /^\s*".*"\s*$/.test(inner) || !/[()"':;#&]/.test(inner) ? id + open + inner + close
+      : id + open + '"' + inner.replace(/"/g, '#quot;') + '"' + close;
+    return src.replace(/(\b[\w-]+)(\[)(?![\[(\/\\"])([^\]\n]*)(\])/g, (m, id, o, inner, c) => q(id, o, inner, c))
+      .replace(/(\b[\w-]+)(\{)(?![{"])([^}\n]*)(\})/g, (m, id, o, inner, c) => q(id, o, inner, c));
+  }
+  async function renderMermaid(src) {
+    try { return await mermaid.render('mmd' + (++mermaidSeq), src); }
+    catch (e) {
+      document.querySelectorAll('#dmmd' + mermaidSeq + ', #mmd' + mermaidSeq).forEach(n => n.remove());
+      const fixed = quoteLabels(src);
+      if (fixed === src) throw e;
+      try { return await mermaid.render('mmd' + (++mermaidSeq), fixed); } catch (_) { throw e; }
+    }
+  }
+  function fillMermaid(el, key) {
+    const r = mermaidSvg.get(key), code = mermaidSrc.get(key) || '';
+    el.removeAttribute('data-pending');
+    const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
+    el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + r;
+  }
   async function processMermaid(root) {
-    const blocks = Array.from(root.querySelectorAll('.mermaid-block[data-pending]'));
+    let blocks = Array.from(root.querySelectorAll('.mermaid-block[data-pending]'));
     if (root.matches && root.matches('.mermaid-block[data-pending]')) blocks.unshift(root);
+    // Already drawn: fill synchronously, before the browser paints the placeholder.
+    blocks = blocks.filter(el => { const k = el.getAttribute('data-key'); if (!mermaidSvg.has(k)) return true; fillMermaid(el, k); return false; });
     if (!blocks.length) return;
     await ensureMermaid();
     for (const el of blocks) {
@@ -229,16 +259,13 @@
       if (!el.isConnected || !el.hasAttribute('data-pending')) continue;
       const code = mermaidSrc.get(key);
       if (!mermaidSvg.has(key)) {
-        try { const { svg } = await mermaid.render('mmd' + (++mermaidSeq), code.trim()); mermaidSvg.set(key, svg); }
+        try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); }
         catch (e) {
           mermaidSvg.set(key, { error: String((e && (e.message || e.str)) || e).split('\n')[0].slice(0, 300) });
           document.querySelectorAll('#dmmd' + mermaidSeq + ', #mmd' + mermaidSeq).forEach(n => n.remove());
         }
       }
-      const r = mermaidSvg.get(key);
-      el.removeAttribute('data-pending');
-      const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
-      el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + r;
+      if (el.isConnected && el.hasAttribute('data-pending')) fillMermaid(el, key);
     }
   }
 
@@ -484,7 +511,7 @@
       case 'web_fetch': return i.url || '';
       case 'run_code': return (i.language || '') + ' snippet';
       case 'math': return (i.operation || '') + ' ' + (i.expression || '');
-      case 'task': return i.description || '';
+      case 'task': return (i.description || '') + (i.model ? ' · ' + i.model : '');
       case 'memory_save': return (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '');
       case 'memory_search': return i.query || '';
       case 'memory_update': case 'memory_forget': return '#' + (i.id || '');
@@ -518,9 +545,12 @@
     if (pend && pend.kind === 'permission') state = 'needs approval';
     let html = '';
     if (pend && pend.kind === 'permission') html += renderApproval(b, pend);
+    // Sub-agents: open the live transcript in the right-hand panel, or stop just this one.
+    const agentActs = b.name !== 'task' || pendingCall || (!running && !(r && r.meta && r.meta.subagent)) ? ''
+      : '<span class="tool-acts"><button class="btn mini" data-act="agent-open">Open</button>' + (running ? '<button class="btn mini danger" data-act="agent-stop">Stop</button>' : '') + '</span>';
     html += '<div class="tool' + (open ? ' open' : '') + (isErr ? ' error' : '') + (compact && !open ? ' compact' : '') + '">' +
       '<div class="head" data-act="toggle-tool"><span class="icon">' + icon + '</span><span class="name">' + esc(title) + '</span>' +
-      '<span class="sum">' + esc(summaryOf(b)) + '</span><span class="state">' + state + '</span></div>' +
+      '<span class="sum">' + esc(summaryOf(b)) + '</span>' + agentActs + '<span class="state">' + state + '</span></div>' +
       '<div class="body">' + toolBody(b, r) + '</div></div>';
     setHTML(node, html);
   }
@@ -624,6 +654,8 @@
       case 'edit-save': { const ta = msgEl.querySelector('textarea'); msgEl._editing = false; post({ type: 'edit', id: msgId, text: ta.value }); break; }
       case 'edit-cancel': { msgEl._editing = false; msgEl._html = null; renderMessage(S.byId.get(msgId).msg); break; }
       case 'approve': post({ type: 'answer', id: toolId, value: { decision: el.getAttribute('data-v') } }); break;
+      case 'agent-open': post({ type: 'agent', op: 'open', id: toolId }); break;
+      case 'agent-stop': post({ type: 'agent', op: 'stop', id: toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
     }
   });
   const onInput = (e) => { for (const f of R.inputs) { try { f(e, ctx); } catch (err) { console.log(err); } } };
@@ -687,6 +719,7 @@
   // ───────────────────────── API for Swift ─────────────────────────
   window.T = {
     reset(messages, opts) {
+      if (R.pauseVisuals) R.pauseVisuals(opts && opts.pauseVisuals);
       S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear();
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;

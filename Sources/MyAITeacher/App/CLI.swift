@@ -38,6 +38,11 @@ enum CLI {
             return 0
         }
 
+        if let n = opt("--spec") {   // a tool's JSON schema as sent to models
+            guard let t = ToolRegistry.byName[n] else { print("unknown tool"); return 2 }
+            print(JSON.object(["name": .string(t.name), "description": .string(t.description), "parameters": t.schema]).pretty)
+            return 0
+        }
         if let text = opt("--title") {
             let t0 = Date()
             print("on-device available: \(OnDevice.isAvailable)")
@@ -77,7 +82,7 @@ enum CLI {
             let kv = args[i + 1].split(separator: "=", maxSplits: 1).map(String.init)
             if kv.count == 2 { Experiments.forced[kv[0]] = kv[1] }
         }
-        let valued: Set<String> = ["--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
+        let valued: Set<String> = ["--spec", "--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
         let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()
         let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model, lessonID: "cli")
@@ -124,6 +129,12 @@ enum CLI {
 enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
+        if args.contains("--webtest") { WebTest.main(args) }
+        // Send one debug command to a running app (launched with MYAITEACHER_DEBUG=1) and exit: --post '{"action":"status"}'
+        if let i = args.firstIndex(of: "--post"), i + 1 < args.count {
+            DistributedNotificationCenter.default().postNotificationName(Notification.Name("com.saqlain.myaiteacher.debug"), object: args[i + 1], userInfo: nil, deliverImmediately: true)
+            exit(0)
+        }
         if args.contains("--cli") {
             setvbuf(stdout, nil, _IONBF, 0)
             Task.detached {

@@ -120,6 +120,7 @@ enum WebSearch {
 }
 
 struct WebSearchTool: Tool {
+    func timeout(_ input: JSON) -> Double? { 30 }
     let name = "web_search"
     let description = """
     Search the live web (free; DuckDuckGo + Bing, merged). Returns titles, URLs and snippets. Use for current events, \
@@ -164,6 +165,7 @@ actor FetchCache {
 }
 
 struct WebFetchTool: Tool {
+    func timeout(_ input: JSON) -> Double? { 40 }
     let name = "web_fetch"
     let description = """
     Fetch a URL and return its main content as Markdown (HTML is cleaned; PDFs are converted to text; images are shown). \

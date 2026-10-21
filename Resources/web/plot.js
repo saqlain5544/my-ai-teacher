@@ -190,7 +190,8 @@
   const fmt = v => {
     if (Math.abs(v) < 1e-10) return '0';
     const a = Math.abs(v);
-    if (a >= 1e4 || a < 1e-3) return v.toExponential(1);
+    if (a >= 1e4 && a < 1e9) return +(v / (a >= 1e6 ? 1e6 : 1e3)).toFixed(2) + (a >= 1e6 ? 'M' : 'k');   // 20k, 1.5M
+    if (a >= 1e9 || a < 1e-3) return v.toExponential(1);
     return String(+v.toFixed(4));
   };
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -267,7 +268,9 @@
     });
     svg += '</g>';
     const legend = fns.map(f => ({ name: f.label, color: f.color })).concat(series.map(s => ({ name: s.name, color: s.color })));
-    if (legend.length > 1 || (legend.length === 1 && spec.legend !== false)) {
+    // One curve needs a legend only when it was given a name (its raw expression is noise next to the title).
+    const named = legend.length === 1 && (series.length || (fns[0] && fns[0].label !== fns[0].expr));
+    if (legend.length > 1 || (named && spec.legend !== false)) {
       let ly = M.t + 8;
       svg += '<g class="plot-legend">';
       legend.forEach(l => {

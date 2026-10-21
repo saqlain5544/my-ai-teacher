@@ -63,6 +63,11 @@ final class AppModel: ObservableObject {
         Experiments.enabled = s.value.experiments
         settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
+        // A sub-agent starting in the open lesson shows up in the right-hand panel, as it works.
+        SubAgentCenter.shared.onStart = { [weak self] run in
+            guard let self, case .lesson(let id) = self.selection, id == run.conversationID else { return }
+            self.showSubAgent(run.id)
+        }
         touchRecent(ws)
         DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up") }
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
@@ -265,6 +270,11 @@ final class AppModel: ObservableObject {
     }
 
     /// Shows a file or folder in the inspector's file explorer.
+    func showSubAgent(_ id: String) {
+        SubAgentCenter.shared.selectedID = id
+        inspectorTab = .agents
+        inspectorShown = true
+    }
     func reveal(_ url: URL) { inspectorTab = .files; inspectorShown = true; revealRequest = url }
 
     // MARK: Providers & models

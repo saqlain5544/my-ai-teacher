@@ -221,7 +221,8 @@ final class ChatSession: ObservableObject, Identifiable {
             let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
-                                     messages: requestMessages(), tools: tools.map(\.spec),
+                                     messages: requestMessages(),
+                                     tools: tools.map { $0.name == "task" ? TaskTool.spec(models: subAgentModels(), current: conversation.model) : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
                                      thinking: info?.reasoning == false ? .off : settings.thinking)
             host.willRequest(&request, self)
@@ -376,6 +377,23 @@ final class ChatSession: ObservableObject, Identifiable {
         }
     }
 
+    /// Models the teacher may give a sub-agent: the provider's fetched list (tool-capable), free-only when this lesson's
+    /// model is free (delegating never adds cost the learner didn't choose); the lesson's model, then the same vendor's,
+    /// then ones known to call tools. The spec shows the first 30; any of them is accepted.
+    func subAgentModels() -> [String] {
+        let pid = conversation.providerID, current = conversation.model
+        let info = app.modelInfo(pid, current)
+        guard let meta = app.modelMeta[pid], !meta.isEmpty else { return [] }
+        let freeOnly = info?.free == true || current.hasSuffix(":free")
+        let vendor = { (id: String) in id.split(separator: "/").first.map(String.init) ?? "" }
+        let mine = vendor(current)
+        let rank = { (m: ModelInfo) in (vendor(m.id) == mine ? 0 : 1) + (m.tools == true ? 0 : 2) }
+        var list = meta.values.filter { $0.id != current && $0.tools != false && (!freeOnly || $0.free == true) }
+            .sorted { (rank($0), $0.id) < (rank($1), $1.id) }.map(\.id)
+        list.insert(current, at: 0)
+        return list
+    }
+
     private func execute(_ call: Block, client: LLMClient) async -> Block {
         let name = call.name ?? ""
         let callID = call.id ?? UUID().uuidString
@@ -418,11 +436,11 @@ final class ChatSession: ObservableObject, Identifiable {
         EventBus.publish(.toolStarted(conversationID: id, tool: name, callID: callID))
         let progress = ProgressThrottle { [weak self] text in self?.sink?.toolProgress(callID, text: text) }
         let ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
-                              toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) })
+                              toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels())
         let t0 = Date()
         var result: Block
         do {
-            let out = try await tool.run(input, ctx)
+            let out = try await tool.runBounded(input, ctx)
             if tool.risk == .interactive { waited += Date().timeIntervalSince(t0) }
             var meta = out.meta?.object ?? [:]
             meta["ms"] = .number(Date().timeIntervalSince(started) * 1000)
@@ -435,6 +453,9 @@ final class ChatSession: ObservableObject, Identifiable {
             result = .toolResult(id: callID, name: name, content: spillIfLarge(out.text, name: name), isError: out.isError, images: out.images, meta: .object(meta))
         } catch is CancellationError {
             result = .toolResult(id: callID, name: name, content: "Cancelled.", isError: true)
+        } catch let e as TimeoutError {
+            result = .toolResult(id: callID, name: name, content: "\(e.localizedDescription) It didn't respond in time: try another source or a smaller step.", isError: true,
+                                 meta: ["ms": .number(Date().timeIntervalSince(started) * 1000), "timedOut": true])
         } catch {
             result = .toolResult(id: callID, name: name, content: "Error: \(error.localizedDescription)", isError: true)
         }
