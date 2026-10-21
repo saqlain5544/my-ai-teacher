@@ -27,6 +27,7 @@ struct ContentView: View {
         case .flashcards: FlashcardsView()
         case .progress: StudyProgressView()
         case .memory: MemoryView()
+        case .insights: InsightsView()
         case nil: Text("Select a lesson").foregroundStyle(.secondary)
         }
     }
@@ -49,6 +50,7 @@ struct Sidebar: View {
                 Label("Memory", systemImage: "brain.head.profile")
                     .badge(app.memoryCount)
                     .tag(SidebarItem.memory)
+                Label("Insights", systemImage: "gauge.with.dots.needle.33percent").tag(SidebarItem.insights)
             }
             ForEach(groups, id: \.0) { title, items in
                 Section(title) {

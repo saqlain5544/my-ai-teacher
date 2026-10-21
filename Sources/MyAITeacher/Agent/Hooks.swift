@@ -13,6 +13,20 @@ enum AppEvent: Sendable {
     case studyDataChanged
     case workspaceChanged(path: String)
     case notice(conversationID: String?, text: String)
+    /// A tool-approval decision (emitted by `ExtensionHost.shouldRun`; `choice` is the learner's option id, or "policy").
+    case approval(conversationID: String, tool: String, choice: String, allowed: Bool, waited: Double)
+    /// A/B experiment exposure or outcome. Publish once where a variant is applied / an outcome is known.
+    case experiment(ExperimentEvent)
+}
+
+struct ExperimentEvent: Sendable {
+    enum Kind: String, Sendable { case exposure, outcome }
+    var name: String
+    var variant: String
+    var kind: Kind = .exposure
+    var metric: String?
+    var value: Double?
+    var conversationID: String?
 }
 
 struct MemoryChange: Sendable {
@@ -100,9 +114,27 @@ final class ExtensionHost {
         for e in extensions {
             let d = e.shouldRun(c, tool: t, session: s)
             if case .allow = d { continue }
-            return d
+            return Self.observed(d, tool: t.name, conversationID: s.id)
         }
         return .allow
+    }
+
+    /// Publishes `.approval` events for gated calls without the loop knowing (one emit point).
+    static func observed(_ d: ToolDecision, tool: String, conversationID: String, askedAt: Date = Date(), resolved: Bool = false) -> ToolDecision {
+        switch d {
+        case .allow: return d
+        case .deny:
+            if !resolved { EventBus.publish(.approval(conversationID: conversationID, tool: tool, choice: "policy", allowed: false, waited: 0)) }
+            return d
+        case .ask(let req, let resolve):
+            return .ask(req, resolve: { choice in
+                let r = resolve(choice)
+                let allowed: Bool = { if case .allow = r { return true }; return false }()
+                EventBus.publish(.approval(conversationID: conversationID, tool: tool, choice: choice, allowed: allowed,
+                                           waited: Date().timeIntervalSince(askedAt)))
+                return observed(r, tool: tool, conversationID: conversationID, resolved: true)
+            })
+        }
     }
     func didRun(_ c: Block, _ r: inout Block, _ s: ChatSession) { for e in extensions { e.didRun(c, result: &r, session: s) } }
     func didFinishTurn(_ m: inout TurnMetrics, _ s: ChatSession) { for e in extensions { e.didFinishTurn(&m, session: s) } }

@@ -7,6 +7,7 @@ enum SidebarItem: Hashable {
     case flashcards
     case progress
     case memory
+    case insights
 }
 
 @MainActor
@@ -67,6 +68,8 @@ final class AppModel: ObservableObject {
         extensions.register(TeachingContextExtension(app: self))
         extensions.register(LanguageExtension())
         extensions.register(ActivityExtension())
+        Telemetry.shared.start(db: global.db)
+        extensions.register(TelemetryExtension())
     }
 
     private func handle(_ e: AppEvent) {
