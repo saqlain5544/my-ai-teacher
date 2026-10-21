@@ -47,17 +47,25 @@ final class Database: @unchecked Sendable {
     private let lock = NSRecursiveLock()
     let path: String
 
-    init(path: String) throws {
+    /// `readOnly` opens a scanner: its reads come through a memory map (the OS file cache — clean pages that are not
+    /// the app's footprint) instead of its own page cache, and it never holds up the writer's connection. Our lock already
+    /// serialises a connection, so it skips SQLite's own mutex (taken on every column read).
+    init(path: String, readOnly: Bool = false) throws {
         self.path = path
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+        let flags = readOnly ? SQLITE_OPEN_READONLY | SQLITE_OPEN_NOMUTEX : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK else {
             throw SQLiteError(message: "Cannot open database at \(path)")
         }
-        try execute("PRAGMA journal_mode=WAL")
-        try execute("PRAGMA synchronous=NORMAL")
-        try execute("PRAGMA foreign_keys=ON")
-        try execute("PRAGMA temp_store=MEMORY")
-        try execute("PRAGMA cache_size=-8000")
+        if readOnly {
+            try execute("PRAGMA mmap_size=1073741824")
+            try execute("PRAGMA cache_size=-1000")
+        } else {
+            try execute("PRAGMA journal_mode=WAL")
+            try execute("PRAGMA synchronous=NORMAL")
+            try execute("PRAGMA foreign_keys=ON")
+            try execute("PRAGMA temp_store=MEMORY")
+            try execute("PRAGMA cache_size=-8000")
+        }
         Self.live.add(self)
     }
 
@@ -162,6 +170,32 @@ final class Database: @unchecked Sendable {
             rows.append(Row(columns: cols, values: vals))
         }
         return rows
+    }
+
+    /// A row being read by `each`, by column index; valid only inside the callback (blobs are not copied).
+    struct Cursor {
+        fileprivate let stmt: OpaquePointer
+        func int64(_ i: Int32) -> Int64 { sqlite3_column_int64(stmt, i) }
+        func double(_ i: Int32) -> Double { sqlite3_column_double(stmt, i) }
+        func text(_ i: Int32) -> String? { sqlite3_column_text(stmt, i).map { String(cString: $0) } }
+        func blob(_ i: Int32) -> UnsafeRawBufferPointer {
+            UnsafeRawBufferPointer(start: sqlite3_column_blob(stmt, i), count: Int(sqlite3_column_bytes(stmt, i)))
+        }
+    }
+
+    /// Streams rows to `body` without materialising them, so a scan of any size runs in constant memory.
+    /// `body` returns false to stop early.
+    func each(_ sql: String, _ params: SQLBindable?..., body: (Cursor) throws -> Bool) throws {
+        lock.lock(); defer { lock.unlock() }
+        let stmt = try prepare(sql)
+        defer { sqlite3_reset(stmt) }
+        bind(stmt, params)
+        while true {
+            let rc = sqlite3_step(stmt)
+            if rc == SQLITE_DONE { return }
+            guard rc == SQLITE_ROW else { throw SQLiteError(message: errorMessage) }
+            if try !body(Cursor(stmt: stmt)) { return }
+        }
     }
 
     func transaction<T>(_ body: () throws -> T) throws -> T {

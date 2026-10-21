@@ -165,8 +165,33 @@ final class Embedder: @unchecked Sendable {
         return out
     }
 
-    static func encode(_ v: [Float]) -> Data { v.withUnsafeBufferPointer { Data(buffer: $0) } }
-    static func decode(_ d: Data) -> [Float] { d.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) } }
+    /// Stored form: a one-byte tag, then the unit vector as int8 (×127) — a quarter of Float32, and the precision every
+    /// comparison uses anyway. Blobs whose length is a multiple of 4 are the older Float32 form; they still decode.
+    static func encode(_ v: [Float]) -> Data { stored(quantize(normalized(v))) }
+    static func stored(_ q: [Int8]) -> Data { Data([1] + q.map { UInt8(bitPattern: $0) }) }
+    static func dimension(_ blob: UnsafeRawBufferPointer) -> Int { blob.isEmpty ? 0 : blob.count % 4 == 0 ? blob.count / 4 : blob.count - 1 }
+    /// A stored vector as int8 into `out`; all zeros (no evidence) when absent or of another dimension.
+    @discardableResult
+    static func decode(_ blob: UnsafeRawBufferPointer, into out: UnsafeMutableBufferPointer<Int8>) -> Bool {
+        let n = out.count
+        if blob.count == n + 1, blob.count % 4 != 0, blob[0] == 1 {
+            UnsafeMutableRawBufferPointer(out).copyMemory(from: UnsafeRawBufferPointer(rebasing: blob[1...]))
+            return true
+        }
+        if n > 0, blob.count == n * 4 {
+            for (i, x) in quantize(normalized((0..<n).map { blob.loadUnaligned(fromByteOffset: $0 * 4, as: Float.self) })).enumerated() { out[i] = x }
+            return true
+        }
+        out.update(repeating: 0)
+        return false
+    }
+    static func decode(_ d: Data) -> [Int8] {
+        d.withUnsafeBytes { b in
+            var v = [Int8](repeating: 0, count: dimension(b))
+            v.withUnsafeMutableBufferPointer { _ = decode(b, into: $0) }
+            return v
+        }
+    }
     static func cosine(_ a: [Float], _ b: [Float]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }
         var dot: Float = 0, na: Float = 0, nb: Float = 0
@@ -184,7 +209,7 @@ final class Embedder: @unchecked Sendable {
         vDSP_vsmul(v, 1, &inv, &out, 1, vDSP_Length(v.count))
         return out
     }
-    /// A unit vector as int8 (×127) for the in-memory index.
+    /// A unit vector as int8 (×127).
     static func quantize(_ v: [Float]) -> [Int8] { v.map { Int8(max(-127, min(127, ($0 * 127).rounded()))) } }
     /// Cosine of a unit float vector and a quantised one.
     /// (Accelerate: int8 → float into a stack buffer, then a vectorised dot product.)
@@ -208,45 +233,6 @@ final class Embedder: @unchecked Sendable {
             var r: Float = 0
             vDSP_dotpr(x, 1, y, 1, &r, n)
             return r / (127 * 127)
-        }
-    }
-    static func dot(_ a: [Float], _ b: [Float]) -> Float {
-        guard a.count == b.count else { return 0 }
-        var r: Float = 0
-        vDSP_dotpr(a, 1, b, 1, &r, vDSP_Length(a.count))
-        return r
-    }
-}
-
-/// Random-hyperplane LSH over normalised embeddings: 8 bands × 10 bits. Two vectors with cosine ≥ 0.93 share
-/// at least one band with p ≈ 0.93, so near-duplicate checks only verify a handful of candidates.
-enum VectorLSH {
-    static let bands = 8, bits = 10
-    nonisolated(unsafe) private static var planes: [[Float]] = []
-    private static let lock = NSLock()
-
-    private static func hyperplanes(dim: Int) -> [[Float]] {
-        lock.lock(); defer { lock.unlock() }
-        if planes.count == bands * bits, planes.first?.count == dim { return planes }
-        var state: UInt64 = 0x9E37_79B9_7F4A_7C15
-        func next() -> Float {   // SplitMix64 → uniform(-1, 1); deterministic across launches
-            state &+= 0x9E37_79B9_7F4A_7C15
-            var z = state
-            z = (z ^ (z >> 30)) &* 0xBF58_476D_1CE4_E5B9
-            z = (z ^ (z >> 27)) &* 0x94D0_49BB_1331_11EB
-            z ^= z >> 31
-            return Float(Double(z >> 11) / Double(1 << 53)) * 2 - 1
-        }
-        planes = (0..<(bands * bits)).map { _ in (0..<dim).map { _ in next() } }
-        return planes
-    }
-
-    static func keys(_ v: [Float]) -> [Int64] {
-        let p = hyperplanes(dim: v.count)
-        return (0..<bands).map { b in
-            var key: Int64 = 0
-            for i in 0..<bits where Embedder.dot(v, p[b * bits + i]) >= 0 { key |= 1 << Int64(i) }
-            return Int64(b) << 32 | key
         }
     }
 }

@@ -29,21 +29,21 @@
 
    Facts the learner explicitly asked to keep bypass the filter.
 3. **The system updates rather than adds.** Writes go through dedup:
-   - an exact `norm` hash bucket catches identical facts;
-   - an in-memory inverted term index finds candidates;
-   - an embedding LSH (8 bands × 10 bits) also finds candidates;
+   - an exact `norm` lookup (`memories_norm` index) catches identical facts;
+   - the inverted term index (or FTS5, past the memory budget) finds memories sharing rarer terms;
+   - one pass over the int8 vectors finds near ones (cosine ≥ 0.86);
    - only those candidates are verified with cosine + stem Jaccard.
 
-   This is O(candidates), not O(N). A merge bumps `evidence` and keeps the longer or more specific text. Contradictions are resolved by the LLM (UPDATE with history), because deterministic "slot" heuristics would wrongly overwrite facts that are both true ("speaks Arabic" and "speaks French").
+   This is O(candidates) row reads, not O(N). A merge bumps `evidence` and keeps the longer or more specific text. Contradictions are resolved by the LLM (UPDATE with history), because deterministic "slot" heuristics would wrongly overwrite facts that are both true ("speaks Arabic" and "speaks French").
 4. **Retrieval is lean.** Each candidate gets three evidence signals:
    - lexical: IDF-weighted stem overlap, saturating;
    - semantic: NLEmbedding cosine, rescaled;
    - concept routing: the query names a known concept.
 
    The signals are combined with noisy-OR. NLEmbedding is weak (unrelated sentences often score 0.3–0.6), so semantic evidence alone carries little weight. Auto-recall injects **0–2** items, never what the core block already holds, and only above a threshold calibrated on a labelled set (`MemoryQualityTests`).
-5. **Scale.** Each store keeps an in-memory index (docs, postings, normalised vectors, LSH buckets) rebuilt from SQLite. `PRAGMA data_version` detects writes from other processes, such as the CLI. Search is linear, using vDSP dot products. Dedup is sub-linear.
+5. **Scale.** Each store keeps a compact in-RAM index within a 32 MB budget (≈ 40k memories, under 1 KB each): stems interned as UInt32 ids with sorted postings, vectors in one int8 slab, kind/importance/recency as small struct-of-arrays fields. Content, subjects and norms stay in SQLite; only result rows are read. Past the budget nothing is kept per memory: lexical candidates come from `memories_fts`, vectors stream from the `embedding` column (stored as int8) in fixed chunks on parallel read-only connections, with bounded top-k heaps, so the footprint is flat at any count. `PRAGMA data_version` detects writes from other processes, such as the CLI. Every retrieval and dedup test also runs on the disk path (`*OnDiskTests`).
 6. **Consolidation.** The local pass, run on every reflection, does the following:
-   - merges duplicates and concepts that share an alias;
+   - merges duplicates (incrementally: memories changed since the last run, at most 2,000 of them and 1,000 merges a run) and concepts that share an alias;
    - decays unused, non-explicit items and archives them;
    - caps episodes;
    - syncs mastery.

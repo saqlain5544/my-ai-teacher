@@ -1,7 +1,7 @@
 import XCTest
 @testable import MyAITeacher
 
-final class MemoryQualityTests: XCTestCase {
+class MemoryQualityTests: XCTestCase {
     struct PR { var tp = 0, fp = 0, relevant = 0, emptyQueriesWithHits = 0, emptyQueries = 0, items = 0, queries = 0
         var precision: Double { tp + fp == 0 ? 1 : Double(tp) / Double(tp + fp) }
         var recall: Double { relevant == 0 ? 1 : Double(tp) / Double(relevant) }
@@ -116,7 +116,7 @@ final class MemoryQualityTests: XCTestCase {
     }
 }
 
-final class MemoryModelTests: XCTestCase {
+class MemoryModelTests: XCTestCase {
     func testPolicyRejectsDerivableDetails() {
         let reject = [
             "Learner asked for the derivative of sin(x^2)",
@@ -322,7 +322,7 @@ enum GlobalStoreFixture {
 }
 
 /// Correctness guards found by stress testing: updates win, nothing is folded or deleted that shouldn't be.
-final class MemoryCorrectnessTests: XCTestCase {
+class MemoryCorrectnessTests: XCTestCase {
     func testUpdatesSupersedeAndKeepHistory() throws {
         let fx = try MemoryFixture()
         let a = fx.hub.add(kind: .profile, content: "The learner is 15 years old and in year 10", subject: nil, importance: 0.6, origin: "inferred", source: "t")

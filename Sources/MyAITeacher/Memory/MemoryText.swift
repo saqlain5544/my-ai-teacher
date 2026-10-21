@@ -33,6 +33,17 @@ enum MemoryText {
         return out
     }
 
+    /// `stems` with the raw tokens each came from (FTS5 tokenises raw words with its own stemmer, not ours).
+    static func terms(_ s: String, limit: Int = 64) -> [(stem: String, tokens: [String])] {
+        var at: [String: Int] = [:], out: [(stem: String, tokens: [String])] = []
+        for t in tokens(s) where keep(t) {
+            let st = stem(t)
+            if let i = at[st] { if !out[i].tokens.contains(t) { out[i].tokens.append(t) } }
+            else if out.count < limit { at[st] = out.count; out.append((st, [t])) }
+        }
+        return out
+    }
+
     static func keep(_ t: String) -> Bool {
         if stop.contains(t) { return false }
         if t.unicodeScalars.contains(where: { $0.value > 0x2FF }) { return t.count >= 2 }   // Arabic, CJK, …

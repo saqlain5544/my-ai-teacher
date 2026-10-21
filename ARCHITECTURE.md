@@ -264,6 +264,16 @@ The app's footprint must not grow with how much the learner has done: data lives
 * The page is a smaller window of that window: it renders the newest 300 messages (from a learner's turn) and says
   how many are earlier; "Show earlier" reveals in-memory ones 200 at a time, then loads older ones from disk. A long
   session drops the oldest from the page once it is a step past 300. Collapsed tool cards carry no body until opened.
+* Learner memory: a store's index lives in RAM only within `MemoryTuning.indexBudget` (32 MB, ≈ 40k memories at under
+  1 KB each: stems interned as UInt32 ids with sorted postings, vectors in one int8 slab, kind/importance/recency as
+  Float32 struct-of-arrays). Content, subjects and norms stay in SQLite; a search reads only its result rows. Past the
+  budget nothing is kept per memory: lexical candidates come from `memories_fts` (each term's rows read up to a cap;
+  FTS5's bm25 would score every match of a common term, ~1 s for 100k), and vectors stream from the `embedding` column
+  (int8 now, a quarter of Float32) in 512-row chunks on four read-only, memory-mapped connections in parallel, into
+  buffers allocated once, with bounded top-k heaps. Dedup and the duplicate sweep use the same candidates (equal norms
+  via `memories_norm`, rare terms, near vectors); a sweep run stops at 2,000 changed memories or 1,000 merges and the
+  next one resumes. Shedding drops the index and the scan connections. Every memory test also runs on the disk path
+  (`*OnDiskTests`); on the labelled set it recalls exactly what the index recalls.
 * Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
   segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
@@ -399,3 +409,11 @@ The app's footprint must not grow with how much the learner has done: data lives
 * Storage at 200k messages (422 MB database, debug build): 23.5k message writes/s (JSON + FTS index), a 400-message
   window loads in 2.6 ms, a count in 0.4 ms, lesson search 29 ms (common words) / 0.1 ms (rare); the app's footprint
   grew 20 MB. SQLite is not the bottleneck; the access patterns were (the search was 64 s before the rowid-range fix).
+* Learner memory (`MemoryScaleTests`: 512-dim vectors, ~14-word memories; release build; before → after). Past the
+  budget (50k, 500k) the store keeps nothing per memory, so its footprint is the scan's constant buffers:
+
+  | Memories | Footprint the index adds | Search, median |
+  |---|---|---|
+  | 10k (in RAM) | +33.7 MB (3.5 KB each) → **+9.5 MB** (index 7.9 MB, ~0.8 KB each) | 1.4 → **0.6 ms** |
+  | 50k (disk path) | +124.6 MB → **+2.8 MB** | 12.6 → **11.6 ms** |
+  | 500k (disk path) | +1,430 MB → **+0.5 MB** | 132 → **65 ms** |
