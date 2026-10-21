@@ -150,6 +150,9 @@ def fresh_profile():
     (LAB / "notes.md").write_text("# Photosynthesis\n\nPlants turn light, water and CO2 into glucose and oxygen.\n\nChlorophyll absorbs red and blue light.\n")
     (LAB / "buggy.py").write_text("total = 0\nfor i in range(1, 10):\n    total += i\nprint(total)\n")
     (LAB / "scores.csv").write_text("name,score\nAda,91\nAlan,78\nGrace,85\n")
+    # A git repository, so the Changes panel shows what the agent edits.
+    for cmd in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "start"]):
+        subprocess.run(["git", "-C", str(LAB)] + cmd, check=True)
 
 APP = ROOT / "build/My AI Teacher.app"
 

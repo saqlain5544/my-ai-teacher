@@ -72,6 +72,7 @@ enum DebugHooks {
             let app = AppModel.shared
             if let u = cmd["url"]?.string.flatMap(URL.init(string:)) { app.openLink(u) }
             else if let p = cmd["reveal"]?.string { app.reveal(URL(fileURLWithPath: p)) }
+            else if let t = cmd["tab"]?.string.flatMap(InspectorTab.init(rawValue:)) { app.inspectorTab = t; app.inspectorShown = true }
             else { app.inspectorShown = cmd["show"]?.bool ?? !app.inspectorShown }
             AppLog.write("inspector shown=\(app.inspectorShown) tab=\(app.inspectorTab.rawValue)")
         case "report":   // {"action":"report","path":"/tmp/r.json"}: lesson state + rendered-page health, for scripts/e2e-live.py

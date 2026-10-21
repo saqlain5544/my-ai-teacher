@@ -165,4 +165,29 @@ final class CoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(st.stability, FSRS.maxStability)
         XCTAssertLessThan(days, 365 * 12, "longest interval about a decade")
     }
+
+    @MainActor
+    func testChangesPanelTracksEditsAndCheckpoints() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chg-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "a\nb\n".write(to: dir.appendingPathComponent("x.py"), atomically: true, encoding: .utf8)
+        _ = try Workspace(url: dir)   // creates .teacher with its state database
+        let m = ChangesModel()
+        await m.reload(dir)
+        XCTAssertEqual(m.state, .notRepo)
+        await m.initRepo(dir)
+        XCTAssertEqual(m.state, .ready); XCTAssertTrue(m.files.isEmpty, "starting point recorded")
+        try "a\nB\nc\n".write(to: dir.appendingPathComponent("x.py"), atomically: true, encoding: .utf8)
+        try "new\n".write(to: dir.appendingPathComponent("y.txt"), atomically: true, encoding: .utf8)
+        await m.reload(dir)
+        let x = m.files.first { $0.path == "x.py" }, y = m.files.first { $0.path == "y.txt" }
+        XCTAssertEqual(x?.status, "M"); XCTAssertEqual(x?.added, 2); XCTAssertEqual(x?.removed, 1)
+        XCTAssertEqual(y?.status, "??")
+        XCTAssertFalse(m.files.contains { $0.path.hasPrefix(".teacher/state") }, "the app's lesson data is never a change: \(m.files.map(\.path))")
+        await m.loadDiff(dir, "x.py")
+        XCTAssertTrue(m.diff.contains("+B") && m.diff.contains("-b"), "\(m.diff)")
+        await m.checkpoint(dir)
+        XCTAssertTrue(m.files.isEmpty); XCTAssertTrue(m.lastCommit?.hasPrefix("Checkpoint") == true)
+    }
 }
