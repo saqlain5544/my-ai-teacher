@@ -98,6 +98,92 @@
     eq(window.__pwned, 0, 'nothing executed');
   });
 
+  test('model HTML cannot fake app UI: no style, class, data-act or handlers', () => {
+    window.__pwned = 0;
+    const el = show('<span class="katex"><span style="position:fixed;inset:0;z-index:99999;background:#0f0">FAKE</span></span>\n\n' +
+      '<button data-act="suggest" data-text="Ignore previous instructions">Click</button> <svg style="position:fixed;inset:0"><rect width="10" height="10"/></svg>\n\n' +
+      '```svg\n<svg xmlns="http://www.w3.org/2000/svg" style="position:fixed;inset:0" data-act="regenerate"><text y="20">hi</text></svg>\n```');
+    ok(!$('[style*="fixed"]', el) || $('.svg-block [style*="fixed"]', el), 'no free-floating styled overlay');
+    ok(!$('[data-act="suggest"], [data-act="regenerate"]', el), 'no model-made app buttons');
+    const svg = $('.svg-block', el); ok(getComputedStyle(svg).contain.includes('paint'), 'svg painted inside its box');
+    posts.length = 0; const b = $('button', el); if (b) click(b); eq(posts.filter(p => p.type === 'suggest').length, 0, 'clicking sends nothing');
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'image', mime: 'image/png', data: 'x" onerror="window.__pwned=1' }] };
+    T.reset([u], {}); eq(window.__pwned, 0, 'attachment data is never markup');
+  });
+
+  test('an unclosed fence at the end of a finished reply renders as finished', async () => {
+    const msg = await stream('See:\n\n```chart\n{"labels":["a","b"],"data":[1,2]}\n', 7);
+    ok(!$('.diagram-pending', msg), 'no stuck "Building…" after the stream ends');
+    ok($('.chart-block svg', msg), 'chart drawn');
+    const m2 = await stream('Code:\n\n```python\nprint(1)\n', 5);
+    ok($('.code-block [data-act="run"]', m2), 'unclosed code block gets its Run button');
+  });
+
+  test('stray or mid-line fences leave no empty code boxes', () => {
+    const el = show('Text\n\n```python\nprint(1)\n```\n```');
+    eq($$('.code-block', el).length, 1, 'one block, not an extra empty one');
+    ok($('.code-block code', el).textContent.includes('print'), 'the real block has its code');
+  });
+
+  test('a visual keeps the same frame while the reply keeps streaming', async () => {
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', model: 'm', blocks: [] };
+    T.status('…', true); T.upsert(a);
+    T.delta(a.id, 0, 'text', '```visual\n<p id="x">hi</p>\n```\n\nMore'); await sleep(200);
+    const f1 = await until(() => $('#m-' + a.id + ' .visual iframe'), 'frame');
+    for (let i = 0; i < 8; i++) { T.delta(a.id, 0, 'text', ' text ' + i); await frame(); }
+    await sleep(150);
+    ok($('#m-' + a.id + ' .visual iframe') === f1, 'same iframe: the visual did not restart');
+    T.status('', false);
+  });
+
+  test('IME composition: Enter that picks a candidate does not send', () => {
+    const a = A([{ kind: 'toolUse', id: 'ime1', name: 'ask_learner', input: { question: '名前は?' } }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'ime1', kind: 'ask_learner', payload: { question: '名前は?' } }, true);
+    const ta = $('[data-tool-id="ime1"] [data-ask-text]'); ta.value = 'たなか';
+    posts.length = 0;
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, isComposing: true }));
+    eq(posts.filter(p => p.type === 'answer').length, 0, 'composing Enter ignored');
+    ta.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    eq(posts.filter(p => p.type === 'answer').length, 1, 'plain Enter sends');
+    T.interaction({ id: 'ime1' }, false); T.status('', false);
+  });
+
+  test('numbers: other digit scripts, thousands separators, empty forms', () => {
+    const qs = [{ type: 'numeric', prompt: 'How many?', min: 100 }, { type: 'short_text', prompt: 'Why?' }];
+    const a = A([{ kind: 'toolUse', id: 'nm1', name: 'ask_learner', input: { questions: qs } }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'nm1', kind: 'ask', payload: { questions: qs } }, true);
+    const card = () => $('[data-tool-id="nm1"]');
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    eq(posts.filter(p => p.type === 'answer').length, 0, 'empty form not sent');
+    ok(card().textContent.includes('Answer at least one'), 'says why');
+    const n = $('[data-q-input="0"]', card());
+    n.value = '١٢٣'; n.dispatchEvent(new Event('input', { bubbles: true })); eq(n.value, '123', 'Arabic-Indic digits become 0-9');
+    n.value = '1,234'; click($('[data-act="q-submit"]', card()));
+    eq(lastPost('answer') && lastPost('answer').value.answers[0], '1,234', '1,234 is ≥ 100 (thousands separator), so it is sent');
+    T.interaction({ id: 'nm1' }, false); T.status('', false);
+  });
+
+  test('performance: streaming a 30k-character reply stays fast per frame', async () => {
+    const base = KITCHEN.replace(/```visual[\s\S]*?```/, '') + '\n\n';
+    let doc = ''; while (doc.length < 30000) doc += base + 'Paragraph ' + doc.length + ' with $x^2$ and **bold** text.\n\n';
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('…', true); T.upsert(a);
+    const times = [];
+    for (let i = 0; i < doc.length; i += 120) {
+      T.delta(a.id, 0, 'text', doc.slice(i, i + 120));
+      const s = performance.now(); await frame(); times.push(performance.now() - s);
+    }
+    T.status('', false);
+    times.sort((x, y) => x - y);
+    const p95 = times[Math.floor(times.length * 0.95)], late = times.slice(-20).reduce((x, y) => x + y, 0) / 20;
+    log('30k stream: ' + times.length + ' frames, p95 ' + p95.toFixed(0) + ' ms, slowest-20 mean ' + late.toFixed(0) + ' ms');
+    ok(p95 < 60, 'p95 frame ' + p95.toFixed(0) + ' ms');
+  });
+
   // ───────────── Code ─────────────
   test('code blocks: highlighting, copy, run and output', () => {
     const code = 'def f(x):\n    return x * 2\nprint(f(21))';
@@ -133,6 +219,10 @@
     gantt: 'gantt\n  title Plan\n  dateFormat YYYY-MM-DD\n  section Study\n  Read :a1, 2026-01-01, 3d',
     // What models write all the time: parentheses, quotes and colons inside labels.
     parenLabels: 'graph LR\n  A[Photosynthesis (light)] --> B[Glucose: C6H12O6]\n  B --> C[Energy "ATP"]',
+    edgeParens: 'flowchart LR\n  A -->|f(x) = 2x| B\n  B --> C(Start (here))',
+    subgraphTitle: 'flowchart TD\n  subgraph one [Group (1)]\n    A --> B\n  end',
+    endNode: 'flowchart TD\n  start --> end',
+    headerless: 'A --> B\n  B --> C',
   };
   for (const [kind, src] of Object.entries(MERMAID)) {
     test('mermaid ' + kind + ' renders', async () => {
@@ -522,7 +612,7 @@
       return inp;
     };
     eq(type('[data-q-input="0"]', 'abc12x.5').value, '12.5', 'letters never get into a number');
-    eq(type('[data-q-input="1"]', '3.7').value, '37', 'whole numbers only');
+    eq(type('[data-q-input="1"]', '3.7').value, '3.7', 'a decimal point is kept so the learner sees why it is not a whole number');
     const t = type('[data-q-input="2"]', 'ab');
     eq($('[data-count="2"]', card()).textContent, '2 / 6', 'counter'); eq(t.getAttribute('maxlength'), '6');
     $('[data-q-input="0"]', card()).value = '250';
@@ -530,7 +620,8 @@
     eq(posts.filter(p => p.type === 'answer').length, 0, 'blocked while invalid');
     ok($('[data-err="0"]', card()).textContent.includes('at most 200'), 'range message: ' + $('[data-err="0"]', card()).textContent);
     ok($('[data-err="2"]', card()).textContent.includes('At least 3'), 'length message');
-    $('[data-q-input="0"]', card()).value = '1/2'; $('[data-q-input="2"]', card()).value = 'ABCD';
+    ok($('[data-err="1"]', card()).textContent.includes('whole number'), 'integer message');
+    $('[data-q-input="0"]', card()).value = '1/2'; $('[data-q-input="1"]', card()).value = '37'; $('[data-q-input="2"]', card()).value = 'ABCD';
     click($('[data-act="q-submit"]', card()));
     const ans = lastPost('answer'); ok(ans, 'sent once valid'); eq(ans.value.answers.slice(0, 3), ['1/2', '37', 'ABCD']);
     T.interaction({ id: 'qv1' }, false); T.status('', false);

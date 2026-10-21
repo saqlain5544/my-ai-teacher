@@ -151,7 +151,10 @@
 
   function parseSpec(src) {
     src = src.trim();
-    try { const j = JSON.parse(src); return normalizeSpec(Array.isArray(j) ? { functions: j } : j); } catch (_) {}
+    // JSON — or the sloppy JS-object/JSON5 that models write ({functions: ['sin(x)'], xmin: -3, }).
+    if (/^[\[{]/.test(src) && window.TeacherUI && window.TeacherUI.parseLoose) {
+      try { const j = window.TeacherUI.parseLoose(src); if (j && typeof j === 'object') return normalizeSpec(Array.isArray(j) ? { functions: j } : j); } catch (_) {}
+    }
     const spec = { functions: [] };
     for (let line of src.split('\n')) {
       line = line.trim(); if (!line || line.startsWith('#') || line.startsWith('//')) continue;

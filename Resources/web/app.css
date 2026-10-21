@@ -134,6 +134,9 @@ button { font: inherit; color: inherit; }
 /* Diagrams & plots */
 .mermaid-block, .plot-block, .svg-block { margin: 0.8em 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow-x: auto; text-align: center; }
 .mermaid-block svg { max-width: 100%; height: auto; }
+/* Model-written SVG: painted inside its box only (no overlays), default ink follows the theme. */
+.svg-block { contain: paint; }
+.svg-block > svg:not([fill]) { fill: currentColor; color: var(--fg); }
 /* Edge labels knock out to the card behind them (Mermaid's dark theme puts light text on mid-grey, ~2.5:1). Mermaid's
    own rules are id-scoped, hence !important. */
 .mermaid-block .edgeLabel, .mermaid-block .edgeLabel p, .mermaid-block .labelBkg { background-color: var(--bg) !important; color: var(--fg) !important; }
@@ -208,6 +211,7 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .btn:disabled { opacity: .5; cursor: default; }
 .q-meta { display: flex; justify-content: space-between; gap: 8px; min-height: 1.1em; font-size: 0.78em; margin-top: 3px; }
 .q-err { color: var(--bad); }
+.q-empty { color: var(--bad); font-size: 0.85em; margin-bottom: 6px; }
 .q-count { color: var(--faint); margin-left: auto; }
 .q-text.invalid { border-color: var(--bad) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
 .agent-note { margin: 0.4em 0; }

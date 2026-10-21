@@ -20,13 +20,15 @@
     const raw = range / target, mag = Math.pow(10, Math.floor(Math.log10(raw || 1))), n = raw / mag;
     return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
   }
-  const fmt = v => Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.abs(v) >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : String(+(+v).toFixed(3));
+  const fmt = v => Math.abs(v) >= 1e9 ? (+v).toExponential(1) : Math.abs(v) >= 1e6 ? (v / 1e6).toFixed(1) + 'M' : Math.abs(v) >= 1e4 ? (v / 1e3).toFixed(0) + 'k' : String(+(+v).toFixed(3));
 
   function chart(spec, ctx) {
     const esc = ctx.esc;
     const type = (spec.type || 'bar').toLowerCase();
     let series = spec.series || (spec.data ? [{ name: spec.name || '', data: spec.data }] : []);
     series = series.filter(s => s && Array.isArray(s.data) && s.data.length);
+    const LEGEND_MAX = 10;
+    if (series.length > LEGEND_MAX) series = series.slice(0, LEGEND_MAX);   // a chart with 15 series reads as noise
     if (!series.length) return '<div class="comp-error">This chart has no data.</div>';
     // Points as {x, y} or [x, y] (common in model output) become labels + values, except for scatter.
     if (type !== 'scatter') series = series.map(s => {
@@ -36,12 +38,14 @@
       if (!spec.labels) spec = Object.assign({}, spec, { labels: s.data.map(v => String(xy(v)[0])) });
       return Object.assign({}, s, { data: s.data.map(v => +xy(v)[1] || 0) });
     });
-    const labels = spec.labels || (series[0] ? series[0].data.map((_, i) => String(i + 1)) : []);
+    // Every data point gets a label (missing ones are numbered), and only as many as the data needs.
+    const longest = series.reduce((m, s) => Math.max(m, s.data.length), 0);
+    const labels = Array.from({ length: longest }, (_, i) => spec.labels && spec.labels[i] != null ? spec.labels[i] : String(i + 1));
     const W = 640, H = 360, M = { l: 52, r: 16, t: spec.title ? 34 : 14, b: 46 };
     let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" role="img">';
     if (spec.title) svg += '<text class="plot-title" x="' + W / 2 + '" y="20" text-anchor="middle">' + esc(spec.title) + '</text>';
     if (type === 'pie' || type === 'donut' || type === 'doughnut') {
-      const vals = series[0] ? series[0].data.map(Number) : [];
+      const vals = series[0] ? series[0].data.map(v => Math.max(0, +(v && typeof v === 'object' ? (v.value ?? v.y) : v) || 0)) : [];   // no negative slices
       const total = vals.reduce((a, b) => a + Math.max(0, b), 0) || 1;
       const cx = 220, cy = (H + M.t) / 2, r = Math.min(150, (H - M.t - 20) / 2), inner = type === 'pie' ? 0 : r * 0.55;
       let a0 = -Math.PI / 2;
@@ -63,6 +67,9 @@
       return svg + '</svg>';
     }
     if (type === 'scatter') {
+      // Points as [x, y] or {x, y}.
+      series = series.map(s => Object.assign({}, s, { data: s.data.map(p => Array.isArray(p) ? p : p && typeof p === 'object' ? [p.x, p.y] : [NaN, NaN]).filter(p => isFinite(+p[0]) && isFinite(+p[1])) })).filter(s => s.data.length);
+      if (!series.length) return '<div class="comp-error">This chart has no plottable points.</div>';
       const pts = series.flatMap(s => s.data);
       const xs = pts.map(p => +p[0]), ys = pts.map(p => +p[1]);
       let x0 = Math.min(...xs), x1 = Math.max(...xs), y0 = Math.min(0, ...ys), y1 = Math.max(...ys);
@@ -82,7 +89,8 @@
     const bandW = (W - M.l - M.r) / Math.max(1, n);
     const sx = i => M.l + bandW * (i + 0.5), sy = y => H - M.b - (y - y0) / (y1 - y0) * (H - M.t - M.b);
     svg += axes(0, 1, y0, y1, null, sy, W, H, M, false);
-    labels.forEach((l, i) => { svg += '<text class="chart-tick" x="' + sx(i) + '" y="' + (H - M.b + 16) + '" text-anchor="middle">' + esc(String(l).length > 12 ? String(l).slice(0, 11) + '…' : l) + '</text>'; });
+    const every = Math.max(1, Math.ceil(n / 14));   // thin crowded axes: at most ~14 tick labels
+    labels.forEach((l, i) => { if (i % every) return; svg += '<text class="chart-tick" x="' + sx(i) + '" y="' + (H - M.b + 16) + '" text-anchor="middle">' + esc(String(l).length > 12 ? String(l).slice(0, 11) + '…' : l) + '</text>'; });
     if (type === 'bar') {
       const k = series.length, gw = bandW * 0.72, bw = stacked ? gw : gw / k;
       const base = labels.map(() => 0);
@@ -158,7 +166,11 @@
       '<div class="md">' + ctx.md(it.text || it.body || '') + '</div></div>').join(''));
   }));
 
-  R.registerFence(['compare', 'comparison'], safe('comparison', (spec, ctx, code) => {
+  R.registerFence(['compare', 'comparison'], (code, ctx, env) => {
+    if (/^\s*\|.*\|\s*\n\s*\|[\s:|-]+\|/.test(code) && !(env && env.open)) return box('compare md', 'cp' + ctx.hash(code), ctx.md(code));   // a markdown table
+    return compareJSON(code, ctx, env);
+  });
+  const compareJSON = safe('comparison', (spec, ctx, code) => {
     let cols = spec.columns || spec.headers || [];
     // Rows may be objects keyed by column name.
     const rows = (spec.rows || []).map(r => Array.isArray(r) ? r : r && typeof r === 'object' ? (cols.length ? cols.map(c => r[c] != null ? r[c] : '') : Object.values(r)) : [r]);
@@ -169,7 +181,7 @@
     let h = '<table class="compare-table"><thead><tr><th>' + ctx.inline(String(corner)) + '</th>' + cols.map(c => '<th>' + ctx.inline(String(c)) + '</th>').join('') + '</tr></thead><tbody>';
     rows.forEach(r => { h += '<tr><th>' + ctx.inline(String(r[0] == null ? '' : r[0])) + '</th>' + r.slice(1).map(c => '<td>' + ctx.inline(String(c == null ? '' : c)) + '</td>').join('') + '</tr>'; });
     return box('compare md', 'cp' + ctx.hash(code), h + '</tbody></table>');
-  }));
+  });
 
   // Facts also come as plain lines ("term | meaning", "term: meaning"), not only JSON.
   const kvLines = code => code.split('\n').map(l => l.trim()).filter(Boolean).map(l => {
@@ -179,8 +191,8 @@
   });
   R.registerFence(['kv', 'facts', 'definitions'], (code, ctx, env) => {
     if (!/^\s*[\[{]/.test(code) && !(env && env.open)) {
-      const rows = kvLines(code);
-      if (rows.length && rows.every(Boolean)) return box('kv', 'kv' + ctx.hash(code), '<dl>' + rows.map(([k, v]) => '<dt>' + ctx.inline(k) + '</dt><dd>' + ctx.inline(v) + '</dd>').join('') + '</dl>');
+      const rows = kvLines(code).filter(Boolean);
+      if (rows.length) return box('kv', 'kv' + ctx.hash(code), '<dl>' + rows.map(([k, v]) => '<dt>' + ctx.inline(k) + '</dt><dd>' + ctx.inline(v) + '</dd>').join('') + '</dl>');
     }
     return factsJSON(code, ctx, env);
   });
@@ -190,7 +202,9 @@
   });
 
   // ── JSON tree & CSV ───────────────────────────────────────────────────
+  let treeBudget = 0;   // nodes left to draw: a 10k-item JSON stays fast; the rest is summarised
   function tree(v, ctx, depth) {
+    if (--treeBudget < 0) return '<span class="j-more">…</span>';
     if (v === null) return '<span class="j-null">null</span>';
     if (typeof v === 'string') return '<span class="j-str">"' + ctx.esc(v) + '"</span>';
     if (typeof v === 'number') return '<span class="j-num">' + v + '</span>';
@@ -202,6 +216,7 @@
   }
   R.registerFence('json', (code, ctx, env) => {
     if (env && env.open) return null;
+    treeBudget = 3000;
     try { return box('json-tree', 'js' + ctx.hash(code), '<div class="code-head"><span class="lang">json</span><span><button data-act="copy-raw" data-raw="' + ctx.esc(code) + '">Copy</button></span></div><div class="j-root">' + tree(JSON.parse(code), ctx, 0) + '</div>'); }
     catch (_) { return null; } // not valid JSON: fall back to a code block
   });
@@ -224,7 +239,8 @@
     const rows = parseCSV(code);
     if (rows.length < 2) return null;
     return box('md csv', 'cv' + ctx.hash(code), '<table class="sortable"><thead><tr>' + rows[0].map(h => '<th>' + ctx.esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
-      rows.slice(1, 1001).map(r => '<tr>' + r.map(c => '<td>' + ctx.esc(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>');
+      rows.slice(1, 1001).map(r => '<tr>' + r.map(c => '<td>' + ctx.esc(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>' +
+      (rows.length > 1001 ? '<div class="muted csv-more">Showing the first 1,000 of ' + (rows.length - 1).toLocaleString() + ' rows.</div>' : ''));
   });
 
   // ── Vocabulary cards (language learning) ──────────────────────────────
@@ -264,6 +280,7 @@
         while (k < inl.children.length && !/break$/.test(inl.children[k].type)) { line += inl.children[k].content; k++; }
         const custom = ((/^\[!\w+\][+-]?\s*(.*)$/.exec(line) || [])[1] || '').trim();
         const title = new state.Token('html_inline', '', 0);
+        title.meta = { trusted: true };
         if (custom && custom.length <= 60) {
           // Short text after the marker is a title.
           inl.children.splice(0, Math.min(inl.children.length, k + 1));

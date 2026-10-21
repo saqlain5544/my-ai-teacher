@@ -41,7 +41,7 @@
       let h = (q.options || []).map((o, oi) => {
         let cls = given === oi ? ' sel' : '';
         if (g && g.correct != null) cls = g.answer === oi ? ' correct' : (given === oi ? ' wrong' : '');
-        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-pick" tabindex="0" role="radio" aria-checked="' + (given === oi) + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="radio" tabindex="-1"' + (given === oi ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
+        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-pick" tabindex="0" role="radio" aria-checked="' + (given === oi) + '" data-focus="o' + qi + '-' + oi + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="radio" tabindex="-1"' + (given === oi ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
       }).join('');
       if (q.allow_other) {
         const v = typeof given === 'string' ? given : (F.other[qi] || '');
@@ -58,7 +58,7 @@
         const sel = Array.isArray(given) && given.includes(oi);
         let cls = sel ? ' sel' : '';
         if (ans) cls = ans.includes(oi) ? (sel ? ' correct' : ' missed') : (sel ? ' wrong' : '');
-        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-toggle" tabindex="0" role="checkbox" aria-checked="' + sel + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="checkbox" tabindex="-1"' + (sel ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
+        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-toggle" tabindex="0" role="checkbox" aria-checked="' + sel + '" data-focus="o' + qi + '-' + oi + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="checkbox" tabindex="-1"' + (sel ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
       }).join('') + (active ? '<div class="q-help">' + (q.max_select ? 'Choose up to ' + q.max_select : 'Select all that apply') + '</div>' : '');
     },
   };
@@ -313,7 +313,7 @@
     const id = toolOf(el), F = state(id);
     const card = el.closest('[data-tool-id]');
     collect(card, F);
-    if (!validate(card)) return;
+    if (!validate(card, F, questionsOf(id, ctx))) return;
     const n = card.querySelectorAll('.quiz-q').length;
     const answers = Array.from({ length: n }, (_, i) => {
       let a = F.answers[i];
@@ -353,11 +353,18 @@
 
   // ── Typed input: numbers accept only numeric characters; text has length bounds and an optional pattern ──
   const limit = (q, multiline) => Math.max(1, Math.min(+q.max_length || (multiline ? 5000 : 300), 100000));
-  const NUM_CHARS = { num: /[^0-9.,+\-eE\/ ]/g, int: /[^0-9\-]/g };
+  // Integer fields still accept "." and "," so the learner sees why 12.5 isn't allowed instead of getting 125.
+  const NUM_CHARS = { num: /[^0-9.,+\-eE\/ \u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, int: /[^0-9.,\-\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g };
+  /** Arabic-Indic, Persian, full-width and Devanagari digits → 0-9. */
+  const normDigits = s => String(s).replace(/[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, c => {
+    const k = c.charCodeAt(0);
+    return String(k - (k >= 0xFF10 ? 0xFF10 : k >= 0x0966 ? 0x0966 : k >= 0x06F0 ? 0x06F0 : 0x0660));
+  });
   /** A number from what the learner typed: 3.5, -2, 1/2, 2,5 (decimal comma), 1e3; NaN when it isn't one. */
   function toNumber(s) {
-    s = String(s).trim().replace(/\s+/g, '');
+    s = normDigits(s).trim().replace(/\s+/g, '');
     if (!s) return NaN;
+    if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '');   // 1,234.5
     const frac = /^([+-]?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/.exec(s);
     if (frac) return +frac[2] ? +frac[1] / +frac[2] : NaN;
     if (/^[+-]?\d+,\d+$/.test(s)) s = s.replace(',', '.');
@@ -391,11 +398,25 @@
     return msg;
   }
   /** Checks every field; marks the bad ones and focuses the first. True when the form can be sent. */
-  function validate(card) {
+  function validate(card, F, qs) {
     let first = null;
     card.querySelectorAll('[data-q-input]').forEach(inp => { if (showProblem(card, inp, true) && !first) first = inp; });
-    if (first) first.focus();
-    return !first;
+    if (first) { first.focus(); return false; }
+    // Nothing answered at all: say so instead of sending an empty form (Skip is the way to pass).
+    const answered = (qs || []).some((q, i) => {
+      if (q.type === 'ordering' || q.type === 'scale') return false;
+      const a = F.answers[i];
+      return a != null && a !== '' && !(Array.isArray(a) && a.every(x => x == null || x === '' || x === -1));
+    }) || (qs || []).every(q => q.type === 'ordering' || q.type === 'scale');
+    const foot = card.querySelector('.quiz-foot');
+    let note = card.querySelector('.q-empty');
+    if (!answered && foot) {
+      if (!note) { note = document.createElement('div'); note.className = 'q-empty'; foot.prepend(note); }
+      note.textContent = 'Answer at least one question, or use Skip.';
+      return false;
+    }
+    if (note) note.remove();
+    return true;
   }
   document.addEventListener('beforeinput', e => {
     const t = e.target; if (!t || !t.getAttribute || !t.getAttribute('data-numeric') || !e.data) return;
@@ -424,7 +445,9 @@
     const t = e.target; if (!t || !t.closest) return;
     const card = t.closest('[data-tool-id]'); if (!card) return;
     const kind = t.getAttribute && t.getAttribute('data-numeric');
-    if (kind && NUM_CHARS[kind].test(t.value)) { t.value = t.value.replace(NUM_CHARS[kind], ''); }   // pasted text
+    if (kind && (NUM_CHARS[kind].test(t.value) || /[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/.test(t.value))) {
+      NUM_CHARS[kind].lastIndex = 0; t.value = normDigits(t.value.replace(NUM_CHARS[kind], ''));   // pasted text, other digit scripts
+    }
     if (kind) NUM_CHARS[kind].lastIndex = 0;
     if (t.hasAttribute('data-q-input')) {
       const c = card.querySelector('[data-count="' + t.getAttribute('data-q-input') + '"]');
@@ -450,6 +473,12 @@
   document.addEventListener('keydown', (e) => {
     const t = e.target;
     if (t.matches && t.matches('label.opt[tabindex]') && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); t.click(); return; }
+    if (t.matches && t.matches('label.opt[tabindex]') && /^Arrow(Down|Up|Left|Right)$/.test(e.key)) {
+      const opts = Array.from(t.closest('.quiz-q').querySelectorAll('label.opt[tabindex]'));
+      const j = opts.indexOf(t) + (e.key === 'ArrowDown' || e.key === 'ArrowRight' ? 1 : -1);
+      if (opts[j]) { e.preventDefault(); opts[j].focus(); }
+      return;
+    }
     if (t.matches && t.matches('textarea.mono') && e.key === 'Escape') { t.blur(); return; }
     if (t.matches && t.matches('textarea.mono') && e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault();

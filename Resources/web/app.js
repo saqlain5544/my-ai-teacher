@@ -26,6 +26,13 @@
   R.mdPlugins.forEach(p => p(md));
   md.renderer.rules.fence = (tokens, idx, opts, env) => renderFence(tokens[idx], idx, tokens, env);
   md.renderer.rules.code_block = (tokens, idx, opts, env) => renderCode(tokens[idx].content, '', env);
+  // HTML the model writes may use plain tags (<span lang>, <ruby>, <details>, <b>…) but never the attributes the app's
+  // own UI relies on: no style/class/id (no faking KaTeX or overlaying fake UI), no data-* (no app buttons), no on*.
+  // Tokens the renderer creates itself are marked trusted.
+  const UNSAFE_ATTR = /\s(?:style|class|id|data-[\w-]*|on\w+|slot|is|popover\w*|form\w*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
+  const cleanHTML = s => s.replace(/<[a-zA-Z][^>]*>/g, tag => tag.replace(UNSAFE_ATTR, ''));
+  md.renderer.rules.html_inline = (tokens, idx) => tokens[idx].meta && tokens[idx].meta.trusted ? tokens[idx].content : cleanHTML(tokens[idx].content);
+  md.renderer.rules.html_block = (tokens, idx) => cleanHTML(tokens[idx].content);
   md.linkify.set({ fuzzyEmail: false });
 
   const katexCache = new Map();
@@ -118,6 +125,7 @@
         t.children[0].content = t.children[0].content.replace(/^\[[ xX]\]\s/, '');
         const box = new state.Token('html_inline', '', 0);
         box.content = '<input type="checkbox" disabled' + (m[1] !== ' ' ? ' checked' : '') + '>';
+        box.meta = { trusted: true };
         t.children.unshift(box);
         toks[i - 2].attrJoin('class', 'task-list-item');
       }
@@ -162,7 +170,7 @@
   function renderCode(code, lang, env) {
     code = code.replace(/\n$/, '');
     const key = 'c' + hash(lang + '|' + code);
-    codeSources.set(key, code);
+    codeSources.set(key, code); cap(codeSources, 1500);
     const l = (lang || '').toLowerCase();
     const runnable = RUNNABLE.has(l) && !(env && env.streamingFence);
     const out = S.codeOutputs.get(key);
@@ -181,12 +189,15 @@
     // Models sometimes put a component's JSON on the fence line itself (```steps [{"title":…}]): that is its content.
     const rest = info.slice(lang.length).trim();
     if (rest && /^[\[{]/.test(rest) && R.fences[lang]) code = rest + '\n' + code;
+    else if (rest && !code.trim() && !R.fences[lang]) code = rest;   // ```python print(1)```: the code is on the fence line
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;
+    // A stray or mid-line fence leaves an empty block: show nothing rather than an empty code box.
+    if (!code.trim() && !isLastOpen) return '';
     const custom = R.fences[lang];
     if (custom) { const out = custom(code, ctx, { open: isLastOpen }); if (out != null) return out; }
     if (lang === 'mermaid' || lang === 'mmd') {
       const key = 'm' + hash(code.trim() + (darkMQ.matches ? 'd' : 'l'));
-      mermaidSrc.set(key, code);
+      mermaidSrc.set(key, code); cap(mermaidSrc, 600);
       const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
       if (isLastOpen) return '<div class="mermaid-block" data-key="' + key + '-p"><div class="diagram-pending">Drawing diagram…</div></div>';
       const done = mermaidSvg.get(key);
@@ -201,12 +212,12 @@
       catch (e) { return '<div class="plot-block"><div class="diagram-error">Plot error: ' + esc(e.message) + '<pre>' + esc(code) + '</pre></div></div>'; }
     }
     if ((lang === 'svg' || ((lang === 'xml' || lang === 'html') && /^\s*<svg[\s>]/.test(code))) && !isLastOpen) {
-      return '<div class="svg-block" data-key="s' + hash(code) + '">' + DOMPurify.sanitize(code, { USE_PROFILES: { svg: true, svgFilters: true } }) + '</div>';
+      return '<div class="svg-block" data-key="s' + hash(code) + '">' + DOMPurify.sanitize(code, { USE_PROFILES: { svg: true, svgFilters: true }, ALLOW_DATA_ATTR: false, FORBID_ATTR: ['class', 'id'] }) + '</div>';
     }
-    if (lang === 'math' || lang === 'katex') return tex(code, true);
+    if (lang === 'math' || lang === 'katex') return tex(code.trim().replace(/^\$\$([\s\S]*)\$\$$/, '$1').replace(/^\\\[([\s\S]*)\\\]$/, '$1'), true);
     // Models usually write interactive widgets (sliders, selects, canvases) as ```html: run them like a ```visual, in
     // the sandbox, with the source one click away. Plain markup examples stay code.
-    if ((lang === 'html' || lang === 'htm') && R.fences.visual && /<(input|select|button|canvas|script|textarea|svg|details)\b/i.test(code)) {
+    if ((lang === 'html' || lang === 'htm') && R.fences.visual && /<(script|canvas)\b/i.test(code)) {
       if (isLastOpen) return R.fences.visual(code, ctx, { open: true });
       return '<div class="html-live">' + R.fences.visual(code, ctx, {}) +
         '<details class="visual-source"><summary>Show HTML</summary>' + renderCode(code, 'html', { streamingFence: true }) + '</details></div>';
@@ -262,11 +273,25 @@
   // Models often leave flowchart labels with (), :, ", ; unquoted, which Mermaid rejects. On a parse error, quote those
   // labels (what the author meant) and try once more; the first error stands if that fails too.
   function quoteLabels(src) {
+    const KINDS = /^\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap|journey|gitGraph|timeline|quadrantChart|xychart|sankey|block|packet|architecture|kanban|requirementDiagram|C4\w+|zenuml|radar|treemap)\b/;
+    // No header (just "A --> B"): it's a flowchart.
+    if (!KINDS.test(src) && /-->|---/.test(src)) src = 'flowchart TD\n' + src;
     if (!/^\s*(flowchart|graph)\b/i.test(src)) return src;
-    const q = (id, open, inner, close) => /^\s*".*"\s*$/.test(inner) || !/[()"':;#&]/.test(inner) ? id + open + inner + close
-      : id + open + '"' + inner.replace(/"/g, '#quot;') + '"' + close;
-    return src.replace(/(\b[\w-]+)(\[)(?![\[(\/\\"])([^\]\n]*)(\])/g, (m, id, o, inner, c) => q(id, o, inner, c))
-      .replace(/(\b[\w-]+)(\{)(?![{"])([^}\n]*)(\})/g, (m, id, o, inner, c) => q(id, o, inner, c));
+    const unsafe = /[()"':;#&|<>]/;
+    const q = (inner) => /^\s*".*"\s*$/.test(inner) || !unsafe.test(inner) ? inner : '"' + inner.replace(/"/g, '#quot;') + '"';
+    return src.split('\n').map(line => {
+      if (/^\s*subgraph\b/.test(line)) return line.replace(/^(\s*subgraph\s+\S+\s*\[)([^\]]*)(\])\s*$/, (m, a, inner, c) => a + q(inner) + c)
+        .replace(/^(\s*subgraph\s+)([^\[\n]*[()][^\[\n]*)$/, (m, a, t) => a + '"' + t.trim().replace(/"/g, '#quot;') + '"');
+      return line
+        // Edge labels: -->|f(x) = 2x| B
+        .replace(/\|([^|\n]+)\|/g, (m, inner) => '|' + q(inner) + '|')
+        // [text], {text}, and (text) whose text itself has parentheses — greedy to the last bracket before an arrow.
+        .replace(/(\b[\w-]+)\[(?![\[(\/\\"])([^\n]*?)\](?=\s*(?:$|;|-|=|\.|&|:::))/g, (m, id, inner) => id + '[' + q(inner) + ']')
+        .replace(/(\b[\w-]+)\{(?![{"])([^}\n]*)\}/g, (m, id, inner) => id + '{' + q(inner) + '}')
+        .replace(/(\b[\w-]+)\((?![(\["])([^\n]*\))\)(?=\s*(?:$|;|-|=|\.|&))/g, (m, id, inner) => id + '(' + q(inner) + ')')
+        // A node called "end" breaks Mermaid's parser.
+        .replace(/(^|[\s>|-])end(?=\s*(?:-->|---|\[|\(|\{|$))/g, (m, pre) => line.trim() === 'end' ? m : pre + 'End');
+    }).join('\n');
   }
   // Mermaid draws in a hidden, laid-out sandbox (it needs real text metrics) that is emptied after every attempt, so a
   // failed parse never leaves its error graphic in the page.
@@ -301,11 +326,14 @@
     const natural = svg.viewBox.baseVal.width, room = el.clientWidth - 24;
     if (natural && room > 0 && natural * 0.9 > room) { svg.style.maxWidth = 'none'; svg.style.width = Math.round(natural * 0.9) + 'px'; }
   }
+  let fillSeq = 0;
   function fillMermaid(el, key) {
     const r = mermaidSvg.get(key), code = mermaidSrc.get(key) || '';
     el.removeAttribute('data-pending');
     const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
-    el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + r;
+    // The same diagram twice needs distinct SVG ids (its styles are scoped by id).
+    const svg = r.error ? '' : r.replace(/\bmmd(\d+)\b/g, 'mmd$1x' + (++fillSeq));
+    el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + svg;
     if (!r.error) fitDiagram(el);
   }
   async function processMermaid(root) {
@@ -320,7 +348,7 @@
       if (!el.isConnected || !el.hasAttribute('data-pending')) continue;
       const code = mermaidSrc.get(key);
       if (!mermaidSvg.has(key)) {
-        try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); }
+        try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); cap(mermaidSvg, 300); }
         catch (e) {
           mermaidSvg.set(key, { error: String((e && (e.message || e.str)) || e).split('\n')[0].slice(0, 300) });
         }
@@ -343,6 +371,41 @@
     } catch (e) { return '<p>' + esc(text) + '</p>'; }
   }
   const inline = s => markdown(String(s == null ? '' : s), false).replace(/^\s*<p>|<\/p>\s*$/g, '');
+
+  // ── Streaming: render only what changed ──
+  // A streaming reply is split at blank lines that can't change meaning (outside fences and $$ blocks, not before a
+  // list item or an indented continuation). Finished sections come from a cache, so a frame costs O(the tail), not
+  // O(the whole reply). Short replies and replies with footnotes/reference links render whole.
+  const segCache = new Map();
+  function segments(text) {
+    const lines = text.split('\n'), segs = [];
+    let cur = [], fence = null, math = false;
+    for (let i = 0; i < lines.length; i++) {
+      const l = lines[i], f = /^\s{0,3}(`{3,}|~{3,})/.exec(l);
+      if (f) { if (!fence) fence = f[1]; else if (l.trim().startsWith(fence)) fence = null; }
+      else if (!fence && /^\s*\$\$\s*$/.test(l)) math = !math;
+      cur.push(l);
+      const next = lines[i + 1];
+      if (!fence && !math && !l.trim() && next !== undefined && next.trim() && !/^\s/.test(next) && !/^([-*+]|\d+[.)])\s/.test(next) && !/^\|/.test(next)) {
+        segs.push(cur.join('\n') + '\n'); cur = [];
+      }
+    }
+    segs.push(cur.join('\n'));
+    return segs;
+  }
+  function markdownLive(text) {
+    if (text.length < 3000 || /\[\^|^\s{0,3}\[[^\]]+\]:/m.test(text)) return markdown(text, true);
+    const segs = segments(text);
+    let html = '';
+    for (let i = 0; i < segs.length - 1; i++) {
+      let h = segCache.get(segs[i]);
+      if (h === undefined) { h = markdown(segs[i], false); segCache.set(segs[i], h); cap(segCache, 400); }
+      html += h;
+    }
+    return html + markdown(segs[segs.length - 1], true);
+  }
+  /** Keeps a Map to its newest `n` entries (Maps iterate in insertion order). */
+  function cap(map, n) { if (map.size > n) { const drop = map.size - n; let k = 0; for (const key of map.keys()) { if (k++ >= drop) break; map.delete(key); } } }
 
   /** Run component processors (language, tables, canvases…) on freshly inserted DOM. */
   function processNode(node) {
@@ -369,7 +432,7 @@
   }
   // Re-rendering a card must never steal the learner's caret: remember the focused field (by its data-* key), restore
   // it after, and while an IME composition is in progress (Arabic, Japanese…) defer the update until it ends.
-  const FOCUS_KEYS = ['data-q-input', 'data-q-blank', 'data-q-other', 'data-ask-text'];
+  const FOCUS_KEYS = ['data-q-input', 'data-q-blank', 'data-q-other', 'data-ask-text', 'data-focus'];
   let composing = false;
   const deferred = new Set();
   document.addEventListener('compositionstart', () => { composing = true; }, true);
@@ -451,7 +514,7 @@
     const text = visibleText(m);
     let html = '';
     if (imgs.length || files.length) {
-      html += '<div class="attachments">' + imgs.map(b => '<img src="data:' + esc(b.mime || 'image/png') + ';base64,' + b.data + '" alt="">').join('') +
+      html += '<div class="attachments">' + imgs.filter(b => /^[A-Za-z0-9+/=\s]*$/.test(b.data || '')).map(b => '<img src="data:' + esc(/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + esc(b.data) + '" alt="">').join('') +
         files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
@@ -492,7 +555,9 @@
       const isLast = i === blocks.length - 1;
       if (b.kind === 'text') {
         node.className = 'md';
-        if (node._src !== b.text) { morph(node, markdown(b.text, streaming && isLast)); node._src = b.text; }
+        // Keyed on the streaming flag as well: when the stream ends, an unclosed fence must render as finished.
+        const live = streaming && isLast, src = (live ? '\u0001' : '') + b.text;
+        if (node._src !== src) { morph(node, live ? markdownLive(b.text) : markdown(b.text, false)); node._src = src; }
       } else if (b.kind === 'thinking') {
         renderThinking(node, b, streaming && isLast);
       } else if (b.kind === 'toolUse') {
@@ -738,6 +803,7 @@
   document.addEventListener('change', onInput);
   document.addEventListener('keydown', (e) => {
     const t = e.target;
+    if (e.isComposing || e.keyCode === 229) return;   // Enter that confirms an IME candidate (Japanese, Chinese…) sends nothing
     if (t.matches && t.matches('[data-ask-text]') && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault(); const btns = t.closest('.ask').querySelectorAll('[data-act="ask-submit"]'); btns[btns.length - 1].click();
     }

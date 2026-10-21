@@ -80,7 +80,7 @@
   }
 
   function frameHTML(title, html, libs, height, key, note) {
-    const fid = 'v' + (++seq);
+    const fid = key;   // stable: re-rendering the message (streaming) must not restart the visual
     return '<div class="visual" data-key="' + key + '" data-fid="' + fid + '">' +
       '<div class="visual-head"><span class="visual-title">◈ ' + (title ? escapeHTML(title) : 'Interactive visual') + '</span>' +
       (note ? '<span class="visual-note">' + note + '</span>' : '') +
@@ -136,11 +136,13 @@
 
   window.addEventListener('message', e => {
     const d = e.data || {};
+    // Only a frame may speak for itself (a visual can't resize or write errors into another one).
+    const own = id => { const f = frames.get(id); return f && e.source === f.contentWindow ? f : null; };
     if (d.visualHeight) {
-      const f = frames.get(d.visualHeight);
+      const f = own(d.visualHeight);
       if (f && f.parentElement && !f.closest('.visual.max')) f.parentElement.style.height = Math.min(900, Math.max(80, d.h)) + 'px';
     } else if (d.visualError) {
-      const f = frames.get(d.visualError);
+      const f = own(d.visualError);
       const box = f && f.closest('.visual') && f.closest('.visual').querySelector('.visual-error');
       if (box) { box.hidden = false; box.querySelector('.visual-error-msg').textContent = '⚠︎ ' + d.msg; }
     }
