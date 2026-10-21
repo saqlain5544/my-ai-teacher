@@ -835,7 +835,7 @@
     html += '<div class="tool' + (open ? ' open' : '') + (isErr ? ' error' : '') + (compact && !open ? ' compact' : '') + '">' +
       '<div class="head" data-act="toggle-tool"><span class="icon">' + icon + '</span><span class="name">' + esc(title) + '</span>' +
       '<span class="sum">' + esc(summaryOf(b)) + '</span>' + agentActs + '<span class="state">' + state + '</span></div>' +
-      '<div class="body">' + toolBody(b, r) + '</div></div>';
+      '<div class="body">' + (open ? toolBody(b, r) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
     setHTML(node, html);
   }
   const fmtMs = ms => ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s';

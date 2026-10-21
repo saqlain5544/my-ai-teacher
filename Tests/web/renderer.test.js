@@ -677,7 +677,9 @@
     });
     noErrors(document.body, 'tool cards');
     const ws = $('[data-tool-id="tc7"]'); click($('.head', ws)); ok($('.results a[href*="wikipedia"]', ws), 'search results listed');
-    ok($('[data-tool-id="tc10"] .katex'), 'math card shows LaTeX');
+    const mc = $('[data-tool-id="tc10"]'); eq($('.body', mc).innerHTML, '', 'a collapsed card has no body (a long lesson keeps its pages small)');
+    click($('.head', mc)); ok($('.katex', mc), 'math card shows LaTeX once opened');
+    click($('.head', mc)); eq($('.body', mc).innerHTML, '', 'closing drops the body again');
     ok($('.turn-meta'), 'turn footer');
   });
 

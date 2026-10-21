@@ -207,6 +207,19 @@ final class CoreTests: XCTestCase {
         XCTAssertLessThan(days, 365 * 12, "longest interval about a decade")
     }
 
+    /// The page renders the newest messages of the window, starting at a learner's message so no tool result lands
+    /// without its card.
+    @MainActor
+    func testTranscriptPageStartsAtALearnerTurn() {
+        let msgs = (0..<1000).map { PerfSeed.message($0) }   // turns of four: question, tool call, tool result, reply
+        typealias C = TranscriptView.Coordinator
+        XCTAssertEqual(C.pageStart(Array(msgs.prefix(200)), keep: C.pageWindow), 0, "a short lesson renders whole")
+        let start = C.pageStart(msgs, keep: C.pageWindow)
+        XCTAssertEqual(start, 700, "the newest 300, already at a question")
+        let odd = C.pageStart(msgs, keep: 301)
+        XCTAssertTrue(msgs[odd].role == .user && !msgs[odd].isToolResultOnly && odd >= 1000 - 301 && odd < 1000 - 301 + 4, "\(odd)")
+    }
+
     /// The transcript gets each message as JSON text in one pass; it must say exactly what the JSON-tree route said.
     @MainActor
     func testTranscriptScriptMatchesTheJSONTree() {

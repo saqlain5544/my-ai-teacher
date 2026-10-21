@@ -82,10 +82,27 @@ struct TranscriptView: NSViewRepresentable {
         private var pendingDeltas: [(id: String, index: Int, kind: Block.Kind, text: String)] = []
         private var flushScheduled = false
 
+        /// The page renders the newest `shown` messages of the lesson's window; the rest stay in memory (requests need them)
+        /// behind "Show earlier", revealed a step at a time before older ones load from disk. Rendering the whole window of a
+        /// 4,000-message lesson took ~0.8–1.4 GB in the page.
+        static let pageWindow = 300, pageStep = 200
+        private var shown = Coordinator.pageWindow
+        /// The page's first message: where "Show earlier" continues from.
+        private var pageFirst: String?
+
+        /// Where the newest `keep` messages start, moved to a learner's message so no tool result arrives without its card.
+        static func pageStart(_ m: [ChatMessage], keep: Int) -> Int {
+            guard m.count > keep else { return 0 }
+            return m[(m.count - keep)...].firstIndex { $0.role == .user && !$0.isToolResultOnly } ?? m.count - keep
+        }
+
+        private func pageIndex(_ s: ChatSession) -> Int? { pageFirst.flatMap { id in s.messages.firstIndex { $0.id == id } } }
+
         func attach(_ s: ChatSession, fontSize: Double) {
             if self.fontSize != fontSize { self.fontSize = fontSize; run("T.setFontSize(\(fontSize))") }
             guard session !== s else { return }
             session?.sink = nil
+            shown = Self.pageWindow
             session = s
             s.sink = self
             AppModel.shared.interactions.onChange = { [weak self] p, active in self?.interaction(p, active: active) }
@@ -98,11 +115,13 @@ struct TranscriptView: NSViewRepresentable {
             if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }
-            if let s = session, s.base > 0 { opts["earlier"] = .number(Double(s.base)) }
+            let start = Self.pageStart(messages, keep: shown), earlier = (session?.base ?? 0) + start
+            pageFirst = start < messages.count ? messages[start].id : nil
+            if earlier > 0 { opts["earlier"] = .number(Double(earlier)) }
             if let anchor = pendingAnchor { opts["anchor"] = .string(anchor); pendingAnchor = nil }
             // Built in one buffer of the exact size: every intermediate copy of a long lesson's payload (8 MB for 4,000
             // messages) would stay in the footprint, as freed large blocks do.
-            let parts = messages.map(Self.script), tail = "], " + JSON.object(opts).compact + ")"
+            let parts = messages[start...].map(Self.script), tail = "], " + JSON.object(opts).compact + ")"
             var js = "T.reset(["
             js.reserveCapacity(parts.reduce(js.utf8.count + tail.utf8.count) { $0 + $1.utf8.count + 1 })
             for (i, p) in parts.enumerated() { if i > 0 { js += "," }; js += p }
@@ -120,6 +139,14 @@ struct TranscriptView: NSViewRepresentable {
         func upsert(_ message: ChatMessage) {
             flushDeltas()
             run("T.upsert(\(Self.script(message)))")
+            // A long session keeps adding to the page: when a turn starts with more than a step past the window rendered,
+            // the oldest leave the page (still in memory, behind "Show earlier").
+            guard message.role == .user, !message.isToolResultOnly, let s = session, let first = pageIndex(s),
+                  s.messages.count - first > Self.pageWindow + Self.pageStep else { return }
+            shown = Self.pageWindow
+            let start = Self.pageStart(s.messages, keep: shown)
+            pageFirst = s.messages[start].id
+            run("T.trimBefore(\(JSON.string(s.messages[start].id).compact), \(s.base + start))")
         }
 
         func delta(_ messageID: String, index: Int, kind: Block.Kind, text: String) {
@@ -150,6 +177,7 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func trimBefore(_ messageID: String, earlier: Int) {
+            if let s = session, pageIndex(s) == nil { pageFirst = messageID }   // the page started before the cut
             run("T.trimBefore(\(JSON.string(messageID).compact), \(earlier))")
         }
 
@@ -248,8 +276,16 @@ struct TranscriptView: NSViewRepresentable {
             case "memory":
                 app.selection = .memory
             case "older":
-                pendingAnchor = session?.messages.first?.id
-                session?.loadEarlier()
+                guard let s = session else { return }
+                pendingAnchor = pageFirst
+                if let first = pageIndex(s), first > 0 {   // in memory, not rendered yet: reveal a step
+                    let from = max(0, first - Self.pageStep)
+                    shown = s.messages.count - (s.messages[from..<first].firstIndex { $0.role == .user && !$0.isToolResultOnly } ?? from)
+                    reset(s.messages, conversation: s.conversation)
+                } else {
+                    shown = s.messages.count + Self.pageStep
+                    s.loadEarlier()
+                }
             case "agent":   // a sub-agent card: open it in the right-hand panel, or stop it
                 guard let id = j["id"]?.string, let s = session else { return }
                 let center = SubAgentCenter.shared
