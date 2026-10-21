@@ -66,6 +66,27 @@ final class CoreTests: XCTestCase {
         XCTAssertFalse(r.markdown.contains("menu"))
     }
 
+    /// A page of unclosed, deeply nested lists once took 90 s of CPU and 14 GB in the converter; it must stay fast and bounded.
+    func testHTMLToMarkdownSurvivesPathologicalNesting() {
+        let item = String(repeating: "word ", count: 400)
+        let html = "<html><body>" + String(repeating: "<ul><li><b>\(item)</b><a href=\"/x\">\(item)</a>", count: 600) + "</body></html>"
+        let t0 = Date()
+        let r = HTMLToMarkdown.convert(html: html, baseURL: URL(string: "https://example.com/"))
+        let secs = Date().timeIntervalSince(t0)
+        XCTAssertLessThan(secs, 3, "took \(secs)s")
+        XCTAssertTrue(r.markdown.contains("word word"), String(r.markdown.prefix(200)))
+        XCTAssertLessThanOrEqual(r.markdown.count, HTMLToMarkdown.maxOutput + 1000)
+    }
+
+    /// The fetch tool's deadline cancels the task; the converter must notice instead of burning CPU after the tool gave up.
+    func testHTMLToMarkdownStopsWhenCancelled() async {
+        let html = "<html><body>" + String(repeating: "<p>" + String(repeating: "word ", count: 50) + "</p>", count: 20_000) + "</body></html>"
+        let task = Task { HTMLToMarkdown.convert(html: html, baseURL: nil).markdown.count }
+        task.cancel()
+        let n = await task.value
+        XCTAssertLessThan(n, 100_000)
+    }
+
     func testAnthropicConversionMergesAndCaches() {
         let msgs = [
             ChatMessage(role: .user, blocks: [.text("hi")]),

@@ -176,14 +176,22 @@ struct GlobTool: Tool {
                                                      options: [.skipsPackageDescendants]) else { return nil }
         var matches: [(String, Date)] = []
         var scanned = 0
-        while let url = e.nextObject() as? URL {
-            if skip.contains(url.lastPathComponent) { e.skipDescendants(); continue }
-            scanned += 1
-            if scanned > 200_000 { break }
-            let rel = String(url.path.dropFirst(root.path.count + 1))
-            if regex.firstMatch(in: rel, range: NSRange(rel.startIndex..., in: rel)) != nil {
-                let d = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
-                matches.append((url.path, d))
+        // Stops on cancellation (the tool's deadline), and drains Foundation temporaries as it goes.
+        var done = false
+        while !done {
+            autoreleasepool {
+                for _ in 0..<512 {
+                    guard let url = e.nextObject() as? URL else { done = true; return }
+                    if skip.contains(url.lastPathComponent) { e.skipDescendants(); continue }
+                    scanned += 1
+                    if scanned > 200_000 { done = true; return }
+                    let rel = String(url.path.dropFirst(root.path.count + 1))
+                    if regex.firstMatch(in: rel, range: NSRange(rel.startIndex..., in: rel)) != nil {
+                        let d = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantPast
+                        matches.append((url.path, d))
+                    }
+                }
+                if Task.isCancelled { done = true }
             }
         }
         return matches

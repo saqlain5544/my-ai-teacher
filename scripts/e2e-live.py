@@ -186,6 +186,9 @@ SCENARIOS = [
          page=["katex", "diagrams", "tables", "practice"], forbid=()),
     dict(name="web", quick=True, prompt="Use web_search to find what the James Webb Space Telescope's primary mirror is made of, then answer in two sentences and cite the URL.",
          expect=["web_search"]),
+    # A long, deeply structured page through the HTML converter (once took 90 s of CPU and 14 GB there).
+    dict(name="fetch", prompt="Use web_fetch to read https://en.wikipedia.org/wiki/Photosynthesis, then tell me in two sentences what the light-dependent reactions produce.",
+         expect=["web_fetch"]),
     dict(name="python", quick=True, prompt="Use run_code to compute the first 15 Fibonacci numbers in Python and print them. Then use the math tool to solve x^2 - 5x + 6 = 0.",
          expect=["run_code", "math"]),
     dict(name="ask", quick=True, prompt="Before explaining anything, call ask_learner to ask me which topic I want to learn, with exactly these options: Cells, Atoms, Planets.",

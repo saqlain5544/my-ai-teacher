@@ -212,6 +212,7 @@ struct WebFetchTool: Tool {
             } else if ct.contains("html") || ct.isEmpty || ct.contains("xml") {
                 let html = String(decoding: data.prefix(6_000_000), as: UTF8.self)
                 let r = HTMLToMarkdown.convert(html: html, baseURL: finalURL)
+                try Task.checkCancellation()  // a conversion cut short by the deadline is partial: don't cache it
                 (md, title) = (r.markdown, r.title)
             } else {
                 (md, title) = (String(decoding: data.prefix(3_000_000), as: UTF8.self), nil)

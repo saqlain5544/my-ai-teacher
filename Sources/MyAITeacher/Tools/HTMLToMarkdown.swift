@@ -3,6 +3,10 @@ import Foundation
 /// Converts HTML to readable Markdown using Foundation's built-in tidy HTML parser (no dependencies).
 enum HTMLToMarkdown {
     struct Result { var title: String?; var markdown: String }
+    /// Text kept from one page (the tool returns at most 100k characters per call).
+    static let maxOutput = 400_000
+    /// Deeper than this the tree is pathological (tidy nesting unclosed tags): the rest is taken as plain text, without recursion.
+    static let maxDepth = 40
 
     private static let skipTags: Set<String> = ["script", "style", "noscript", "svg", "iframe", "form", "button", "input",
                                                 "select", "textarea", "template", "canvas", "object", "embed", "link", "meta"]
@@ -15,7 +19,7 @@ enum HTMLToMarkdown {
     static func preprocess(_ html: String) -> String {
         var s = html.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
         s = s.replacingOccurrences(of: "<(script|style|noscript|svg|template)\\b[\\s\\S]*?</\\1>", with: "", options: [.regularExpression, .caseInsensitive])
-        s = s.replacingOccurrences(of: "<math\\b([^>]*)>[\\s\\S]*?<annotation[^>]*encoding=\"application/x-tex\"[^>]*>([\\s\\S]*?)</annotation>[\\s\\S]*?</math>",
+        s = s.replacingOccurrences(of: "<math\\b([^>]*)>(?:(?!</math>)[\\s\\S])*?<annotation[^>]*encoding=\"application/x-tex\"[^>]*>([\\s\\S]*?)</annotation>(?:(?!</math>)[\\s\\S])*?</math>",
                                    with: "<span data-tex=\"1\"$1>$2</span>", options: [.regularExpression, .caseInsensitive])
         s = s.replacingOccurrences(of: "<math\\b[\\s\\S]*?</math>", with: "", options: [.regularExpression, .caseInsensitive])
         let blocks = "article|main|nav|footer|aside|header|section|figure|figcaption|details|summary|hgroup|address|search|dialog"
@@ -26,23 +30,25 @@ enum HTMLToMarkdown {
     }
 
     static func convert(html: String, baseURL: URL?) -> Result {
+        if Task.isCancelled { return Result(title: nil, markdown: "") }
         let cleaned = preprocess(html)
         guard let doc = try? XMLDocument(xmlString: cleaned, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever]) else {
             return Result(title: nil, markdown: stripTags(html))
         }
-        let title = (try? doc.nodes(forXPath: "//title").first?.stringValue)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let title = (try? doc.nodes(forXPath: "//title").first).flatMap { $0 }.map { plainText($0, cap: 1000) }?.trimmingCharacters(in: .whitespacesAndNewlines)
         // Prefer the main content region (simple readability heuristic).
         var root: XMLNode? = nil
         for xp in ["//*[@id='mw-content-text']", "//*[@data-h5='article']", "//*[@data-h5='main']", "//*[@role='main']", "//*[@id='content']", "//*[@id='main-content']", "//body"] {
-            if let nodes = try? doc.nodes(forXPath: xp), let best = nodes.max(by: { ($0.stringValue?.count ?? 0) < ($1.stringValue?.count ?? 0) }),
-               (best.stringValue?.count ?? 0) > 200 || xp == "//body" {
-                root = best; break
+            if let nodes = try? doc.nodes(forXPath: xp),
+               let best = nodes.map({ ($0, textLength($0, cap: 2_000_000)) }).max(by: { $0.1 < $1.1 }),
+               best.1 > 200 || xp == "//body" {
+                root = best.0; break
             }
         }
         guard let root else { return Result(title: title, markdown: "") }
         var ctx = Ctx(base: baseURL, dropChrome: root.name?.lowercased() == "body")
         var out = ""
-        render(root, &out, &ctx)
+        autoreleasepool { render(root, &out, &ctx) }
         return Result(title: title, markdown: tidy(out))
     }
 
@@ -52,26 +58,91 @@ enum HTMLToMarkdown {
         var listStack: [(ordered: Bool, index: Int)] = []
         var inPre = false
         var lastTex = ""
+        var depth = 0, visited = 0, emitted = 0
+        /// Set when the output budget is spent or the task was cancelled (the tool's deadline passed).
+        var stop = false
+    }
+
+    /// Children in order, each in its own autorelease pool so Foundation temporaries don't pile up on a big page.
+    private static func renderChildren(_ node: XMLNode, _ out: inout String, _ ctx: inout Ctx) {
+        for c in node.children ?? [] where !ctx.stop { autoreleasepool { render(c, &out, &ctx) } }
+    }
+
+    /// Appends text within the page budget.
+    private static func emit(_ t: String, _ out: inout String, _ ctx: inout Ctx) {
+        let room = maxOutput - ctx.emitted
+        if t.utf8.count <= room { out += t; ctx.emitted += t.utf8.count; return }
+        out += t.prefix(max(0, room)); ctx.emitted = maxOutput; ctx.stop = true
+    }
+
+    /// A subtree's raw text, iteratively and capped. `XMLNode.stringValue` builds a string per level: O(text × depth), 1.5 GB on a deep page.
+    static func plainText(_ node: XMLNode, cap: Int = maxOutput) -> String {
+        var r = "", stack = [node]
+        while r.utf8.count < cap, let n = stack.popLast() {
+            if n.kind == .text { r += n.stringValue ?? "" } else if let kids = n.children { stack.append(contentsOf: kids.reversed()) }
+        }
+        return r.utf8.count > cap ? String(r.prefix(cap)) : r
+    }
+
+    private static func textLength(_ node: XMLNode, cap: Int) -> Int {
+        var total = 0, stack = [node]
+        while total < cap, let n = stack.popLast() {
+            if n.kind == .text { total += n.stringValue?.utf8.count ?? 0 } else if let kids = n.children { stack.append(contentsOf: kids) }
+        }
+        return total
+    }
+
+    /// A subtree's text, depth-first with an explicit stack.
+    private static func flatText(_ node: XMLNode, _ out: inout String, _ ctx: inout Ctx) {
+        var stack = [node]
+        while !ctx.stop, let n = stack.popLast() {
+            ctx.visited += 1
+            if ctx.visited % 256 == 0 && Task.isCancelled { ctx.stop = true }
+            if n.kind == .text {
+                var t = collapseWhitespace(n.stringValue ?? "")
+                if out.hasSuffix(" ") || out.hasSuffix("\n") || out.isEmpty { while t.hasPrefix(" ") { t.removeFirst() } }
+                emit(t, &out, &ctx)
+            } else if let el = n as? XMLElement, skipTags.contains((el.name ?? "").lowercased()) {
+                continue
+            } else if let kids = n.children {
+                stack.append(contentsOf: kids.reversed())
+            }
+        }
+    }
+
+    /// Runs of whitespace (and no-break spaces) become one space. A plain scan: a regex per text node was the converter's main cost.
+    static func collapseWhitespace(_ s: String) -> String {
+        var r = ""; r.reserveCapacity(s.utf8.count)
+        var space = false
+        for u in s.unicodeScalars {
+            if u.properties.isWhitespace || u == "\u{00A0}" {
+                if !space { r.unicodeScalars.append(" "); space = true }
+            } else { r.unicodeScalars.append(u); space = false }
+        }
+        return r
     }
 
     private static func render(_ node: XMLNode, _ out: inout String, _ ctx: inout Ctx) {
+        if ctx.stop { return }
+        ctx.visited += 1
+        if ctx.visited % 256 == 0 && Task.isCancelled { ctx.stop = true; return }
         if node.kind == .text {
             var t = node.stringValue ?? ""
             if !ctx.inPre {
-                t = t.replacingOccurrences(of: "[\\s\\u00A0]+", with: " ", options: .regularExpression)
+                t = collapseWhitespace(t)
                 if out.hasSuffix(" ") || out.hasSuffix("\n") || out.isEmpty { while t.hasPrefix(" ") { t.removeFirst() } }
                 t = escapeMarkdown(t)
             }
-            out += t
+            emit(t, &out, &ctx)
             return
         }
-        guard let el = node as? XMLElement else { node.children?.forEach { render($0, &out, &ctx) }; return }
+        guard let el = node as? XMLElement else { renderChildren(node, &out, &ctx); return }
         var tag = (el.name ?? "").lowercased()
         if let h5 = el.attribute(forName: "data-h5")?.stringValue { tag = h5 == "summary" || h5 == "details" ? "p" : (chromeTags.contains(h5) ? h5 : "div") }
         if skipTags.contains(tag) { return }
         if chromeTags.contains(tag) && (ctx.dropChrome || tag == "nav") { return }
         if el.attribute(forName: "data-tex") != nil {
-            let t = Self.unwrapDisplayStyle((el.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines))
+            let t = Self.unwrapDisplayStyle(plainText(el).trimmingCharacters(in: .whitespacesAndNewlines))
             ctx.lastTex = t
             out += (el.attribute(forName: "display")?.stringValue == "block") ? "\n$$\(t)$$\n" : "$\(t)$"
             return
@@ -82,8 +153,11 @@ enum HTMLToMarkdown {
             return
         }
         if el.attribute(forName: "hidden") != nil || (el.attribute(forName: "aria-hidden")?.stringValue == "true" && tag != "span") { return }
+        if ctx.depth >= maxDepth { flatText(el, &out, &ctx); out += " "; return }
+        ctx.depth += 1
+        defer { ctx.depth -= 1 }
 
-        func children() { el.children?.forEach { render($0, &out, &ctx) } }
+        func children() { renderChildren(el, &out, &ctx) }
         func block(_ body: () -> Void) { ensureBlank(&out); body(); ensureBlank(&out) }
 
         switch tag {
@@ -91,7 +165,7 @@ enum HTMLToMarkdown {
             let level = Int(String(tag.last!)) ?? 2
             block {
                 out += String(repeating: "#", count: level) + " "
-                var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+                var inner = ""; renderChildren(el, &inner, &ctx)
                 out += inner.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
             }
         case "br": out += "  \n"
@@ -100,17 +174,17 @@ enum HTMLToMarkdown {
         case _ where blockTags.contains(tag):
             ensureNewline(&out); children(); ensureNewline(&out)
         case "strong", "b":
-            var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+            var inner = ""; renderChildren(el, &inner, &ctx)
             let t = inner.trimmingCharacters(in: .whitespaces)
             if !t.isEmpty { out += "**\(t)** " }
         case "em", "i":
-            var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+            var inner = ""; renderChildren(el, &inner, &ctx)
             let t = inner.trimmingCharacters(in: .whitespaces)
             if !t.isEmpty { out += "*\(t)* " }
         case "code", "kbd", "samp":
             if ctx.inPre { children() } else {
-                let t = (el.stringValue ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-                if !t.isEmpty { out += "`\(t)`" }
+                let t = plainText(el).trimmingCharacters(in: .whitespacesAndNewlines)
+                if !t.isEmpty { emit("`\(t)`", &out, &ctx) }
             }
         case "pre":
             block {
@@ -118,10 +192,10 @@ enum HTMLToMarkdown {
                             ?? el.attribute(forName: "class")?.stringValue ?? "")
                     .components(separatedBy: .whitespaces).first { $0.hasPrefix("language-") || $0.hasPrefix("lang-") }
                     .map { $0.replacingOccurrences(of: "language-", with: "").replacingOccurrences(of: "lang-", with: "") } ?? ""
-                out += "```\(lang)\n" + (el.stringValue ?? "").trimmingCharacters(in: .newlines) + "\n```"
+                emit("```\(lang)\n" + plainText(el).trimmingCharacters(in: .newlines) + "\n```", &out, &ctx)
             }
         case "a":
-            var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+            var inner = ""; renderChildren(el, &inner, &ctx)
             let text = inner.trimmingCharacters(in: .whitespacesAndNewlines)
             if let href = el.attribute(forName: "href")?.stringValue, !href.hasPrefix("javascript:"), !href.hasPrefix("#"), !text.isEmpty,
                let url = URL(string: href, relativeTo: ctx.base)?.absoluteURL {
@@ -150,12 +224,12 @@ enum HTMLToMarkdown {
                 top.index += 1; ctx.listStack[ctx.listStack.count - 1] = top; marker = "\(top.index). "
             }
             out += String(repeating: "  ", count: depth) + marker
-            var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+            var inner = ""; renderChildren(el, &inner, &ctx)
             out += inner.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n\n", with: "\n")
             ensureNewline(&out)
         case "blockquote":
             block {
-                var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }
+                var inner = ""; renderChildren(el, &inner, &ctx)
                 out += tidy(inner).split(separator: "\n", omittingEmptySubsequences: false).map { "> " + $0 }.joined(separator: "\n")
             }
         case "table": block { out += table(el, &ctx) }
@@ -164,8 +238,8 @@ enum HTMLToMarkdown {
                 ?? el.attribute(forName: "alttext")?.stringValue
             if let tex { let t = tex.trimmingCharacters(in: .whitespacesAndNewlines)
                 out += (el.attribute(forName: "display")?.stringValue == "block") ? "\n$$\(t)$$\n" : "$\(t)$" }
-            else { out += el.stringValue ?? "" }
-        case "sup": var inner = ""; el.children?.forEach { render($0, &inner, &ctx) }; out += "^\(inner)"
+            else { emit(plainText(el), &out, &ctx) }
+        case "sup": var inner = ""; renderChildren(el, &inner, &ctx); out += "^\(inner)"
         default: children()
         }
     }
@@ -184,8 +258,9 @@ enum HTMLToMarkdown {
         for r in rows.prefix(200) {
             let cells = (r.children ?? []).compactMap { $0 as? XMLElement }.filter { ["td", "th"].contains($0.name?.lowercased() ?? "") }
             grid.append(cells.map { c in
-                var s = ""; var sub = ctx; sub.listStack = []
-                c.children?.forEach { render($0, &s, &sub) }
+                var s = ""; let lists = ctx.listStack; ctx.listStack = []
+                renderChildren(c, &s, &ctx)
+                ctx.listStack = lists
                 return tidy(s).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "|", with: "\\|")
             })
         }
