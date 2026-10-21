@@ -576,7 +576,7 @@ final class ChatSession: ObservableObject, Identifiable {
         case "quiz": "Waiting for your answers…"
         case "ask_learner": "Waiting for your answer…"
         case "task": "Researching with a sub-agent…"
-        case let n where n.hasPrefix("memory_"): "Updating memory…"
+        case let n where n == "memory" || n.hasPrefix("memory_"): "Updating memory…"
         default: "Using \(name)…"
         }
     }

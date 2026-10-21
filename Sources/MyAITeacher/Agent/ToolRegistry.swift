@@ -4,8 +4,7 @@ enum ToolRegistry {
     /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage).
     static let core: [Tool] = [
         AskLearnerTool(), MathTool(), RunCodeTool(), ReadTool(), WriteTool(), EditTool(), LsTool(), BashTool(),
-        WebSearchTool(), WebFetchTool(), VisualTool(),
-        MemorySearchTool(), MemorySaveTool(), MemoryUpdateTool(), MemoryForgetTool(), LoadToolsTool(),
+        WebSearchTool(), WebFetchTool(), VisualTool(), MemoryTool(), LoadToolsTool(),
     ]
     /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
     static let deferred: [Tool] = [
@@ -31,7 +30,7 @@ enum ToolRegistry {
     }
 
     /// Tools a research sub-agent may use without supervision.
-    static let subagentTools: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemorySearchTool()]
+    static let subagentTools: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemoryTool(readOnly: true)]
 }
 
 /// Delegates a self-contained research/reading task to a sub-agent with its own context; only its final report returns.

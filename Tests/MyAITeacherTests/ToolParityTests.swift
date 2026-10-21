@@ -60,7 +60,7 @@ final class ToolParityTests: XCTestCase {
         o = try await run("math", ["operation": "solve", "expression": "x**2 = 4"])
         XCTAssertTrue(o.text.contains("[-2, 2]"), o.text)
         // Memory tools
-        o = try await run("memory_save", ["content": "Learner likes visual proofs", "kind": "preference", "scope": "folder"])
+        o = try await run("memory", ["action": "save", "content": "Learner likes visual proofs", "kind": "preference", "scope": "folder"])
         XCTAssertTrue(o.text.contains("#f"))
     }
 

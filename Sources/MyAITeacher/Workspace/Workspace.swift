@@ -103,6 +103,14 @@ final class GlobalStore: @unchecked Sendable {
         study = StudyStore(db: db)
     }
 
+    /// Over an explicit database (tests, tools) — never touches the app's real learner DB.
+    init(db: Database) {
+        self.db = db
+        try? db.script(Schema_.sql)
+        memory = MemoryStore(db: db, scope: .learner)
+        study = StudyStore(db: db)
+    }
+
     /// Lessons created before folder workspaces existed lived in the global DB; move them to the default folder.
     func migrateLegacyConversations(into ws: Workspace) {
         guard let rows = try? db.query("SELECT id, data, updated_at FROM conversations"), !rows.isEmpty else { return }

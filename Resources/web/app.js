@@ -441,8 +441,10 @@
     glob: ['🔎', 'Find files'], grep: ['🔎', 'Search files'], web_search: ['🌐', 'Web search'], web_fetch: ['🌐', 'Read page'],
     run_code: ['▶︎', 'Run code'], math: ['∑', 'Math'], todo_write: ['☑︎', 'Checklist'], task: ['🧭', 'Sub-agent'],
     flashcards: ['🗂', 'Flashcards'], mastery: ['📈', 'Mastery'], lesson_plan: ['🗺', 'Learning plan'], memory_search: ['🧠', 'Recall'],
-    memory_save: ['🧠', 'Remember'], memory_update: ['🧠', 'Update memory'], memory_forget: ['🧠', 'Forget'],
+    memory_save: ['🧠', 'Remember'], memory_update: ['🧠', 'Update memory'], memory_forget: ['🧠', 'Forget'], memory: ['🧠', 'Memory'],
+    load_tools: ['🧰', 'Load tools'],
   };
+  const MEMORY_TITLES = { search: 'Recall', save: 'Remember', update: 'Update memory', forget: 'Forget' };
   function summaryOf(b) {
     const i = b.input || {};
     switch (b.name) {
@@ -457,6 +459,9 @@
       case 'memory_save': return (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '');
       case 'memory_search': return i.query || '';
       case 'memory_update': case 'memory_forget': return '#' + (i.id || '');
+      case 'memory': return i.action === 'search' ? (i.query || '') : i.action === 'save' ? (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '')
+        : '#' + (i.id || '') + (i.content ? ' ' + i.content : '');
+      case 'load_tools': return (i.names || []).join(', ');
       case 'flashcards': return (i.action || '') + ' ' + (i.deck || '') + (i.cards ? ' · ' + i.cards.length + ' cards' : '');
       case 'mastery': return (i.action || '') + ' ' + (i.concept || i.subject || '');
       case 'lesson_plan': return (i.action || '') + ' ' + (i.title || i.id || '');
@@ -474,10 +479,11 @@
       const out = custom(b, r, pend, ctx);
       if (out != null) return setHTML(node, out);
     }
-    const [icon, title] = TOOL_META[b.name] || ['🔧', b.name];
+    let [icon, title] = TOOL_META[b.name] || ['🔧', b.name];
+    if (b.name === 'memory' && b.input && MEMORY_TITLES[b.input.action]) title = MEMORY_TITLES[b.input.action];
     const running = pendingCall || !r || (r.meta && r.meta.running);
     const isErr = r && r.isError;
-    const compact = ['memory_save', 'memory_search', 'memory_update', 'memory_forget', 'mastery'].includes(b.name) && !pend;
+    const compact = ['memory', 'memory_save', 'memory_search', 'memory_update', 'memory_forget', 'mastery', 'load_tools'].includes(b.name) && !pend;
     const open = S.openTools.has(b.id) || b.name === 'todo_write' || (b.name === 'lesson_plan' && r && !running);
     let state = running ? '<span class="spinner"></span>' : (isErr ? 'failed' : (r && r.meta && r.meta.ms ? fmtMs(r.meta.ms) : '✓'));
     if (pend && pend.kind === 'permission') state = 'needs approval';

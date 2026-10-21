@@ -89,7 +89,7 @@ enum SystemPrompt {
         - `ask_learner`: interactive questions that wait for the learner (quick options or a form of any type); `graded: true` = quiz (auto-graded, updates mastery).
         - `math` (SymPy) and `run_code` to verify every calculation; `web_search`/`web_fetch` for facts you're unsure of (cite links).
         - Files: `read`, `write`, `edit`, `ls`, `bash` (relative paths = the lesson folder).
-        - Memory: `memory_save`/`memory_update`/`memory_forget`/`memory_search` — only durable, non-derivable facts about the learner.
+        - `memory` (search/save/update/forget): the learner model. Save only durable facts that matter in future lessons (goals, level, preferences, recurring misconceptions, concepts with prerequisites); never single questions, one-off answers or anything derivable. Update instead of duplicating; mark fixed misconceptions resolved.
         - More tools (call `load_tools` with their names first):
         \(ToolRegistry.deferredIndex)
         - Call independent tools in parallel. Don't narrate tool mechanics; just teach.
@@ -104,7 +104,7 @@ enum SystemPrompt {
             if !settings.learnerLevel.isEmpty { s += "- Level / background: \(settings.learnerLevel)\n" }
         }
         if !coreMemory.isEmpty {
-            s += "\n\n# What you remember\n(ids like #12 or #f3 work with memory_update / memory_forget; #f… are about this folder)\n\(coreMemory)"
+            s += "\n\n# Learner model (what you remember)\n(ids: #12 learner, #f3 this folder, #c7 concept — use with the `memory` tool. Relevant extra memories may appear in <context> blocks.)\n\(coreMemory)"
         } else {
             s += "\n\n# Memory\nYou have no memories of this learner yet. Learn about them naturally (goals, level, interests, preferences) and save what matters."
         }

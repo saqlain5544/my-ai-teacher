@@ -13,18 +13,20 @@ final class MemoryExtension: AgentExtension {
         guard app.settings.value.autoMemory else { return }
         let text = message.plainText
         guard text.count > 3 else { return }
-        let core = session.conversation.systemPrompt ?? ""
-        // Only clearly relevant memories: relevance alone must clear the bar (importance/recency can't carry it).
-        let hits = session.services.memory.search(text, limit: 5, minScore: 0.38)
-            .filter { $0.relevance >= 0.30 && !core.contains("[#\($0.id)]") }
-        guard !hits.isEmpty else { return }
-        session.services.memory.markUsed(hits.map(\.id))
-        let note = "<context>\nRelevant memories:\n" + hits.map { "- [#\($0.id)] (\($0.kind.rawValue)) \($0.content)" }.joined(separator: "\n") + "\n</context>"
-        message.blocks.insert(Block(kind: .text, text: note, meta: ["hidden": true]), at: 0)
+        // Lean, selective recall: 0–2 items above a calibrated relevance bar, never what the core block already holds.
+        let recall = session.services.memory.recall(text, core: session.conversation.systemPrompt ?? "")
+        guard !recall.note.isEmpty else { return }
+        session.services.memory.markUsed(recall.memories.map(\.id))
+        message.blocks.insert(Block(kind: .text, text: recall.note, meta: ["hidden": true]), at: 0)
         var meta = message.meta?.object ?? [:]
-        meta["recalled"] = .array(hits.map { ["id": .string($0.id), "kind": .string($0.kind.rawValue), "content": .string($0.content), "score": .number(($0.score * 100).rounded() / 100)] })
+        let items: [JSON] = recall.memories.map {
+            ["id": .string($0.id), "kind": .string($0.kind.rawValue), "content": .string($0.content), "score": .number(($0.relevance * 100).rounded() / 100)]
+        } + recall.concepts.map {
+            ["id": .string($0.id), "kind": "concept", "content": .string("\($0.name) — \($0.masteryLabel)"), "score": 1]
+        }
+        meta["recalled"] = .array(items)
         message.meta = .object(meta)
-        EventBus.publish(.memoryChanged(MemoryChange(kind: .recalled, ids: hits.map(\.id), conversationID: session.id)))
+        EventBus.publish(.memoryChanged(MemoryChange(kind: .recalled, ids: recall.ids, conversationID: session.id)))
     }
 
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {
@@ -68,6 +70,7 @@ final class MemoryExtension: AgentExtension {
                     if outcome.added > 0 { parts.append("\(outcome.added) new") }
                     if outcome.updated > 0 { parts.append("\(outcome.updated) updated") }
                     if outcome.deleted > 0 { parts.append("\(outcome.deleted) removed") }
+                    if outcome.concepts > 0 { parts.append("\(outcome.concepts) concept\(outcome.concepts == 1 ? "" : "s")") }
                     EventBus.publish(.memoryChanged(MemoryChange(kind: .reflected, summary: parts.joined(separator: ", "), conversationID: convID)))
                     EventBus.publish(.notice(conversationID: convID, text: "🧠 Memory updated — " + parts.joined(separator: ", ")))
                 }
@@ -120,7 +123,7 @@ final class ActivityExtension: AgentExtension {
     }
 }
 
-/// Teaching context in the system prompt: mastery, due reviews, plans, and the folder being worked in.
+/// Teaching context in the system prompt: due reviews, plans, and the folder being worked in.
 @MainActor
 final class TeachingContextExtension: AgentExtension {
     let id = "teaching-context"
@@ -130,8 +133,7 @@ final class TeachingContextExtension: AgentExtension {
     func systemPromptSections(_ session: ChatSession) -> [String] {
         let s = session.services
         var out: [String] = []
-        let mastery = s.study.masterySummary()
-        if !mastery.isEmpty { out.append("# Concept mastery (most recent)\n\(mastery)") }
+        // Concept mastery is part of the learner model's "Learning map" in the core memory block.
         let due = s.study.dueCount()
         if due > 0 { out.append("# Spaced repetition\n\(due) flashcard(s) are due. Mention it at a natural moment (the learner reviews in the Flashcards screen).") }
         let plans = s.study.plans().prefix(3)
