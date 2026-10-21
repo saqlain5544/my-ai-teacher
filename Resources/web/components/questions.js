@@ -386,7 +386,7 @@
     }
     const minlen = +inp.getAttribute('data-minlen') || 0, pat = inp.getAttribute('data-pattern');
     if (v.trim() && v.trim().length < minlen) return 'At least ' + minlen + ' characters';
-    if (v.trim() && pat) { try { if (!new RegExp('^(?:' + pat + ')$').test(v.trim())) return 'Doesn\'t match the expected format'; } catch (_) {} }
+    if (v.trim() && pat) { try { if (!new RegExp('^(?:' + pat + ')$').test(v.trim())) return FORMAT_HINT; } catch (_) {} }
     return '';
   }
   function showProblem(card, inp, force) {
@@ -398,9 +398,12 @@
     return msg;
   }
   /** Checks every field; marks the bad ones and focuses the first. True when the form can be sent. */
+  // A pattern only hints at the shape: models also write the accepted answers as one ("1/4|one quarter"), and a learner
+  // who is wrong must still be able to hand in an answer. Numbers and length limits do block.
+  const FORMAT_HINT = 'Doesn\'t look like the expected format (you can still submit)';
   function validate(card, F, qs) {
     let first = null;
-    card.querySelectorAll('[data-q-input]').forEach(inp => { if (showProblem(card, inp, true) && !first) first = inp; });
+    card.querySelectorAll('[data-q-input]').forEach(inp => { const msg = showProblem(card, inp, true); if (msg && msg !== FORMAT_HINT && !first) first = inp; });
     if (first) { first.focus(); return false; }
     // Nothing answered at all: say so instead of sending an empty form (Skip is the way to pass).
     const answered = (qs || []).some((q, i) => {

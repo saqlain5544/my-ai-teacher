@@ -59,7 +59,15 @@ enum Questions {
     static func isFormatPattern(_ p: String, answers: JSON?) -> Bool {
         guard p.range(of: #"[\\^$.|?*+()\[\]{}]"#, options: .regularExpression) != nil,
               let re = try? NSRegularExpression(pattern: "^(?:\(p))$") else { return false }
-        let expected = answers?.array?.compactMap(\.string) ?? answers?.string.map { [$0] } ?? []
+        // Answers come as a string, a list, or wrapped ({"item": [...]}): every string in them is an accepted answer.
+        func strings(_ j: JSON?) -> [String] {
+            guard let j else { return [] }
+            if let s = j.string { return [s] }
+            if let a = j.array { return a.flatMap { strings($0) } }
+            if let o = j.object { return o.values.flatMap { strings($0) } }
+            return []
+        }
+        let expected = strings(answers)
         return expected.allSatisfy { a in
             let t = a.trimmingCharacters(in: .whitespaces)
             return re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil

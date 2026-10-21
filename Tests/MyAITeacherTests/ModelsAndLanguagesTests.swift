@@ -166,6 +166,7 @@ final class QuizPatternTests: XCTestCase {
         XCTAssertNil(pattern("[0-9]+", "twelve"), "a format the expected answer fails is wrong")
         XCTAssertNil(pattern("(unclosed", nil), "doesn't compile")
         XCTAssertEqual(pattern("[a-z]+", .array(["cat", "dog"])), "[a-z]+", "every accepted answer passes")
+        XCTAssertNil(pattern("[0-9]+", .object(["item": .array(["twelve"])])), "answers wrapped in an object are read too")
     }
 }
 

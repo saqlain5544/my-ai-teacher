@@ -817,6 +817,19 @@
     T.interaction({ id: 'qv1' }, false); T.status('', false);
   });
 
+  test('a pattern hints but never blocks: a wrong answer can be handed in (live quiz runs got stuck)', () => {
+    // MiniMax-M3 wrote the accepted answers as the "format".
+    const qs = [{ type: 'short_text', prompt: 'Fraction you ate?', pattern: '^\\s*1\\s*/\\s*4\\s*$|^\\s*one\\s+quarter\\s*$|^\\s*0\\.25\\s*$' }];
+    const a = A([{ kind: 'toolUse', id: 'qp1', name: 'ask_learner', input: { title: 'Pizza', questions: qs } }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'qp1', kind: 'ask', payload: { title: 'Pizza', questions: qs } }, true);
+    const card = () => $('[data-tool-id="qp1"]');
+    const inp = $('[data-q-input="0"]', card()); inp.value = '1/2'; inp.dispatchEvent(new Event('input', { bubbles: true }));
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    const ans = lastPost('answer'); ok(ans, 'a wrong answer is still submitted'); eq(ans.value.answers[0], '1/2');
+    T.interaction({ id: 'qp1' }, false); T.status('', false);
+  });
+
   test('quiz results render graded review', () => {
     const a = A([{ kind: 'toolUse', id: 'qz2', name: 'quiz', input: { questions: QUIZ.questions.slice(0, 2) } }]);
     const graded = [{ correct: true, given: 1, answer: 1, explanation: 'شكرا = thanks' }, { correct: false, given: [0], answer: [0, 2], explanation: '5 is prime' }];
