@@ -116,6 +116,7 @@ final class Database: @unchecked Sendable {
 
     @discardableResult
     func execute(_ sql: String, params: [SQLBindable?]) throws -> Int {
+        let sp = Signposts.begin("sql", String(sql.prefix(60))); defer { Signposts.end("sql", sp) }
         lock.lock(); defer { lock.unlock() }
         let stmt = try prepare(sql)
         bind(stmt, params)
@@ -131,6 +132,7 @@ final class Database: @unchecked Sendable {
     }
 
     func query(_ sql: String, params: [SQLBindable?]) throws -> [Row] {
+        let sp = Signposts.begin("sql", String(sql.prefix(60))); defer { Signposts.end("sql", sp) }
         lock.lock(); defer { lock.unlock() }
         let stmt = try prepare(sql)
         defer { sqlite3_reset(stmt) }

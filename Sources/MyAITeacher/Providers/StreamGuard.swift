@@ -15,6 +15,7 @@ struct GuardedClient: LLMClient {
         let schemas = Dictionary(request.tools.map { ($0.name, $0.schema) }, uniquingKeysWith: { a, _ in a })
         return AsyncThrowingStream { cont in
             let task = Task {
+                let sp = Signposts.begin("model", request.model); defer { Signposts.end("model", sp) }
                 var parser = TextProtocolParser(tools: schemas)
                 var seen = Set<String>()
                 var parsedCall = false, flushed = false

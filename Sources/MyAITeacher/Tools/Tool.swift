@@ -74,6 +74,7 @@ extension Tool {
     }
     /// Runs the tool under its timeout.
     func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        let sp = Signposts.begin("tool", name); defer { Signposts.end("tool", sp) }
         let input = ToolArgs.coerce(input, schema: schema)   // "[…]" strings for arrays, "3" for numbers…
         guard let limit = timeout(input) else { return try await run(input, ctx) }
         let tool = self

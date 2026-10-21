@@ -7,7 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // A test-profile instance runs beside the learner's work and must never take the keyboard from them.
         if AppPaths.testHome == nil { NSApp.activate(ignoringOtherApps: true) }
         NSWindow.allowsAutomaticWindowTabbing = false
-        MainActor.assumeIsolated { DebugHooks.install(); MemoryGovernor.shared.start() }
+        MainActor.assumeIsolated { DebugHooks.install(); MemoryGovernor.shared.start(); Signposts.install() }
         // Test runs stop exactly this instance (never the learner's copy of the same app).
         if let home = AppPaths.testHome {
             try? "\(ProcessInfo.processInfo.processIdentifier)".write(to: home.appendingPathComponent("app.pid"), atomically: true, encoding: .utf8)

@@ -595,6 +595,7 @@ final class ChatSession: ObservableObject, Identifiable {
         // Tier 3 only if still over budget.
         guard estimateTokens() > budget, messages.count > 8 else { return }
         setStatus("Summarising earlier parts of the lesson…")
+        let sp = Signposts.begin("compaction", "\(messages.count) messages"); defer { Signposts.end("compaction", sp) }
         var keepChars = 0
         var cut = messages.count
         for i in stride(from: messages.count - 1, through: 0, by: -1) {

@@ -7,6 +7,7 @@ import WebKit
 ///   {"action":"snapshot","path":"/tmp/x.png"} | {"action":"eval","js":"…"} | {"action":"send","text":"…"}
 ///   {"action":"answer","value":{…}}  (resolves the first pending interaction) | {"action":"select","item":"memory"}
 ///   {"action":"newLesson"} | {"action":"setModel","provider":"minimax","model":"MiniMax-M3"} | {"action":"openFolder","path":"…"}
+///   perf: {"action":"seedLesson","messages":4000} | {"action":"seedMemories","count":10000} | {"action":"recall"} | {"action":"runTool",…} | {"action":"mark",…}
 /// Results are appended to ~/Library/Logs/MyAITeacher.log.
 @MainActor
 enum DebugHooks {
@@ -75,7 +76,7 @@ enum DebugHooks {
             case "progress": app.selection = .progress
             case "flashcards": app.selection = .flashcards
             case "insights": app.selection = .insights
-            default: if let id = app.conversations.first?.id { app.selection = .lesson(id) }
+            default: if let id = cmd["id"]?.string ?? app.conversations.first?.id { app.selection = .lesson(id) }
             }
         case "quick": app.quickQuestion()
         case "stop": session?.stop(); AppLog.write("stopped")
@@ -112,6 +113,33 @@ enum DebugHooks {
         case "resize":
             if let w = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) {
                 w.setFrame(NSRect(x: w.frame.minX, y: w.frame.minY, width: cmd["w"]?.double ?? 1240, height: cmd["h"]?.double ?? 840), display: true)
+            }
+        // Perf workloads (scripts/perf): synthetic data at scale, and the hot paths run on their own.
+        case "mark":   // {"action":"mark","name":"…"}: brackets a workload in the signpost timeline
+            Signposts.event("mark", cmd["name"]?.string ?? "")
+            AppLog.write("mark \(cmd["name"]?.string ?? "")")
+        case "seedLesson": PerfSeed.lesson(cmd["messages"]?.int ?? 3000, title: cmd["title"]?.string ?? "Perf lesson")
+        case "seedMemories": PerfSeed.memories(cmd["count"]?.int ?? 10_000)
+        case "recall":   // on the main thread, as the per-message recall in MemoryExtension.willSend runs
+            let hub = app.services.memory, text = cmd["text"]?.string ?? "How does the chain rule work for derivatives?"
+            let ms = (0..<(cmd["times"]?.int ?? 5)).map { _ in
+                let t0 = DispatchTime.now().uptimeNanoseconds
+                _ = hub.recall(text, core: "")
+                return Int((DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000)
+            }
+            AppLog.write("recall ms=\(ms) items=\(hub.count())")
+        case "runTool":   // {"action":"runTool","name":"web_fetch","input":{…}}: one tool call outside any lesson
+            guard let name = cmd["name"]?.string, let tool = ToolRegistry.byName[name], let p = app.settings.provider(app.settings.value.providerID) else {
+                AppLog.write("runTool: unknown tool"); return
+            }
+            let ctx = ToolContext(conversationID: "perf", workspace: app.workspace.url, services: app.services, interactions: app.interactions,
+                                  toolCallID: UUID().uuidString, client: p.client(apiKey: KeyStore.shared.key(for: p)), model: app.settings.value.model, progress: { _ in })
+            let input = cmd["input"] ?? .object([:])
+            Task {
+                let t0 = Date()
+                let r: String
+                do { let out = try await tool.runBounded(input, ctx); r = "ok=\(!out.isError) chars=\(out.text.count)" } catch { r = "error: \(error.localizedDescription)" }
+                AppLog.write("runTool \(name) \(r) ms=\(Int(Date().timeIntervalSince(t0) * 1000))")
             }
         default: AppLog.write("unknown debug command: \(cmd.compact)")
         }
@@ -202,6 +230,96 @@ enum DebugHooks {
             web.takeSnapshot(with: nil) { image, _ in finish(image, frame) }
         } else {
             finish(nil, .zero)
+        }
+    }
+}
+
+/// Synthetic data at scale for perf runs, written straight to the stores in the background.
+enum PerfSeed {
+    /// A lesson of `n` messages in turns of four: a question, a step with a tool call, its result (4 KB; 30 KB every tenth
+    /// turn) and a reply with Markdown, maths, code and a table (a Mermaid diagram every 25th turn). Opened when written.
+    @MainActor static func lesson(_ n: Int, title: String) {
+        let app = AppModel.shared, store = app.services.conversations
+        var c = Conversation(providerID: app.settings.value.providerID, model: app.settings.value.model)
+        c.title = title
+        let conv = c
+        Task.detached(priority: .userInitiated) {
+            let t0 = Date(), start = Date().addingTimeInterval(-Double(n) * 30)
+            try? store.db.transaction {
+                for i in 0..<n {
+                    var m = message(i)
+                    m.createdAt = start.addingTimeInterval(Double(i) * 30)
+                    store.upsert(m, conversationID: conv.id, seq: i)
+                }
+            }
+            store.save(conv)
+            await MainActor.run {
+                app.conversations.insert(conv, at: 0)
+                app.selection = .lesson(conv.id)
+                AppLog.write("seeded lesson \(conv.id) \(n) messages in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
+            }
+        }
+    }
+
+    static func message(_ i: Int) -> ChatMessage {
+        let turn = i / 4, call = "perf_\(turn)"
+        switch i % 4 {
+        case 0: return ChatMessage(role: .user, blocks: [.text("Question \(turn): how does the chain rule apply to sin(x^\(turn % 7 + 2))? Show a worked example.")])
+        case 1: return ChatMessage(role: .assistant, blocks: [.text("Let me check a reference first."),
+                                                            .toolUse(id: call, name: "web_fetch", input: ["url": .string("https://example.org/calculus/\(turn)")])])
+        case 2:
+            let para = "The chain rule says that the derivative of f(g(x)) is f'(g(x)) · g'(x). Reference section \(turn) works through composite functions. "
+            return ChatMessage(role: .user, blocks: [.toolResult(id: call, name: "web_fetch", content: String(repeating: para, count: turn % 10 == 0 ? 220 : 30))])
+        default:
+            var text = """
+            ## Step \(turn): the chain rule
+
+            For $f(x) = \\sin(x^{\(turn % 7 + 2)})$ the outer function is $\\sin u$ and the inner one is $u = x^{\(turn % 7 + 2)}$, so
+
+            $$f'(x) = \\cos(x^{\(turn % 7 + 2)}) \\cdot \(turn % 7 + 2)x^{\(turn % 7 + 1)}$$
+
+            1. **Differentiate the outer function** and keep the inner one as it is.
+            2. **Multiply** by the derivative of the inner function.
+            3. Simplify, and check the result numerically at $x = 1$.
+
+            ```python
+            import math
+            h = 1e-6
+            f = lambda x: math.sin(x ** \(turn % 7 + 2))
+            print((f(1 + h) - f(1 - h)) / (2 * h), math.cos(1) * \(turn % 7 + 2))
+            ```
+
+            | x | f(x) | f'(x) |
+            |---|------|-------|
+            | 0 | 0 | 0 |
+            | 1 | 0.841 | \(String(format: "%.3f", cos(1.0) * Double(turn % 7 + 2))) |
+
+            Try it yourself: what is the derivative of $\\cos(3x^2)$?
+            """
+            if turn % 25 == 0 { text += "\n\n```mermaid\nflowchart LR\n  A[outer f] --> B[inner g]\n  B --> C[f'(g) · g']\n```" }
+            var m = ChatMessage(role: .assistant, blocks: [.text(text)], model: "perf-synthetic")
+            m.turn = TurnMetrics(duration: 6.5, timeToFirstToken: 0.8, steps: 2, usage: Usage(input: 4200, output: 520))
+            return m
+        }
+    }
+
+    /// `n` learner memories with real embeddings (as recall sees them), across kinds and subjects.
+    @MainActor static func memories(_ n: Int) {
+        let store = AppModel.shared.services.memory.learner
+        Task.detached(priority: .userInitiated) {
+            let t0 = Date()
+            let subjects = ["calculus", "algebra", "physics", "chemistry", "biology", "history", "spanish", "programming", "statistics", "music"]
+            let topics = ["derivatives", "integrals", "limits", "vectors", "forces", "reactions", "cells", "verbs", "recursion", "probability",
+                          "matrices", "waves", "genetics", "loops", "scales", "energy", "proofs", "series", "graphs", "sorting"]
+            let kinds: [MemoryKind] = [.knowledge, .fact, .misconception, .preference, .episode, .goal]
+            let rows = (0..<n).map { i -> (kind: MemoryKind, content: String, subject: String?, vector: [Float]?) in
+                let s = subjects[i % subjects.count], t = topics[(i / 3) % topics.count], k = kinds[i % kinds.count]
+                let text = "Learner \(["understands", "confuses", "practised", "asked about", "wants to master", "struggled with"][i % 6]) \(t) in \(s) " +
+                    "(case \(i)): \(["worked example with numbers", "visual explanation", "step-by-step proof", "real-world analogy"][i % 4])."
+                return (k, text, s, Embedder.shared.vector(text))
+            }
+            store.bulkInsert(rows)
+            AppLog.write("seeded \(n) memories in \(Int(Date().timeIntervalSince(t0) * 1000)) ms")
         }
     }
 }

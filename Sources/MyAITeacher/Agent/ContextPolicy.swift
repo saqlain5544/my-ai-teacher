@@ -38,6 +38,7 @@ enum ContextPolicy {
 
     /// Request-ready history.
     static func prepare(_ stored: [ChatMessage], conversation c: Conversation, model: String) -> [ChatMessage] {
+        let sp = Signposts.begin("context", "\(stored.count) messages"); defer { Signposts.end("context", sp) }
         var msgs = stored.filter { m in
             if m.role == .assistant && m.blocks.isEmpty { return false }
             if m.role == .assistant && m.error != nil && m.toolUses.isEmpty && m.plainText.isEmpty { return false }

@@ -30,6 +30,7 @@ enum HTMLToMarkdown {
     }
 
     static func convert(html: String, baseURL: URL?) -> Result {
+        let sp = Signposts.begin("html", "\(html.utf8.count) bytes"); defer { Signposts.end("html", sp) }
         if Task.isCancelled { return Result(title: nil, markdown: "") }
         let cleaned = preprocess(html)
         guard let doc = try? XMLDocument(xmlString: cleaned, options: [.documentTidyHTML, .nodeLoadExternalEntitiesNever]) else {

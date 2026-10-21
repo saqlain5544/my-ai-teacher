@@ -94,12 +94,14 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     func messages(_ conversationID: String) -> [ChatMessage] {
+        let sp = Signposts.begin("lesson.load", "all"); defer { Signposts.end("lesson.load", sp) }
         let rows = (try? db.query("SELECT data FROM messages WHERE conversation_id=? ORDER BY seq", conversationID)) ?? []
         return rows.compactMap { r in r.data("data").flatMap { try? dec.decode(ChatMessage.self, from: $0) } }
     }
 
     /// Messages with seq in [from, to) — a window of a long lesson (seq is the message's position).
     func messages(_ conversationID: String, from: Int, to: Int = Int.max) -> [ChatMessage] {
+        let sp = Signposts.begin("lesson.load", "from \(from)"); defer { Signposts.end("lesson.load", sp) }
         let rows = (try? db.query("SELECT data FROM messages WHERE conversation_id=? AND seq>=? AND seq<? ORDER BY seq",
                                   conversationID, from, min(to, Int(Int32.max)))) ?? []
         return rows.compactMap { r in r.data("data").flatMap { try? dec.decode(ChatMessage.self, from: $0) } }
@@ -114,6 +116,7 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     func upsert(_ m: ChatMessage, conversationID: String, seq: Int) {
+        let sp = Signposts.begin("lesson.save"); defer { Signposts.end("lesson.save", sp) }
         guard let data = try? enc.encode(m) else { return }
         let text = m.blocks.compactMap { b -> String? in
             switch b.kind { case .text, .file: return b.text; default: return nil }

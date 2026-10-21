@@ -298,6 +298,20 @@ final class TelemetryTests: XCTestCase {
         XCTAssertEqual(store.llmByModel(.init(since: 0)).reduce(0) { $0 + $1.calls }, 20_000)
     }
 
+    /// Signposts cost nothing unless the app runs with MYAITEACHER_SIGNPOSTS=1: no interval, and the detail is never built.
+    func testSignpostsAreFreeWhenOff() {
+        XCTAssertFalse(Signposts.enabled)
+        var built = 0
+        let detail = { () -> String in built += 1; return "x" }
+        let c0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
+        for _ in 0..<100_000 { Signposts.end("sql", Signposts.begin("sql", detail())); Signposts.event("mark", detail()) }
+        let ns = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - c0) / 100_000
+        print(String(format: "SIGNPOSTS OFF: %.1f ns per begin+end+event", ns))
+        XCTAssertNil(Signposts.begin("sql", detail()))
+        XCTAssertEqual(built, 0)
+        XCTAssertLessThan(ns, 2_000)
+    }
+
     /// Live check against a free model (opt-in: TELEMETRY_LIVE=1 and OPENROUTER_API_KEY). Builds StepMetrics the way
     /// ChatSession does, maps and stores them, and reads them back through the dashboard queries.
     func testLiveFreeModelRoundTrip() async throws {

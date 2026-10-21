@@ -175,7 +175,9 @@ struct TranscriptView: NSViewRepresentable {
                 if replaceQueue { queue.removeAll() }
                 queue.append(js); return
             }
+            let sp = Signposts.begin("render", "\(js.prefix(9)) \(js.utf8.count) bytes")
             web.evaluateJavaScript(js) { _, err in
+                Signposts.end("render", sp)
                 if let err { AppLog.write("JS error: \(err.localizedDescription) in \(js.prefix(160))") }
             }
         }

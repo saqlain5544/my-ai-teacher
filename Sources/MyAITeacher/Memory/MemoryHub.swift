@@ -152,6 +152,7 @@ final class MemoryHub: @unchecked Sendable {
     /// Explicit search (the `memory` tool and the Memory screen). `minScore` is a relevance threshold.
     func search(_ query: String, limit: Int = 8, kinds: [MemoryKind]? = nil, minScore: Double = MemoryTuning.searchThreshold,
                 queryVector: [Float]? = nil) -> [Memory] {
+        let sp = Signposts.begin("memory.search"); defer { Signposts.end("memory.search", sp) }
         let qv = queryVector ?? Embedder.shared.vector(query).map(Embedder.normalized)
         let routed = graph?.route(query) ?? [:]
         let merged = learner.search(query, limit: limit, kinds: kinds, minRelevance: minScore, conceptBoost: routed, queryVector: qv)
@@ -171,6 +172,7 @@ final class MemoryHub: @unchecked Sendable {
 
     /// Per-turn automatic recall: 0–2 items, only when clearly relevant and not already in the core block.
     func recall(_ message: String, core: String, maxItems: Int = 2) -> Recall {
+        let sp = Signposts.begin("recall", "\(message.count) chars"); defer { Signposts.end("recall", sp) }
         let text = String(message.prefix(1500))
         let qv = Embedder.shared.vector(text).map(Embedder.normalized)
         let routed = (graph?.route(text) ?? [:]).filter { $0.value >= 1 }
