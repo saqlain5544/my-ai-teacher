@@ -9,8 +9,9 @@ final class TelemetryExtension: AgentExtension {
     nonisolated(unsafe) static var startedAt: Double = ProcessClock.startTime
     private let telemetry: Telemetry
     private var bag: Set<AnyCancellable> = []
-    /// Last seen `compactedThrough` per lesson (compaction detection without a loop hook).
+    /// Last seen compaction points per lesson (detection without a loop hook): summary and trim epochs.
     private var compactedThrough: [String: String?] = [:]
+    private var trimmedThrough: [String: String?] = [:]
     private var lastContext: [String: Int] = [:]
 
     init(telemetry: Telemetry = .shared) {
@@ -33,15 +34,19 @@ final class TelemetryExtension: AgentExtension {
 
     func willSend(_ message: inout ChatMessage, session: ChatSession) {
         compactedThrough[session.id] = .some(session.conversation.compactedThrough)
+        trimmedThrough[session.id] = .some(session.conversation.trimmedThrough)
     }
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        let now = session.conversation.compactedThrough
-        defer { compactedThrough[session.id] = .some(now) }
-        guard let seen = compactedThrough[session.id], let now, now != seen else { return }
+        let summary = session.conversation.compactedThrough, trim = session.conversation.trimmedThrough
+        defer { compactedThrough[session.id] = .some(summary); trimmedThrough[session.id] = .some(trim) }
+        var kinds: [String] = []
+        if let seen = compactedThrough[session.id], let summary, summary != seen { kinds.append("summary") }
+        if let seen = trimmedThrough[session.id], let trim, trim != seen { kinds.append("trim") }
+        guard !kinds.isEmpty else { return }
         let before = lastContext[session.id] ?? 0
-        timed { [TelemetryEvent(ts: Date().timeIntervalSince1970, kind: .compaction, provider: session.conversation.providerID,
-                                model: session.conversation.model, conv: session.id, value: Double(before))] }
+        timed { kinds.map { TelemetryEvent(ts: Date().timeIntervalSince1970, kind: .compaction, provider: session.conversation.providerID,
+                                           model: session.conversation.model, conv: session.id, value: Double(before), label: $0) } }
     }
 
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {
@@ -58,6 +63,7 @@ final class TelemetryExtension: AgentExtension {
             steps.reverse()
             if let ctx = steps.last?.0.usage.promptTotal, ctx > 0 { lastContext[session.id] = ctx }
             compactedThrough[session.id] = .some(session.conversation.compactedThrough)
+            trimmedThrough[session.id] = .some(session.conversation.trimmedThrough)
             return TelemetryMapper.events(turn: turn, steps: steps, conversationID: session.id)
         }
     }
