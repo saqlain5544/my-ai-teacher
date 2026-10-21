@@ -41,7 +41,7 @@
       let h = (q.options || []).map((o, oi) => {
         let cls = given === oi ? ' sel' : '';
         if (g && g.correct != null) cls = g.answer === oi ? ' correct' : (given === oi ? ' wrong' : '');
-        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-pick"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="radio" tabindex="-1"' + (given === oi ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
+        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-pick" tabindex="0" role="radio" aria-checked="' + (given === oi) + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="radio" tabindex="-1"' + (given === oi ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
       }).join('');
       if (q.allow_other) {
         const v = typeof given === 'string' ? given : (F.other[qi] || '');
@@ -58,7 +58,7 @@
         const sel = Array.isArray(given) && given.includes(oi);
         let cls = sel ? ' sel' : '';
         if (ans) cls = ans.includes(oi) ? (sel ? ' correct' : ' missed') : (sel ? ' wrong' : '');
-        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-toggle"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="checkbox" tabindex="-1"' + (sel ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
+        return '<label class="opt' + cls + '"' + (active ? ' data-act="q-toggle" tabindex="0" role="checkbox" aria-checked="' + sel + '"' : '') + ' data-q="' + qi + '" data-o="' + oi + '"><input type="checkbox" tabindex="-1"' + (sel ? ' checked' : '') + dis(active) + '><span class="md">' + ctx.inline(o) + '</span></label>';
       }).join('') + (active ? '<div class="q-help">' + (q.max_select ? 'Choose up to ' + q.max_select : 'Select all that apply') + '</div>' : '');
     },
   };
@@ -219,7 +219,8 @@
     });
     if (active) {
       h += '<div class="quiz-foot">' + (graded ? '<div class="confidence">Confidence: ' + [1, 2, 3, 4, 5].map(n => '<button data-act="q-conf" data-v="' + n + '" class="' + (F.confidence === n ? 'sel' : '') + '">' + n + '</button>').join('') + '</div>' : '<span></span>') +
-        '<div class="btn-row"><button class="btn" data-act="q-skip">' + (graded ? 'Skip' : 'Dismiss') + '</button><button class="btn primary" data-act="q-submit">' + ctx.esc(input.submit_label || (graded ? 'Submit answers' : 'Send')) + '</button></div></div>';
+        (locked(F, pend) ? '<div class="btn-row"><span class="answered"><span class="spinner"></span> Sent</span></div></div>'
+          : '<div class="btn-row"><button class="btn" data-act="q-skip">' + (graded ? 'Skip' : 'Dismiss') + '</button><button class="btn primary" data-act="q-submit">' + ctx.esc(input.submit_label || (graded ? 'Submit answers' : 'Send')) + '</button></div></div>');
     } else if (gradedList) {
       const score = r.meta.score, total = r.meta.total;
       h += '<div class="quiz-foot"><span class="score' + (total && score / total >= 0.8 ? ' great' : '') + '">Score: ' + score + ' / ' + total + '</span><span class="meta">' + (total && score === total ? '🎉 Perfect!' : 'Mistakes are how we learn.') + '</span></div>';
@@ -242,29 +243,44 @@
     }
     if (!pend) return '<div class="ask"><div class="q md">' + ctx.inline(i.question || '') + '</div><span class="spinner"></span></div>';
     const F = state(b.id);
-    let h = '<div class="ask"><div class="q md">' + ctx.inline(i.question || '') + '</div><div class="opts">';
-    (i.options || []).forEach((o, oi) => { h += '<button class="btn' + (F.selected.includes(oi) ? ' sel' : '') + '" data-act="ask-opt" data-o="' + oi + '">' + ctx.inline(o) + '</button>'; });
+    const p = (pend && pend.payload) || {};
+    const question = i.question || p.question || '', options = i.options || p.options || [];
+    const multi = i.multi_select != null ? i.multi_select : p.multi_select, free = (i.allow_free_text != null ? i.allow_free_text : p.allow_free_text) !== false;
+    const off = locked(F, pend) ? ' disabled' : '';
+    let h = '<div class="ask"><div class="q md">' + ctx.inline(question) + '</div><div class="opts">';
+    options.forEach((o, oi) => { h += '<button class="btn' + (F.selected.includes(oi) ? ' sel' : '') + '" data-act="ask-opt" data-o="' + oi + '"' + off + '>' + ctx.inline(o) + '</button>'; });
     h += '</div>';
-    if (i.multi_select) h += '<div class="btn-row" style="margin-bottom:8px"><button class="btn primary" data-act="ask-submit">Submit</button></div>';
-    if (i.allow_free_text !== false) h += '<div class="free"><textarea placeholder="Or type your own answer…" data-ask-text></textarea><button class="btn primary" data-act="ask-submit">Send</button></div>';
+    if (multi) h += '<div class="btn-row" style="margin-bottom:8px"><button class="btn primary" data-act="ask-submit"' + (off || (F.selected.length ? '' : ' disabled')) + '>Submit</button></div>';
+    if (free) h += '<div class="free"><textarea placeholder="Or type your own answer…" data-ask-text' + off + '>' + ctx.esc(F.text || '') + '</textarea><button class="btn primary" data-act="ask-submit"' + off + '>' + (F.sent ? 'Sent' : 'Send') + '</button></div>';
+    h += '<div class="ask-foot"><button class="btn link" data-act="q-skip"' + off + '>Skip</button></div>';
     return h + '</div>';
   }
 
   R.registerToolCard('quiz', (b, r, pend, ctx) => renderForm(b, r, pend, ctx, true));
-  R.registerToolCard('ask_learner', (b, r, pend, ctx) => (b.input && b.input.questions) ? renderForm(b, r, pend, ctx, !!b.input.graded) : renderQuick(b, r, pend, ctx));
+  R.registerToolCard('ask_learner', (b, r, pend, ctx) => {
+    const qs = (b.input && b.input.questions) || (pend && pend.payload && pend.payload.questions);
+    const graded = !!((b.input && b.input.graded) || (r && r.meta && r.meta.graded));
+    return qs ? renderForm(b, r, pend, ctx, graded) : renderQuick(b, r, pend, ctx);
+  });
 
   // ── Actions & inputs ─────────────────────────────────────────────────
   const toolOf = el => { const t = el.closest('[data-tool-id]'); return t ? t.getAttribute('data-tool-id') : null; };
   const qi = el => +el.getAttribute('data-q');
-  const questionsOf = id => {
+  const questionsOf = (id, ctx) => {
     const el = document.querySelector('[data-tool-id="' + CSS.escape(id) + '"]');
-    return el && el._block ? normalize(el._block.input.questions) : [];
+    if (!el || !el._block) return [];
+    const p = ctx.pending(id), pl = p && p.payload;
+    return normalize((el._block.input && el._block.input.questions) || (pl && pl.questions) || []);
   };
+  const inputOf = (id, card, ctx) => { const p = ctx.pending(id); return Object.assign({}, p && p.payload, card._block.input); };
+  // A send locks the card until the interaction ends; if the app asks again (new pending object), it unlocks.
+  const lock = (F, ctx, id) => { F.sent = true; F.sentFor = ctx.pending(id); };
+  const locked = (F, pend) => { if (F.sent && F.sentFor !== pend) F.sent = false; return !!F.sent; };
   R.registerAction('q-pick', (el, e, ctx) => { e.preventDefault(); const id = toolOf(el); const F = state(id); F.answers[qi(el)] = +el.getAttribute('data-o'); ctx.refreshCard(id); });
   R.registerAction('q-toggle', (el, e, ctx) => {
     e.preventDefault(); const id = toolOf(el), F = state(id), q = qi(el), o = +el.getAttribute('data-o');
     const cur = Array.isArray(F.answers[q]) ? F.answers[q] : [];
-    const max = (questionsOf(id)[q] || {}).max_select;
+    const max = (questionsOf(id, ctx)[q] || {}).max_select;
     if (cur.includes(o)) F.answers[q] = cur.filter(x => x !== o);
     else F.answers[q] = (max && cur.length >= max ? cur.slice(1) : cur).concat([o]).sort((a, b) => a - b);
     ctx.refreshCard(id);
@@ -281,7 +297,11 @@
     F.answers[q] = order.slice();
     ctx.refreshCard(id);
   });
-  R.registerAction('q-skip', (el, e, ctx) => ctx.post({ type: 'answer', id: toolOf(el), value: { cancelled: true } }));
+  R.registerAction('q-skip', (el, e, ctx) => {
+    const id = toolOf(el), F = state(id); if (locked(F, ctx.pending(id))) return;
+    lock(F, ctx, id); el.disabled = true;
+    ctx.post({ type: 'answer', id, value: { cancelled: true } });
+  });
   R.registerAction('q-submit', (el, e, ctx) => {
     const id = toolOf(el), F = state(id);
     const card = el.closest('[data-tool-id]');
@@ -292,24 +312,35 @@
       if (a === undefined || a === '') a = (F.other[i] || '').trim() || null;
       return a === undefined ? null : a;
     });
-    el.disabled = true; el.textContent = 'Sent';
+    if (locked(F, ctx.pending(id))) return;
+    lock(F, ctx, id); el.disabled = true; el.textContent = 'Sent';
     ctx.post({ type: 'answer', id, value: { answers, confidence: F.confidence || null, seconds: (Date.now() - F.started) / 1000 } });
   });
   R.registerAction('ask-opt', (el, e, ctx) => {
     const id = toolOf(el), F = state(id), o = +el.getAttribute('data-o'), card = el.closest('[data-tool-id]');
-    const input = card._block.input;
-    if (input.multi_select) { F.selected = F.selected.includes(o) ? F.selected.filter(x => x !== o) : F.selected.concat([o]); ctx.refreshCard(id); }
-    else ctx.post({ type: 'answer', id, value: { selected: [input.options[o]] } });
+    const input = inputOf(id, card, ctx);
+    if (locked(F, ctx.pending(id))) return;
+    const ta = card.querySelector('[data-ask-text]'); if (ta) F.text = ta.value;
+    if (input.multi_select) { F.selected = F.selected.includes(o) ? F.selected.filter(x => x !== o) : F.selected.concat([o]); ctx.refreshCard(id); return; }
+    lock(F, ctx, id); F.selected = [o]; ctx.refreshCard(id);
+    ctx.post({ type: 'answer', id, value: { selected: [input.options[o]], text: (F.text || '').trim() } });
   });
   R.registerAction('ask-submit', (el, e, ctx) => {
     const id = toolOf(el), F = state(id), card = el.closest('[data-tool-id]');
-    const ta = card.querySelector('[data-ask-text]'); const opts = card._block.input.options || [];
-    ctx.post({ type: 'answer', id, value: { selected: F.selected.map(i => opts[i]), text: ta ? ta.value.trim() : '' } });
+    if (locked(F, ctx.pending(id))) return;
+    const ta = card.querySelector('[data-ask-text]'); if (ta) F.text = ta.value;
+    const opts = inputOf(id, card, ctx).options || [];
+    if (!F.selected.length && !(F.text || '').trim()) { if (ta) ta.focus(); return; }
+    lock(F, ctx, id); ctx.refreshCard(id);
+    ctx.post({ type: 'answer', id, value: { selected: F.selected.map(i => opts[i]), text: (F.text || '').trim() } });
   });
-  R.registerAction('q-pen', (el) => { const c = el.closest('.draw').querySelector('canvas'); c._pen = el.getAttribute('data-c'); });
+  R.registerAction('q-pen', (el) => {
+    const c = el.closest('.draw').querySelector('canvas'), F = state(toolOf(el));
+    c._pen = el.getAttribute('data-c'); (F.pen = F.pen || {})[+c.getAttribute('data-q')] = c._pen;
+  });
   R.registerAction('q-clear', (el) => {
     const c = el.closest('.draw').querySelector('canvas'); const id = toolOf(el);
-    c.getContext('2d').clearRect(0, 0, c.width, c.height); state(id).answers[qi(el)] = undefined;
+    c.getContext('2d').clearRect(0, 0, c.width, c.height); const F = state(id); F.answers[qi(el)] = undefined; if (F.raw) F.raw[qi(el)] = null;
   });
 
   function collect(card, F) {
@@ -329,7 +360,14 @@
     const card = t.closest('[data-tool-id]'); if (!card) return;
     const F = state(card.getAttribute('data-tool-id'));
     collect(card, F);
-    if (t.hasAttribute('data-q-other')) { const q = +t.getAttribute('data-q-other'); if (t.value.trim()) F.answers[q] = t.value; }
+    if (t.hasAttribute('data-ask-text')) F.text = t.value;
+    if (t.hasAttribute('data-q-other')) {
+      const q = +t.getAttribute('data-q-other');
+      if (t.value.trim()) {
+        F.answers[q] = t.value;
+        card.querySelectorAll('.opt[data-q="' + q + '"]').forEach(o => { o.classList.remove('sel'); o.setAttribute('aria-checked', 'false'); const r = o.querySelector('input'); if (r) r.checked = false; });
+      } else if (typeof F.answers[q] === 'string') F.answers[q] = undefined;
+    }
     if (t.getAttribute('data-math')) {
       const pv = card.querySelector('[data-preview="' + t.getAttribute('data-q-input') + '"]');
       if (pv) pv.innerHTML = t.value.trim() ? ctx.tex(t.value, true) : '<span class="muted">Preview appears here</span>';
@@ -338,7 +376,9 @@
   });
   document.addEventListener('keydown', (e) => {
     const t = e.target;
-    if (t.matches && t.matches('textarea.mono') && e.key === 'Tab') {
+    if (t.matches && t.matches('label.opt[tabindex]') && (e.key === ' ' || e.key === 'Enter')) { e.preventDefault(); t.click(); return; }
+    if (t.matches && t.matches('textarea.mono') && e.key === 'Escape') { t.blur(); return; }
+    if (t.matches && t.matches('textarea.mono') && e.key === 'Tab' && !e.shiftKey) {
       e.preventDefault();
       const s = t.selectionStart; t.value = t.value.slice(0, s) + '    ' + t.value.slice(t.selectionEnd); t.selectionStart = t.selectionEnd = s + 4;
       t.dispatchEvent(new Event('input', { bubbles: true }));
@@ -353,7 +393,10 @@
       const id = card.getAttribute('data-tool-id'), q = +c.getAttribute('data-q'), F = state(id);
       const g = c.getContext('2d');
       g.lineCap = 'round'; g.lineJoin = 'round';
-      if (F.answers[q] && F.answers[q].image) { const im = new Image(); im.onload = () => g.drawImage(im, 0, 0); im.src = F.answers[q].image; }
+      // Re-renders restore the transparent strokes (not the white-backed export) and keep the chosen pen.
+      F.raw = F.raw || {}; F.pen = F.pen || {};
+      if (F.raw[q]) { const im = new Image(); im.onload = () => g.drawImage(im, 0, 0); im.src = F.raw[q]; }
+      if (F.pen[q]) c._pen = F.pen[q];
       let drawing = false, last = null;
       const pt = e => { const r = c.getBoundingClientRect(); return [(e.clientX - r.left) * c.width / r.width, (e.clientY - r.top) * c.height / r.height]; };
       c.addEventListener('pointerdown', e => { drawing = true; last = pt(e); c.setPointerCapture(e.pointerId); });
@@ -373,8 +416,9 @@
         const og = out.getContext('2d'); og.fillStyle = '#fff'; og.fillRect(0, 0, out.width, out.height);
         og.drawImage(c, 0, 0);
         F.answers[q] = { image: out.toDataURL('image/png') };
+        F.raw[q] = c.toDataURL('image/png');
       };
-      c.addEventListener('pointerup', end); c.addEventListener('pointerleave', end);
+      c.addEventListener('pointerup', end); c.addEventListener('pointerleave', end); c.addEventListener('pointercancel', end);
     });
   });
 

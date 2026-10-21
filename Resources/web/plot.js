@@ -151,7 +151,7 @@
 
   function parseSpec(src) {
     src = src.trim();
-    try { const j = JSON.parse(src); return Array.isArray(j) ? { functions: j } : j; } catch (_) {}
+    try { const j = JSON.parse(src); return normalizeSpec(Array.isArray(j) ? { functions: j } : j); } catch (_) {}
     const spec = { functions: [] };
     for (let line of src.split('\n')) {
       line = line.trim(); if (!line || line.startsWith('#') || line.startsWith('//')) continue;
@@ -159,8 +159,25 @@
       if ((m = line.match(/^title\s*[:=]\s*(.+)$/i))) spec.title = m[1].replace(/^["']|["']$/g, '');
       else if ((m = line.match(/^(x|y)(?:range|lim)?\s*[:=]\s*\[?\s*([-\d.eπpi*/ ]+)\s*,\s*([-\d.eπpi*/ ]+)\s*\]?$/i)))
         spec[m[1].toLowerCase()] = [evalConst(m[2]), evalConst(m[3])];
-      else if ((m = line.match(/^(?:y|[a-z]\(x\))\s*=\s*(.+)$/i))) spec.functions.push(m[1]);
-      else spec.functions.push(line);
+      else if ((m = line.match(/^(?:y|[a-z]\(x\))\s*=\s*(.+)$/i))) spec.functions.push(withRange(m[1], spec));
+      else spec.functions.push(withRange(line, spec));
+    }
+    return normalizeSpec(spec);
+  }
+  // "x^2 from -3 to 3" / "x^2 for x in [-3, 3]" → expression + x range.
+  function withRange(expr, spec) {
+    const m = expr.match(/^(.*?)\s*(?:,\s*)?(?:from\s+(\S+)\s+to\s+(\S+)|for\s+x\s+in\s*\[\s*([^,\]]+)\s*,\s*([^\]]+)\])\s*$/i);
+    if (!m) return expr;
+    if (!spec.x) spec.x = [evalConst(m[2] || m[4]), evalConst(m[3] || m[5])];
+    return m[1];
+  }
+  // Accept the range spellings models use: xmin/xmax, x_min/x_max, xlim/ylim, {min,max} objects.
+  function normalizeSpec(spec) {
+    for (const a of ['x', 'y']) {
+      const lo = spec[a + 'min'] ?? spec[a + '_min'], hi = spec[a + 'max'] ?? spec[a + '_max'];
+      if (!spec[a] && lo != null && hi != null) spec[a] = [+lo, +hi];
+      if (!spec[a] && Array.isArray(spec[a + 'lim'])) spec[a] = spec[a + 'lim'];
+      if (spec[a] && !Array.isArray(spec[a]) && spec[a].min != null) spec[a] = [+spec[a].min, +spec[a].max];
     }
     return spec;
   }

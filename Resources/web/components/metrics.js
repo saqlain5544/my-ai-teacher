@@ -55,8 +55,8 @@
     const total = Math.max(0.001, t.duration || 0);
     h += '<div class="mp-title">Steps</div><table class="mp-steps"><thead><tr><th>#</th><th>Timeline</th><th>TTFT</th><th>Time</th><th>Out</th><th>tok/s</th><th>Tools</th><th>Finish</th></tr></thead><tbody>';
     steps.forEach((s, i) => {
-      const start = ((s.startedAt * 1000) - t0) / 1000;
-      const left = Math.max(0, Math.min(100, start / total * 100)), width = Math.max(1.5, (s.duration || 0) / total * 100);
+      const start = s.startedAt ? ((s.startedAt * 1000) - t0) / 1000 : 0;
+      const left = Math.max(0, Math.min(100, (start / total * 100) || 0)), width = Math.max(1.5, (s.duration || 0) / total * 100);
       const ttftW = s.timeToFirstToken ? Math.min(width, s.timeToFirstToken / total * 100) : 0;
       const sp = tps(s);
       h += '<tr><td>' + (i + 1) + '</td><td class="wf"><div class="wf-bar" style="left:' + left + '%;width:' + width + '%"><div class="wf-ttft" style="width:' + (width ? ttftW / width * 100 : 0) + '%"></div></div></td>' +

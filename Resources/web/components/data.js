@@ -32,6 +32,8 @@
     const esc = ctx.esc;
     const type = (spec.type || 'bar').toLowerCase();
     let series = spec.series || (spec.data ? [{ name: spec.name || '', data: spec.data }] : []);
+    series = series.filter(s => s && Array.isArray(s.data) && s.data.length);
+    if (!series.length) return '<div class="comp-error">This chart has no data.</div>';
     const labels = spec.labels || (series[0] ? series[0].data.map((_, i) => String(i + 1)) : []);
     const W = 640, H = 360, M = { l: 52, r: 16, t: spec.title ? 34 : 14, b: 46 };
     let svg = '<svg class="chart" viewBox="0 0 ' + W + ' ' + H + '" xmlns="http://www.w3.org/2000/svg" role="img">';

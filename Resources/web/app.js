@@ -280,10 +280,39 @@
     }
     for (let j = cur.length - 1; j >= i; j--) if (cur[j].parentNode === el) el.removeChild(cur[j]);
   }
+  // Re-rendering a card must never steal the learner's caret: remember the focused field (by its data-* key), restore
+  // it after, and while an IME composition is in progress (Arabic, Japanese…) defer the update until it ends.
+  const FOCUS_KEYS = ['data-q-input', 'data-q-blank', 'data-q-other', 'data-ask-text'];
+  let composing = false;
+  const deferred = new Set();
+  document.addEventListener('compositionstart', () => { composing = true; }, true);
+  document.addEventListener('compositionend', () => {
+    composing = false;
+    const nodes = [...deferred]; deferred.clear();
+    setTimeout(() => nodes.forEach(n => { if (n._pending != null) { const h = n._pending; n._pending = null; setHTML(n, h); } }), 0);
+  }, true);
+  function captureFocus(node) {
+    const a = document.activeElement;
+    if (!a || a === document.body || !node.contains(a)) return null;
+    const key = FOCUS_KEYS.map(k => a.hasAttribute(k) ? '[' + k + '="' + CSS.escape(a.getAttribute(k)) + '"]' : '').find(Boolean);
+    if (!key) return null;
+    let start = null, end = null; try { start = a.selectionStart; end = a.selectionEnd; } catch (_) {}
+    return { key, start, end, scroll: a.scrollTop };
+  }
+  function restoreFocus(node, f) {
+    if (!f) return;
+    const el = node.querySelector(f.key); if (!el) return;
+    el.focus({ preventScroll: true });
+    try { if (f.start != null) el.setSelectionRange(f.start, f.end); } catch (_) {}
+    el.scrollTop = f.scroll;
+  }
   function setHTML(node, html) {
     if (node._html === html) return;
+    const f = captureFocus(node);
+    if (f && composing) { node._pending = html; deferred.add(node); return; }
     node.innerHTML = html; node._html = html;
     processNode(node);
+    restoreFocus(node, f);
   }
 
   // ───────────────────────── Messages ─────────────────────────
@@ -538,14 +567,11 @@
   function refreshCard(toolId) {
     const el = document.querySelector('[data-tool-id="' + CSS.escape(toolId) + '"]');
     if (!el) return;
-    const active = document.activeElement && el.contains(document.activeElement) ? document.activeElement : null;
-    const focusKey = active ? ['data-q-input', 'data-q-blank', 'data-q-other', 'data-ask-text'].map(a => active.getAttribute(a) != null ? '[' + a + '="' + active.getAttribute(a) + '"]' : '').find(Boolean) : null;
-    const caret = active && active.selectionStart;
-    el._html = null; renderToolCard(el, el._block);
-    if (focusKey) { const f = el.querySelector(focusKey); if (f) { f.focus(); try { f.setSelectionRange(caret, caret); } catch (_) {} } }
+    el._html = null; renderToolCard(el, el._block);   // setHTML keeps focus and caret
   }
   const ctx = {
     esc, hash, tex, post, inline,
+    pending: id => S.pending.get(id),
     md: (s) => markdown(String(s == null ? '' : s), false),
     flash(el, text) { const t = el.textContent; el.textContent = text; setTimeout(() => { el.textContent = t; }, 1100); },
     refreshCard,
