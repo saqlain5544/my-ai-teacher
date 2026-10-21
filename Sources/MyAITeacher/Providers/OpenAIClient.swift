@@ -43,7 +43,7 @@ struct OpenAIClient: LLMClient {
     }
 
     private func streamOnce(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
-        var headers = config.headers
+        var headers = config.headers(for: request)
         if let apiKey { headers["Authorization"] = "Bearer \(apiKey)" }
         let req = URLRequest.json(config.baseURL.joinedURL("/chat/completions"), body: buildBody(request), headers: headers)
         return AsyncThrowingStream { continuation in

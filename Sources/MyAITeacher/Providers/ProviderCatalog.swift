@@ -40,6 +40,18 @@ enum ProviderCatalog {
         ProviderConfig(id: "opencode", name: "OpenCode Zen", api: .openai, baseURL: "https://opencode.ai/zen/v1",
                        envKeys: ["OPENCODE_API_KEY"], defaultModel: "big-pickle", supportsVision: false,
                        note: "Paid Zen models only — OpenCode's -free models are restricted to the OpenCode app."),
+        // One key, several APIs: most models speak Chat Completions, Claude/Qwen/MiniMax M3 speak Anthropic Messages, Gemini its
+        // own; models.dev says which (GPT, Grok and Muse need OpenAI's Responses API and are left out). Every request carries
+        // a stable `x-opencode-session` per lesson, or Go refuses it.
+        ProviderConfig(id: "opencode-go", name: "OpenCode Go", api: .openai, baseURL: "https://opencode.ai/inference/go/openai/v1",
+                       envKeys: ["OPENCODE_API_KEY"], defaultModel: "deepseek-v4.1-flash", headers: ["User-Agent": "my-ai-teacher/1.0"],
+                       suggestedModels: ["deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3", "kimi-k3", "qwen3.8-max", "minimax-m3.1-flash-free"],
+                       quirks: [.reasoningEffort, .reasoningContentBack],
+                       note: "OpenCode's Go subscription: DeepSeek, GLM, Kimi, Qwen, MiniMax, MiMo and more with one key (the same as Zen), plus free models.",
+                       sessionHeader: "x-opencode-session", modelsDev: "opencode-go",
+                       apiBases: [APIKind.anthropic.rawValue: "https://opencode.ai/inference/go/anthropic/v1",
+                                  APIKind.gemini.rawValue: "https://opencode.ai/inference/go/google/v1beta"],
+                       modelsURL: "https://opencode.ai/inference/go/v1/models"),
         ProviderConfig(id: "xai", name: "xAI", api: .openai, baseURL: "https://api.x.ai/v1",
                        envKeys: ["XAI_API_KEY"], defaultModel: "grok-4", suggestedModels: ["grok-4", "grok-4-fast"]),
         ProviderConfig(id: "moonshot", name: "Moonshot Kimi", api: .openai, baseURL: "https://api.moonshot.ai/v1",
@@ -74,7 +86,7 @@ enum ProviderCatalog {
             }
             req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
         case .openai:
-            req = URLRequest(url: p.baseURL.joinedURL("/models"))
+            req = URLRequest(url: p.modelsURL.flatMap(URL.init(string:)) ?? p.baseURL.joinedURL("/models"))
             if let apiKey { req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization") }
         }
         for (k, v) in p.headers { req.setValue(v, forHTTPHeaderField: k) }
@@ -86,7 +98,7 @@ enum ProviderCatalog {
         let raw = (p.api == .gemini ? j["models"] : j["data"])?.array ?? []
         let skip = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe", "realtime", "audio", "guard", "orpheus", "image", "sora", "rerank", "search-preview", "safety", "aqa", "babbage", "davinci", "gpt-3.5-turbo-instruct"]
         var seen = Set<String>()
-        return raw.compactMap { m -> ModelInfo? in
+        var models = raw.compactMap { m -> ModelInfo? in
             if p.api == .gemini, !(m["supportedGenerationMethods"]?.array?.contains("generateContent") ?? true) { return nil }
             guard var id = m["id"]?.string ?? m["name"]?.string else { return nil }
             if id.hasPrefix("models/") { id.removeFirst(7) }
@@ -94,6 +106,13 @@ enum ProviderCatalog {
             if m["capabilities"]?["completion_chat"]?.bool == false { return nil }
             return ModelInfo.parse(id: id, m, provider: p)
         }.sorted { $0.id < $1.id }
+        // A list of bare ids (OpenCode Go): models.dev adds limits, prices and each model's API.
+        if let md = p.modelsDev {
+            if let provider = try? await ModelsDev.provider(md) { models = ModelsDev.enrich(models, with: provider) }
+            else { models = models.compactMap(ModelsDev.fallback) }
+            ModelRoutes.set(provider: p.id, models)
+        }
+        return models
     }
 }
 
@@ -110,6 +129,8 @@ struct ModelInfo: Codable, Sendable, Hashable {
     var free: Bool?
     var inputPricePerM: Double?
     var outputPricePerM: Double?
+    /// The API that serves it, when a provider offers several (`ProviderConfig.apiBases`).
+    var api: APIKind?
 
     static func parse(id: String, _ m: JSON, provider p: ProviderConfig) -> ModelInfo {
         var i = ModelInfo(id: id)

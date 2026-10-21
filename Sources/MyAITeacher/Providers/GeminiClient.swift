@@ -11,7 +11,7 @@ struct GeminiClient: LLMClient {
     }
 
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
-        var headers = config.headers
+        var headers = config.headers(for: request)
         if let apiKey { headers["x-goog-api-key"] = apiKey }
         let model = request.model.hasPrefix("models/") ? String(request.model.dropFirst(7)) : request.model
         let url = config.baseURL.joinedURL("/models/\(model):streamGenerateContent?alt=sse")

@@ -37,8 +37,9 @@ struct ReadTool: Tool {
             guard let doc = PDFDocument(url: url) else { return .error("Could not open PDF.") }
             var range = 1...max(1, doc.pageCount)
             if let p = input["pages"]?.string {
-                let parts = p.split(separator: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }
-                if parts.count == 1 { range = parts[0]...parts[0] } else if parts.count == 2 { range = parts[0]...parts[1] }
+                // Clamped: a model may send "5-3" or "0", and a reversed or empty range would trap.
+                let parts = p.split(separator: "-").compactMap { Int($0.trimmingCharacters(in: .whitespaces)) }.map { max(1, $0) }
+                if parts.count == 1 { range = parts[0]...parts[0] } else if parts.count == 2 { range = parts[0]...max(parts[0], parts[1]) }
             }
             let upper = min(range.upperBound, doc.pageCount, range.lowerBound + 49)
             var text = "PDF \(url.lastPathComponent): \(doc.pageCount) pages\n"
@@ -248,7 +249,7 @@ struct GrepTool: Tool {
         let pattern = try input.req("pattern")
         let path = resolvePath(input["path"]?.string ?? ".", workspace: ctx.workspace).path
         let mode = input["output_mode"]?.string ?? "files_with_matches"
-        let limit = input["head_limit"]?.int ?? 200
+        let limit = max(1, input["head_limit"]?.int ?? 200)
         var result: ProcessResult
         if let rg = ProcessRunner.which("rg") {
             var args = ["--no-heading", "--color=never", "--max-columns=500"]

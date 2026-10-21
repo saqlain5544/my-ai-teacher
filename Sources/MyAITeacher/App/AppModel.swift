@@ -149,7 +149,7 @@ final class AppModel: ObservableObject {
             alert.runModal()
             return
         }
-        for s in sessions.values { s.stop(); s.close() }
+        for s in sessions.values { s.stop(); s.close(); s.detach(deleted: false) }
         sessions.removeAll()
         workspace = ws
         services = Services(global: global, workspace: ws)
@@ -211,6 +211,7 @@ final class AppModel: ObservableObject {
 
     func delete(_ id: String) {
         sessions[id]?.stop()
+        sessions[id]?.detach(deleted: true)
         sessions.removeValue(forKey: id)
         services.conversations.delete(id)
         conversations.removeAll { $0.id == id }

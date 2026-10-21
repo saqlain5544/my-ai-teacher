@@ -26,6 +26,7 @@ cold launch. It runs at roughly 70 MB plus one WebKit process (about 90 MB), a f
 1. **Choose a model.** Open **Settings › Providers** (⌘,) and paste a key for any provider. Keys already exported in
    your shell (for example `ANTHROPIC_API_KEY` in `~/.zshrc`) are picked up automatically. No key yet? These cost nothing:
    * [OpenRouter](https://openrouter.ai) `:free` models, with a daily request limit;
+   * [OpenCode Go](https://opencode.ai/docs/go/)'s `-free` models;
    * [NVIDIA NIM](https://build.nvidia.com)'s free tier;
    * a local model through [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai).
 2. **Start a lesson** with ⌘N and say what you want to learn: "Teach me the chain rule", "Quiz me on the French
@@ -85,7 +86,7 @@ The agent can also:
 
 ### Any model
 Anthropic, OpenAI, Google Gemini, DeepSeek (V4 Flash and Pro), MiniMax, OpenRouter, NVIDIA NIM, Mistral, Groq, xAI,
-Moonshot Kimi, Z.ai, Together, Cerebras, Fireworks, OpenCode Zen, Ollama (cloud or local) and LM Studio. Any
+Moonshot Kimi, Z.ai, Together, Cerebras, Fireworks, OpenCode Zen and Go, Ollama (cloud or local) and LM Studio. Any
 OpenAI-, Anthropic- or Gemini-compatible endpoint can be added as a custom provider.
 * Model lists come live from each provider, and the model picker searches loosely: "deepsek nvidia" finds NVIDIA's
   DeepSeek models.

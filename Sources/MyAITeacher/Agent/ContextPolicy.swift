@@ -39,20 +39,27 @@ enum ContextPolicy {
     /// Request-ready history.
     static func prepare(_ stored: [ChatMessage], conversation c: Conversation, model: String) -> [ChatMessage] {
         let sp = Signposts.begin("context", "\(stored.count) messages"); defer { Signposts.end("context", sp) }
-        var msgs = stored.filter { m in
-            if m.role == .assistant && m.blocks.isEmpty { return false }
-            if m.role == .assistant && m.error != nil && m.toolUses.isEmpty && m.plainText.isEmpty { return false }
-            return true
-        }
+        // The compaction points name stored messages (the one before a cut may be an empty, failed reply that requests
+        // leave out), so both are resolved against the stored list before anything is dropped.
+        var msgs = stored
         // Tier 3: summary replaces the compacted prefix.
         if let through = c.compactedThrough, let summary = c.compactSummary, let cut = msgs.firstIndex(where: { $0.id == through }) {
             let head = ChatMessage(role: .user, blocks: [.text("<lesson_summary>\nEarlier part of this lesson, summarised:\n\n\(summary)\n</lesson_summary>")])
             msgs = [head] + msgs[(cut + 1)...]
         }
+        let trimThrough = c.trimmedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1
+        var kept: [ChatMessage] = [], trimEnd = -1
+        kept.reserveCapacity(msgs.count)
+        for (i, m) in msgs.enumerated() {
+            if m.role == .assistant && m.blocks.isEmpty { continue }
+            if m.role == .assistant && m.error != nil && m.toolUses.isEmpty && m.plainText.isEmpty { continue }
+            kept.append(m)
+            if i <= trimThrough { trimEnd = kept.count - 1 }
+        }
+        msgs = kept
         let keepThinking = AnthropicClient.isAdaptiveClaude(model)
         let lastAssistant = msgs.lastIndex { $0.role == .assistant } ?? -1
         let lastTurnStart = turnStarts(msgs).last ?? 0
-        let trimEnd = c.trimmedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1
         for i in msgs.indices {
             // Tier 1: drop reasoning from earlier turns (the current tool loop keeps it — some providers require it).
             if !keepThinking && i < lastTurnStart && i != lastAssistant {

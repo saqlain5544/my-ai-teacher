@@ -45,6 +45,27 @@ final class ContextTests: XCTestCase {
         XCTAssertEqual(out[0].blocks.count, 1 + msgs[4].blocks.count)
     }
 
+    /// The message before a compaction cut can be a failed, empty reply that requests leave out: the summary must still
+    /// replace the prefix (the cut is found among the stored messages), and the trim point still lands where it should.
+    func testCompactionPointsSurviveFilteredMessages() {
+        var msgs = (0..<3).flatMap { turn($0) }
+        var failed = ChatMessage(role: .assistant, blocks: [])
+        failed.error = "HTTP 529: overloaded"
+        msgs.insert(failed, at: 4)   // after turn 0, before the learner's next question
+        var c = Conversation(providerID: "x", model: "x")
+        c.compactedThrough = failed.id; c.compactSummary = "Covered: X."
+        let out = ContextPolicy.prepare(msgs, conversation: c, model: "x")
+        XCTAssertTrue(out[0].plainText.contains("Covered: X."), "the summary replaces everything up to the failed reply")
+        XCTAssertEqual(out.count, msgs.count - 5)
+        // The trim epoch may end on the failed reply too: everything before it is trimmed, nothing after.
+        var t = Conversation(providerID: "x", model: "x")
+        t.trimmedThrough = failed.id
+        let trimmed = ContextPolicy.prepare(msgs, conversation: t, model: "x")
+        XCTAssertEqual(trimmed.count, msgs.count - 1)
+        XCTAssertLessThan(trimmed[2].blocks[0].text!.count, 1_400)
+        XCTAssertEqual(trimmed[6].blocks[0].text!.count, 5_000)
+    }
+
     func testBudgetCapsAtHalfWindow() {
         XCTAssertEqual(ContextPolicy.budget(setting: 48_000, contextWindow: 32_768), 16_384)
         XCTAssertEqual(ContextPolicy.budget(setting: 48_000, contextWindow: 1_000_000), 48_000)

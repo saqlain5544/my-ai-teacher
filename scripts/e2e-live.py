@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Live end-to-end scenarios against the real app, on a free model, in a throwaway profile.
 
-    scripts/e2e-live.py [--provider openrouter --model x:free | --provider nvidia --model deepseek-ai/deepseek-v4.1-flash] [--only name] [--keep]
+    scripts/e2e-live.py [--provider openrouter --model x:free | --provider opencode-go --model x-free | --provider nvidia --model deepseek-ai/deepseek-v4.1-flash] [--only name] [--keep]
 
 Launches .build/debug/MyAITeacher with MYAITEACHER_HOME (its own database, settings, folders and log — the learner's
 data is never touched) and MYAITEACHER_DEBUG=1, then drives lessons through the debug hooks: sends prompts, answers
@@ -22,7 +22,8 @@ ap.add_argument("--compact", type=int, default=48000)
 args = ap.parse_args()
 # Free models only: OpenRouter's :free models, or NVIDIA NIM's free tier (when OpenRouter's daily free quota is used up).
 # MiniMax: the learner's prepaid token plan (allowed for testing; thinking is off so replies end fast).
-assert (args.provider == "openrouter" and args.model.endswith(":free")) or args.provider in ("nvidia", "minimax"), "free / prepaid models only"
+assert (args.provider == "openrouter" and args.model.endswith(":free")) or (args.provider == "opencode-go" and args.model.endswith("-free")) \
+    or args.provider in ("nvidia", "minimax"), "free / prepaid models only"
 HOME = pathlib.Path(args.home)
 LOG = HOME / "MyAITeacher.log"
 REPORT = HOME / "report.json"
@@ -271,7 +272,7 @@ def launch():
     time.sleep(2)
     return proc
 
-SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash"}[args.provider]
+SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "opencode-go": "beam-free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash"}[args.provider]
 
 # ───────────── Sub-agent checks (the report's "agents": this lesson's runs) ─────────────
 # Problems are the app's (a run that failed, a write that happened); notes are the model's (it didn't do as asked).

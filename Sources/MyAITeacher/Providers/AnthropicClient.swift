@@ -41,7 +41,7 @@ struct AnthropicClient: LLMClient {
 
     private func streamOnce(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
         let body = buildBody(request)
-        var headers = config.headers
+        var headers = config.headers(for: request)
         headers["anthropic-version"] = "2023-06-01"
         if let apiKey {
             headers["x-api-key"] = apiKey

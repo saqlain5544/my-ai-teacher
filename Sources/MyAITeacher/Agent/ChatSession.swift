@@ -42,6 +42,11 @@ final class ChatSession: ObservableObject, Identifiable {
     private var runTask: Task<Void, Never>?
     private var pendingModeNote: String?
     private var turn = TurnMetrics()
+    /// The app let go of this lesson (its folder was closed): a turn still finishing writes to its own folder's
+    /// database but no longer reports to the app, so it can't reappear in another folder's sidebar.
+    private(set) var detached = false
+    /// The lesson was deleted: nothing is written any more (a finishing turn would otherwise re-create it).
+    private(set) var discarded = false
 
     init(conversation: Conversation, app: AppModel, services: Services) {
         self.id = conversation.id
@@ -219,6 +224,13 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func close() { host.sessionWillClose(self); save() }
 
+    /// The app no longer owns this lesson; `deleted` also stops every write (a turn still finishing re-created the
+    /// deleted lesson, in the database and the sidebar).
+    func detach(deleted: Bool) {
+        detached = true
+        if deleted { discarded = true }
+    }
+
     // MARK: Loop
 
     // MARK: Background sub-agents
@@ -275,7 +287,7 @@ final class ChatSession: ObservableObject, Identifiable {
         conversation.stats = stats
         save()
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
-        app.sessionDidFinishTurn(self)
+        if !detached { app.sessionDidFinishTurn(self) }
     }
 
     private func loop() async {
@@ -301,7 +313,7 @@ final class ChatSession: ObservableObject, Identifiable {
                                      messages: requestMessages(),
                                      tools: tools.map { $0.name == "task" ? taskSpec() : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
-                                     thinking: info?.reasoning == false ? .off : settings.thinking)
+                                     thinking: info?.reasoning == false ? .off : settings.thinking, sessionID: conversation.id)
             host.willRequest(&request, self)
             var assistant = ChatMessage(role: .assistant, blocks: [], model: conversation.model)
             var step = StepMetrics(provider: provider.id, model: conversation.model, startedAt: Date())
@@ -355,9 +367,17 @@ final class ChatSession: ObservableObject, Identifiable {
             conversation.usage = Usage(input: step.usage.promptTotal, output: (conversation.usage?.output ?? 0) + step.usage.output)
             if assistant.error != nil { break }
             let calls = assistant.toolUses
-            if calls.isEmpty || Task.isCancelled {
+            if calls.isEmpty {
                 // A background report arrived during this step: read it before ending the turn.
                 if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
+                break
+            }
+            if Task.isCancelled {
+                // Stopped after the model asked for tools: every call still gets a result, or the next request would carry
+                // tool uses without results, which every provider refuses.
+                append(ChatMessage(role: .user, blocks: calls.map {
+                    .toolResult(id: $0.id ?? "", name: $0.name ?? "", content: "Cancelled by the learner.", isError: true)
+                }))
                 break
             }
             await runTools(calls, client: client)
@@ -625,7 +645,7 @@ final class ChatSession: ObservableObject, Identifiable {
             </transcript>
             """
             let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
-                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
+                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096, sessionID: conversation.id)
             // A supervised job (Runtime › jobs): a failed call, or one silent for 120 s (every streamed event is a heartbeat),
             // is retried with backoff, then the digest below.
             var text = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 120) { beat in
@@ -655,6 +675,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func persist(_ idx: Int) {
+        guard !discarded else { return }
         _ = messages[idx].spill(into: services.conversations.blobs)
         services.conversations.upsert(messages[idx], conversationID: id, seq: base + idx)
         conversation.updatedAt = Date()
@@ -673,8 +694,9 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     func save() {
+        guard !discarded else { return }
         services.conversations.save(conversation)
-        app.conversationDidChange(conversation)
+        if !detached { app.conversationDidChange(conversation) }
     }
 
     private func setStatus(_ s: String?) {

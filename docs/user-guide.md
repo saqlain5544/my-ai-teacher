@@ -42,7 +42,8 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | Mistral, Groq, xAI | `MISTRAL_API_KEY`, `GROQ_API_KEY`, `XAI_API_KEY` |
 | Moonshot Kimi, Z.ai (GLM) | `MOONSHOT_API_KEY`, `ZAI_API_KEY` |
 | Together, Cerebras, Fireworks | `TOGETHER_API_KEY`, `CEREBRAS_API_KEY`, `FIREWORKS_API_KEY` |
-| OpenCode Zen, Ollama Cloud | `OPENCODE_API_KEY`, `OLLAMA_API_KEY` |
+| OpenCode Zen, OpenCode Go | `OPENCODE_API_KEY` (one key for both) |
+| Ollama Cloud | `OLLAMA_API_KEY` |
 | Ollama (local), LM Studio (local) | no key |
 
 * **Where keys come from.** A key exported in your login shell (`~/.zshrc`, `~/.zprofile`) is read at launch, even when you open
@@ -50,8 +51,16 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   precedence over the environment.
 * **Free options.**
   * OpenRouter's models ending in `:free` have a daily request limit; you'll see an HTTP 429 message once it's used up.
+  * OpenCode Go's models ending in `-free`. Availability varies, and some are limited by region.
   * NVIDIA NIM's free tier.
   * Local models through Ollama or LM Studio.
+* **OpenCode Go** is OpenCode's subscription for open models: DeepSeek V4, GLM, Kimi, Qwen, MiniMax, MiMo and more.
+  * It uses the same key as OpenCode Zen.
+  * The app sends each model to the API that serves it (OpenAI-compatible, Anthropic or Gemini), going by
+    [models.dev](https://models.dev), and gives every lesson its own session id, which Go requires.
+  * GPT, Grok and Muse models on Go need OpenAI's Responses API, which the app doesn't support yet, so they aren't listed.
+  * Models that train on your requests (marked "contributor") only work after you allow that in your OpenCode workspace's
+    privacy settings.
 * **Custom providers.** **Add custom provider** accepts any endpoint compatible with OpenAI, Anthropic or Gemini.
   Give it a base URL, an optional key variable and a default model.
 * **Choosing a model.** The model picker in the toolbar lists each provider's live catalogue. Search is forgiving: word order

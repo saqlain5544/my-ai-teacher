@@ -57,7 +57,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
         let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
-        compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(savedBudget, 400_000)   // migrate the old default
+        compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(max(savedBudget, 20_000), 900_000)   // migrate the old default; the stepper's range
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
         experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments

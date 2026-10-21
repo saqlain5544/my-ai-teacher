@@ -74,7 +74,7 @@ scripts/e2e.sh
   by clicking the rendered cards, and checks each turn: page errors, stuck spinners, failed tools, files on disk, and the
   learner database. It covers the learning-first behaviour too: attempt first, misconception tags, follow-ups. Use
   `--only <name>` for one scenario and `--keep` to leave the app open. The harness accepts only free or prepaid
-  providers: OpenRouter `:free` models, `--provider nvidia`, or `--provider minimax`. When OpenRouter's daily free
+  providers: OpenRouter `:free` models, OpenCode Go `-free` models (`--provider opencode-go`), `--provider nvidia`, or `--provider minimax`. When OpenRouter's daily free
   quota runs out, use NVIDIA:
 
   ```bash

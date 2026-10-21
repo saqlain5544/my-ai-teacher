@@ -35,6 +35,8 @@ struct LLMRequest: Sendable {
     var maxTokens = 16384
     var temperature: Double?
     var thinking: ThinkingLevel = .off
+    /// Stable for one lesson (or sub-agent run): providers with a `sessionHeader` route and cache by it.
+    var sessionID: String?
 }
 
 enum StreamEvent: Sendable {
@@ -71,12 +73,31 @@ struct ProviderConfig: Codable, Sendable, Identifiable, Hashable {
     var note: String?
     /// Model ids the provider retired → what now serves them (a saved lesson on an old id keeps working).
     var retired: [String: String]?
+    /// A header carrying `LLMRequest.sessionID` on every request (OpenCode Go refuses requests without `x-opencode-session`).
+    var sessionHeader: String?
+    /// The provider's id on models.dev: context windows, output limits, free models, and which API serves each model,
+    /// for providers whose own /models lists only ids.
+    var modelsDev: String?
+    /// One provider behind several APIs (OpenCode Go): the base URL of each API other than `api` (`APIKind` raw value → URL).
+    /// Each request goes to the API that serves its model (`ModelRoutes`).
+    var apiBases: [String: String]?
+    /// Where the model list lives when it isn't `<baseURL>/models` (OpenCode Go lists at …/go/v1/models while chat
+    /// completions live under …/go/openai/v1).
+    var modelsURL: String?
 
     func currentModel(_ id: String) -> String { retired?[id] ?? id }
 
+    /// The configured headers plus the session header, when the provider wants one.
+    func headers(for request: LLMRequest) -> [String: String] {
+        var h = headers
+        if let name = sessionHeader { h[name] = request.sessionID ?? UUID().uuidString }
+        return h
+    }
+
     /// The provider's client behind the stream guard (text-embedded tool calls, reasoning tags, end tokens, duplicates).
     func client(apiKey: String?) -> LLMClient {
-        switch api {
+        if apiBases != nil { return GuardedClient(inner: RoutedClient(config: self, apiKey: apiKey)) }
+        return switch api {
         case .anthropic: GuardedClient(inner: AnthropicClient(config: self, apiKey: apiKey))
         case .openai: GuardedClient(inner: OpenAIClient(config: self, apiKey: apiKey))
         case .gemini: GuardedClient(inner: GeminiClient(config: self, apiKey: apiKey))

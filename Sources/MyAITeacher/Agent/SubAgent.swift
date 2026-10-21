@@ -825,7 +825,8 @@ enum SubAgent {
         let first = assistant
         await w { $0.upsert(first) }
         defer { metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count }
-        let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort)
+        let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort,
+                                 sessionID: ctx.toolCallID)
         for try await ev in client.stream(request) {
             proc.heartbeat()
             if metrics.timeToFirstToken == nil { metrics.timeToFirstToken = Date().timeIntervalSince(metrics.startedAt) }
