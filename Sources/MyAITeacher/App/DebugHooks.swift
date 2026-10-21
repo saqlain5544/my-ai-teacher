@@ -303,10 +303,11 @@ enum PerfSeed {
         }
     }
 
-    /// `n` learner memories with real embeddings (as recall sees them), across kinds and subjects.
+    /// `n` learner memories with real embeddings (as recall sees them), across kinds and subjects. At utility priority:
+    /// embedding 10k texts fills every core, and above that the main thread waited for a core (stalls that weren't the app's).
     @MainActor static func memories(_ n: Int) {
         let store = AppModel.shared.services.memory.learner
-        Task.detached(priority: .userInitiated) {
+        Task.detached(priority: .utility) {
             let t0 = Date()
             let subjects = ["calculus", "algebra", "physics", "chemistry", "biology", "history", "spanish", "programming", "statistics", "music"]
             let topics = ["derivatives", "integrals", "limits", "vectors", "forces", "reactions", "cells", "verbs", "recursion", "probability",
