@@ -174,7 +174,9 @@ final class MemoryHub: @unchecked Sendable {
     func recall(_ message: String, core: String, maxItems: Int = 2) -> Recall {
         let sp = Signposts.begin("recall", "\(message.count) chars"); defer { Signposts.end("recall", sp) }
         let text = String(message.prefix(1500))
-        let qv = Embedder.shared.vector(text).map(Embedder.normalized)
+        // This runs on the main thread as the learner sends: the meaning comes from the opening (one embedding piece,
+        // ~25 ms) while the lexical match still reads all of it; 1,500 characters took ~100 ms.
+        let qv = Embedder.shared.vector(String(text.prefix(Embedder.pieceLength))).map(Embedder.normalized)
         let routed = (graph?.route(text) ?? [:]).filter { $0.value >= 1 }
         let past = Self.pastCue.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
         let th = MemoryTuning.recallThreshold
