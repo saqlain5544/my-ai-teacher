@@ -61,10 +61,11 @@ final class Workspace: @unchecked Sendable, Identifiable {
         try? fm.createDirectory(at: stateDir.appendingPathComponent("outputs"), withIntermediateDirectories: true)
         try? fm.createDirectory(at: stateDir.appendingPathComponent("attachments"), withIntermediateDirectories: true)
         // The app's lesson database and caches must never end up in the project's git history (a checkpoint, or the
-        // learner's own `git add -A`); the code agent's project memory is worth versioning, so it stays visible.
+        // learner's own `git add -A`); the code agent's project memory and the learner's own sub-agent types
+        // (`agents/*.md`) are worth versioning, so they stay visible.
         let ignore = stateDir.appendingPathComponent(".gitignore")
         if !fm.fileExists(atPath: ignore.path) {
-            try? "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n".write(to: ignore, atomically: true, encoding: .utf8)
+            try? "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n!agents/\n!agents/*.md\n".write(to: ignore, atomically: true, encoding: .utf8)
         }
         let readme = stateDir.appendingPathComponent("README.md")
         if !fm.fileExists(atPath: readme.path) {

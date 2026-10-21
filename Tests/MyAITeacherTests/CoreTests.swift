@@ -152,7 +152,7 @@ final class CoreTests: XCTestCase {
             if t.risk == .interactive { XCTAssertNil(limit, t.name) } else { XCTAssertNotNil(limit, t.name); XCTAssertLessThanOrEqual(limit ?? 0, 700, t.name) }
         }
         XCTAssertEqual(WebSearchTool().timeout(.object([:])), 30)
-        XCTAssertGreaterThan(TaskTool().timeout(.object([:])) ?? 0, SubAgent.budget)
+        XCTAssertGreaterThan(TaskTool().timeout(.object([:])) ?? 0, Double(SubAgentSettings().seconds))
     }
 
     func testLongLessonsLoadAsAWindow() throws {

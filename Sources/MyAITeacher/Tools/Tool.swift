@@ -34,6 +34,16 @@ struct ToolContext: Sendable {
     let progress: @Sendable (String) -> Void
     /// Models the lesson may hand to a sub-agent (the provider's fetched list; free-only when the lesson is free).
     var subAgentModels: [String] = []
+    /// Other providers, limits and the lesson's grants for sub-agents; nil runs them on the lesson's client with defaults.
+    var agentHost: AgentHost? = nil
+    /// 0 for the teacher; n inside a sub-agent n levels down.
+    var agentDepth = 0
+    /// Inside a sub-agent: what its own sub-agents may not exceed.
+    var agentCeiling: AgentCeiling? = nil
+    /// Inside a sub-agent on another provider: the provider of `client` (nil = the lesson's).
+    var agentProvider: String? = nil
+    /// The shell session `bash` keeps its working directory in (each sub-agent has its own); nil = the lesson's.
+    var shellID: String? = nil
 }
 
 protocol Tool: Sendable {

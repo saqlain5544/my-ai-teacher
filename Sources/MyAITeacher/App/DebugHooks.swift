@@ -86,6 +86,10 @@ enum DebugHooks {
             if let l = cmd["level"]?.string.flatMap(FolderAccess.init(rawValue:)) { app.setAccess(l, for: app.workspace) }
             app.accessPrompt = nil
         case "consolidate": app.extensions.get(MemoryExtension.self)?.consolidateNow()
+        case "steer":   // {"action":"steer","id":"A1","text":"…"}: a learner's note to a running sub-agent (the Agents panel's box)
+            let ok = cmd["id"]?.string.flatMap { SubAgentCenter.shared.run($0) }?.steer(cmd["text"]?.string ?? "", from: "learner") ?? false
+            AppLog.write("steer \(cmd["id"]?.string ?? "?"): \(ok ? "sent" : "not running")")
+        case "runtime": AppLog.write("runtime: " + Runtime.metrics.json.compact)
         case "dismissSheet": app.accessPrompt = nil
         case "openFolder":
             if let p = cmd["path"]?.string { app.openFolder(URL(fileURLWithPath: p)) }
@@ -136,6 +140,7 @@ enum DebugHooks {
             "running": .bool(session?.isRunning ?? false), "status": clip(session?.status, 200), "error": clip(session?.errorMessage, 400),
             "lesson": clip(session?.id, 60), "folder": .string(app.workspace.url.path), "messages": .array(msgs),
             "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload]) }),
+            "agents": .array(SubAgentCenter.shared.runs(in: session?.id).map(\.debugJSON)), "runtime": Runtime.metrics.json,
         ]
         let write = {
             if let d = try? JSONEncoder().encode(JSON.object(out)) { try? d.write(to: URL(fileURLWithPath: path), options: .atomic) }

@@ -130,6 +130,7 @@ def run_turn(text, scenario, timeout=240):
     while time.time() - t0 < timeout:
         r = report()
         seen_running |= r["running"]
+        if scenario.get("during"): scenario["during"](r)   # a learner acting mid-turn (e.g. steering a sub-agent)
         for p in r["pending"]:
             if p["id"] not in tries:
                 time.sleep(0.6)   # let the card render, as a learner would see it
@@ -229,6 +230,52 @@ def launch():
 
 SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash"}[args.provider]
 
+# ───────────── Sub-agent checks (the report's "agents": this lesson's runs) ─────────────
+# Problems are the app's (a run that failed, a write that happened); notes are the model's (it didn't do as asked).
+def verify_controls(r):
+    runs = [a for a in r.get("agents") or [] if a["model"] == SUB_MODEL]
+    if not runs: return [], ["no sub-agent ran on %s (runs: %s)" % (SUB_MODEL, [(a["model"], a["effort"]) for a in r.get("agents") or []])]
+    a, problems, notes = runs[-1], [], []
+    if a["state"] != "done": problems.append("the sub-agent ended %s: %s" % (a["state"], a["report"][:300]))
+    if (a.get("budget") or {}).get("seconds") != 60: notes.append("its budget was %s, not 60 s" % a.get("budget"))
+    if a["effort"] != "low" and "doesn't reason" not in a["report"]: notes.append("effort %s, not low" % a["effort"])
+    if a["seconds"] > 60 + 120: problems.append("it ran %d s on a 60 s budget" % a["seconds"])
+    print("     sub-agent: %s %s effort=%s budget=%s used %ss %s tokens, %s" % (a["handle"], a["model"], a["effort"], a.get("budget"), a["seconds"], a["tokens"], a["state"]))
+    return problems, notes
+
+def verify_readonly(r):
+    problems, notes = [], []
+    if (LAB / "probe.txt").exists():
+        problems.append("a read-only reviewer wrote probe.txt"); (LAB / "probe.txt").unlink()
+    revs = [a for a in r.get("agents") or [] if a["type"] == "reviewer"]
+    if not revs: return problems, ["no reviewer sub-agent ran"]
+    refused = [t["text"][:160] for a in revs for t in a["tools"] if t["isError"] and "read-only" in t["text"]]
+    if refused: print("     refused: %s" % refused[0])
+    else: notes.append("the reviewer never tried the write (its tools: %s)" % [t["name"] for a in revs for t in a["tools"]])
+    return problems, notes
+
+def steering():
+    """The teacher should steer its background agent (`agents` send); if it hasn't after 10 s, the learner does (the
+    panel's note box, through the debug hook), so the delivery is checked either way."""
+    state = {"seen": {}, "sent": None}
+    def during(r):
+        for a in r.get("agents") or []:
+            if a["state"] == "running" and a["background"] and not a["notes"] and not state["sent"]:
+                if time.time() - state["seen"].setdefault(a["handle"], time.time()) > 10:
+                    post({"action": "steer", "id": a["handle"], "text": "Also include one fact about Phobos."}); state["sent"] = a["handle"]
+    def verify(r):
+        bg = [a for a in r.get("agents") or [] if a["background"]]
+        if not bg: return [], ["no background sub-agent ran"]
+        a, problems, notes = bg[-1], [], []
+        if a["state"] != "done": problems.append("the background agent ended %s" % a["state"])
+        if state["sent"] and not a["notes"]: problems.append("the learner's note never reached %s" % a["handle"])
+        if not a["notes"]: notes.append("no note was sent while it ran (it finished in %s s)" % a["seconds"])
+        elif state["sent"]: notes.append("the teacher didn't steer it; the learner's note did")
+        if a["notes"] and "phobos" not in a["report"].lower(): notes.append("its report doesn't mention Phobos")
+        print("     background %s: notes=%s state=%s %ss" % (a["handle"], [n[:60] for n in a["notes"]], a["state"], a["seconds"]))
+        return problems, notes
+    return {"during": during, "verify": verify}
+
 SCENARIOS = [
     dict(name="render", quick=True, prompt="Explain the Pythagorean theorem. Include: the formula in LaTeX, a ```mermaid flowchart of the proof idea, "
          "a markdown table of three Pythagorean triples, and a ```practice block with two self-check questions. Do not call any tools.",
@@ -273,6 +320,20 @@ SCENARIOS = [
     dict(name="quiz-mode", mode="quiz", prompt="Quiz me on the planets of the solar system: 3 questions.", any=["ask_learner", "quiz"]),
     dict(name="stop", quick=True, prompt="Write a 1500-word essay on the history of mathematics.", stop_after=6),
     dict(name="after-stop", same_lesson=True, prompt="Thanks. Now just tell me in one sentence who Euclid was."),
+    # Sub-agent controls: another model with an effort and a time budget; a read-only type refused a write even with
+    # full access; a background agent steered while it works (by the teacher, or by the learner's note if it doesn't).
+    dict(name="subagent-controls", quick=True, any=["task"], verify=lambda r: verify_controls(r),
+         prompt="Use the task tool with model " + SUB_MODEL + ", effort low and max_seconds 60 for a sub-agent that finds the melting "
+                "point of gallium with web_search and cites a source. Then answer in one line."),
+    dict(name="subagent-readonly", folder=True, any=["task"], before=lambda: post({"action": "setAccess", "level": "full"}),
+         cleanup=lambda: post({"action": "setAccess", "level": "read"}), verify=lambda r: verify_readonly(r),
+         prompt="Use the task tool with type reviewer and exactly this brief: 'Call the bash tool with the command: echo hi > probe.txt — "
+                "you must make this tool call before answering (never guess its output), then quote the tool result word for word.' "
+                "Then tell me in one line what the tool result said."),
+    dict(name="subagent-steer", quick=True, any=["task"], settle_agents=True, **steering(),
+         prompt="Use the task tool with background: true, description 'Mars facts' and max_seconds 90 for a sub-agent that searches the "
+                "web and lists five facts about Mars. Right after it starts, use the agents tool with action send, its handle as id and "
+                "the message 'Also include one fact about Phobos.' Then use agents with action wait (seconds 120) and give me its list."),
 ]
 
 def main():
@@ -292,6 +353,7 @@ def main():
                 if sc.get("folder"):
                     post({"action": "dismissSheet"}); time.sleep(0.5)
                     post({"action": "newLesson", "mode": sc.get("mode_after_open", "tutor")}); time.sleep(1.0)
+            if sc.get("before"): sc["before"](); time.sleep(0.5)
             r0 = report(); start = len(r0["messages"]); start_log = len(log_lines())
             t0 = time.time()
             if sc.get("stop_after"):
@@ -299,6 +361,12 @@ def main():
                 r, answered = report(), []
             else:
                 r, answered = run_turn(sc["prompt"], sc)
+                if sc.get("settle_agents"):   # a background agent's report starts a turn of its own: wait for all of it
+                    t1 = time.time()
+                    while time.time() - t1 < 200 and (r["running"] or any(a["state"] == "running" for a in r.get("agents") or [])):
+                        if sc.get("during"): sc["during"](r)
+                        time.sleep(1.5); r = report()
+                    time.sleep(1.5); r = report()
             secs = time.time() - t0
             if sc.get("click") in (None, "") and not sc.get("stop_after"):
                 users = [m for m in r["messages"][start:] if m["role"] == "user" and any(b["kind"] == "text" for b in m["blocks"])]
@@ -309,6 +377,9 @@ def main():
                 start = max(i for i, m in enumerate(r["messages"]) if m["role"] == "user" and any(b["kind"] == "text" for b in m["blocks"]))
             problems, notes, used = check(sc["name"], r, start, answered, sc.get("expect", ()), sc.get("any", ()), sc.get("page", ()), sc.get("forbid", ()), start_log, bool(sc.get("stop_after")), sc.get("require", ()))
             if sc.get("stop_after") and r["running"]: problems.append("still running after stop")
+            if sc.get("verify"):
+                more_p, more_n = sc["verify"](r); problems += more_p; notes += more_n
+            if sc.get("cleanup"): sc["cleanup"]()
             if sc.get("page_js"):
                 v = js_value(sc["page_js"])
                 if not sc["page_ok"](v): problems.append("page check failed: %s" % v)

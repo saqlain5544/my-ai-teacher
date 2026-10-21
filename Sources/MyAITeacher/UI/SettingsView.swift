@@ -7,6 +7,7 @@ struct SettingsView: View {
             GeneralSettings().tabItem { Label("General", systemImage: "gearshape") }
             ProvidersSettings().tabItem { Label("Providers", systemImage: "key") }
             ToolsSettings().tabItem { Label("Tools", systemImage: "hammer") }
+            AgentsSettings().tabItem { Label("Agents", systemImage: "person.2") }
             MemorySettings().tabItem { Label("Memory", systemImage: "brain.head.profile") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }
         }

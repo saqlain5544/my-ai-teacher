@@ -18,6 +18,8 @@ final class ToolParityTests: XCTestCase {
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
         ctx = ToolContext(conversationID: "t", workspace: dir, services: Services(global: GlobalStore(), workspace: ws),
                           interactions: interactions, toolCallID: "c", client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
+        // A refused connection is a provider error that may pass: runs restart (and resume) a few times; quickly here.
+        SubAgent.recovery = (limit: Intensity(maxRestarts: 2, period: 60), backoff: Backoff(initial: 0.01, factor: 1, max: 0.01))
     }
     override func tearDown() { try? FileManager.default.removeItem(at: dir) }
 

@@ -296,7 +296,7 @@ final class ChatSession: ObservableObject, Identifiable {
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: requestMessages(),
-                                     tools: tools.map { $0.name == "task" ? TaskTool.spec(models: subAgentModels(), current: conversation.model) : $0.spec },
+                                     tools: tools.map { $0.name == "task" ? taskSpec() : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
                                      thinking: info?.reasoning == false ? .off : settings.thinking)
             host.willRequest(&request, self)
@@ -521,7 +521,7 @@ final class ChatSession: ObservableObject, Identifiable {
         EventBus.publish(.toolStarted(conversationID: id, tool: name, callID: callID))
         let progress = ProgressThrottle { [weak self] text in self?.sink?.toolProgress(callID, text: text) }
         let ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
-                              toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels())
+                              toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         let t0 = Date()
         var result: Block
         do {
@@ -690,7 +690,7 @@ final class ChatSession: ObservableObject, Identifiable {
         return min(m, max(fallback, 16_384))
     }
 
-    static func isTransient(_ error: Error) -> Bool {
+    nonisolated static func isTransient(_ error: Error) -> Bool {
         if let h = error as? HTTPError { return [408, 409, 425, 429, 500, 502, 503, 504, 529].contains(h.status) }
         if let u = error as? URLError { return [.timedOut, .networkConnectionLost, .cannotConnectToHost].contains(u.code) }
         return false

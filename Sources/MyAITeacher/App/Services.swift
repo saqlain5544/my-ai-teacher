@@ -25,6 +25,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     var showThinking = true
     var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
     var experiments = true              // local A/B experiments (see Experiments)
+    var agents = SubAgentSettings()     // sub-agent limits, defaults and app-level agent types
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -54,6 +55,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
         experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments
+        agents = (try? c.decode(SubAgentSettings.self, forKey: .agents)) ?? d.agents
     }
 }
 

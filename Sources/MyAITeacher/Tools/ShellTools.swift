@@ -29,14 +29,15 @@ struct BashTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let command = try input.req("command")
         let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
-        let cwd = await ShellState.shared.dir(ctx.conversationID, default: ctx.workspace)
+        let session = ctx.shellID ?? ctx.conversationID
+        let cwd = await ShellState.shared.dir(session, default: ctx.workspace)
         let cwdFile = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-cwd-\(UUID().uuidString)")
         let script = "trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)"
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
         let progress = ctx.progress
         let r = await ProcessRunner.run(shell, ["-c", script], cwd: cwd, timeout: timeout, onOutput: { progress($0) })
         if let newDir = try? String(contentsOf: cwdFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !newDir.isEmpty {
-            await ShellState.shared.set(ctx.conversationID, URL(fileURLWithPath: newDir))
+            await ShellState.shared.set(session, URL(fileURLWithPath: newDir))
         }
         try? FileManager.default.removeItem(at: cwdFile)
         var text = truncateMiddle(r.combined, max: 30_000)
