@@ -66,9 +66,9 @@ final class MemoryHub: @unchecked Sendable {
         guard let graph, let id = graph.upsert(name: name, subjects: subjects, summary: summary, status: status, origin: origin, source: source) else { return nil }
         for (names, rel) in [(prerequisites, ConceptRelation.prerequisite), (related, .related), (partOf, .partOf)] {
             for n in names {
-                // A prerequisite inherits the subjects only when it has none (e.g. "derivatives" for physics).
+                // A new neighbour inherits this concept's subjects; an existing one keeps its own (that is how cross-subject links appear).
                 let existing = graph.find(n)
-                guard let other = existing ?? graph.upsert(name: n, subjects: rel == .partOf ? subjects : [], origin: origin, source: source) else { continue }
+                guard let other = existing ?? graph.upsert(name: n, subjects: subjects, origin: origin, source: source) else { continue }
                 graph.link(id, other, rel)
             }
         }
@@ -219,7 +219,7 @@ final class MemoryHub: @unchecked Sendable {
         if let graph {
             for (subject, cs) in graph.subjects().prefix(6) {
                 let shown = cs.prefix(6).map { c -> String in
-                    var t = "\(c.name) #c\(c.rowid) \(c.masteryLabel)"
+                    var t = "\(c.name) #c\(c.rowid)" + (c.pKnown == nil && c.status == nil ? "" : " \(c.masteryLabel)")
                     if (c.pKnown ?? 0) >= 0.95 { t += " ✓" }
                     return t
                 }

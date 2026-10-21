@@ -10,7 +10,8 @@ Sources/MyAITeacher/
   Agent/       ChatSession (the agent loop), Hooks (extensions + EventBus), Metrics, SystemPrompt, ToolRegistry
   Extensions/  Features built on hooks: permissions, memory, language, activity, teaching context
   Tools/       Tool protocol + tools (files, shell, code, web, math, questions, study, memory)
-  Memory/      MemoryStore/MemoryHub (hybrid FTS5 + on-device embeddings), Reflection
+  Memory/      Learner model: MemoryStore (indexed memories), ConceptGraph (subjects/concepts/prereqs + BKT mastery),
+               MemoryHub (core block, lean recall), Reflection (mem0-style ops + consolidation) — see docs/memory-design.md
   Study/       FSRS-5 flashcards, BKT mastery, plans, quizzes, activity
   Workspace/   Folder workspaces (.teacher state), GlobalStore, Services
   UI/          SwiftUI views + TranscriptView bridge
@@ -81,7 +82,7 @@ Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, curricula |
-| — (extra) | `memory_search/save/update/forget` | scoped (learner/folder) long-term memory |
+| — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |
 
 ## Measured (Apple Silicon, macOS 27)
 * Cold launch → rendered transcript: **1.07 s**; app process footprint **~68–73 MB** + one WebKit content process (~90 MB).
