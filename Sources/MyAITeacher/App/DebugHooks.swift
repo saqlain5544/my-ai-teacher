@@ -13,10 +13,16 @@ enum DebugHooks {
     static var enabled: Bool { ProcessInfo.processInfo.environment["MYAITEACHER_DEBUG"] == "1" }
     weak static var transcript: WKWebView?
 
+    /// One channel per profile (MYAITEACHER_HOME), so test instances running side by side never act on each other's commands.
+    nonisolated static var channel: Notification.Name {
+        let home = ProcessInfo.processInfo.environment["MYAITEACHER_HOME"].map { URL(fileURLWithPath: $0).resolvingSymlinksInPath().path } ?? ""
+        return Notification.Name("com.saqlain.myaiteacher.debug" + (home.isEmpty ? "" : ":" + home))
+    }
+
     static func install() {
         guard enabled else { return }
-        AppLog.write("debug hooks enabled")
-        DistributedNotificationCenter.default().addObserver(forName: Notification.Name("com.saqlain.myaiteacher.debug"), object: nil, queue: .main) { n in
+        AppLog.write("debug hooks enabled on \(channel.rawValue)")
+        DistributedNotificationCenter.default().addObserver(forName: channel, object: nil, queue: .main) { n in
             let raw = (n.object as? String) ?? ""
             MainActor.assumeIsolated { handle(JSON.parse(raw) ?? .null) }
         }

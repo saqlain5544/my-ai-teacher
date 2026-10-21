@@ -31,7 +31,8 @@ LAB = HOME / "lab"
 POSTER = HOME.parent / (HOME.name + "-poster")   # own copy: rebuilding .build mid-run must not break the driver
 
 def post(cmd):
-    subprocess.run([str(POSTER), "--post", json.dumps(cmd)], check=True)
+    # Commands go to this profile's channel only (several test instances can run side by side).
+    subprocess.run([str(POSTER), "--post", json.dumps(cmd)], check=True, env={**os.environ, "MYAITEACHER_HOME": str(HOME)})
 
 def report(timeout=8):
     before = REPORT.stat().st_mtime_ns if REPORT.exists() else 0

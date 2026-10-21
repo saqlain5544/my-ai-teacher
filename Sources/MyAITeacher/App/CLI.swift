@@ -131,9 +131,10 @@ enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("--webtest") { WebTest.main(args) }
-        // Send one debug command to a running app (launched with MYAITEACHER_DEBUG=1) and exit: --post '{"action":"status"}'
+        // Send one debug command to a running app (launched with MYAITEACHER_DEBUG=1) and exit: --post '{"action":"status"}'.
+        // It reaches the instance with the same MYAITEACHER_HOME (none: the instance without one).
         if let i = args.firstIndex(of: "--post"), i + 1 < args.count {
-            DistributedNotificationCenter.default().postNotificationName(Notification.Name("com.saqlain.myaiteacher.debug"), object: args[i + 1], userInfo: nil, deliverImmediately: true)
+            DistributedNotificationCenter.default().postNotificationName(DebugHooks.channel, object: args[i + 1], userInfo: nil, deliverImmediately: true)
             exit(0)
         }
         if args.contains("--cli") {
