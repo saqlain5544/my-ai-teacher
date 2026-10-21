@@ -192,6 +192,8 @@ final class ConceptGraph: @unchecked Sendable {
     }
 
     /// Concepts named in `text`: strength 1 when every stem of a name/alias appears, partial for long names.
+    private static let learningCue = try! NSRegularExpression(pattern: #"\?|\b(what|how|why|when|which|help|tell me about|i need|explain|define|definition|solve|calculate|derive|prove|learn|learning|teach|practi[cs]e|quiz|review|understand|struggle|confus|example|formula|equation|law|theory|concept)"#, options: .caseInsensitive)
+
     func route(_ text: String) -> [Int64: Double] {
         let q = Set(MemoryText.stems(text, limit: 64))
         guard !q.isEmpty else { return [:] }
@@ -199,9 +201,19 @@ final class ConceptGraph: @unchecked Sendable {
         ensureLoaded()
         var cands = Set<Int64>()
         for s in q { cands.formUnion(postings[s] ?? []) }
+        let asking = Self.learningCue.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) != nil
         var out: [Int64: Double] = [:]
         for id in cands {
             for st in keyStems[id] ?? [] {
+                // A one-word concept needs more than a shared word: a short name (C, R, Go) must appear as itself, with its
+                // capitals ("vitamin c", "go home" aren't programming); a common word must come with other content or a
+                // learning cue ("no energy today" isn't about physics; "explain kinetic energy" is).
+                if st.count == 1, let name = nodes[id]?.name {
+                    if name.count <= 2 {
+                        let pat = "(?<![\\w#+])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\w#+])"
+                        if text.range(of: pat, options: .regularExpression) == nil { continue }
+                    } else if q.count < 2 && !asking { continue }
+                }
                 let cov = Double(st.intersection(q).count) / Double(st.count)
                 let strength = cov >= 1 ? 1 : (st.count >= 3 && cov >= 0.66 ? cov * 0.8 : 0)
                 if strength > (out[id] ?? 0) { out[id] = strength }

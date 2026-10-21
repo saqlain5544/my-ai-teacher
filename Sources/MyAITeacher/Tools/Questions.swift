@@ -131,9 +131,16 @@ enum Questions {
             if let t = a.string, e < opts.count { return Grade(correct: norm(t) == norm(opts[e]) ? true : nil, expected: opts[e]) }
             return Grade()
         case "multiple_choice":
-            let e = Set(ans?.array?.compactMap(\.int) ?? [])
+            // Answers may be indices or the options' text (models write either).
+            let opts = q["options"]?.array?.compactMap(\.string) ?? []
+            // A string answer is the option's text first ("2" among options "2","4","5" is option 0), then an index.
+            let index = { (j: JSON) -> Int? in
+                if let s = j.string, let i = opts.firstIndex(where: { norm($0) == norm(s) }) { return i }
+                return j.int
+            }
+            let e = Set(ans?.array?.compactMap(index) ?? [])
             guard !e.isEmpty else { return Grade() }
-            let g = Set(a.array?.compactMap(\.int) ?? [])
+            let g = Set(a.array?.compactMap(index) ?? [])
             let hits = Double(g.intersection(e).count), wrong = Double(g.subtracting(e).count)
             return Grade(correct: g == e, score: max(0, (hits - wrong) / Double(e.count)), expected: e.sorted().map(String.init).joined(separator: ", "))
         case "true_false":
@@ -254,11 +261,28 @@ enum MathEquivalence {
         T = standard_transformations + (implicit_multiplication_application, convert_xor)
         a, b = json.loads(sys.stdin.read())
         try:
-            def P(s):
-                if "=" in s and "==" not in s:
-                    l, r = s.split("=", 1); return parse_expr(l, transformations=T) - parse_expr(r, transformations=T)
-                return parse_expr(s, transformations=T)
-            print("true" if simplify(P(a) - P(b)) == 0 else "false")
+            E = lambda s: parse_expr(s, transformations=T)
+            is_eq = lambda s: "=" in s and "==" not in s
+            def sides(s):
+                l, r = s.split("=", 1); return E(l), E(r)
+            if is_eq(a) and is_eq(b):
+                # Same equation up to swapping sides or scaling by a constant: 2=x ~ x=2, 2x-y=0 ~ y=2x.
+                la, ra = sides(a); lb, rb = sides(b)
+                da, db = simplify(la - ra), simplify(lb - rb)
+                if db == 0 or da == 0:
+                    ok = simplify(da - db) == 0
+                else:
+                    q = simplify(da / db)
+                    ok = q.is_number and q != 0 and q.is_finite
+                print("true" if ok else "false")
+            elif is_eq(a) or is_eq(b):
+                # "x = 2" against a bare "2": compare with the side opposite the variable.
+                eq, other = (a, b) if is_eq(a) else (b, a)
+                l, r = sides(eq); o = E(other)
+                val = r if l.is_Symbol else (l if r.is_Symbol else None)
+                print("null" if val is None else ("true" if simplify(val - o) == 0 else "false"))
+            else:
+                print("true" if simplify(E(a) - E(b)) == 0 else "false")
         except Exception:
             print("null")
         """

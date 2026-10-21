@@ -424,3 +424,19 @@ final class LearningModelTests: XCTestCase {
         _ = chain
     }
 }
+
+final class ConceptRoutingTests: XCTestCase {
+    func testOneWordConceptsNeedRealEvidence() throws {
+        let fx = try MemoryFixture()
+        guard let g = fx.hub.graph else { return XCTFail() }
+        let c = g.upsert(name: "C", subjects: ["programming"])!, go = g.upsert(name: "Go", subjects: ["programming"])!
+        let energy = g.upsert(name: "Energy", subjects: ["physics"])!
+        XCTAssertNil(g.route("Vitamin c is good for colds")[c])
+        XCTAssertNotNil(g.route("I want to learn C pointers")[c])
+        XCTAssertNil(g.route("I should go home now")[go])
+        XCTAssertNotNil(g.route("How do Go channels work?")[go])
+        XCTAssertNil(g.route("no energy today")[energy])
+        XCTAssertNotNil(g.route("explain kinetic energy")[energy])
+        XCTAssertNotNil(g.route("what is energy?")[energy])
+    }
+}

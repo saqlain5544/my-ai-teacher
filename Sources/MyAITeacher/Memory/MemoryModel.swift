@@ -163,6 +163,32 @@ final class Embedder: @unchecked Sendable {
         vDSP_vsmul(v, 1, &inv, &out, 1, vDSP_Length(v.count))
         return out
     }
+    /// A unit vector as int8 (×127) for the in-memory index.
+    static func quantize(_ v: [Float]) -> [Int8] { v.map { Int8(max(-127, min(127, ($0 * 127).rounded()))) } }
+    /// Cosine of a unit float vector and a quantised one.
+    /// (Accelerate: int8 → float into a stack buffer, then a vectorised dot product.)
+    static func dot(_ a: [Float], _ b: [Int8]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        let n = vDSP_Length(b.count)
+        return withUnsafeTemporaryAllocation(of: Float.self, capacity: b.count) { tmp in
+            vDSP_vflt8(b, 1, tmp.baseAddress!, 1, n)
+            var r: Float = 0
+            vDSP_dotpr(a, 1, tmp.baseAddress!, 1, &r, n)
+            return r / 127
+        }
+    }
+    /// Cosine of two quantised unit vectors.
+    static func dot(_ a: [Int8], _ b: [Int8]) -> Float {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        let n = vDSP_Length(a.count)
+        return withUnsafeTemporaryAllocation(of: Float.self, capacity: a.count * 2) { tmp in
+            let x = tmp.baseAddress!, y = tmp.baseAddress! + a.count
+            vDSP_vflt8(a, 1, x, 1, n); vDSP_vflt8(b, 1, y, 1, n)
+            var r: Float = 0
+            vDSP_dotpr(x, 1, y, 1, &r, n)
+            return r / (127 * 127)
+        }
+    }
     static func dot(_ a: [Float], _ b: [Float]) -> Float {
         guard a.count == b.count else { return 0 }
         var r: Float = 0

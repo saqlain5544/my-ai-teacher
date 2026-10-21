@@ -35,6 +35,20 @@ final class FeatureTests: XCTestCase {
         XCTAssertEqual(eq, true)
         let neq = await MathEquivalence.equivalent("\\frac{x}{2}", "2x")
         XCTAssertEqual(neq, false)
+        // Equations: same up to swapping sides or scaling; a bare value against "x = value".
+        for (g, e, want) in [("2=x", "x=2", true), ("2x-y=0", "y=2x", true), ("4x=8", "x=2", true), ("x=3", "x=2", false),
+                             ("2", "x=2", true), ("3", "x=2", false)] {
+            let r = await MathEquivalence.equivalent(g, e)
+            XCTAssertEqual(r, want, "\(g) vs \(e)")
+        }
+    }
+
+    func testMultipleChoiceGradedFromOptionText() async {
+        let q: JSON = ["type": "multiple_choice", "options": ["2", "4", "5"], "answer": ["2", "5"]]
+        let g = await Questions.grade(q, answer: [0, 2])
+        XCTAssertEqual(g.correct, true)
+        let t = await Questions.grade(q, answer: ["5", "2"])
+        XCTAssertEqual(t.correct, true)
     }
 
     func testShortTextNeedsTeacherWhenUnmatched() async {

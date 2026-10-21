@@ -57,7 +57,8 @@ final class MemoryStore: @unchecked Sendable {
     private struct Doc {
         var memory: Memory
         var stems: Set<String>
-        var vector: [Float]?
+        /// Unit vector quantised to int8 (×127): 4× smaller than Float32, cosine error < 0.005.
+        var vector: [Int8]?
         var norm: String
         var lsh: [Int64]
     }
@@ -89,7 +90,7 @@ final class MemoryStore: @unchecked Sendable {
 
     private func makeDoc(_ m: Memory, vector raw: [Float]?) -> Doc {
         let v = raw.map(Embedder.normalized)
-        return Doc(memory: m, stems: Set(MemoryText.stems(indexText(m))), vector: v, norm: MemoryText.norm(m.content), lsh: v.map(VectorLSH.keys) ?? [])
+        return Doc(memory: m, stems: Set(MemoryText.stems(indexText(m))), vector: v.map(Embedder.quantize), norm: MemoryText.norm(m.content), lsh: v.map(VectorLSH.keys) ?? [])
     }
 
     private func insertDoc(_ d: Doc) {
@@ -192,7 +193,7 @@ final class MemoryStore: @unchecked Sendable {
             for id in cands {
                 guard let d = docs[id], d.memory.kind == kind else { continue }
                 let jac = MemoryText.jaccard(stems, d.stems)
-                let cos = (vec != nil && d.vector != nil) ? Double(Embedder.dot(vec!, d.vector!)) : 0
+                let cos = (vec != nil && d.vector != nil) ? Double(Embedder.dot(vec!, d.vector!)) : 0   // float · int8
                 // A refinement (one side's terms contain the other's) is the same fact stated more specifically.
                 let small = min(stems.count, d.stems.count)
                 let refines = small >= 3 && jac >= 0.5 && (stems.isSubset(of: d.stems) || d.stems.isSubset(of: stems))
@@ -377,31 +378,39 @@ final class MemoryStore: @unchecked Sendable {
         let oldEpisodes = ((try? db.query("SELECT id FROM memories WHERE archived=0 AND kind='episode' ORDER BY created_at DESC LIMIT -1 OFFSET 30")) ?? []).compactMap { $0.int("id") }
         for id in oldEpisodes { archive(Int64(id), status: "rolled-up") }
         rep.archived += oldEpisodes.count
-        // Duplicate sweep using the same candidate machinery as `add`.
+        // Duplicate sweep using the same candidate machinery as `add` — incremental: only memories changed since the last
+        // sweep are checked (against everything), with bounded candidate sets, so it costs O(changed), not O(all).
         lock.lock(); ensureLoaded()
         let snapshot = docs
         lock.unlock()
+        let lastSweep = MemorySchema.meta(db, "sweep_\(scope.rawValue)").flatMap(Double.init).map { Date(timeIntervalSince1970: $0) } ?? .distantPast
         var gone = Set<Int64>()
-        for (id, d) in snapshot.sorted(by: { $0.key < $1.key }) where !gone.contains(id) {
+        for (id, d) in snapshot.sorted(by: { $0.key < $1.key }) where !gone.contains(id) && d.memory.updatedAt > lastSweep {
             var cands = Set<Int64>()
             lock.lock()
             for s in d.stems { if let p = postings[s], p.count <= 50 { cands.formUnion(p) } }
-            for k in d.lsh { cands.formUnion(buckets[k] ?? []) }
+            for k in d.lsh { if let b = buckets[k] { cands.formUnion(b.count <= 200 ? b : Set(b.prefix(200))) } }
             lock.unlock()
-            for c in cands where c > id && !gone.contains(c) {
+            for c in cands where c != id && !gone.contains(c) {
                 guard let o = snapshot[c], o.memory.kind == d.memory.kind else { continue }
                 let jac = MemoryText.jaccard(d.stems, o.stems)
                 let cs = (d.vector != nil && o.vector != nil) ? Double(Embedder.dot(d.vector!, o.vector!)) : 0
                 guard d.norm == o.norm || jac >= 0.8 || (cs >= 0.95 && jac >= 0.5) else { continue }
-                // Keep the older id (stable references); absorb the newer one's evidence.
-                let keepNew = o.memory.content.count > d.memory.content.count
-                if keepNew { try? db.execute("UPDATE memories SET content=?, norm=?, embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?", o.memory.content, o.norm, c, id) }
-                try? db.execute("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", o.memory.evidence, o.memory.importance, id)
-                archive(c, status: "merged into #\(id)")
-                if keepNew { refresh(id) }
-                gone.insert(c); rep.merged += 1
+                // Keep the older id (stable references); absorb the other's evidence. The newer text wins when it is an
+                // update (changed number/negation), otherwise the longer one.
+                let (keep, drop) = id < c ? (id, c) : (c, id)
+                guard let k = snapshot[keep], let x = snapshot[drop] else { continue }
+                let newer = x.memory.updatedAt > k.memory.updatedAt ? x : k, older = newer.memory.rowid == x.memory.rowid ? k : x
+                let keepNew = MemoryText.isUpdate(newer.memory.content, of: older.memory.content) ? newer.memory.rowid == drop : x.memory.content.count > k.memory.content.count
+                if keepNew { try? db.execute("UPDATE memories SET content=?, norm=?, embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?", x.memory.content, x.norm, drop, keep) }
+                try? db.execute("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", x.memory.evidence, x.memory.importance, keep)
+                archive(drop, status: "merged into #\(keep)")
+                if keepNew { refresh(keep) }
+                gone.insert(drop); rep.merged += 1
+                if drop == id { break }
             }
         }
+        MemorySchema.setMeta(db, "sweep_\(scope.rawValue)", String(Date().timeIntervalSince1970))
         return rep
     }
 
