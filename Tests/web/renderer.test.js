@@ -707,6 +707,8 @@
     eq(lastPost('edit'), { type: 'edit', id: u.id, text: 'What is RNA?' });
     const e = A('partial', { error: 'Rate limited' }); T.reset([U('q'), e], {});
     click($('#m-' + e.id + ' [data-act="retry"]')); eq(lastPost('retry').type, 'retry');
+    const st = A([], { error: 'Stopped.' }); T.reset([U('q'), st], {});
+    ok(!$('#m-' + st.id + ' .msg-error') && $('#m-' + st.id + ' .msg-stopped'), 'a stop is a quiet note, not an error');
   });
 
   test('metrics footer expands', () => {

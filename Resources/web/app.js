@@ -572,7 +572,9 @@
     let tail = el.querySelector(':scope > .tail');
     if (!tail) { tail = document.createElement('div'); tail.className = 'tail'; el.appendChild(tail); }
     let th = '';
-    if (m.error) th += '<div class="msg-error"><span>⚠️ ' + esc(m.error) + '</span><button data-act="retry">Retry</button></div>';
+    // Stopping is the learner's choice, not an error: a quiet note with a way to try again.
+    if (m.error === 'Stopped.') th += '<div class="msg-stopped"><span>⏹ Stopped before the reply began.</span><button class="btn link" data-act="retry">Try again</button></div>';
+    else if (m.error) th += '<div class="msg-error"><span>⚠️ ' + esc(m.error) + '</span><button data-act="retry">Retry</button></div>';
     if (!streaming && m.turn) {
       const { msgs, user } = turnOf(m.id);
       th += R.footers.map(f => f(m, msgs, user, ctx)).join('');

@@ -113,7 +113,7 @@ def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forb
     if any(a[0] == "TIMEOUT" for a in answered): problems.append("turn did not finish in time")
     if r.get("error"): problems.append("session error: " + r["error"])
     for m in msgs:
-        if m.get("error"): problems.append("message error: " + m["error"])
+        if m.get("error") and m["error"] != "Stopped.": problems.append("message error: " + m["error"])   # a stop is the learner's choice
     for m in msgs:
         for b in m["blocks"]:
             if b["kind"] == "toolUse" and b["id"] not in results: problems.append("tool %s has no result" % b["name"])
