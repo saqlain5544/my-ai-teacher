@@ -16,7 +16,30 @@ struct AnthropicClient: LLMClient {
         return false
     }
 
+    /// Models on compatible hosts that reject `thinking: disabled` (learned at runtime).
+    nonisolated(unsafe) private static var adaptiveOnlyModels = Set<String>()
+    private static let lock = NSLock()
+    static func adaptiveOnly(_ model: String) -> Bool { lock.withLock { adaptiveOnlyModels.contains(model) } }
+
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+        guard request.thinking == .off, !isFirstParty, !Self.adaptiveOnly(request.model) else { return streamOnce(request) }
+        // One retry if the host says thinking can't be disabled for this model; nothing has been yielded then.
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    for try await ev in streamOnce(request) { continuation.yield(ev) }
+                    continuation.finish()
+                } catch let e as HTTPError where e.status == 400 && e.body.localizedCaseInsensitiveContains("adaptive") {
+                    _ = Self.lock.withLock { Self.adaptiveOnlyModels.insert(request.model) }
+                    do { for try await ev in streamOnce(request) { continuation.yield(ev) }; continuation.finish() }
+                    catch { continuation.finish(throwing: error) }
+                } catch { continuation.finish(throwing: error) }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    private func streamOnce(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
         let body = buildBody(request)
         var headers = config.headers
         headers["anthropic-version"] = "2023-06-01"
@@ -35,6 +58,7 @@ struct AnthropicClient: LLMClient {
                 var usage = Usage()
                 do {
                     for try await ev in SSEClient.stream(req) {
+                        if SSEClient.trace { FileHandle.standardError.write(Data(("SSE " + ev.data + "\n").utf8)) }
                         if ev.event == "__json__" {
                             try Self.emitNonStreaming(ev.data, continuation); continue
                         }
@@ -175,6 +199,16 @@ struct AnthropicClient: LLMClient {
             if r.thinking != .off {
                 let budget = min(r.thinking.budget, max(1024, r.maxTokens - 1024))
                 body["thinking"] = ["type": "enabled", "budget_tokens": .number(Double(budget))]
+            } else if !isFirstParty {
+                // Compatible hosts (MiniMax…) think by default: "off" must be explicit. Models that only allow adaptive
+                // thinking (learned from their 400) get the lowest effort instead.
+                if Self.adaptiveOnly(r.model) {
+                    body["thinking"] = ["type": "adaptive"]
+                    body["output_config"] = ["effort": "low"]
+                } else {
+                    body["thinking"] = ["type": "disabled"]
+                }
+                if let t = r.temperature { body["temperature"] = .number(t) }
             } else if let t = r.temperature {
                 body["temperature"] = .number(t)
             }

@@ -114,6 +114,7 @@ enum CLI {
                 case .toolCall(let b): print("[tool call \(b.name ?? "") \(args.contains("--full") ? (b.input?.compact ?? "") : String(b.input?.compact.prefix(300) ?? ""))]")
                 case .usage(let u): print("\n[usage in=\(u.input) out=\(u.output) cacheRead=\(u.cacheRead) cacheWrite=\(u.cacheWrite)]")
                 case .stop(let r): print("[stop \(r)]")
+                case .textWasThinking: print("\n[the text above was reasoning]")
                 }
             }
         } catch {

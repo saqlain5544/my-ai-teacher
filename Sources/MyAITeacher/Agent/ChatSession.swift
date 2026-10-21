@@ -351,6 +351,12 @@ final class ChatSession: ObservableObject, Identifiable {
             else { m.blocks.append(block) }
             sink?.upsert(m)
             if block.name == "todo_write" { todos = block.input?["todos"]?.array ?? [] }
+        case .textWasThinking:
+            // The reply so far was reasoning (a bare </think>): move its text into one thinking block.
+            let t = m.blocks.filter { $0.kind == .text }.compactMap(\.text).joined()
+            m.blocks.removeAll { $0.kind == .text }
+            if !t.isEmpty { m.blocks.insert(.thinking(t), at: 0) }
+            sink?.upsert(m)
         case .usage, .stop:
             break
         }

@@ -239,6 +239,11 @@ enum SubAgent {
                         assistant.blocks.append(b)
                         await run.upsert(assistant)
                         ctx.progress("→ \(b.name ?? "") \(tools.first { $0.name == b.name }?.summary(b.input ?? .null) ?? "")\n")
+                    case .textWasThinking:
+                        let t = assistant.blocks.filter { $0.kind == .text }.compactMap(\.text).joined()
+                        assistant.blocks.removeAll { $0.kind == .text }
+                        if !t.isEmpty { assistant.blocks.insert(.thinking(t), at: 0) }
+                        await run.upsert(assistant)
                     case .usage(let u): metrics.usage = u
                     case .stop(let r): metrics.finishReason = r
                     default: break

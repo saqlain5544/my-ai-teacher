@@ -6,6 +6,7 @@ enum Quirk: String, Codable, Sendable {
     case reasoningEffort          // send `reasoning_effort`
     case openrouterReasoning      // send `reasoning: {effort}`
     case reasoningContentBack     // replay `reasoning_content` on assistant tool-call turns (DeepSeek, Kimi)
+    case chatTemplateThinking     // vLLM/NIM hosts: "off" goes in `chat_template_kwargs` (thinking / enable_thinking)
     case noStreamOptions          // server rejects `stream_options`
 }
 
@@ -164,6 +165,11 @@ struct OpenAIClient: LLMClient {
         if r.thinking == .off, q.contains(.openrouterReasoning) {
             body["reasoning"] = Self.reasoningIsMandatory(r.model) ? ["effort": "low", "exclude": false] : ["enabled": false]
         }
+        // Open-weight models on vLLM-style hosts think unless the chat template is told not to. The key differs by family
+        // and some templates fail on a key they don't know (NIM answers 500), so only a known family gets one.
+        if r.thinking == .off, q.contains(.chatTemplateThinking), let key = Self.templateThinkingKey(r.model) {
+            body["chat_template_kwargs"] = .object([key: false])
+        }
         if r.thinking != .off {
             if q.contains(.reasoningEffort) { body["reasoning_effort"] = .string(r.thinking.rawValue) }
             if q.contains(.openrouterReasoning) { body["reasoning"] = ["effort": .string(r.thinking.rawValue)] }
@@ -171,6 +177,13 @@ struct OpenAIClient: LLMClient {
             body["temperature"] = .number(t)
         }
         return .object(body)
+    }
+
+    static func templateThinkingKey(_ model: String) -> String? {
+        let m = model.lowercased()
+        if m.contains("deepseek") || m.contains("kimi") { return "thinking" }
+        if m.contains("qwen") || m.contains("nemotron") || m.contains("glm") { return "enable_thinking" }
+        return nil
     }
 
     func convert(_ r: LLMRequest) -> [JSON] {
