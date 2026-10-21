@@ -131,6 +131,8 @@ def run_turn(text, scenario, timeout=240):
     while time.time() - t0 < timeout:
         r = report()
         seen_running |= r["running"]
+        # Only this lesson's cards: one left open in an earlier lesson (a learner who walked away) mustn't hold up this one.
+        r["pending"] = [p for p in r["pending"] if p.get("lesson") in (None, r.get("lesson"))]
         if scenario.get("during"): scenario["during"](r)   # a learner acting mid-turn (e.g. steering a sub-agent)
         for p in r["pending"]:
             if p["id"] not in tries:

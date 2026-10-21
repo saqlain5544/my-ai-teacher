@@ -172,7 +172,8 @@ enum DebugHooks {
         var out: [String: JSON] = [
             "running": .bool(session?.isRunning ?? false), "status": clip(session?.status, 200), "error": clip(session?.errorMessage, 400),
             "lesson": clip(session?.id, 60), "folder": .string(app.workspace.url.path), "messages": .array(msgs),
-            "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload]) }),
+            "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload,
+                                                                                 "lesson": .string($0.conversationID)]) }),
             "agents": .array(SubAgentCenter.shared.runs(in: session?.id).map(\.debugJSON)), "runtime": Runtime.metrics.json,
             "browser": .array(AgentBrowser.shared.tabs.map { .object(["id": .number(Double($0.id)), "url": .string($0.url?.absoluteString ?? ""), "title": .string($0.title)]) }),
         ]
