@@ -17,6 +17,8 @@ protocol AgentHost: Sendable {
     var lessonProvider: String { get }
     var folder: URL { get }
     var isCodeMode: Bool { get }
+    /// The lesson runs on a free model: its sub-agents may only use models known to be free.
+    var lessonFree: Bool { get }
     func limits() async -> SubAgentSettings
     func grants() async -> LessonGrants
     /// Other providers with a key (the lesson's own models come with the tool context).
@@ -30,6 +32,7 @@ protocol AgentHost: Sendable {
 
 extension AgentHost {
     func currentModel(_ providerID: String, _ model: String) async -> String { model }
+    var lessonFree: Bool { false }
 }
 
 struct LessonOnlyHost: AgentHost {
@@ -76,12 +79,17 @@ struct AppAgentHost: AgentHost {
             return app.availableProviders.filter { $0.id != lessonProvider }.compactMap { p -> AgentProvider? in
                 app.loadModels(p)                  // fetched once a day; the cached list is used meanwhile
                 _ = app.modelInfo(p.id, "")        // loads the cached metadata
-                let meta = app.modelMeta[p.id] ?? [:]
-                var models = meta.isEmpty ? app.modelList(p) : meta.values.filter { $0.tools != false }.map(\.id).sorted()
-                if freeOnly { models = models.filter { meta[$0]?.free == true || $0.hasSuffix(":free") } }
+                let models = Self.allowed(meta: app.modelMeta[p.id] ?? [:], suggested: app.modelList(p), freeOnly: freeOnly)
                 return models.isEmpty ? nil : AgentProvider(id: p.id, name: p.name, models: models, defaultModel: p.defaultModel)
             }
         }
+    }
+
+    /// A provider's models a sub-agent may use: the fetched tool-capable ones (the suggestions before a list exists);
+    /// free-only keeps those whose metadata says free, or whose id says `:free` — never one whose price is unknown.
+    static func allowed(meta: [String: ModelInfo], suggested: [String], freeOnly: Bool) -> [String] {
+        let models = meta.isEmpty ? suggested : meta.values.filter { $0.tools != false }.map(\.id).sorted()
+        return freeOnly ? models.filter { meta[$0]?.free == true || $0.hasSuffix(":free") } : models
     }
 
     func client(_ providerID: String) async -> LLMClient? {
@@ -105,7 +113,8 @@ struct AppAgentHost: AgentHost {
 extension ChatSession {
     /// The sub-agent host for this lesson's tool calls.
     var agentHost: AppAgentHost {
-        SubAgent.lastLimits.mutate { $0 = settings.agents }   // TaskTool.timeout reads it before the call runs
+        // TaskTool.timeout reads the limits and the types' budgets before the call runs.
+        SubAgent.remember(settings.agents, types: AgentCatalog.all(app: settings.agents.definitions, folder: services.workspace.url))
         let info = app.modelInfo(conversation.providerID, conversation.model)
         return AppAgentHost(conversationID: id, lessonProvider: conversation.providerID,
                             lessonFree: info?.free == true || conversation.model.hasSuffix(":free"),

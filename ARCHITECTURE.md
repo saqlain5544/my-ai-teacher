@@ -121,34 +121,48 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
     description, tools, deny, read_only, provider, model, effort, max_steps/max_seconds/max_tokens, isolation; the body
     is the system prompt — user-authored project files, the app never writes them). Built-in names can't be redefined.
   * `provider`/`model`: the lesson provider's fetched list, or any other provider with a key (Settings can limit that,
-    and paid models there are off by default; a free lesson only ever delegates to free models). Retired ids map to their
+    and paid models there are off by default). A free lesson only ever delegates to models known to be free (metadata, or
+    a `:free` id), even before any list has loaded. Retired ids map to their
     successor; loose names resolve through `Fuzzy` when one candidate clearly fits ("using deepseek-v4-pro for 'deepseek
     v4 pro'"), otherwise the error suggests the closest three.
   * `effort` off/low/medium/high (default off), sent as `LLMRequest.thinking` through the same clients as the lesson, so
     every provider's mapping applies (NIM `chat_template_kwargs`, MiniMax disabled/adaptive, OpenRouter `reasoning`,
     DeepSeek `thinking`); a model whose metadata says it doesn't reason gets off.
-  * Budget `max_steps` / `max_seconds` / `max_tokens` (input + output over the run), clamped to the limits; past it the
-    agent is told to report from what it has. `unbounded` needs the setting, always runs in the background, stays stoppable.
+  * Budget `max_steps` / `max_seconds` / `max_tokens` (input + output over the run, its own sub-agents' included),
+    clamped to the limits (a number past Int, NaN or infinity counts as not given); past it the agent is told to report from
+    what it has, with a capped report call (8k tokens; 4k for a schema repair). A run still going 300 s past its time
+    budget is stopped (the backstop). The tool's own timeout follows the run's budget (the call's, a resumed run's, or its
+    type's). `unbounded` needs the setting, always runs in the background, stays stoppable.
   * `tools` / `deny_tools` narrow the type's tools; `output_schema` (JSON Schema, `JSONSchemaCheck`) is checked after
     the report with one repair turn; the teacher gets the JSON (and `meta.structured`).
   * `isolation: "worktree"` (coder types, code mode, a git repo, write access): it works on a `git worktree` in the
-    app's support folder, removed if nothing changed, otherwise reported with its path, branch and diff stat.
+    app's support folder (made with hooks and fsmonitor off), removed if nothing changed, otherwise reported with its
+    path, branch and diff stat; kept ones go with their `teacher/…` branch after 14 days, at a later launch. Its shell and
+    code start in the worktree.
 * Permissions are a ceiling, never a prompt (`SubAgentPolicy`): a sub-agent may do what the lesson may do without
   asking (folder access, approvals the learner gave in this lesson, the Python setting, disabled tools) and nothing more;
-  writes must land inside its folder (or worktree), never `.teacher/`; installs are refused. Read-only types never get
-  write tools, and their `bash` runs only `ReadOnlyShell` commands (git diff/log/show/status, ls, cat, grep, rg, find…,
-  no redirection, chaining or writing flags). Nested sub-agents (up to Settings' depth) can't exceed their parent.
+  writes must land inside its folder (or worktree), never `.teacher/` — checked on the real path (the deepest existing
+  ancestor through realpath, so symlinked folders and dangling links are followed) and case-insensitively, as APFS is;
+  the lesson's own `Workspace.contains`/`isStatePath` use the same check. Installs are refused (pip/uv/poetry/conda/gem/
+  cargo/go/brew, global npm/pnpm/yarn/bun). Read-only types never get write tools, and their `bash` never reaches a shell:
+  `ReadOnlyShell` splits the command into a pipeline of argument lists and runs each program directly (Process, pipes
+  between them), with only bare program names from a list, their allowlisted reading flags, and no word containing
+  `\ $ { } * ? [ ] ( ) = ! ~`; git runs with fsmonitor, hooks, external diff and textconv off. Nested sub-agents (up to
+  Settings' depth) can't exceed their parent, and a resume meets the same concurrency and depth limits.
 * `agents`: list/status (type, model, effort, budget use, tokens, time, cost), `send` (a note it reads before its next
   step), `wait` (the teacher then has the report; it isn't delivered again), `stop`, `resume`. At most N at once per lesson.
 * Each run is a supervised process (Runtime › agents): a provider error that may pass (429/5xx, timeouts, lost
   connections) crashes it, the supervisor restarts it after 1 s → 2 s → 4 s, and the new incarnation resumes from the
   transcript (the failed reply is dropped, unfinished tool calls are answered as interrupted); after 3 restarts in 60 s it
   reports from what it has. A watchdog ends a run that goes 300 s without a stream event or a tool finishing (a provider
-  that only sends keep-alives). Stop goes through the supervisor, so a stopped run is never restarted. Writes from a
-  replaced incarnation are dropped (`RunWriter`).
+  that only sends keep-alives); the incarnation it ends writes nothing more (no "stopped" report, no worktree cleanup)
+  and the restart carries on, so Stop still reaches the live one. Stop goes through the supervisor, so a stopped run is
+  never restarted. Writes from a replaced incarnation are dropped (`RunWriter`); notes it never read pass to the next
+  incarnation (`Mailbox.remaining`).
 * Memory: images in sub-agent transcripts spill to the lesson's `BlobStore`; requests send only the newest 2 images. A
-  finished run keeps its transcript in memory only while it is among the newest 4 (or on screen): older ones park it on
-  disk (a per-launch temporary folder) and keep their summary and report; it comes back when shown or resumed.
+  finished run keeps its transcript in memory only while it is among the newest 4 (or on screen): older ones park it,
+  whole (images by blob reference), in a per-launch temporary folder and keep their summary and report; it comes back
+  when shown or resumed. The folder goes at quit, and a crashed launch's at the next.
   `MemoryGovernor`'s shed parks every finished transcript but the one on screen. The trimmed transcript (no images) is
   also kept in the tool result, so a run from an earlier launch reopens from there.
 
@@ -267,9 +281,13 @@ The app's footprint must not grow with how much the learner has done: data lives
 * `Registry`: processes by pid and name, supervisors by name, restart counts; `Runtime.metrics` (process count, mailbox
   depth, restarts) shows in the Agents panel's footer and `{"action":"runtime"}`; the debug report carries it too.
 * The tree, started on first use: root → `services` (permanent: `telemetry.flush`, which replaced a GCD timer; a hung
-  flush is ended by its watchdog and restarted), `jobs` (one per name: `memory.reflect:<lesson>`, `memory.consolidate`,
-  `embeddings.warmup`, `lesson.compact#n` via `Runtime.call`, which retries a failed summary call with backoff before the
-  digest fallback), `agents` (sub-agent runs). Root never gives up; it restarts a supervisor that did, with backoff.
+  flush is ended by its watchdog and restarted, without queuing another tick behind the stuck one), `jobs` (one per name:
+  `memory.reflect:<lesson>`, `memory.consolidate`, `embeddings.warmup` (on a GCD thread, not the cooperative pool),
+  `worktrees.prune`, and `lesson.compact#n` via `Runtime.call`, which retries a failed summary call with backoff before
+  the digest fallback), `agents` (sub-agent runs). Root never gives up; it restarts a supervisor that did, with backoff.
+* Watchdogs measure silence, not running time: a job's work gets a heartbeat (`Runtime.Job.beat`, `call`'s `beat`), and
+  a model client wrapped in `BeatingClient` beats on every streamed event — so a long summary or reflection is never cut
+  off mid-answer and billed twice; only one that goes quiet is ended (compaction 120 s, reflection 180 s).
 * What it can't do: catch a Swift trap (force unwrap, out-of-range index, overflow) or a crash in a framework. Those end
   the app, so risky native work belongs behind a subprocess. Already out of process: shell and code (`bash`, `run_code`),
   Python/SymPy (`math`), ripgrep, git, and WebKit's content process (`WebWatchdog`). Still in process, on untrusted

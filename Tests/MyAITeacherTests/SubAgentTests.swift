@@ -42,6 +42,8 @@ struct FakeHost: AgentHost {
     var info: [String: ModelInfo] = [:]
     var retired: [String: String] = [:]
     var isCodeMode = false
+    var lessonFree = false
+    var output = 4096
     func currentModel(_ providerID: String, _ model: String) async -> String { retired[model] ?? model }
     var lessonProvider: String { "lesson" }
     func limits() async -> SubAgentSettings { settings }
@@ -49,7 +51,7 @@ struct FakeHost: AgentHost {
     func providers() async -> [AgentProvider] { others }
     func client(_ providerID: String) async -> LLMClient? { clients[providerID] }
     func modelInfo(_ providerID: String, _ model: String) async -> ModelInfo? { info[model] }
-    func maxOutput(_ providerID: String, _ model: String) async -> Int { 4096 }
+    func maxOutput(_ providerID: String, _ model: String) async -> Int { output }
 }
 
 func step(_ r: ScriptedLLM.Reply, delay: Double = 0, usage: Usage = Usage(input: 100, output: 20)) -> ScriptedLLM.Step {
@@ -212,6 +214,13 @@ final class SubAgentTests: XCTestCase {
         XCTAssertTrue(spec.schema["properties"]?["type"]?["description"]?.string?.contains("summariser — Summarises files") == true)
         let unknown = try await task(["description": "x", "prompt": "x", "type": "nope"], c)
         XCTAssertTrue(unknown.isError && unknown.text.contains("explore"), unknown.text)
+        // Claude Code's name for the general type (MiniMax-M3 sent it live) resolves, and says so.
+        let loose = try await task(["description": "x", "prompt": "x", "type": "general-purpose"], ctx(ScriptedLLM([step(.text("ok"))]), host: host))
+        XCTAssertTrue(loose.text.contains("Using type general for “general-purpose”"), loose.text)
+        let viaAgent = ctx(ScriptedLLM([step(.text("ok"))]), host: host)
+        _ = try await task(["agent": "reviewer", "brief": "look"], viaAgent)
+        let viaType = await run(viaAgent)?.typeName
+        XCTAssertEqual(viaType, "reviewer", "the type under `agent`, the brief under `brief`")
     }
 
     func testFrontmatterVariants() {
@@ -222,14 +231,27 @@ final class SubAgentTests: XCTestCase {
         XCTAssertEqual(AgentCatalog.parse("---\ndescription: d\n---\n", fileName: "My Helper")?.name, "my-helper")
     }
 
-    func testPolicyAndReadOnlyShell() {
-        for ok in ["git diff HEAD~1", "git -C sub log --oneline | head -5", "rg -n 'a|b' src", "grep -o foo x", "find . -name '*.swift'", "ls -la"] {
+    func testPolicyAndReadOnlyShell() async {
+        for ok in ["git diff HEAD^", "git -C sub log --oneline | head -5", "rg -n 'a|b' src", "grep -o foo x", "find . -name x -type f", "ls -la",
+                   "git log -5", "git status -sb", "sort -nr notes.txt", "head -n 3 notes.txt", "git --no-pager show --stat HEAD"] {
             XCTAssertTrue(ReadOnlyShell.allows(ok), ok)
         }
-        for bad in ["echo hi > f", "git commit -m x", "find . -delete", "rm -rf x", "ls; rm x", "cat $(ls)", "git diff --output=x", "sort -o out in",
-                    "git -c core.pager=evil log", "ls && touch x", "FOO=1 ls", "sed -i s/a/b/ f", "tee f", "ls &", "git branch -D main"] {
+        // Every escape the review found, and the earlier denials: none reaches a program.
+        for bad in ["cat =(touch PWNED)", "ls *(e:'touch PWNED':)", "find . -de\\lete", "find . $'-delete'", "find . -name x -{delete,print}",
+                    "find . -ex\\ec rm {} +", "uniq in.txt victim.txt", "sort -uo victim in", "sort --outp=victim in", "git grep --open=rm -e .",
+                    "git grep -iOrm x", "git --config-env=core.fsmonitor=SHELL status", "tree -ao out", "./anything/ls", "/bin/ls",
+                    "find . -name '*.swift'", "file x", "echo hi > f", "git commit -m x", "find . -delete", "rm -rf x", "ls; rm x", "cat $(ls)",
+                    "git diff --output=x", "sort -o out in", "git -c core.pager=evil log", "ls && touch x", "FOO=1 ls", "sed -i s/a/b/ f", "tee f",
+                    "ls &", "git branch -D main", "ls 'unclosed", "ls ~", "git diff --ext-diff", "find . -fprint out", "rg --pre=cat x", "ls |", ""] {
             XCTAssertFalse(ReadOnlyShell.allows(bad), bad)
         }
+        // They run directly, never through a shell: a pipeline of programs, no expansion.
+        let out = await ReadOnlyShell.run("ls | grep notes", cwd: dir, timeout: 10)
+        XCTAssertEqual(out.text.trimmingCharacters(in: .whitespacesAndNewlines), "notes.txt", out.text)
+        let quoted = await ReadOnlyShell.run("echo 'a|b' x", cwd: dir, timeout: 10)
+        XCTAssertEqual(quoted.text, "a|b x\n")
+        XCTAssertEqual(ReadOnlyShell.hardened(["-C", "d", "log", "-5"]).suffix(6), ["-C", "d", "log", "--no-ext-diff", "--no-textconv", "-5"])
+        XCTAssertTrue(ReadOnlyShell.hardened(["status"]).contains("core.fsmonitor=false"))
         let scope = AgentScope(type: "general", tools: ["math", "run_code", "write"], readOnly: false, root: dir, folderName: "f")
         let ask = LessonGrants(access: .full, python: .ask)
         if case .allow = SubAgentPolicy.decide(MathTool(), ["expression": "1+1"], scope: scope, grants: ask) { XCTFail("Python on ask needs the lesson's approval") }
@@ -381,6 +403,11 @@ final class SubAgentTests: XCTestCase {
             let r = await ProcessRunner.run(git, ["-C", dir.path] + args, timeout: 30)
             XCTAssertEqual(r.exitCode, 0, r.combined)
         }
+        // A repository's hooks never run: `git worktree add` would run post-checkout.
+        let marker = dir.appendingPathComponent("HOOKRAN")
+        let hook = dir.appendingPathComponent(".git/hooks/post-checkout")
+        try "#!/bin/sh\ntouch \(marker.path.shellQuoted)\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
         var host = FakeHost(folder: dir)
         host.lessonGrants = LessonGrants(access: .write)
         var o = try await task(["description": "W", "prompt": "x", "type": "coder", "isolation": "worktree"], ctx(ScriptedLLM([]), host: host))
@@ -395,14 +422,207 @@ final class SubAgentTests: XCTestCase {
         let r = try XCTUnwrap(wt)
         XCTAssertEqual(try String(contentsOf: r.path.appendingPathComponent("new.txt"), encoding: .utf8), "hello")
         XCTAssertTrue(o.text.contains("Its changes are on a git worktree") && o.text.contains(r.branch), o.text)
-        _ = await ProcessRunner.run(git, ["-C", dir.path, "worktree", "remove", "--force", r.path.path], timeout: 30)
-        // Nothing changed: the worktree is removed.
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "post-checkout didn't run")
+        // Its shell starts in the worktree, not the learner's folder.
+        host.lessonGrants = LessonGrants(access: .full)
+        let sh = ctx(ScriptedLLM([step(.tools([("bash", ["command": "pwd"])])), step(.text("ok"))]), host: host)
+        _ = try await task(["description": "W", "prompt": "where", "type": "coder", "isolation": "worktree"], sh)
+        let pwd = await MainActor.run { SubAgentCenter.shared.run(sh.toolCallID)?.messages.flatMap(\.blocks).first { $0.name == "bash" && $0.kind == .toolResult }?.text }
+        let shWt = await MainActor.run { SubAgentCenter.shared.run(sh.toolCallID)?.config?.worktree }
+        XCTAssertEqual(pwd.map { URL(fileURLWithPath: $0.trimmingCharacters(in: .whitespacesAndNewlines)).canonicalPath }, shWt?.path.canonicalPath)
+        // Nothing changed: the worktree is removed — once, however many callers finish it at the same time.
         let idle = ctx(ScriptedLLM([step(.text("Nothing to do."))]), host: host)
         o = try await task(["description": "W", "prompt": "look", "type": "coder", "isolation": "worktree"], idle)
         XCTAssertTrue(o.text.contains("changed nothing (the worktree was removed)"), o.text)
         let wt2 = await MainActor.run { SubAgentCenter.shared.run(idle.toolCallID)?.config?.worktree }
         let gone = try XCTUnwrap(wt2)
         XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path.path))
+        let twice = try await Worktree.create(folder: dir, label: "twice")
+        async let a = twice.finish()
+        async let b = twice.finish()
+        let (fa, fb) = await (a, b)
+        XCTAssertEqual(fa, fb); XCTAssertTrue(fa.contains("changed nothing"), fa)
+        // A kept worktree is removed with its branch once it is older than keepDays.
+        await Worktree.pruneStale()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: r.path.path), "a recent one stays")
+        await Worktree.pruneStale(now: Date().addingTimeInterval(Double(Worktree.keepDays + 1) * 86_400))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: r.path.path))
+        let branches = await ProcessRunner.run(git, ["-C", dir.path, "branch", "--list", "teacher/*"], timeout: 20)
+        XCTAssertEqual(branches.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "", "its branch went too")
+    }
+
+    // MARK: Lifecycle under failure
+
+    func waitUntil(_ timeout: TimeInterval = 5, _ cond: @escaping @MainActor @Sendable () -> Bool) async {
+        let t0 = Date()
+        while Date().timeIntervalSince(t0) < timeout { if await MainActor.run(body: cond) { return }; try? await Task.sleep(nanoseconds: 20_000_000) }
+    }
+
+    /// A provider that only sends keep-alives (no events): the watchdog restarts the run, the abandoned incarnation
+    /// writes nothing (it used to report "stopped" and leave a live, unstoppable restart behind), and Stop still works.
+    func testWatchdogRestartsASilentRunAndStopStillEndsIt() async throws {
+        SubAgent.watchdog = 0.4
+        defer { SubAgent.watchdog = 300 }
+        let llm = ScriptedLLM([step(.hang), step(.text("recovered"))])
+        let c = ctx(llm)
+        let o = try await task(["description": "Silent", "prompt": "x"], c)
+        XCTAssertTrue(o.text.hasPrefix("recovered"), o.text)
+        let found = await run(c)
+        let r = try XCTUnwrap(found)
+        let (restarts, state) = await (r.restarts, r.state)
+        XCTAssertEqual(restarts, 1); XCTAssertEqual(state, .done)
+        // Silent every time: Stop ends it for good, and nothing calls the model afterwards.
+        let silent = ScriptedLLM(Array(repeating: step(.hang), count: 20))
+        let c2 = ctx(silent)
+        _ = try await task(["description": "Silent", "prompt": "x", "background": true], c2)
+        let found2 = await run(c2)
+        let r2 = try XCTUnwrap(found2)
+        await waitUntil { r2.restarts >= 1 }
+        let running = await r2.isRunning
+        XCTAssertTrue(running, "a restart keeps the run going")
+        await r2.stop()
+        await waitUntil { !r2.isRunning }
+        let after = await r2.state
+        XCTAssertEqual(after, .stopped)
+        let n = silent.requests.count
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertEqual(silent.requests.count, n, "no incarnation outlives Stop")
+    }
+
+    func testANoteSurvivesARestart() async throws {
+        // The note arrives after the run read its mailbox and before the provider fails: the restart must get it.
+        let llm = ScriptedLLM([step(.fail(HTTPError(status: 503, body: "busy")), delay: 0.5), step(.text("done"))])
+        let c = ctx(llm)
+        let o = try await task(["description": "N", "prompt": "x", "background": true], c)
+        try await Task.sleep(nanoseconds: 200_000_000)
+        let handle = try XCTUnwrap(o.meta?["handle"]?.string)
+        _ = try await AgentsTool().run(["action": "send", "id": .string(handle), "message": "Mind the units."], c)
+        _ = try await AgentsTool().run(["action": "wait", "id": .string(handle), "seconds": 10], c)
+        XCTAssertEqual(llm.requests.count, 2)
+        XCTAssertTrue(llm.requests[1].messages.last?.plainText.contains("Mind the units.") == true, "the restarted incarnation reads it")
+    }
+
+    func testAFreeLessonNeverDelegatesToAPaidModel() async throws {
+        var host = FakeHost(folder: dir)
+        host.lessonFree = true
+        host.info = ["known-free": ModelInfo(id: "known-free", free: true)]
+        let llm = ScriptedLLM(Array(repeating: step(.text("ok")), count: 4))
+        // The lesson's model list hasn't loaded (empty: any model passes the list check).
+        var o = try await task(["description": "P", "prompt": "x", "model": "anthropic/claude-opus-4.5"], ctx(llm, host: host))
+        XCTAssertTrue(o.isError && o.text.contains("free models only"), o.text)
+        o = try await task(["description": "P", "prompt": "x", "model": "x/y:free"], ctx(llm, host: host))
+        XCTAssertFalse(o.isError, o.text)
+        o = try await task(["description": "P", "prompt": "x", "model": "known-free"], ctx(llm, host: host))
+        XCTAssertFalse(o.isError, o.text)
+        o = try await task(["description": "P", "prompt": "x"], ctx(llm, host: host))
+        XCTAssertFalse(o.isError, "the lesson's own (free) model: \(o.text)")
+        // The app host's filter for other providers: free-only keeps only what is known to be free.
+        let meta = ["a:free": ModelInfo(id: "a:free", tools: true), "b": ModelInfo(id: "b", tools: true, free: true),
+                    "c": ModelInfo(id: "c", tools: true), "d": ModelInfo(id: "d", tools: false, free: true)]
+        XCTAssertEqual(AppAgentHost.allowed(meta: meta, suggested: [], freeOnly: true), ["a:free", "b"])
+        XCTAssertEqual(AppAgentHost.allowed(meta: meta, suggested: [], freeOnly: false), ["a:free", "b", "c"])
+        XCTAssertEqual(AppAgentHost.allowed(meta: [:], suggested: ["MiniMax-M3", "z:free"], freeOnly: true), ["z:free"], "an unknown price isn't free")
+    }
+
+    func testPathChecksFollowSymlinksAndCase() throws {
+        let outside = FileManager.default.temporaryDirectory.appendingPathComponent("outside-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: outside, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: outside) }
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("link"), withDestinationURL: outside)
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("dangle"), withDestinationURL: outside.appendingPathComponent("nope/x"))
+        let scope = AgentScope(type: "general", tools: ["write"], readOnly: false, root: dir, folderName: "f")
+        let full = LessonGrants(access: .full)
+        for (path, why) in [("link/new.txt", "only write inside"), ("link/deep/new.txt", "only write inside"), ("dangle", "only write inside"),
+                            (".TEACHER/x.txt", "private state"), ("sub/../.Teacher/y.txt", "private state")] {
+            guard case .deny(let reason) = SubAgentPolicy.decide(WriteTool(), ["path": .string(path), "content": "x"], scope: scope, grants: full) else {
+                XCTFail("\(path) must be refused"); continue
+            }
+            XCTAssertTrue(reason.contains(why), "\(path): \(reason)")
+        }
+        if case .deny(let r) = SubAgentPolicy.decide(WriteTool(), ["path": "new/ok.txt", "content": "x"], scope: scope, grants: full) { XCTFail(r) }
+        let ws = try Workspace(url: dir)
+        XCTAssertFalse(ws.contains(dir.appendingPathComponent("link/new.txt")), "the lesson's own check follows the link too")
+        XCTAssertTrue(ws.isStatePath(dir.appendingPathComponent(".TEACHER/new.db")))
+    }
+
+    func testResumeHonoursTheLimits() async throws {
+        var host = FakeHost(folder: dir)
+        host.settings.maxConcurrent = 1
+        let c = ctx(ScriptedLLM([step(.text("first")), step(.hang)]), host: host)
+        let o = try await task(["description": "R", "prompt": "x"], c)
+        let handle = try XCTUnwrap(o.meta?["handle"]?.string)
+        var busy = ToolContext(conversationID: c.conversationID, workspace: dir, services: services, interactions: interactions,
+                               toolCallID: "busy-\(UUID())", client: ScriptedLLM([step(.hang)]), model: "m", progress: { _ in })
+        busy.agentHost = host
+        _ = try await task(["description": "Busy", "prompt": "x", "background": true], busy)
+        var r = try await AgentsTool().run(["action": "resume", "id": .string(handle), "message": "more"], c)
+        XCTAssertTrue(r.isError && r.text.contains("limit is 1"), "a resume counts against the limit: \(r.text)")
+        await run(busy)?.stop()
+        await waitUntil { SubAgentCenter.shared.runs(in: c.conversationID).allSatisfy { !$0.isRunning } }
+        var deep = c
+        deep.agentDepth = host.settings.maxDepth
+        r = try await TaskTool().run(["description": "R", "prompt": "more", "resume": .string(handle)], deep)
+        XCTAssertTrue(r.isError && r.text.contains("nest at most"), "and the depth limit: \(r.text)")
+    }
+
+    func testBudgetsReachEveryPath() async throws {
+        // The tool's own timeout follows the type's budget (and a resumed run's), and survives absurd numbers.
+        var limits = SubAgentSettings()
+        limits.maxSeconds = 900
+        SubAgent.remember(limits, types: AgentCatalog.builtIns + [AgentDefinition(name: "slow", description: "", prompt: "", budget: AgentBudget(seconds: 600))])
+        XCTAssertEqual(TaskTool().timeout(["type": "slow"]), 780)
+        XCTAssertEqual(TaskTool().timeout([:]), Double(limits.seconds) + 180)
+        XCTAssertEqual(TaskTool().timeout(["max_seconds": 1e300]), Double(limits.seconds) + 180, "a number past Int: not given (no trap)")
+        SubAgent.knownSeconds.mutate { $0["run:a99"] = 500 }
+        XCTAssertEqual(AgentsTool().timeout(["action": "resume", "id": "A99"]), 680)
+        SubAgent.remember(SubAgentSettings(), types: AgentCatalog.builtIns)
+        let huge = try await task(["description": "H", "prompt": "x", "max_steps": 1e300, "max_tokens": -1e300, "max_seconds": .number(.nan)], ctx(ScriptedLLM([step(.text("ok"))])))
+        XCTAssertFalse(huge.isError, huge.text)
+        XCTAssertTrue(JSONSchemaCheck.errors(["a": [1]], ["properties": ["a": ["type": "array", "minItems": 1e300]]]).isEmpty, "an absurd limit is ignored, not a trap")
+        // The report call is capped, the schema repair more so.
+        var host = FakeHost(folder: dir)
+        host.output = 32_000
+        let llm = ScriptedLLM([step(.tools([("ls", ["path": "."])])), step(.text("not json")), step(.text("{}"))])
+        _ = try await task(["description": "C", "prompt": "x", "max_steps": 1, "output_schema": ["type": "array"]], ctx(llm, host: host))
+        XCTAssertEqual(llm.requests.map(\.maxTokens), [32_000, 8192, 4096])
+        // A nested agent's tokens count against its parent's budget.
+        let parentLLM = ScriptedLLM([step(.hang)])
+        let pc = ctx(parentLLM)
+        _ = try await task(["description": "Parent", "prompt": "x", "background": true, "max_tokens": 50_000], pc)
+        let found_parent = await run(pc)
+        let parent = try XCTUnwrap(found_parent)
+        var child = ctx(ScriptedLLM([step(.text("child"), usage: Usage(input: 900, output: 300))]))
+        child = ToolContext(conversationID: pc.conversationID, workspace: dir, services: services, interactions: interactions, toolCallID: "child-\(UUID())",
+                            client: child.client, model: "m", progress: { _ in })
+        child.agentHost = FakeHost(folder: dir)
+        child.agentDepth = 1
+        child.agentCeiling = AgentCeiling(handle: await parent.handle, readOnly: false, tools: Set(AgentCatalog.research))
+        _ = try await task(["description": "Child", "prompt": "x"], child)
+        let charged = await parent.usage.total
+        XCTAssertEqual(charged, 1200, "the child's tokens are the parent's")
+        await parent.stop()
+        // A background run far past its time budget is stopped, whatever its stream does.
+        SubAgent.backstop = 0.3
+        defer { SubAgent.backstop = 300 }
+        let bc = ctx(ScriptedLLM([step(.hang)]))
+        _ = try await task(["description": "Late", "prompt": "x", "background": true, "max_seconds": 1], bc)
+        let found_late = await run(bc)
+        let late = try XCTUnwrap(found_late)
+        await waitUntil(5) { !late.isRunning }
+        let lateState = await late.state
+        XCTAssertEqual(lateState, .stopped)
+    }
+
+    func testPackageInstallsAreRecognised() {
+        let bash = BashTool()
+        for cmd in ["pip install x", "pip3.12 install x", "uv add x", "uv pip install x", "uv tool install ruff", "poetry add x", "cargo install x",
+                    "gem install x", "go install x@latest", "npm i -g x", "npm install --location=global x", "pnpm add -g x", "yarn global add x",
+                    "bun add --global x", "python3 -m pip install x", "brew install x", "npm -g install x"] {
+            XCTAssertNotNil(PermissionExtension.packageInstall(tool: bash, input: ["command": .string(cmd)]), cmd)
+        }
+        for cmd in ["pip list", "npm install", "npm ci", "cargo build", "go build ./...", "uv run pytest", "poetry run x", "yarn add x"] {
+            XCTAssertNil(PermissionExtension.packageInstall(tool: bash, input: ["command": .string(cmd)]), cmd)
+        }
     }
 
     // MARK: Memory bounds
@@ -433,8 +653,31 @@ final class SubAgentTests: XCTestCase {
             old.blobs = blobs
             old.upsert(shot)
             XCTAssertNotNil(old.messages.last?.blocks[0].blob); XCTAssertNil(old.messages.last?.blocks[0].data, "the screenshot is on disk")
+            // Parked as it was: a long tool result whole, the image by reference — a resumed run continues undegraded.
+            old.upsert(ChatMessage(role: .user, blocks: [.toolResult(id: "long", name: "read", content: String(repeating: "x", count: 10_000))]))
+            let before = old.messages
+            SubAgentCenter.shared.tidy(keep: 0)
+            XCTAssertNotNil(old.parked)
+            old.unpark()
+            XCTAssertEqual(old.messages.map(\.id), before.map(\.id))
+            XCTAssertEqual(old.messages.last?.blocks[0].text?.count, 10_000, "not cut to 3000")
+            XCTAssertNotNil(old.messages.first { $0.blocks.first?.blob != nil }, "the image by reference")
+            // The governor's shed parks every finished transcript but the one on screen.
+            SubAgentCenter.shared.selectedID = all[1].id
+            all.forEach { $0.unpark() }
+            NotificationCenter.default.post(name: MemoryGovernor.shedNotification, object: false)
+            XCTAssertNil(all[1].parked, "the one on screen stays")
+            XCTAssertTrue(all.filter { $0.id != all[1].id }.allSatisfy { $0.parked != nil })
+            SubAgentCenter.shared.selectedID = nil
         }
         _ = img.spill(into: services.conversations.blobs)
         XCTAssertEqual(SubAgent.saved([img], state: .done)["messages"]?[0]?["blocks"]?[0]?["blob"], nil, "saved transcripts carry no references")
+        // A crashed launch's parked folder is swept; a live one (this launch's) isn't.
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("parks-\(UUID().uuidString.prefix(6))")
+        let dead = tmp.appendingPathComponent(SubAgentCenter.parkPrefix + "999999"), mine = tmp.appendingPathComponent(SubAgentCenter.parkPrefix + "\(ProcessInfo.processInfo.processIdentifier)")
+        for d in [dead, mine] { try FileManager.default.createDirectory(at: d, withIntermediateDirectories: true) }
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        SubAgentCenter.sweepParks(in: tmp)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dead.path)); XCTAssertTrue(FileManager.default.fileExists(atPath: mine.path))
     }
 }

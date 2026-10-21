@@ -107,8 +107,22 @@ final class PermissionExtension: AgentExtension {
     nonisolated static func packageInstall(tool: Tool, input: JSON) -> String? {
         guard tool.name == "bash" || tool.name == "run_code" else { return nil }
         let text = (input["command"]?.string ?? "") + "\n" + (input["code"]?.string ?? "")
-        let pattern = #"\b(pip3?|pipx|uv\s+pip|uv\s+add|conda|mamba|micromamba|poetry\s+add|easy_install)\s+install\b|\bpython3?\s+-m\s+(pip|ensurepip)\b|\bensurepip\b|\bbrew\s+install\b|\bnpm\s+(i|install)\s+(-g|--global)\b"#
-        guard let r = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { return nil }
-        return String(text[r])
+        for pattern in installPatterns {
+            if let r = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) { return String(text[r]) }
+        }
+        return nil
     }
+
+    /// Package managers' install commands (one pattern each, so none can swallow another): pip/pip3/pip3.12, pipx,
+    /// conda and friends, gem, cargo, go, brew, port, uv (pip install, add, tool install), poetry/pipenv, `python -m pip`,
+    /// and global JavaScript installs (npm -g/--global/--location=global, pnpm/yarn/bun -g, yarn global add).
+    nonisolated static let installPatterns = [
+        #"\b(pip(3(\.\d+)?)?|pipx|conda|mamba|micromamba|easy_install|gem|cargo|go|brew|port)\s+install\b"#,
+        #"\buv\s+(pip\s+install|add|tool\s+install)\b"#,
+        #"\b(poetry\s+add|pipenv\s+install)\b"#,
+        #"\bpython(3(\.\d+)?)?\s+-m\s+(pip|ensurepip)\b|\bensurepip\b"#,
+        #"\b(npm|pnpm|bun)\s+(i|install|add)\b[^\n;&|]*?\s(-g|--global|--location[= ]global)\b"#,
+        #"\b(npm|pnpm|bun)\s+(-g|--global|--location[= ]global)\s+(i|install|add)\b"#,
+        #"\byarn\s+global\s+add\b"#,
+    ]
 }

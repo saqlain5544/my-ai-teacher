@@ -87,11 +87,10 @@ struct TaskTool: Tool {
         ], required: ["description", "prompt"])
     }
     func summary(_ input: JSON) -> String { input["description"]?.string ?? "sub-agent" }
-    /// The budget's own clock ends a run (then the report step); this backstop is the asked-for (or default) time plus the report.
+    /// The budget's own clock ends a run (then the report step); this backstop is the run's time budget (the call's, the
+    /// type's or the default) plus the report.
     func timeout(_ input: JSON) -> Double? {
-        if input["background"]?.bool == true || input["unbounded"]?.bool == true { return 30 }
-        let limits = SubAgent.lastLimits.get()
-        return Double(min(input["max_seconds"]?.int ?? limits.seconds, limits.maxSeconds)) + 180
+        input["background"]?.bool == true || input["unbounded"]?.bool == true ? 30 : SubAgent.callSeconds(input)
     }
 
     /// The spec a lesson sends: the provider's choosable models under `model` (fetched, never hard-coded), other
@@ -128,7 +127,8 @@ struct TaskTool: Tool {
             input[k]?.array?.compactMap(\.string) ?? word(k)?.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
         }
         var q = TaskRequest(brief: prompt, title: input["description"]?.string ?? input["title"]?.string ?? input["role"]?.string ?? "Sub-agent")
-        q.type = word("type") ?? word("subagent_type") ?? word("agent_type")   // Claude Code's name for it
+        // Claude Code calls it subagent_type; MiniMax-M3 sent {"agent": "reviewer", "brief": …} live.
+        q.type = word("type") ?? word("subagent_type") ?? word("agent_type") ?? word("agent")
         q.provider = word("provider")
         q.model = word("model")
         q.effort = word("effort").flatMap { e in ThinkingLevel(rawValue: e.lowercased()) ?? ["none": .off, "minimal": .low, "xhigh": .high, "max": .high][e.lowercased()] }
@@ -169,7 +169,7 @@ struct AgentsTool: Tool {
     }
     func summary(_ input: JSON) -> String { (input["action"]?.string ?? "") + (input["id"]?.string.map { " " + $0 } ?? "") }
     func timeout(_ input: JSON) -> Double? {
-        input["action"]?.string == "resume" && input["background"]?.bool != true ? Double(SubAgent.lastLimits.get().seconds) + 180 : 140
+        input["action"]?.string == "resume" && input["background"]?.bool != true ? SubAgent.callSeconds(["resume": input["id"] ?? .null]) : 140
     }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {

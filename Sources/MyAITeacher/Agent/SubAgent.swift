@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Live view of a sub-agent's transcript (the right-hand panel's web view).
 @MainActor
@@ -139,6 +140,7 @@ final class SubAgentRun: ObservableObject, Identifiable {
         usage = Usage(); steps = 0; cost = cfg.cost(Usage()); budgetStart = Date(); briefStart = messages.count
         briefs += 1
         childID = "agent:\(handle)" + (briefs > 1 ? ".\(briefs)" : "")
+        SubAgent.knownSeconds.mutate { $0["run:" + handle.lowercased()] = cfg.budget.seconds }   // for a resume's tool timeout
         setStatus("Thinking…")
     }
 
@@ -148,9 +150,10 @@ final class SubAgentRun: ObservableObject, Identifiable {
         if attempt > 0 { restarts += 1; setStatus("Resuming after a provider error (restart \(restarts))…") }
         return live
     }
-    fileprivate func attach(_ ref: ProcRef<SubAgentNote>) {
+    /// The new incarnation's mailbox: notes its predecessor never read come first, then those sent in between.
+    fileprivate func attach(_ ref: ProcRef<SubAgentNote>, unread: [SubAgentNote]) {
         mailbox = ref
-        for n in backlog { ref.send(n) }
+        for n in unread + backlog { ref.send(n) }
         backlog = []
     }
     /// No incarnation may write any more (the run is being settled from outside).
@@ -193,8 +196,15 @@ final class SubAgentRun: ObservableObject, Identifiable {
 
     fileprivate func record(_ u: Usage) {
         steps += 1
+        charge(u, cost: config?.cost(u))
+    }
+
+    /// Tokens and cost count against this brief's budget — its own calls', and those of the sub-agents it started
+    /// (a parent can't spend past its budget through its children), up the chain.
+    private func charge(_ u: Usage, cost c: Double?) {
         usage = usage + u; totalUsage = totalUsage + u
-        cost = config?.cost(usage)
+        cost = c.flatMap { c in cost.map { $0 + c } }
+        if let parent, let p = SubAgentCenter.shared.run(parent), p.isRunning { p.charge(u, cost: c) }
     }
 
     /// The budget limit this brief has reached, if any.
@@ -239,8 +249,10 @@ final class SubAgentRun: ObservableObject, Identifiable {
     /// the panel shows the run or a resume needs its context.
     fileprivate func park(in dir: URL) {
         guard !isRunning, parked == nil, !messages.isEmpty else { return }
+        // The whole transcript, as it was (images are already blob references): a resumed run continues undegraded.
         let url = dir.appendingPathComponent(id.replacingOccurrences(of: "/", with: "_") + ".json")
-        guard (try? SubAgent.saved(messages, state: state).data.write(to: url, options: .atomic)) != nil else { return }
+        let enc = JSONEncoder(); enc.dateEncodingStrategy = .secondsSince1970
+        guard let data = try? enc.encode(messages), (try? data.write(to: url, options: .atomic)) != nil else { return }
         parkedToolCalls = toolCalls
         parked = url
         messages = []
@@ -248,7 +260,8 @@ final class SubAgentRun: ObservableObject, Identifiable {
     func unpark() {
         guard let url = parked else { return }
         parked = nil
-        messages = (try? Data(contentsOf: url)).flatMap(JSON.parse).map { SubAgentCenter.decode($0["messages"]) } ?? []
+        let dec = JSONDecoder(); dec.dateDecodingStrategy = .secondsSince1970
+        messages = (try? Data(contentsOf: url)).flatMap { try? dec.decode([ChatMessage].self, from: $0) } ?? []
         try? FileManager.default.removeItem(at: url)
     }
 
@@ -296,12 +309,18 @@ final class SubAgentRun: ObservableObject, Identifiable {
 
 /// One incarnation's hold on its run. Writes from an incarnation that was replaced (a hung one the watchdog gave up on,
 /// still unwinding) are dropped, so only the live one shapes the transcript, the budget and the report.
+/// An incarnation the watchdog ended is replaced at once (its process crashed, the supervisor restarts it), so from
+/// that moment it writes nothing — not even "stopped" — and its restart takes over.
 struct RunWriter: Sendable {
     let run: SubAgentRun
     let token: Int
+    let control: ProcControl
     @discardableResult func callAsFunction<T: Sendable>(_ f: @escaping @MainActor @Sendable (SubAgentRun) -> T) async -> T? {
-        await MainActor.run { run.live == token ? f(run) : nil }
+        guard !replaced else { return nil }
+        return await MainActor.run { run.live == token && !replaced ? f(run) : nil }
     }
+    /// Ended by a crash (the watchdog, a linked process): a new incarnation follows.
+    var replaced: Bool { control.stopReason?.isCrash == true }
 }
 
 /// All sub-agent runs of this app session (newest last), and which one the panel shows.
@@ -320,15 +339,32 @@ final class SubAgentCenter: ObservableObject {
     nonisolated static let resident = 4
     /// This launch's parked transcripts (temporary: a run outlives neither the app nor a reboot).
     let parkDir: URL = {
-        let d = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-subagents-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        let d = FileManager.default.temporaryDirectory.appendingPathComponent(SubAgentCenter.parkPrefix + "\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }()
+    nonisolated static let parkPrefix = "myaiteacher-subagents-"
 
     private init() {
         // Short of memory: every finished transcript but the one on screen goes to disk.
         NotificationCenter.default.addObserver(forName: MemoryGovernor.shedNotification, object: nil, queue: .main) { _ in
             MainActor.assumeIsolated { SubAgentCenter.shared.tidy(keep: 0) }
+        }
+        // Parked transcripts live as long as this launch: gone at quit, and a crashed launch's are swept at the next.
+        let dir = parkDir
+        NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { _ in
+            try? FileManager.default.removeItem(at: dir)
+        }
+        Self.sweepParks(in: FileManager.default.temporaryDirectory)
+        Task { await Runtime.job("worktrees.prune", restart: .temporary) { _ in await Worktree.pruneStale() } }
+    }
+
+    /// Removes parked-transcript folders of launches that are no longer running.
+    nonisolated static func sweepParks(in tmp: URL) {
+        let mine = ProcessInfo.processInfo.processIdentifier
+        for name in (try? FileManager.default.contentsOfDirectory(atPath: tmp.path)) ?? [] where name.hasPrefix(parkPrefix) {
+            guard let pid = Int32(name.dropFirst(parkPrefix.count)), pid != mine, kill(pid, 0) != 0, errno == ESRCH else { continue }
+            try? FileManager.default.removeItem(at: tmp.appendingPathComponent(name))
         }
     }
 
@@ -387,8 +423,27 @@ enum SubAgent {
     /// The longest a run may go without a stream event or a tool finishing (tools beat while they run, within their own
     /// timeouts): a provider that only sends keep-alives is a hang the watchdog ends, and the run resumes.
     nonisolated(unsafe) static var watchdog: TimeInterval = 300
+    /// A background run past its time budget plus this is stopped, however it is doing (a slow stream that keeps
+    /// beating never reaches the next budget check); its report is what it found.
+    nonisolated(unsafe) static var backstop: TimeInterval = 300
     /// Settings → Agents as last read (TaskTool.timeout runs before the tool and has no host to ask).
     static let lastLimits = Locked(SubAgentSettings())
+    /// Time budgets by "type:<name>" (every type the lesson's spec lists) and "run:<handle>", for the same reason.
+    static let knownSeconds = Locked<[String: Int?]>([:])
+    static func remember(_ limits: SubAgentSettings, types: [AgentDefinition]) {
+        lastLimits.mutate { $0 = limits }
+        knownSeconds.mutate { s in for t in types { s["type:" + t.name] = t.budget.seconds } }
+    }
+    /// The longest this call may take before its report: its own `max_seconds`, else (resuming) the run's, else its
+    /// type's, else the default — within the limit — plus time for the report.
+    static func callSeconds(_ input: JSON) -> Double {
+        let limits = lastLimits.get(), known = knownSeconds.get()
+        let type = AgentDefinition.normalized(input["type"]?.string ?? input["subagent_type"]?.string ?? "explore")
+        let forType: Int? = known["type:" + type] ?? nil
+        let forRun: Int? = input["resume"]?.string.flatMap { known["run:" + $0.lowercased()] ?? nil }
+        let asked = input["max_seconds"]?.int ?? forRun ?? forType ?? limits.seconds
+        return Double(min(max(1, asked), limits.maxSeconds)) + 180
+    }
 
     /// Starts (or, with `resume`, continues) a sub-agent. Blocking: returns its report. Background: returns at once; the
     /// report reaches the lesson when it finishes (SubAgentCenter.onReport), unless the teacher waits for it first.
@@ -404,14 +459,14 @@ enum SubAgent {
             }
             if await r.isRunning { return .error("\(r.handle) is still running: send it a note (`agents` send), wait for it or stop it first.") }
             resumed = r
-        } else {
-            guard ctx.agentDepth < limits.maxDepth else {
-                return .error("Sub-agents nest at most \(limits.maxDepth) deep (Settings → Agents): do this part yourself.")
-            }
-            let running = await MainActor.run { center.runs(in: ctx.conversationID).filter(\.isRunning).count }   // run state lives on the main actor
-            if running >= limits.maxConcurrent {
-                return .error("\(running) sub-agents are already running (the limit is \(limits.maxConcurrent)); wait for one or stop one first.")
-            }
+        }
+        // A resume is a new run of the agent: the same limits apply.
+        guard ctx.agentDepth < limits.maxDepth else {
+            return .error("Sub-agents nest at most \(limits.maxDepth) deep (Settings → Agents): do this part yourself.")
+        }
+        let running = await MainActor.run { center.runs(in: ctx.conversationID).filter(\.isRunning).count }   // run state lives on the main actor
+        if running >= limits.maxConcurrent {
+            return .error("\(running) sub-agents are already running (the limit is \(limits.maxConcurrent)); wait for one or stop one first.")
         }
         await resumed?.unpark()   // its context comes back from disk if it was parked
         let previous = await resumed?.config
@@ -466,7 +521,13 @@ enum SubAgent {
         var notes: [String] = []
         let types = AgentCatalog.all(app: limits.definitions, folder: host.folder)
         let typeName = q.type ?? previous?.type.name ?? "explore"
-        guard let def = AgentCatalog.find(typeName, in: types) else {
+        // A type named loosely ("general-purpose", Claude Code's name) resolves like a model when one clearly fits.
+        var named = AgentCatalog.find(typeName, in: types)
+        if named == nil, case .guess(let d) = pick(typeName, types.map { ($0, [$0.description, $0.name]) }) {
+            notes.append("Using type \(d.name) for “\(typeName)”.")
+            named = d
+        }
+        guard let def = named else {
             throw ToolError("Unknown agent type `\(typeName)`. Types: " + types.map { "\($0.name) (\($0.description))" }.joined(separator: "; ") + ".")
         }
 
@@ -510,6 +571,12 @@ enum SubAgent {
         else if let c = await host.client(pid) { client = c }
         else { throw ToolError("No client for provider `\(pid)`.") }
         let info = await host.modelInfo(pid, model)
+        // A free lesson never delegates to a model that may cost money, whatever the lists say (a list that hasn't loaded
+        // yet is empty, and an empty list accepts anything).
+        if host.lessonFree, !(pid == caller && model == ctx.model), info?.free != true, !model.hasSuffix(":free") {
+            throw ToolError("This lesson runs on a free model, so its sub-agents use free models only, and `\(model)` isn't known to be free. " +
+                            "Pick a `:free` model or omit `model`.")
+        }
 
         // Effort, mapped per provider by the clients exactly as for the lesson; a model that doesn't reason gets off.
         var effort = q.effort ?? (keepPrevious ? previous?.effort : nil) ?? def.effort ?? limits.effort
@@ -592,11 +659,12 @@ enum SubAgent {
         let childID = await run.childID
         let spec = ChildSpec(id: childID, restart: .transient, intensity: recovery.limit, backoff: recovery.backoff, shutdownGrace: 3, start: { attempt in
             let token = await run.incarnate(attempt: attempt)
+            let unread = await run.mailbox?.mailbox.remaining() ?? []   // notes the crashed incarnation never read
             let ref = Proc.spawn(childID, of: SubAgentNote.self, watchdog: watchdog) { proc in
-                try await loop(RunWriter(run: run, token: token), cfg, client: client, brief: attempt == 0 ? brief : nil,
+                try await loop(RunWriter(run: run, token: token, control: proc.control), cfg, client: client, brief: attempt == 0 ? brief : nil,
                                resume: resume || attempt > 0, ctx: ctx, host: host, proc: proc)
             }
-            await run.attach(ref)
+            await run.attach(ref, unread: unread)
             return ref.proc
         }, onExit: { reason in
             Task { @MainActor in if run.isRunning, run.childID == childID { await settle(run, cfg, reason: reason) } }
@@ -604,6 +672,16 @@ enum SubAgent {
         guard let agents = await Runtime.supervisor("agents"), await agents.startChild(spec) else {
             await settle(run, cfg, reason: .crashed("the runtime couldn't start it"))
             return
+        }
+        // The hard backstop: a run still going well past its time budget is stopped (a stream that keeps beating, a step
+        // that never returns to the budget check). Unbounded runs have none; they are stopped by hand.
+        if let seconds = cfg.budget.seconds {
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: UInt64((Double(seconds) + backstop) * 1e9))
+                guard run.isRunning, run.childID == childID else { return }
+                AppLog.write("sub-agent \(run.handle): still running \(Int(backstop)) s past its \(seconds) s budget — stopping it")
+                run.stop()
+            }
         }
     }
 
@@ -630,7 +708,7 @@ enum SubAgent {
         var failure: String?
 
         while true {
-            if Task.isCancelled { stopped = true; break }
+            if Task.isCancelled { try handOver(w); stopped = true; break }
             // Notes from the teacher or the learner, read before the next call.
             let notes = await proc.drain()
             if !notes.isEmpty, let last = messages.indices.last {
@@ -653,9 +731,11 @@ enum SubAgent {
             await w { $0.setStatus(now) }
             var (assistant, metrics) = (ChatMessage(role: .assistant, blocks: [], model: cfg.model), StepMetrics(provider: cfg.providerID, model: cfg.model, startedAt: Date()))
             do {
-                try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc)
+                // The report call (past the budget) needs only a report's room.
+                try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc,
+                               maxTokens: wrapUp ? min(cfg.maxOutput, 8192) : cfg.maxOutput)
             } catch {
-                if Task.isCancelled { stopped = true }
+                if Task.isCancelled { try handOver(w); stopped = true }
                 else if ChatSession.isTransient(error) {
                     // A crash: the supervisor restarts the run after a backoff; the next incarnation resumes from the transcript.
                     assistant.error = "\(error.localizedDescription) — restarting"
@@ -665,7 +745,7 @@ enum SubAgent {
                     throw error
                 } else { failure = error.localizedDescription; assistant.error = failure }
             }
-            if Task.isCancelled { stopped = true }
+            if Task.isCancelled { try handOver(w); stopped = true }
             assistant.metrics = metrics
             assistant.usage = metrics.usage
             turn.steps += 1
@@ -704,8 +784,9 @@ enum SubAgent {
                 messages.append(fix)
                 await w { $0.upsert(fix); $0.setStatus("Fixing the report's format…") }
                 var (assistant, metrics) = (ChatMessage(role: .assistant, blocks: [], model: cfg.model), StepMetrics(provider: cfg.providerID, model: cfg.model, startedAt: Date()))
-                do { try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc) }
-                catch { assistant.error = error.localizedDescription }
+                do { try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc,
+                                    maxTokens: min(cfg.maxOutput, 4096)) }
+                catch { try handOver(w); assistant.error = error.localizedDescription }
                 assistant.metrics = metrics
                 turn.steps += 1
                 turn.usage = turn.usage + metrics.usage
@@ -725,18 +806,26 @@ enum SubAgent {
             await w { $0.upsert(m) }
         }
         let state: SubAgentRun.State = stopped ? .stopped : failure != nil ? .failed : .done
+        try handOver(w)   // never finish (or remove the worktree of) a run that a restart is taking over
         let note = await cfg.worktree?.finish()
         let (s, e, f) = (structured, schemaErrors, failure)
         await w { $0.complete(report($0, cfg, state: state, failure: f, structured: s, schemaErrors: e, note: note), state) }
     }
 
+    /// An incarnation the watchdog ended stops here, writing nothing: the supervisor restarts the run, and the next
+    /// incarnation carries on (a "stopped" report from this one would end a run that is about to resume).
+    private static func handOver(_ w: RunWriter) throws {
+        if w.replaced { throw CancellationError() }
+    }
+
     /// One model call, streamed into `assistant` (and the panel). Every event is a heartbeat for the watchdog.
     private static func step(_ assistant: inout ChatMessage, _ metrics: inout StepMetrics, _ w: RunWriter, _ cfg: SubAgentConfig, client: LLMClient,
-                             system: String, messages: [ChatMessage], tools: [Tool], ctx: ToolContext, proc: ProcContext<SubAgentNote>) async throws {
+                             system: String, messages: [ChatMessage], tools: [Tool], ctx: ToolContext, proc: ProcContext<SubAgentNote>,
+                             maxTokens: Int) async throws {
         let first = assistant
         await w { $0.upsert(first) }
         defer { metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count }
-        let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: cfg.maxOutput, thinking: cfg.effort)
+        let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort)
         for try await ev in client.stream(request) {
             proc.heartbeat()
             if metrics.timeToFirstToken == nil { metrics.timeToFirstToken = Date().timeIntervalSince(metrics.startedAt) }
@@ -793,7 +882,10 @@ enum SubAgent {
             sub.shellID = "\(ctx.conversationID)/\(handle)"
             let block: Block
             do {
-                let out = try await tool.runBounded(input, sub)
+                // A read-only agent's command never reaches a shell: its programs run directly (ReadOnlyShell).
+                let out = cfg.scope.readOnly && name == "bash"
+                    ? await ReadOnlyShell.run(input["command"]?.string ?? "", cwd: cfg.scope.root, timeout: Double(min(600, max(1, input["timeout"]?.int ?? 120))))
+                    : try await tool.runBounded(input, sub)
                 block = .toolResult(id: callID, name: name, content: truncateMiddle(out.text, max: 40_000), isError: out.isError, images: out.images,
                                     meta: with(out.meta, ["ms": .number(Date().timeIntervalSince(t0) * 1000)]))
             } catch {

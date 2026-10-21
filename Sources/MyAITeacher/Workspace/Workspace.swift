@@ -83,16 +83,31 @@ final class Workspace: @unchecked Sendable, Identifiable {
         memory = MemoryStore(db: db, scope: .folder)
     }
 
-    func contains(_ u: URL) -> Bool {
-        let p = u.standardizedFileURL.resolvingSymlinksInPath().path
-        let root = url.resolvingSymlinksInPath().path
-        return p == root || p.hasPrefix(root + "/")
+    func contains(_ u: URL) -> Bool { u.isInside(url) }
+    func isStatePath(_ u: URL) -> Bool { u.isInside(stateDir) }
+}
+
+extension URL {
+    /// The real path, also for a file that doesn't exist yet: the deepest existing ancestor through realpath (so a
+    /// symlinked directory is followed), then the rest. Lower-cased, because APFS is case-insensitive by default and
+    /// `.TEACHER/x` is `.teacher/x` there (on a case-sensitive volume this errs towards "inside").
+    var canonicalPath: String {
+        var head = standardizedFileURL, rest: [String] = []
+        var st = stat()
+        while lstat(head.path, &st) != 0, head.path != "/" {   // lstat: a dangling symlink exists (and doesn't resolve)
+            rest.insert(head.lastPathComponent, at: 0)
+            head.deleteLastPathComponent()
+        }
+        // A link that leads nowhere could be written through to anywhere: it is inside nothing.
+        guard var base = realpath(head.path, nil).map({ p in defer { free(p) }; return String(cString: p) }) else { return "\u{0}unresolved" }
+        for c in rest { base = (base as NSString).appendingPathComponent(c) }
+        return base.lowercased()
     }
 
-    func isStatePath(_ u: URL) -> Bool {
-        let p = u.standardizedFileURL.resolvingSymlinksInPath().path
-        let s = stateDir.resolvingSymlinksInPath().path
-        return p == s || p.hasPrefix(s + "/")
+    /// Whether this path is `base` or lies under it, after symlinks and case.
+    func isInside(_ base: URL) -> Bool {
+        let p = canonicalPath, b = base.canonicalPath
+        return p == b || p.hasPrefix(b.hasSuffix("/") ? b : b + "/")
     }
 }
 
