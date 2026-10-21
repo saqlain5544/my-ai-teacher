@@ -169,6 +169,26 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(store.seq(ofMessage: msgs[742].id), 742)
     }
 
+    /// Lesson search ranks only the newest matches with a rowid range; `rowid IN (subquery)` ran one full-text lookup per
+    /// rowid (64 s on 200k messages). A common word over many messages must stay fast, and the newest lesson wins.
+    func testLessonSearchStaysFastOnCommonWords() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("fts-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Services(global: GlobalStore(), workspace: try Workspace(url: dir)).conversations
+        try store.db.execute("BEGIN")
+        for i in 0..<20_000 {
+            store.upsert(ChatMessage(role: .user, blocks: [.text("momentum and energy in collisions, part \(i)" + (i == 77 ? " zebrafish" : ""))]),
+                         conversationID: "L\(i / 2_000)", seq: i % 2_000)
+        }
+        try store.db.execute("COMMIT")
+        let t = Date()
+        let hits = store.search("momentum energy")
+        XCTAssertLessThan(Date().timeIntervalSince(t), 1.0)
+        XCTAssertEqual(hits.first?.id, "L9", "newest matches are the ones ranked")
+        XCTAssertEqual(store.search("zebrafish").map(\.id), ["L0"], "a rare word is found anywhere")
+    }
+
     func testGradingReadsNumbersAndKeepsMeaningfulPunctuation() {
         let cases: [(String, Double)] = [("12 seconds", 12), ("12 m/s", 12), ("1 1/2", 1.5), ("3/4", 0.75), ("3,5", 3.5), ("1,234", 1234),
                                          ("5%", 5), ("10^3", 1000), ("2.5e3", 2500), ("−4", -4), ("about 9.81 m/s²", 9.81)]

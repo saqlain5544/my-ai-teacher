@@ -138,11 +138,14 @@ final class ConversationStore: @unchecked Sendable {
     func search(_ q: String) -> [(id: String, snippet: String)] {
         let query = FTS.query(q)
         guard !query.isEmpty else { return [] }
+        // Rank only the 2,000 newest matches, so a common word over millions of rows stays fast. FTS5 yields matches in
+        // rowid order: find the 2,000th newest, then rank the range from it (a seek). `rowid IN (subquery)` instead ran one
+        // full-text lookup per rowid — 64 s on 200k messages.
+        let floor = (try? db.query("SELECT rowid AS r FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT 1 OFFSET 1999", query))?.first?.int("r") ?? 0
         let rows = (try? db.query("""
             SELECT conversation_id, snippet(messages_fts, 0, '', '', '…', 12) AS snip FROM messages_fts
-            WHERE messages_fts MATCH ? AND rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT 2000)
-            ORDER BY rank LIMIT 50
-            """, query, query)) ?? []   // rank only the 2,000 newest matches: a common word over millions of rows stays fast
+            WHERE messages_fts MATCH ? AND rowid >= ? ORDER BY rank LIMIT 50
+            """, query, floor)) ?? []
         var seen = Set<String>()
         return rows.compactMap { r in
             guard let id = r.string("conversation_id"), seen.insert(id).inserted else { return nil }
