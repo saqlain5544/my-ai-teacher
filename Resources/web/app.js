@@ -184,10 +184,12 @@
   const mermaidSvg = new Map(), mermaidSrc = new Map();
   let mermaidLoading = null, mermaidSeq = 0;
   function renderFence(tok, idx, tokens, env) {
-    const info = (tok.info || '').trim(), lang = info.split(/\s+/)[0].toLowerCase();
+    // The language is the first word, without punctuation models add: ```visual: ```{chart} ```Mermaid, ```python3.
+    const info = (tok.info || '').trim(), raw = info.split(/\s+/)[0];
+    const lang = raw.replace(/^[{.(\[]+|[}:;,.)\]]+$/g, '').toLowerCase();
     let code = tok.content;
     // Models sometimes put a component's JSON on the fence line itself (```steps [{"title":…}]): that is its content.
-    const rest = info.slice(lang.length).trim();
+    const rest = info.slice(raw.length).trim();
     if (rest && /^[\[{]/.test(rest) && R.fences[lang]) code = rest + '\n' + code;
     else if (rest && !code.trim() && !R.fences[lang]) code = rest;   // ```python print(1)```: the code is on the fence line
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;

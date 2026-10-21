@@ -105,7 +105,7 @@ def run_turn(text, scenario, timeout=240):
 def turn_messages(r, start):
     return r["messages"][start:]
 
-def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forbid_tools=(), log_from=0, allow_empty=False):
+def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forbid_tools=(), log_from=0, allow_empty=False, require=()):
     problems, notes = [], []
     msgs = turn_messages(r, start)
     used = [b["name"] for m in msgs for b in m["blocks"] if b["kind"] == "toolUse"]
@@ -135,6 +135,8 @@ def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forb
     if not last_text.strip() and not allow_empty: problems.append("no final text from the teacher")
     for key in page:
         if not pg.get(key): notes.append("page has no " + key)
+    for key in require:
+        if not pg.get(key): problems.append("page has no " + key + " (the point of this scenario)")
     errs = [l for l in log_lines()[log_from:] if (" JS error" in l or "[error]" in l.lower() or " error:" in l.lower()) and "eval →" not in l]
     if errs: problems.append("log errors: %s" % [e[20:220] for e in errs[:4]])
     return problems, notes, used
@@ -197,7 +199,7 @@ SCENARIOS = [
          prompt="buggy.py should print 55 (the sum of 1..10) but doesn't. Fix it, run it to verify, and save how to run it to project memory.",
          after=lambda: (LAB / "buggy.py").read_text() + "\n#MEM " + ((LAB / ".teacher/code-memory.md").read_text() if (LAB / ".teacher/code-memory.md").exists() else "(none)")),
     dict(name="visual", quick=True, prompt="Show me an interactive ```visual: a slider from 1 to 10 that sets a circle's radius and shows its area. Keep it small.",
-         page=["visuals"]),
+         require=["visuals"]),
     dict(name="memory-save", quick=True, prompt="Please remember for future lessons: I learn best from worked examples with real-world analogies. Save that to memory.",
          expect=["memory"]),
     dict(name="memory-recall", quick=True, prompt="In one sentence: how do I like to learn?", followup_contains="analog"),
@@ -249,7 +251,7 @@ def main():
                     print("     PROBLEM: the prompt never reached the lesson (first message: %r)" % (texts[-1][:60] if texts else None))
             if sc.get("rewrites"):   # regenerate/edit replace history: check from the last learner message
                 start = max(i for i, m in enumerate(r["messages"]) if m["role"] == "user" and any(b["kind"] == "text" for b in m["blocks"]))
-            problems, notes, used = check(sc["name"], r, start, answered, sc.get("expect", ()), sc.get("any", ()), sc.get("page", ()), sc.get("forbid", ()), start_log, bool(sc.get("stop_after")))
+            problems, notes, used = check(sc["name"], r, start, answered, sc.get("expect", ()), sc.get("any", ()), sc.get("page", ()), sc.get("forbid", ()), start_log, bool(sc.get("stop_after")), sc.get("require", ()))
             if sc.get("stop_after") and r["running"]: problems.append("still running after stop")
             if sc.get("followup_contains"):
                 txt = (r["page"] or {}).get("lastText", "").lower()

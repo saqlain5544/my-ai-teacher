@@ -354,6 +354,14 @@
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');
   });
 
+  test('fence languages with punctuation still pick the component (```visual:, ```{chart}, ```Mermaid)', async () => {
+    const el = show('```visual: <!-- title: Slider -->\n<input id="r" type="range"><script>r.value = 5</script>\n```\n\n```{chart}\n{"type":"bar","series":[{"data":[1,2]}]}\n```\n\n```Mermaid\ngraph LR\n  A-->B\n```');
+    await until(() => $('.visual iframe', el), 'visual: runs');
+    ok($('.chart-block svg', el), '{chart} draws');
+    await until(() => $('.mermaid-block svg', el), 'Mermaid draws', 8000);
+    ok(!$('.code-block', el), 'nothing fell back to a code block');
+  });
+
   test('component JSON written on the fence line itself still renders', () => {
     const el = show('```steps [{"title":"Read the symbol"},{"title":"Count electrons"}]\n```\n\n```chart {"type":"bar","labels":["a"],"series":[{"data":[1]}]}\n```\n\n```python print(1)\n```');
     noErrors(el, 'fence-line payload');
