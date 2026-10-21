@@ -123,6 +123,34 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   web_search 30 s, web_fetch 40 s, bash/run_code their own limit + margin, sub-agent budget + report.
 * A model stream that goes silent for 120 s fails (providers send keep-alives while thinking).
 
+## Provider stream guard
+* Every client is wrapped in `GuardedClient` (Providers/StreamGuard.swift). When a host's tool-call parser fails, models
+  put their protocol in the text; the guard parses DeepSeek DSML/V3/V3.1, Qwen/Hermes/Qwen3-Coder/GLM `<tool_call>`,
+  MiniMax M2/M3, Kimi, Mistral, Llama `<|python_tag|>`, Nemotron `<TOOLCALL>`, Harmony and Gemma 4 into real tool calls
+  (values typed by the tool schema), drops end-of-turn tokens and garbled markers, turns a bare `</think>` into
+  reasoning, removes duplicate calls, and handles markers split across chunks. Tool arguments are coerced to the schema
+  before every tool runs (stringified arrays, numbers, booleans).
+* Thinking off is real: NIM gets the family's `chat_template_kwargs`; MiniMax gets `thinking: disabled` (or adaptive at
+  low effort for models that require it, learned from the 400); OpenRouter gets `reasoning: {enabled: false}`.
+
+## Code agent
+* Mode `agent` ("Code agent", ⇧⌘K): a software-engineer prompt, the whole coding toolset up front, and project memory
+  in `.teacher/code-memory.md` (plus CLAUDE.md / AGENTS.md) instead of the learner model; `project_memory` tool.
+
+## Learning model
+* Mastery fades since the last practice (never below 40%), with a half-life that grows with each correct recall.
+  `readyToLearn` = not solid, every prerequisite solid; `fading` = was solid, now slipping. Both go into the teacher's
+  memory block ("Study next") and Memory › Overview.
+* Guards: restated facts with changed numbers/negations supersede (old text in history); reflection only edits what it
+  was shown and archives instead of deleting; concepts fold only with the same words or a trailing qualifier;
+  prerequisites stay acyclic; the concept index updates incrementally.
+
+## Long lessons
+* A lesson loads as a window (from the compaction point or the last 400 messages); earlier messages page in on request.
+  Compaction folds ranges into a rolling summary (digest fallback if the model fails); requests still over budget
+  squeeze their largest outputs. SSE parsing is linear; lesson search ranks only the newest 2,000 matches.
+* Storage: measured, SQLite is not the bottleneck (the access patterns were), so no custom engine.
+
 ## Frozen pages
 * Visuals run model-written JavaScript in sandboxed frames that share the transcript's process, so an endless loop
   would freeze the lesson. `WebWatchdog` pings each transcript (and sub-agent) page every 2 s while its window is
