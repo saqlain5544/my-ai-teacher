@@ -112,7 +112,8 @@ final class ProcControl: @unchecked Sendable {
     private struct State {
         var work: Task<Void, Never>?, dog: Task<Void, Never>?, killer: Task<Void, Never>?
         var stopReason: ExitReason?
-        var ended = false
+        var ended = false, started = false
+        var startWaiters: [CheckedContinuation<Void, Never>] = []
         var lastBeat = Date()
     }
     private let state = Locked(State())
@@ -122,6 +123,24 @@ final class ProcControl: @unchecked Sendable {
     var silence: TimeInterval { Date().timeIntervalSince(state.get().lastBeat) }
     var stopReason: ExitReason? { state.get().stopReason }
     var hasEnded: Bool { state.get().ended }
+
+    /// The body has begun running (its task is scheduled and inside the body).
+    fileprivate func markStarted() { wake { $0.started = true } }
+    /// Returns once the body has begun, or the process ended before it could. A supervisor starts children one after
+    /// another this way, as OTP does: a later child never starts before the one it may depend on.
+    func started() async {
+        await withCheckedContinuation { (c: CheckedContinuation<Void, Never>) in
+            let now = state.mutate { s -> Bool in
+                if s.started || s.ended { return true }
+                s.startWaiters.append(c); return false
+            }
+            if now { c.resume() }
+        }
+    }
+    private func wake(_ change: (inout State) -> Void) {
+        let waiters = state.mutate { s -> [CheckedContinuation<Void, Never>] in change(&s); defer { s.startWaiters = [] }; return s.startWaiters }
+        waiters.forEach { $0.resume() }
+    }
 
     fileprivate func attach(work: Task<Void, Never>, dog: Task<Void, Never>?) {
         let late = state.mutate { s -> Bool in
@@ -163,6 +182,7 @@ final class ProcControl: @unchecked Sendable {
         }
         guard let tasks else { return }
         tasks.forEach { $0?.cancel() }
+        wake { _ in }   // ended before it started: nobody waits forever
         onEnd?(r)
     }
 }
@@ -203,6 +223,7 @@ actor Proc {
         let ctx = ProcContext(pid: proc.pid, name: name, mailbox: mailbox, control: control)
         let work = Task.detached {
             let reason: ExitReason
+            control.markStarted()
             do {
                 try await body(ctx)
                 reason = control.stopReason ?? .normal

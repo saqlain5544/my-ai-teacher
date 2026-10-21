@@ -72,8 +72,9 @@ final class RuntimeTests: XCTestCase {
     func testRestForOneRestartsTheChildrenStartedAfterIt() async {
         let log = Log()
         let crashB = Locked(true)
+        let starts = Log()   // the order the supervisor starts them in (what rest-for-one guarantees)
         let spec = { (id: String) in
-            ChildSpec(id: id, start: { n in Proc.spawn("rt.r41.\(id)", of: Never.self) { ctx in
+            ChildSpec(id: id, start: { n in starts.add("\(id)\(n)"); return Proc.spawn("rt.r41.\(id)", of: Never.self) { ctx in
                 log.add("\(id)\(n)")
                 if id == "b", crashB.mutate({ c in defer { c = false }; return c }) { try await Task.sleep(nanoseconds: 50_000_000); throw Boom() }
                 _ = await ctx.receive()
@@ -85,8 +86,7 @@ final class RuntimeTests: XCTestCase {
         await eventually(2, "b and c restarted") { log.all.contains("c1") }
         XCTAssertFalse(log.all.contains("a1"), "a started before b: untouched")
         XCTAssertTrue(log.all.contains("c stopped"), "c was stopped before b restarted")
-        let order = log.all.filter { ["b1", "c1"].contains($0) }
-        XCTAssertEqual(order, ["b1", "c1"], "restarted in start order")
+        XCTAssertEqual(starts.all.filter { ["b1", "c1"].contains($0) }, ["b1", "c1"], "restarted in start order")
         await sup.stop()
         XCTAssertEqual(log.count("a stopped"), 1)
     }

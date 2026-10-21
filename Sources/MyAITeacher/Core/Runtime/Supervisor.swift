@@ -137,6 +137,7 @@ actor Supervisor {
         await process.proc.link(proc)
         let sup = self
         await proc.monitor { pid, reason in Task { await sup.childExited(id, pid, reason) } }
+        await proc.control.started()   // in order: the next child starts once this one runs
     }
 
     private func childExited(_ id: String, _ pid: PID, _ reason: ExitReason) async {
