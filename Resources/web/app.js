@@ -297,6 +297,11 @@
 
   const mermaidSvg = new Cache(300, 4e6), mermaidSrc = new Cache(600, 2e6);
   let mermaidLoading = null, mermaidSeq = 0;
+  /** A component the reply ended inside of: what arrived, folded, instead of an error. */
+  function unfinished(lang, code) {
+    return '<details class="visual-source comp-unfinished"><summary>The ' + esc(lang) + ' stopped before it finished — show what arrived</summary>' +
+      renderCode(code, '', { streamingFence: true }) + '</details>';
+  }
   function renderFence(tok, idx, tokens, env) {
     // The language is the first word, without punctuation models add: ```visual: ```{chart} ```Mermaid, ```python3.
     const info = (tok.info || '').trim(), raw = info.split(/\s+/)[0];
@@ -310,17 +315,23 @@
     // A stray or mid-line fence leaves an empty block: show nothing rather than an empty code box.
     if (!code.trim() && !isLastOpen) return '';
     const custom = R.fences[lang];
-    if (custom) { const out = custom(code, ctx, { open: isLastOpen }); if (out != null) return out; }
+    // The reply ended inside this fence: a forgotten closing fence on complete content renders as usual, but content cut
+    // off mid-way (stopped, or the token limit) shows what arrived instead of a parse error.
+    const unclosed = !env.streaming && env.openFence && idx === env.lastFenceIdx;
+    if (custom) {
+      const out = custom(code, ctx, { open: isLastOpen });
+      if (out != null) return unclosed && /comp-error|diagram-error/.test(out) ? unfinished(lang, code) : out;
+    }
     if (lang === 'mermaid' || lang === 'mmd') {
       const key = 'm' + hash(code.trim() + (darkMQ.matches ? 'd' : 'l'));
       mermaidSrc.set(key, code);
       const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
       if (isLastOpen) return '<div class="mermaid-block" data-key="' + key + '-p"><div class="diagram-pending">Drawing diagram…</div></div>';
       const done = mermaidSvg.get(key);
-      if (done && done.error) return '<div class="mermaid-block" data-key="' + key + '">' + tools + '<div class="diagram-error">Diagram error: ' + esc(done.error) + '<pre>' + esc(code) + '</pre></div></div>';
+      if (done && done.error) return unclosed ? unfinished(lang, code) : '<div class="mermaid-block" data-key="' + key + '">' + tools + '<div class="diagram-error">Diagram error: ' + esc(done.error) + '<pre>' + esc(code) + '</pre></div></div>';
       // The SVG never passes through the HTML sanitizer (it strips Mermaid's <style> and <foreignObject> labels, leaving
       // blank boxes): this is a placeholder that processMermaid fills, from the cache at once or after drawing.
-      return '<div class="mermaid-block" data-key="' + key + '" data-pending="1">' + (done ? '' : '<div class="diagram-pending">Drawing diagram…</div>') + '</div>';
+      return '<div class="mermaid-block" data-key="' + key + '" data-pending="1"' + (unclosed ? ' data-unfinished="1"' : '') + '>' + (done ? '' : '<div class="diagram-pending">Drawing diagram…</div>') + '</div>';
     }
     if (lang === 'plot' || lang === 'graph' || lang === 'function-plot') {
       if (isLastOpen) return '<div class="plot-block" data-key="p-pending"><div class="diagram-pending">Plotting…</div></div>';
@@ -459,6 +470,7 @@
     const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
     // The same diagram twice needs distinct SVG ids (its styles are scoped by id).
     const svg = r.error ? '' : r.replace(/\bmmd(\d+)\b/g, 'mmd$1x' + (++fillSeq));
+    if (r.error && el.hasAttribute('data-unfinished')) { el.innerHTML = unfinished('mermaid', code); return; }
     el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + svg;
     if (!r.error) fitDiagram(el);
   }
@@ -489,7 +501,8 @@
   });
   function markdown(text, streaming) {
     const env = { streaming };
-    if (streaming) { const f = text.match(/^\s{0,3}(```|~~~)/gm); env.openFence = !!(f && f.length % 2 === 1); }
+    // An odd number of fence markers: the last fence is still open (streaming), or the reply ended inside it (stopped).
+    if (text.indexOf('```') >= 0 || text.indexOf('~~~') >= 0) { const f = text.match(/^\s{0,3}(```|~~~)/gm); env.openFence = !!(f && f.length % 2 === 1); }
     try {
       const tokens = md.parse(text, env);
       if (env.openFence) { for (let i = tokens.length - 1; i >= 0; i--) if (tokens[i].type === 'fence') { env.lastFenceIdx = i; break; } }

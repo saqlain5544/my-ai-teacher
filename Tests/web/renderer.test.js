@@ -471,6 +471,18 @@
     T.earlier(0); ok(!$('.earlier'), 'nothing earlier: no button');
   });
 
+  test('a reply stopped inside a component shows what arrived, not a parse error (live stop run)', async () => {
+    const el = show('Plan:\n\n```steps\n[{"title":"1. Counting","text":"Tally marks"},{"title":"2. Mesopotamia","text":"Babylonian tablets (~');
+    noErrors(el, 'stopped steps'); const d = $('.comp-unfinished', el);
+    ok(d && d.textContent.includes('stopped before it finished'), 'unfinished note');
+    ok(el.textContent.includes('Plan:'), 'the text before it renders');
+    const m = show('```mermaid\nflowchart TD\n  A --> B[half');
+    await until(() => { const b = $('.mermaid-block', m); return b && !b.hasAttribute('data-pending'); }, 'mermaid settles', 8000);
+    noErrors(m, 'stopped mermaid'); ok($('.comp-unfinished', m), 'mermaid too');
+    const c = show('```python\nprint(1');
+    ok($('.code-block', c) && !$('.comp-unfinished', c), 'plain code stays code');
+  });
+
   test('invalid component JSON shows an inline error, not a crash', () => {
     const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');
