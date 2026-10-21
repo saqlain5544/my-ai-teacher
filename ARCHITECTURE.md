@@ -213,7 +213,11 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   and the 5.5 models, `computer_20251124` for those documented with it); member calls map onto `computer` and replay
   with `toolset_name` only while the request declares the toolset. A failed action skips the rest of its batch.
   Requests carry only the latest two screenshots, except for Claude with replayed thinking: there history is never
-  edited (it would invalidate later thinking blocks) and the API clears old tool results (`clear_tool_uses_20250919`).
+  edited (it would invalidate later thinking blocks) and the API clears old screenshots (`clear_tool_uses_20250919`
+  once one is in the history, every other tool in `exclude_tools`). Microcompaction and the lesson summary still change
+  the history once, at a boundary: for the models that check thinking against it (Fable 5.1, Opus/Sonnet/Haiku 5.5)
+  requests with thinking on send `block_binding.prefix_mismatch_behavior: "drop_block"`, so those blocks are dropped
+  instead of every later request failing on an enforced account.
 * **macOS permissions**: Screen Recording and Accessibility are checked (`CGPreflightScreenCaptureAccess`,
   `AXIsProcessTrustedWithOptions` without prompting); `mac permissions` shows the learner a card that opens Settings or
   asks macOS. The app is ad-hoc signed, so a rebuild drops both grants; the app remembers the last build that had them

@@ -47,9 +47,7 @@ struct AnthropicClient: LLMClient {
             headers["x-api-key"] = apiKey
             if !isFirstParty { headers["Authorization"] = "Bearer \(apiKey)" }
         }
-        var betas = isFirstParty ? request.tools.compactMap(\.nativeBeta) : []
-        if isFirstParty, Self.supportsFallback(request.model) { betas.append("server-side-fallback-2026-07-01") }
-        if isFirstParty, Self.clearsToolUsesServerSide(request) { betas.append("context-management-2025-06-27") }
+        let betas = betas(request)
         if !betas.isEmpty { headers["anthropic-beta"] = betas.joined(separator: ",") }
         let req = URLRequest.json(config.baseURL.joinedURL("/messages"), body: body, headers: headers)
         return AsyncThrowingStream { continuation in
@@ -166,6 +164,16 @@ struct AnthropicClient: LLMClient {
 
     // MARK: Request
 
+    /// Beta features a request uses (Anthropic's own API only): each matches a field `buildBody` sends.
+    func betas(_ request: LLMRequest) -> [String] {
+        guard isFirstParty else { return [] }
+        var betas = request.tools.compactMap(\.nativeBeta)
+        if Self.supportsFallback(request.model) { betas.append("server-side-fallback-2026-07-01") }
+        if Self.clearsToolUsesServerSide(request) { betas.append("context-management-2025-06-27") }
+        if Self.dropsMismatchedThinking(request) { betas.append("thinking-binding-controls-2026-08-01") }
+        return betas
+    }
+
     func buildBody(_ r: LLMRequest) -> JSON {
         let adaptive = Self.isAdaptiveClaude(r.model)
         var body: [String: JSON] = [
@@ -194,7 +202,9 @@ struct AnthropicClient: LLMClient {
         }
         if adaptive {
             if r.thinking != .off {
-                body["thinking"] = ["type": "adaptive", "display": "summarized"]
+                var t: [String: JSON] = ["type": "adaptive", "display": "summarized"]
+                if isFirstParty, Self.dropsMismatchedThinking(r) { t["block_binding"] = ["prefix_mismatch_behavior": "drop_block"] }
+                body["thinking"] = .object(t)
                 body["output_config"] = ["effort": .string(r.thinking.rawValue)]
             } else {
                 body["output_config"] = ["effort": "low"]
@@ -219,8 +229,11 @@ struct AnthropicClient: LLMClient {
             }
         }
         if isFirstParty, Self.clearsToolUsesServerSide(r) {
+            // Only screenshots go: every other tool's results (file reads, bash output, searches) are excluded.
+            let keepTools = r.tools.map(\.name).filter { !ContextPolicy.captureTools.contains($0) }
             body["context_management"] = ["edits": [["type": "clear_tool_uses_20250919", "trigger": ["type": "input_tokens", "value": 30000],
-                                                    "keep": ["type": "tool_uses", "value": 6], "clear_at_least": ["type": "input_tokens", "value": 6000]]]]
+                                                    "keep": ["type": "tool_uses", "value": 3], "clear_at_least": ["type": "input_tokens", "value": 6000],
+                                                    "exclude_tools": .array(keepTools.map { .string($0) })]]]
         }
         body["messages"] = .array(Self.convert(r.messages, model: r.model, toolset: isFirstParty && NativeComputerTool.declared(in: r.tools)))
         return .object(body)
@@ -228,8 +241,20 @@ struct AnthropicClient: LLMClient {
 
     /// Claude with replayed thinking can't have its history edited (old screenshots dropped): the API would reject the
     /// later thinking blocks. Old screenshots and tool results are cleared server-side instead, which keeps them valid.
+    /// Only once a screenshot is actually in the history (declaring the tools alone clears nothing).
     static func clearsToolUsesServerSide(_ r: LLMRequest) -> Bool {
         isAdaptiveClaude(r.model) && r.tools.contains { ContextPolicy.captureTools.contains($0.name) }
+            && r.messages.contains { m in m.blocks.contains { $0.kind == .toolResult && $0.hasPayload } }
+    }
+
+    /// Models that check each replayed thinking block against the history before it (Fable 5.1, Opus/Sonnet/Haiku 5.5).
+    /// Microcompaction and the lesson summary change that history once, at a boundary; on an enforced account every later
+    /// request would then fail with a 400, so the API is asked to drop such blocks instead (per request: sent every time).
+    /// Thinking on only, as the API requires.
+    static func dropsMismatchedThinking(_ r: LLMRequest) -> Bool {
+        guard r.thinking != .off else { return false }
+        let m = r.model.lowercased()
+        return ["fable-5-1", "fable-5.1", "opus-5-5", "opus-5.5", "sonnet-5-5", "sonnet-5.5", "haiku-5-5", "haiku-5.5"].contains { m.contains($0) }
     }
 
     /// `toolset`: the request declares Anthropic's computer toolset, so its calls replay as members (left_click…) with

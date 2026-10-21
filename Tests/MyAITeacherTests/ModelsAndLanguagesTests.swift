@@ -114,3 +114,39 @@ final class ZigRunTests: XCTestCase {
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: lesson.path), ["note.txt"], "no .zig-cache or binary in the lesson's folder")
     }
 }
+
+/// Claude requests: history edits must not turn into 400s, and server-side clearing only removes screenshots.
+final class ClaudeHistoryTests: XCTestCase {
+    private let first = ProviderCatalog.presets.first { $0.id == "anthropic" }!
+    private func tools(_ names: [String]) -> [ToolSpec] { names.map { ToolSpec(name: $0, description: "", schema: ["type": "object"]) } }
+
+    func testMismatchedThinkingIsDroppedNotRejected() {
+        let c = AnthropicClient(config: first, apiKey: nil)
+        var r = LLMRequest(model: "claude-opus-5-5", system: "", messages: [ChatMessage(role: .user, blocks: [.text("hi")])], thinking: .high)
+        XCTAssertEqual(c.buildBody(r)["thinking"]?["block_binding"]?["prefix_mismatch_behavior"]?.string, "drop_block")
+        XCTAssertTrue(c.betas(r).contains("thinking-binding-controls-2026-08-01"), "the field needs its beta header (400 without)")
+        r.thinking = .off
+        XCTAssertNil(c.buildBody(r)["thinking"]?["block_binding"], "thinking on only")
+        XCTAssertFalse(c.betas(r).contains("thinking-binding-controls-2026-08-01"))
+        r.thinking = .high; r.model = "claude-opus-4-7"
+        XCTAssertNil(c.buildBody(r)["thinking"]?["block_binding"], "only models that run the check")
+        var compatible = first; compatible.baseURL = "https://api.minimax.io/anthropic/v1"
+        r.model = "claude-opus-5-5"
+        XCTAssertNil(AnthropicClient(config: compatible, apiKey: nil).buildBody(r)["thinking"]?["block_binding"], "Anthropic's own API only")
+    }
+
+    func testServerSideClearingTakesOnlyScreenshotsAndOnlyOnceThereAreSome() {
+        let c = AnthropicClient(config: first, apiKey: nil)
+        let use = ChatMessage(role: .assistant, blocks: [.toolUse(id: "t1", name: "browser", input: ["action": "screenshot"])])
+        var shot = Block.toolResult(id: "t1", name: "browser", content: "screenshot")
+        shot.mime = "image/png"; shot.data = "iVBORw0KGgo="
+        var r = LLMRequest(model: "claude-sonnet-5-5", system: "", messages: [ChatMessage(role: .user, blocks: [.text("go")])],
+                           tools: tools(["read", "bash", "browser", "computer"]), thinking: .low)
+        XCTAssertNil(c.buildBody(r)["context_management"], "declared tools alone clear nothing")
+        r.messages += [use, ChatMessage(role: .user, blocks: [shot])]
+        let edit = c.buildBody(r)["context_management"]?["edits"]?[0]
+        XCTAssertEqual(edit?["type"]?.string, "clear_tool_uses_20250919")
+        XCTAssertEqual(edit?["exclude_tools"]?.array?.compactMap(\.string), ["read", "bash"], "file reads and shell output are never cleared")
+        XCTAssertTrue(c.betas(r).contains("context-management-2025-06-27"))
+    }
+}
