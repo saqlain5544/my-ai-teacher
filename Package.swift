@@ -16,6 +16,8 @@ let package = Package(
             ],
             linkerSettings: [
                 .linkedLibrary("sqlite3"),
+                // Optional on older macOS: used only behind availability checks.
+                .unsafeFlags(["-Xlinker", "-weak_framework", "-Xlinker", "FoundationModels"]),
             ]
         ),
         .testTarget(

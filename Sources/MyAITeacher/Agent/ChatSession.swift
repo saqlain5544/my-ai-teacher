@@ -80,7 +80,16 @@ final class ChatSession: ObservableObject, Identifiable {
         host.willSend(&msg, self)
         if conversation.title == "New lesson" {
             let firstLine = trimmed.split(separator: "\n").first.map(String.init) ?? "Lesson"
-            conversation.title = firstLine.count > 48 ? String(firstLine.prefix(45)) + "…" : (firstLine.isEmpty ? "Lesson" : firstLine)
+            let provisional = firstLine.count > 48 ? String(firstLine.prefix(45)) + "…" : (firstLine.isEmpty ? "Lesson" : firstLine)
+            conversation.title = provisional
+            // A proper title from the on-device model, in parallel with the lesson (no API call).
+            if !trimmed.isEmpty {
+                Task { [weak self] in
+                    guard let t = await OnDevice.title(for: trimmed), let self, self.conversation.title == provisional else { return }
+                    self.conversation.title = t
+                    self.save()
+                }
+            }
         }
         append(msg)
         save()

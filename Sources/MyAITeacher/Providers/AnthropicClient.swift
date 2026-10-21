@@ -146,7 +146,10 @@ struct AnthropicClient: LLMClient {
             "stream": true,
         ]
         if !r.system.isEmpty {
-            body["system"] = [["type": "text", "text": .string(r.system), "cache_control": ["type": "ephemeral"]]]
+            // Two cached blocks: the instructions shared by every lesson, then this lesson's context (date, memory, folder).
+            // A change in the second (a new memory, a new day) keeps the first one's cache hit.
+            let parts = SystemPrompt.split(r.system)
+            body["system"] = .array(parts.map { ["type": "text", "text": .string($0), "cache_control": ["type": "ephemeral"]] })
         }
         if !r.tools.isEmpty {
             var tools: [JSON] = r.tools.map { t in

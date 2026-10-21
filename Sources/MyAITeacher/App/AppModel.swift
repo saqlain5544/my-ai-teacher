@@ -333,6 +333,7 @@ final class AppModel: ObservableObject {
             ["title": "Study this folder", "subtitle": "Read my files and teach from them", "prompt": "Look through the files in this folder and suggest how you could help me learn from them."],
             ["title": "Today's news, explained", "subtitle": "Live web search with sources", "prompt": "Search the web for one important science or technology story from this week and explain it to me with sources."],
         ]
+        if isQuick(workspace) { suggestions.removeAll { $0["title"]?.string == "Study this folder" } }
         if dueCount > 0 {
             suggestions.insert(["title": "Review weak spots", "subtitle": .string("\(dueCount) flashcards due + targeted practice"), "prompt": "Look at my mastery and memory, find my weakest concepts and give me targeted practice with a quiz."], at: 0)
         }

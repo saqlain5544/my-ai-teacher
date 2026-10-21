@@ -38,6 +38,12 @@ enum CLI {
             return 0
         }
 
+        if let text = opt("--title") {
+            let t0 = Date()
+            print("on-device available: \(OnDevice.isAvailable)")
+            print("title: \(await OnDevice.title(for: text) ?? "(none)")  [\(String(format: "%.2f", Date().timeIntervalSince(t0)))s]")
+            return 0
+        }
         if args.contains("--models") {
             let list: [ModelInfo]
             do { list = try await ProviderCatalog.fetchModels(provider, apiKey: KeyStore.shared.key(for: provider)) }
@@ -87,6 +93,7 @@ enum CLI {
             case .gemini: body = GeminiClient(config: provider, apiKey: nil).buildBody(req)
             }
             print(body.pretty.prefix(4000))
+            return 0   // dump only: never sends
         }
         let start = Date()
         var first: Double?

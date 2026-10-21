@@ -51,6 +51,15 @@ enum SystemPrompt {
         }
     }
 
+    /// Where the lesson-specific part starts (everything before it is identical across lessons).
+    static let dynamicMarker = "\n\n# Environment\n"
+
+    /// Splits a built prompt into [shared instructions, lesson context] for providers with explicit cache breakpoints.
+    static func split(_ system: String) -> [String] {
+        guard let r = system.range(of: dynamicMarker) else { return [system] }
+        return [String(system[..<r.lowerBound]), String(system[r.lowerBound...]).trimmingCharacters(in: .newlines)]
+    }
+
     static func build(settings: AppSettings, mode: TeachingMode, coreMemory: String, model: String, lessonID: String? = nil) -> String {
         let df = DateFormatter()
         df.dateFormat = "EEEE, d MMMM yyyy"
