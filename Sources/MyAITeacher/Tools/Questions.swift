@@ -1,0 +1,375 @@
+import Foundation
+
+/// Shared question model for `ask_learner` (ungraded) and `quiz` (graded). The web view renders each `type`
+/// with a matching component; answers come back in the shapes documented below.
+enum Questions {
+    static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
+                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing"]
+
+    static func schema(graded: Bool) -> JSON {
+        var props: [String: JSON] = [
+            "type": Schema.string("Component type.", enum: types),
+            "prompt": Schema.string("Question text (Markdown/LaTeX; mark foreign-language spans with <span lang>)."),
+            "options": Schema.array(Schema.string("Option"), "single_choice / multiple_choice options."),
+            "text": Schema.string("fill_blanks: sentence with blanks written as {{}} e.g. \"Water boils at {{}} °C.\""),
+            "blank_options": Schema.array(Schema.array(Schema.string("Choice"), "Choices for one blank"), "fill_blanks: optional dropdown choices per blank."),
+            "items": Schema.array(Schema.string("Item"), "ordering: items IN THE CORRECT ORDER (the app shuffles them)."),
+            "pairs": Schema.array(Schema.array(Schema.string("Side"), "[left, right]"), "matching: correct pairs, each [left, right], e.g. [[\"chat\",\"cat\"],[\"chien\",\"dog\"]] (the app shuffles the right side)."),
+            "min": Schema.number("scale: minimum (default 1)."),
+            "max": Schema.number("scale: maximum (default 5)."),
+            "labels": Schema.array(Schema.string("Label"), "scale: [low label, high label], or one label per point."),
+            "max_select": Schema.integer("multiple_choice: maximum number of selections."),
+            "language": Schema.string("code: programming language."),
+            "starter": Schema.string("code: starter code."),
+            "unit": Schema.string("numeric: unit shown next to the input."),
+            "placeholder": Schema.string("Input placeholder."),
+            "hint": Schema.string("Optional hint the learner can reveal."),
+            "concept": Schema.string("Concept tested (for mastery tracking)."),
+            "allow_other": Schema.boolean("single/multiple choice: allow a typed answer too."),
+        ]
+        if graded {
+            props["answer"] = ["description": .string("""
+                Correct answer. single_choice: option index; multiple_choice: array of indices; true_false: boolean; \
+                numeric: number; short_text: string or array of accepted strings; fill_blanks: array (per blank) of \
+                accepted strings or arrays of alternatives; math: expression (SymPy or LaTeX) checked for equivalence; \
+                omit for ordering/matching (defined by items/pairs) and for long_text/code/drawing (you grade those).
+                """)]
+            props["tolerance"] = Schema.number("numeric: absolute tolerance.")
+            props["explanation"] = Schema.string("Why the answer is correct; shown after submitting.")
+        }
+        return Schema.object(props, required: ["type", "prompt"])
+    }
+
+    /// Accepts legacy shapes (mcq/multi/short, `question` field) and returns normalised questions.
+    static func normalize(_ qs: [JSON]) -> [JSON] {
+        qs.map { q in
+            var o = q.object ?? [:]
+            if o["prompt"] == nil, let t = o["question"] { o["prompt"] = t }
+            let map = ["mcq": "single_choice", "choice": "single_choice", "multi": "multiple_choice", "short": "short_text",
+                       "text": "short_text", "essay": "long_text", "tf": "true_false", "boolean": "true_false", "number": "numeric",
+                       "cloze": "fill_blanks", "order": "ordering", "match": "matching", "likert": "scale", "rating": "scale"]
+            if let t = o["type"]?.string, let m = map[t] { o["type"] = .string(m) }
+            if o["type"] == nil { o["type"] = o["options"] != nil ? "single_choice" : "short_text" }
+            return .object(o)
+        }
+    }
+
+    /// Structural problems the model must fix before the learner sees the form.
+    static func validate(_ qs: [JSON]) -> [String] {
+        var errs: [String] = []
+        for (i, q) in qs.enumerated() {
+            let n = i + 1
+            switch q["type"]?.string ?? "" {
+            case "single_choice", "multiple_choice":
+                if (q["options"]?.array?.count ?? 0) < 2 { errs.append("Q\(n): \(q["type"]!.string!) needs at least 2 options.") }
+            case "matching":
+                let pairs = q["pairs"]?.array ?? []
+                if pairs.count < 2 || pairs.contains(where: { ($0.array?.count ?? 0) != 2 }) {
+                    errs.append("Q\(n): matching needs `pairs` as [[left, right], …] with at least 2 pairs (each pair has exactly 2 strings).")
+                }
+            case "ordering":
+                if (q["items"]?.array?.count ?? 0) < 2 { errs.append("Q\(n): ordering needs at least 2 `items` in the correct order.") }
+            case "fill_blanks":
+                let text = q["text"]?.string ?? q["prompt"]?.string ?? ""
+                if !text.contains("{{}}") { errs.append("Q\(n): fill_blanks needs `text` containing {{}} for each blank.") }
+            case "": errs.append("Q\(n): missing `type`.")
+            default: break
+            }
+            if (q["prompt"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): missing `prompt`.") }
+        }
+        return errs
+    }
+
+    /// The view never sees answers or explanations.
+    static func publicView(_ q: JSON) -> JSON {
+        var o = q.object ?? [:]
+        for k in ["answer", "explanation", "tolerance"] { o.removeValue(forKey: k) }
+        return .object(o)
+    }
+
+    struct Grade: Sendable {
+        var correct: Bool?        // nil = needs the teacher's judgement
+        var score: Double?        // 0…1 partial credit
+        var expected: String?
+    }
+
+    static func norm(_ s: String) -> String {
+        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+            .replacingOccurrences(of: "[\\p{P}\\s]+", with: " ", options: .regularExpression)
+            .trimmingCharacters(in: .whitespaces)
+    }
+
+    static func number(_ a: JSON) -> Double? {
+        if let d = a.double { return d }
+        guard var s = a.string?.trimmingCharacters(in: .whitespaces) else { return nil }
+        s = s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "−", with: "-")
+        s = s.replacingOccurrences(of: "[^0-9eE+\\-./]", with: "", options: .regularExpression)
+        if let d = Double(s) { return d }
+        let parts = s.split(separator: "/")
+        if parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b != 0 { return a / b }
+        return nil
+    }
+
+    static func grade(_ q: JSON, answer a: JSON) async -> Grade {
+        let type = q["type"]?.string ?? "single_choice"
+        let ans = q["answer"]
+        if a.isNull { return Grade(correct: type == "scale" ? nil : false, score: 0, expected: ans.map(describe)) }
+        switch type {
+        case "single_choice":
+            let opts = q["options"]?.array?.compactMap(\.string) ?? []
+            guard let e = ans?.int ?? opts.firstIndex(of: ans?.string ?? "") else { return Grade() }
+            if let g = a.int { return Grade(correct: g == e, score: g == e ? 1 : 0, expected: e < opts.count ? opts[e] : "\(e)") }
+            if let t = a.string, e < opts.count { return Grade(correct: norm(t) == norm(opts[e]) ? true : nil, expected: opts[e]) }
+            return Grade()
+        case "multiple_choice":
+            let e = Set(ans?.array?.compactMap(\.int) ?? [])
+            guard !e.isEmpty else { return Grade() }
+            let g = Set(a.array?.compactMap(\.int) ?? [])
+            let hits = Double(g.intersection(e).count), wrong = Double(g.subtracting(e).count)
+            return Grade(correct: g == e, score: max(0, (hits - wrong) / Double(e.count)), expected: e.sorted().map(String.init).joined(separator: ", "))
+        case "true_false":
+            guard let e = ans?.bool, let g = a.bool else { return Grade() }
+            return Grade(correct: e == g, score: e == g ? 1 : 0, expected: e ? "True" : "False")
+        case "numeric":
+            guard let e = ans?.double else { return Grade() }
+            guard let g = number(a) else { return Grade(correct: false, score: 0, expected: describe(ans!)) }
+            let tol = q["tolerance"]?.double ?? max(1e-9, abs(e) * 1e-3)
+            return Grade(correct: abs(e - g) <= tol, score: abs(e - g) <= tol ? 1 : 0, expected: describe(ans!))
+        case "short_text":
+            let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map(norm)
+            guard !alts.isEmpty, let g = a.string else { return Grade(expected: ans.map(describe)) }
+            return alts.contains(norm(g)) ? Grade(correct: true, score: 1, expected: describe(ans!)) : Grade(correct: nil, expected: describe(ans!))
+        case "fill_blanks":
+            let blanks = ans?.array ?? []
+            let given = a.array ?? []
+            guard !blanks.isEmpty else { return Grade() }
+            var ok = 0
+            for (i, b) in blanks.enumerated() {
+                let alts = (b.array?.compactMap(\.string) ?? b.string.map { [$0] } ?? []).map(norm)
+                if i < given.count, let g = given[i].string, alts.contains(norm(g)) { ok += 1 }
+            }
+            return Grade(correct: ok == blanks.count, score: Double(ok) / Double(blanks.count),
+                         expected: blanks.map { $0.array?.first?.string ?? $0.string ?? "" }.joined(separator: " | "))
+        case "ordering":
+            let items = q["items"]?.array?.compactMap(\.string) ?? []
+            let g = a.array?.compactMap(\.int) ?? []
+            guard !items.isEmpty, g.count == items.count else { return Grade(correct: false, score: 0, expected: items.joined(separator: " → ")) }
+            let inPlace = g.enumerated().filter { $0.offset == $0.element }.count
+            return Grade(correct: g == Array(0..<items.count), score: Double(inPlace) / Double(items.count), expected: items.joined(separator: " → "))
+        case "matching":
+            let pairs = q["pairs"]?.array ?? []
+            let g = a.array?.compactMap(\.int) ?? []
+            guard !pairs.isEmpty else { return Grade() }
+            let ok = g.enumerated().filter { $0.offset == $0.element }.count
+            return Grade(correct: ok == pairs.count && g.count == pairs.count, score: Double(ok) / Double(pairs.count),
+                         expected: pairs.map { "\($0[0]?.string ?? "") ↔ \($0[1]?.string ?? "")" }.joined(separator: "; "))
+        case "math":
+            guard let e = ans?.string ?? ans?.double.map({ String($0) }), let g = a.string else { return Grade(expected: ans.map(describe)) }
+            let eq = await MathEquivalence.equivalent(g, e)
+            return Grade(correct: eq, score: eq == true ? 1 : (eq == false ? 0 : nil), expected: e)
+        default:
+            return Grade(expected: ans.map(describe))     // long_text, code, drawing, scale: teacher judges
+        }
+    }
+
+    static func describe(_ j: JSON) -> String { j.string ?? j.compact }
+
+    /// Human-readable rendering of a learner's answer for the model.
+    static func describeAnswer(_ q: JSON, _ a: JSON) -> String {
+        if a.isNull { return "(no answer)" }
+        switch q["type"]?.string ?? "" {
+        case "single_choice":
+            let opts = q["options"]?.array?.compactMap(\.string) ?? []
+            if let i = a.int { return i < opts.count ? "“\(opts[i])”" : "option \(i)" }
+            return "“\(a.string ?? a.compact)” (typed)"
+        case "multiple_choice":
+            let opts = q["options"]?.array?.compactMap(\.string) ?? []
+            let picked = (a.array ?? []).compactMap { $0.int.flatMap { $0 < opts.count ? "“\(opts[$0])”" : nil } ?? $0.string.map { "“\($0)” (typed)" } }
+            return picked.isEmpty ? "(none)" : picked.joined(separator: ", ")
+        case "ordering":
+            let items = q["items"]?.array?.compactMap(\.string) ?? []
+            return (a.array ?? []).compactMap { $0.int.flatMap { $0 < items.count ? items[$0] : nil } }.joined(separator: " → ")
+        case "matching":
+            let pairs = q["pairs"]?.array ?? []
+            return (a.array ?? []).enumerated().map { i, r in
+                "\(pairs[safe: i]?[0]?.string ?? "?") ↔ \(r.int.flatMap { pairs[safe: $0]?[1]?.string } ?? "?")"
+            }.joined(separator: "; ")
+        case "fill_blanks": return (a.array ?? []).map { "“\($0.string ?? "")”" }.joined(separator: ", ") + (q["text"]?.string.map { "  (in: \($0))" } ?? "")
+        case "drawing": return "(drawing attached as an image)"
+        case "code": return "\n```\(q["language"]?.string ?? "")\n\(a.string ?? "")\n```"
+        default: return a.string.map { "“\($0)”" } ?? a.compact
+        }
+    }
+
+    /// Extracts drawings (data URLs) from answers so they can be passed to the model as images.
+    static func images(from answers: [JSON]) -> [Block] {
+        answers.compactMap { a in
+            guard let s = a["image"]?.string ?? a.string, s.hasPrefix("data:image/"),
+                  let comma = s.firstIndex(of: ","), let data = Data(base64Encoded: String(s[s.index(after: comma)...])),
+                  let img = ImageUtil.loadForModel(data: data, name: "drawing") else { return nil }
+            return img.block
+        }
+    }
+}
+
+extension Array {
+    subscript(safe i: Int) -> Element? { i >= 0 && i < count ? self[i] : nil }
+}
+
+/// Symbolic equivalence via SymPy, with a light LaTeX → SymPy translation.
+enum MathEquivalence {
+    static func toSympy(_ s: String) -> String {
+        var t = s
+        for (a, b) in [("\\left", ""), ("\\right", ""), ("\\cdot", "*"), ("\\times", "*"), ("\\div", "/"), ("\\pi", "pi"),
+                       ("\\infty", "oo"), ("\\ln", "log"), ("\\,", ""), ("\\!", ""), ("$", ""), ("−", "-")] { t = t.replacingOccurrences(of: a, with: b) }
+        // \frac{a}{b} → ((a)/(b)), \sqrt{x} → sqrt(x) (repeat for nesting)
+        for _ in 0..<6 {
+            t = t.replacingOccurrences(of: "\\\\[dt]?frac\\{([^{}]*)\\}\\{([^{}]*)\\}", with: "(($1)/($2))", options: .regularExpression)
+            t = t.replacingOccurrences(of: "\\\\sqrt\\{([^{}]*)\\}", with: "sqrt($1)", options: .regularExpression)
+        }
+        t = t.replacingOccurrences(of: "\\\\(sin|cos|tan|exp|log|arcsin|arccos|arctan|sinh|cosh|tanh)", with: "$1", options: .regularExpression)
+        t = t.replacingOccurrences(of: "{", with: "(").replacingOccurrences(of: "}", with: ")")
+        return t
+    }
+
+    static func equivalent(_ a: String, _ b: String) async -> Bool? {
+        let x = toSympy(a), y = toSympy(b)
+        guard MathTool.safe(x), MathTool.safe(y), let py = ProcessRunner.which("python3") else { return nil }
+        let script = """
+        import sys, json
+        try:
+            from sympy import simplify, nsimplify, Symbol
+            from sympy.parsing.sympy_parser import parse_expr, standard_transformations, implicit_multiplication_application, convert_xor
+        except ImportError:
+            print("null"); sys.exit(0)
+        T = standard_transformations + (implicit_multiplication_application, convert_xor)
+        a, b = json.loads(sys.stdin.read())
+        try:
+            def P(s):
+                if "=" in s and "==" not in s:
+                    l, r = s.split("=", 1); return parse_expr(l, transformations=T) - parse_expr(r, transformations=T)
+                return parse_expr(s, transformations=T)
+            print("true" if simplify(P(a) - P(b)) == 0 else "false")
+        except Exception:
+            print("null")
+        """
+        let scratch = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-math", isDirectory: true)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        let r = await ProcessRunner.run(py, ["-c", script], cwd: scratch, stdin: JSON.array([.string(x), .string(y)]).compact, timeout: 15)
+        switch r.stdout.trimmingCharacters(in: .whitespacesAndNewlines) {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
+    }
+}
+
+// MARK: - Tools
+
+struct AskLearnerTool: Tool {
+    let name = "ask_learner"
+    let description = """
+    Show interactive question components in the chat and WAIT for the learner's reply. Use for diagnostics (level, goals), \
+    letting them choose a path, practice and reflection. Either a single quick choice (`question` + `options`) or a small \
+    form of `questions` with any component type: single_choice, multiple_choice, true_false, short_text, long_text, numeric, \
+    fill_blanks, ordering, matching, scale, code, math, drawing. Not graded — use `quiz` for graded checks.
+    """
+    let risk = ToolRisk.interactive
+    var schema: JSON {
+        Schema.object([
+            "question": Schema.string("Quick form: the question (shown as clickable options)."),
+            "options": Schema.array(Schema.string("Option"), "Quick form: 2-6 short options."),
+            "multi_select": Schema.boolean("Quick form: allow several options."),
+            "allow_free_text": Schema.boolean("Quick form: allow a typed answer (default true)."),
+            "title": Schema.string("Form title."),
+            "questions": Schema.array(Questions.schema(graded: false), "Form: one or more question components."),
+            "submit_label": Schema.string("Form: submit button text."),
+        ])
+    }
+    func summary(_ input: JSON) -> String { input["question"]?.string ?? input["title"]?.string ?? input["questions"]?[0]?["prompt"]?.string ?? "" }
+
+    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        var payload = input.object ?? [:]
+        if let qs = input["questions"]?.array {
+            let errs = Questions.validate(Questions.normalize(qs))
+            if !errs.isEmpty { return .error("Fix the form and call ask_learner again:\n" + errs.joined(separator: "\n")) }
+            payload["questions"] = .array(Questions.normalize(qs).map(Questions.publicView))
+        }
+        let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "ask", conversationID: ctx.conversationID, payload: .object(payload))
+        if reply["cancelled"]?.bool == true { return .error("The learner dismissed the question.") }
+        if let qs = input["questions"]?.array {
+            let norm = Questions.normalize(qs)
+            let answers = reply["answers"]?.array ?? []
+            var lines: [String] = []
+            for (i, q) in norm.enumerated() {
+                lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")]: \(q["prompt"]?.string ?? "")\n   Answer: \(Questions.describeAnswer(q, answers[safe: i] ?? .null))")
+            }
+            return ToolOutput(text: "Learner's answers:\n" + lines.joined(separator: "\n"), images: Questions.images(from: answers),
+                              meta: ["answers": .array(answers)])
+        }
+        let sel = reply["selected"]?.array?.compactMap(\.string) ?? []
+        let text = reply["text"]?.string ?? ""
+        var out = "Learner's answer: " + sel.joined(separator: ", ")
+        if !text.isEmpty { out += (sel.isEmpty ? "" : " — ") + "\"\(text)\"" }
+        return ToolOutput(text: out, meta: ["selected": .array(sel.map { .string($0) }), "text": .string(text)])
+    }
+}
+
+struct QuizTool: Tool {
+    let name = "quiz"
+    let description = """
+    Show a graded interactive quiz in the chat and WAIT for the answers. Auto-grades single/multiple choice, true/false, \
+    numeric, short text (accepted answers), fill-in-the-blanks, ordering, matching and math (symbolic equivalence via SymPy); \
+    returns long text, code and drawings for you to grade. Results update concept mastery. 1-6 questions targeted at what \
+    was just taught; mix types and difficulty (aim ~85% success).
+    """
+    let risk = ToolRisk.interactive
+    var schema: JSON {
+        Schema.object([
+            "title": Schema.string("Quiz title."),
+            "subject": Schema.string("Subject, e.g. algebra."),
+            "questions": Schema.array(Questions.schema(graded: true), "Questions."),
+        ], required: ["title", "questions"])
+    }
+    func summary(_ input: JSON) -> String { input["title"]?.string ?? "Quiz" }
+
+    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        let questions = Questions.normalize(input["questions"]?.array ?? [])
+        guard !questions.isEmpty else { return .error("A quiz needs at least one question.") }
+        let errs = Questions.validate(questions)
+        if !errs.isEmpty { return .error("Fix the quiz and call it again:\n" + errs.joined(separator: "\n")) }
+        let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null,
+                             "questions": .array(questions.map(Questions.publicView)), "graded": true]
+        let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "quiz", conversationID: ctx.conversationID, payload: payload)
+        if reply["cancelled"]?.bool == true { return .error("The learner skipped the quiz.") }
+        let answers = reply["answers"]?.array ?? []
+        let subject = input["subject"]?.string ?? "general"
+        var graded: [JSON] = []
+        var score = 0.0
+        var autoTotal = 0
+        var lines: [String] = []
+        for (i, q) in questions.enumerated() {
+            let a = answers[safe: i] ?? .null
+            let g = await Questions.grade(q, answer: a)
+            if g.correct != nil { autoTotal += 1; score += g.score ?? (g.correct == true ? 1 : 0) }
+            if let concept = q["concept"]?.string, let c = g.correct {
+                ctx.services.study.recordAttempt(subject: subject, concept: concept, correct: c, note: nil)
+            }
+            let verdict = g.correct.map { $0 ? "✅ correct" : "❌ incorrect" } ?? "📝 needs your grading"
+            lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(q["concept"]?.string.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   Learner: \(Questions.describeAnswer(q, a))\n   Expected: \(g.expected ?? "—")\n   → \(verdict)\(g.score.map { $0 > 0 && $0 < 1 ? String(format: " (partial %.0f%%)", $0 * 100) : "" } ?? "")")
+            graded.append(["correct": g.correct.map { .bool($0) } ?? .null, "score": g.score.map { .number($0) } ?? .null,
+                           "explanation": q["explanation"] ?? .null, "expected": g.expected.map { .string($0) } ?? .null,
+                           "answer": q["answer"] ?? .null, "given": a])
+        }
+        ctx.services.study.recordQuiz(conversationID: ctx.conversationID, title: input["title"]?.string ?? "Quiz", topic: subject,
+                                      score: score, total: autoTotal, data: ["questions": .array(questions), "answers": .array(answers)])
+        EventBus.publish(.studyDataChanged)
+        var text = "Quiz \"\(input["title"]?.string ?? "")\" submitted. Auto-graded score: \(String(format: "%g", (score * 10).rounded() / 10))/\(autoTotal).\n"
+        if let c = reply["confidence"]?.int { text += "Self-rated confidence before answering: \(c)/5.\n" }
+        if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
+        text += "\n" + lines.joined(separator: "\n")
+        text += "\n\nGive warm, specific feedback: praise what's right, explain each mistake and the misconception behind it, and grade anything marked for your grading."
+        return ToolOutput(text: text, images: Questions.images(from: answers),
+                          meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
+    }
+}
