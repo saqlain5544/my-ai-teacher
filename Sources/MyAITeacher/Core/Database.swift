@@ -45,8 +45,10 @@ final class Database: @unchecked Sendable {
     private var db: OpaquePointer?
     private var cache: [String: OpaquePointer] = [:]
     private let lock = NSRecursiveLock()
+    let path: String
 
     init(path: String) throws {
+        self.path = path
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK else {
             throw SQLiteError(message: "Cannot open database at \(path)")
@@ -56,7 +58,12 @@ final class Database: @unchecked Sendable {
         try execute("PRAGMA foreign_keys=ON")
         try execute("PRAGMA temp_store=MEMORY")
         try execute("PRAGMA cache_size=-8000")
+        Self.live.add(self)
     }
+
+    private static let live = WeakRegistry<Database>()
+    /// Returns every open database's page cache to the system (memory pressure: see MemoryGovernor).
+    static func releaseAllMemory() { for d in live.all { _ = try? d.execute("PRAGMA shrink_memory") } }
 
     deinit {
         for (_, s) in cache { sqlite3_finalize(s) }

@@ -14,6 +14,7 @@ struct TranscriptView: NSViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
+        config.setURLSchemeHandler(BlobSchemeHandler(), forURLScheme: BlobSchemeHandler.scheme)
         config.userContentController.addUserScript(WKUserScript(source: Self.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         if Telemetry.isEnabled { config.userContentController.addUserScript(WKUserScript(source: WebTelemetry.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)) }
         config.preferences.setValue(true, forKey: "developerExtrasEnabled")
@@ -25,6 +26,7 @@ struct TranscriptView: NSViewRepresentable {
         web.allowsMagnification = true
         c.web = web
         c.watchdog = WebWatchdog(web: web) { [weak c] in c?.pageHung() }
+        NotificationCenter.default.addObserver(c, selector: #selector(Coordinator.shedCaches), name: MemoryGovernor.shedNotification, object: nil)
         DebugHooks.transcript = web
         let dir = AppPaths.webResources
         web.loadFileURL(dir.appendingPathComponent("index.html"), allowingReadAccessTo: dir)
@@ -72,6 +74,9 @@ struct TranscriptView: NSViewRepresentable {
         weak var session: ChatSession?
         private var ready = false
         private var queue: [String] = []
+
+        /// The app is short of memory (MemoryGovernor): the page drops its render caches, which rebuild on demand.
+        @objc func shedCaches() { if ready { web?.evaluateJavaScript("T.dropCaches(); 0") } }
         private var fontSize: Double = 15
         // Coalesced streaming deltas, flushed once per frame.
         private var pendingDeltas: [(id: String, index: Int, kind: Block.Kind, text: String)] = []
@@ -136,6 +141,10 @@ struct TranscriptView: NSViewRepresentable {
 
         func notice(_ text: String) {
             run("T.notice(\(JSON.string(text).compact))")
+        }
+
+        func trimBefore(_ messageID: String, earlier: Int) {
+            run("T.trimBefore(\(JSON.string(messageID).compact), \(earlier))")
         }
 
         func toolProgress(_ toolID: String, text: String) {

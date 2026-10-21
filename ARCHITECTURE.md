@@ -156,6 +156,23 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   squeeze their largest outputs. SSE parsing is linear; lesson search ranks only the newest 2,000 matches.
 * Storage: measured, SQLite is not the bottleneck (the access patterns were), so no custom engine.
 
+## Bounded memory
+The app's footprint must not grow with how much the learner has done: data lives on disk, memory holds a window.
+* Images: payloads ≥ 16k base64 chars go to a content-addressed `BlobStore` beside the lesson's database
+  (`<db dir>/blobs/ab/<sha256>`); messages keep a reference (`Block.blob`). Request builders read `Block.payload`
+  (inline or from disk) only for images they send; the transcript loads `teacher-blob://img/<ref>`, so no base64 sits
+  in Swift memory or the DOM. `blob_refs` records which message uses which blob; deleting or truncating a lesson collects
+  unreferenced blobs (10-minute grace for ones whose message isn't saved yet), and a launch sweep catches orphans.
+* Lesson window: besides the 400-message cap, loaded messages have a 24 MB budget. When the learner sends, the oldest
+  display-only messages (before the compaction point; whole turns) leave memory and the page (`T.trimBefore`); what the
+  next request needs is never trimmed, and is itself bounded by compaction.
+* Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
+  segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
+* `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
+  rebuilds (memory indexes, fetched pages, SQLite caches, page caches) and returns freed pages to the system.
+  `{"action":"shed"}` triggers it in a test instance; the log records the footprint before and after.
+* In-process work that a deadline abandons checks cancellation itself (see Timeouts), so abandoned work stops using memory.
+
 ## Frozen pages
 * Visuals run model-written JavaScript in sandboxed frames that share the transcript's process, so an endless loop
   would freeze the lesson. `WebWatchdog` pings each transcript (and sub-agent) page every 2 s while its window is

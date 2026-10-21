@@ -112,7 +112,7 @@ struct GeminiClient: LLMClient {
                     if m.role == .assistant, m.model == model, let sig = b.signature, !sig.hasPrefix("redacted:") {
                         parts.append(["text": .string(b.text ?? ""), "thought": true, "thoughtSignature": .string(sig)])
                     }
-                case .image: parts.append(["inlineData": ["mimeType": .string(b.mime ?? "image/png"), "data": .string(b.data ?? "")]])
+                case .image: parts.append(["inlineData": ["mimeType": .string(b.mime ?? "image/png"), "data": .string(b.payload ?? "")]])
                 case .file: parts.append(["text": .string("<file name=\"\(b.name ?? "file")\">\n\(b.text ?? "")\n</file>")])
                 case .toolUse:
                     var p: [String: JSON] = ["functionCall": ["name": .string(b.name ?? ""), "args": b.input ?? .object([:])]]
@@ -122,7 +122,7 @@ struct GeminiClient: LLMClient {
                 case .toolResult:
                     parts.append(["functionResponse": ["name": .string(b.name ?? ""),
                                                        "response": ["result": .string(b.text ?? ""), "is_error": .bool(b.isError ?? false)]]])
-                    if let d = b.data, let mime = b.mime { parts.append(["inlineData": ["mimeType": .string(mime), "data": .string(d)]]) }
+                    if let d = b.payload, let mime = b.mime { parts.append(["inlineData": ["mimeType": .string(mime), "data": .string(d)]]) }
                 }
             }
             if parts.isEmpty { continue }

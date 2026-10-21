@@ -5,6 +5,8 @@ import Combine
 @MainActor
 protocol TranscriptSink: AnyObject {
     func reset(_ messages: [ChatMessage], conversation: Conversation)
+    /// The lesson's window dropped every message before `messageID`; `earlier` of them are now on disk only.
+    func trimBefore(_ messageID: String, earlier: Int)
     func upsert(_ message: ChatMessage)
     func delta(_ messageID: String, index: Int, kind: Block.Kind, text: String)
     func toolProgress(_ toolID: String, text: String)
@@ -52,6 +54,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let start = cut.map { max(0, min(total - Self.window, $0)) } ?? max(0, total - Self.hardCap)
         self.base = start
         self.messages = start == 0 ? store.messages(conversation.id) : store.messages(conversation.id, from: start)
+        spillLoaded(messages.indices)
         repairInterruptedToolCalls()
         if let t = messages.last(where: { $0.toolUses.contains { $0.name == "todo_write" } })?.toolUses.last(where: { $0.name == "todo_write" }) {
             todos = t.input?["todos"]?.array ?? []
@@ -61,6 +64,8 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Absolute position (seq) of `messages[0]`; earlier messages stay on disk until asked for.
     private(set) var base = 0
     static let window = 400, hardCap = 5000
+    /// Memory for loaded messages beyond what the next request needs (those before the compaction point are display only).
+    static let windowBytes = 24 << 20
     /// Messages in the whole lesson (loaded or not).
     var totalCount: Int { base + messages.count }
 
@@ -71,7 +76,28 @@ final class ChatSession: ObservableObject, Identifiable {
         let older = services.conversations.messages(id, from: from, to: base)
         messages.insert(contentsOf: older, at: 0)
         base = from
+        spillLoaded(0..<older.count)
         sink?.reset(messages, conversation: conversation)
+    }
+
+    /// Rows saved before blobs existed still carry their images inline: move them to disk and re-save them once
+    /// (without touching the lesson's date).
+    private func spillLoaded(_ range: Range<Int>) {
+        for i in range where messages[i].spill(into: services.conversations.blobs) {
+            services.conversations.upsert(messages[i], conversationID: id, seq: base + i)
+        }
+    }
+
+    /// Drops the oldest loaded messages once the window passes `window` messages or `windowBytes`, so a lesson of any
+    /// length keeps a bounded footprint. Only display-only ones (before the compaction point) and whole turns go; they page
+    /// back in when the learner scrolls up. Runs when the learner sends, when the transcript is at the newest message.
+    private func trimWindow() {
+        guard let through = conversation.compactedThrough, let c = messages.firstIndex(where: { $0.id == through }) else { return }
+        let drop = ContextPolicy.windowTrim(messages, cut: c + 1, window: Self.window, maxBytes: Self.windowBytes)
+        guard drop > 0 else { return }
+        messages.removeFirst(drop)
+        base += drop
+        sink?.trimBefore(messages[0].id, earlier: base)
     }
 
     var settings: AppSettings { app.settings.value }
@@ -99,6 +125,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func send(_ text: String, attachments: [Block] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !isRunning, !(trimmed.isEmpty && attachments.isEmpty) else { return }
+        trimWindow()
         var blocks: [Block] = []
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true])); pendingModeNote = nil }
         blocks += attachments
@@ -615,11 +642,12 @@ final class ChatSession: ObservableObject, Identifiable {
     private func append(_ m: ChatMessage, persist p: Bool = true) {
         messages.append(m)
         if p { persist(messages.count - 1) }
-        sink?.upsert(m)
+        sink?.upsert(messages[messages.count - 1])   // as saved: images by reference, not base64
         revision += 1
     }
 
     private func persist(_ idx: Int) {
+        _ = messages[idx].spill(into: services.conversations.blobs)
         services.conversations.upsert(messages[idx], conversationID: id, seq: base + idx)
         conversation.updatedAt = Date()
     }

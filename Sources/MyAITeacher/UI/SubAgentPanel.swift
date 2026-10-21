@@ -80,6 +80,7 @@ struct SubAgentWebView: NSViewRepresentable {
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
+        config.setURLSchemeHandler(BlobSchemeHandler(), forURLScheme: BlobSchemeHandler.scheme)
         config.userContentController.addUserScript(WKUserScript(source: TranscriptView.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         let web = ClickThroughWebView(frame: .zero, configuration: config)
         web.navigationDelegate = c

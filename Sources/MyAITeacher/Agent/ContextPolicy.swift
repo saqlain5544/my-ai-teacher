@@ -16,7 +16,7 @@ enum ContextPolicy {
         for m in msgs {
             for b in m.blocks {
                 chars += (b.text?.count ?? 0) + (b.input.map { $0.compact.count } ?? 0)
-                if b.data != nil { chars += 6_000 }   // ~1.5k tokens per image
+                if b.hasPayload { chars += 6_000 }   // ~1.5k tokens per image
             }
         }
         return chars / 4
@@ -25,6 +25,15 @@ enum ContextPolicy {
     /// Indices of messages that start a learner turn (real user messages, not tool results).
     static func turnStarts(_ msgs: [ChatMessage]) -> [Int] {
         msgs.indices.filter { msgs[$0].role == .user && !msgs[$0].isToolResultOnly }
+    }
+
+    /// How many of the oldest loaded messages can leave memory: only display-only ones (before `cut`, the compaction
+    /// point) and whole turns, enough to bring the rest within `window` messages and `maxBytes`; 0 when none can go.
+    static func windowTrim(_ msgs: [ChatMessage], cut: Int, window: Int, maxBytes: Int) -> Int {
+        var bytes = msgs.reduce(0) { $0 + $1.approxBytes }, want = 0
+        while want < min(cut, msgs.count), msgs.count - want > window || bytes > maxBytes { bytes -= msgs[want].approxBytes; want += 1 }
+        guard want > 0 else { return 0 }
+        return turnStarts(msgs).first { $0 >= want && $0 <= cut } ?? 0
     }
 
     /// Request-ready history.
@@ -121,7 +130,7 @@ enum ContextPolicy {
         switch b.kind {
         case .toolResult:
             if let t = b.text, t.count > stubLimit { b.text = stub(t) }
-            b.data = nil; b.mime = nil
+            b.data = nil; b.blob = nil; b.mime = nil
         case .toolUse:
             if case .object(var o) = b.input ?? .null {
                 for (k, v) in o { if let s = v.string, s.count > stubLimit { o[k] = .string(stub(s)) } }

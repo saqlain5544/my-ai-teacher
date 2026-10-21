@@ -151,17 +151,24 @@ struct WebSearchTool: Tool {
     }
 }
 
+/// Converted pages for 15 minutes (paging through a long one re-reads it), bounded by size, oldest out first.
 actor FetchCache {
     static let shared = FetchCache()
+    static let maxChars = 4_000_000
     private var store: [String: (Date, String, String?)] = [:]
+    private var chars = 0
     func get(_ k: String) -> (String, String?)? {
         guard let v = store[k], Date().timeIntervalSince(v.0) < 900 else { return nil }
         return (v.1, v.2)
     }
     func put(_ k: String, _ md: String, _ title: String?) {
-        if store.count > 100 { store.removeAll() }
-        store[k] = (Date(), md, title)
+        if let old = store.removeValue(forKey: k) { chars -= old.1.utf8.count }
+        while chars + md.utf8.count > Self.maxChars, let oldest = store.min(by: { $0.value.0 < $1.value.0 }) {
+            chars -= oldest.value.1.utf8.count; store[oldest.key] = nil
+        }
+        store[k] = (Date(), md, title); chars += md.utf8.count
     }
+    func clear() { store = [:]; chars = 0 }
 }
 
 struct WebFetchTool: Tool {

@@ -48,6 +48,15 @@ def report(timeout=8):
 def js(code):
     post({"action": "eval", "js": code})
 
+def make_png(path, w=640, h=400):
+    """A red picture with noise in it (so it stays large after the app re-encodes it: the blob store's case)."""
+    import zlib, struct, random
+    rnd = random.Random(7)
+    rows = b"".join(b"\x00" + bytes(v for _ in range(w) for v in (200 + rnd.randrange(56), rnd.randrange(60), rnd.randrange(60))) for _ in range(h))
+    chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xffffffff)
+    path.write_bytes(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 2, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b""))
+    return path
+
 def log_lines():
     return LOG.read_text(errors="replace").splitlines() if LOG.exists() else []
 
@@ -115,7 +124,7 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
 
 def run_turn(text, scenario, timeout=240):
     if scenario.get("click"): js(scenario["click"])   # a learner action in the page (chip, regenerate, edit…)
-    else: post({"action": "send", "text": text})
+    else: post({"action": "send", "text": text, **({"image": str(make_png(HOME / "picture.png"))} if scenario.get("image") else {})})
     time.sleep(1.5)
     t0, answered, seen_running, tries = time.time(), [], False, {}
     while time.time() - t0 < timeout:
@@ -226,6 +235,10 @@ SCENARIOS = [
          page=["katex", "diagrams", "tables", "practice"], forbid=()),
     dict(name="web", quick=True, prompt="Use web_search to find what the James Webb Space Telescope's primary mirror is made of, then answer in two sentences and cite the URL.",
          expect=["web_search"]),
+    # An attached image is stored once on disk and the page loads it by reference (no base64 in memory or in the DOM).
+    dict(name="image", quick=True, image=True, prompt="I attached a small picture. What is its main colour? Answer in one word.",
+         page_js="JSON.stringify([...document.querySelectorAll('.attachments img')].map(i => [i.getAttribute('src').slice(0, 20), i.naturalWidth]))",
+         page_ok=lambda v: bool(v) and "teacher-blob://img/" in v and ",0]" not in v),
     # A long, deeply structured page through the HTML converter (once took 90 s of CPU and 14 GB there).
     dict(name="fetch", prompt="Use web_fetch to read https://en.wikipedia.org/wiki/Photosynthesis, then tell me in two sentences what the light-dependent reactions produce.",
          expect=["web_fetch"]),
@@ -296,6 +309,9 @@ def main():
                 start = max(i for i, m in enumerate(r["messages"]) if m["role"] == "user" and any(b["kind"] == "text" for b in m["blocks"]))
             problems, notes, used = check(sc["name"], r, start, answered, sc.get("expect", ()), sc.get("any", ()), sc.get("page", ()), sc.get("forbid", ()), start_log, bool(sc.get("stop_after")), sc.get("require", ()))
             if sc.get("stop_after") and r["running"]: problems.append("still running after stop")
+            if sc.get("page_js"):
+                v = js_value(sc["page_js"])
+                if not sc["page_ok"](v): problems.append("page check failed: %s" % v)
             if sc.get("followup_contains"):
                 txt = (r["page"] or {}).get("lastText", "").lower()
                 if sc["followup_contains"] not in txt: notes.append("reply does not mention %r" % sc["followup_contains"])

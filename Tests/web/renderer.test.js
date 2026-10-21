@@ -363,6 +363,32 @@
     noErrors(el, 'prose in a chart fence'); ok(el.textContent.includes('Sales rose from 10 to 30'), 'prose shown');
   });
 
+  test('images stored on disk load by reference; a bad reference never becomes markup', () => {
+    const ref = 'ab'.repeat(32);
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'image', mime: 'image/png', blob: ref }, { kind: 'image', blob: 'x" onerror="window.__pwned=2' }, { kind: 'text', text: 'see' }] };
+    T.reset([u], {});
+    const imgs = $$('#m-' + u.id + ' .attachments img');
+    eq(imgs.length, 1, 'only the valid reference'); eq(imgs[0].getAttribute('src'), 'teacher-blob://img/' + ref, 'blob URL');
+    eq(window.__pwned || 0, 0, 'nothing injected');
+  });
+
+  test('the window trims old messages from the page and says how many are on disk', async () => {
+    const msgs = []; for (let i = 0; i < 6; i++) msgs.push(i % 2 ? A('answer ' + i) : U('question ' + i));
+    T.reset(msgs, {});
+    T.trimBefore(msgs[4].id, 1234);
+    eq($$('.msg').length, 2, 'two messages left'); ok(!document.getElementById('m-' + msgs[0].id), 'oldest gone');
+    ok($('.earlier button').textContent.includes('1,234'), 'earlier count');
+    T.trimBefore('unknown', 5); eq($$('.msg').length, 2, 'unknown id: nothing changes');
+    T.upsert(U('next')); await until(() => $$('.msg').length === 3, 'new messages still append', 2000);
+  });
+
+  test('render caches can be dropped and everything re-renders', () => {
+    let el = show('Inline $x^2$ and code:\n\n```python\nprint(1)\n```');
+    T.dropCaches();
+    el = show('Inline $x^2$ and code:\n\n```python\nprint(1)\n```');
+    ok($('.katex', el) && $('.code-block', el), 'math and code render after a drop'); noErrors(el, 'after drop');
+  });
+
   test('invalid component JSON shows an inline error, not a crash', () => {
     const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');

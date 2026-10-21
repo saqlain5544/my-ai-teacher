@@ -7,6 +7,9 @@ enum Schema_ {
     CREATE TABLE IF NOT EXISTS messages(id TEXT PRIMARY KEY, conversation_id TEXT NOT NULL, seq INTEGER NOT NULL,
         data TEXT NOT NULL, text TEXT, created_at REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS messages_conv ON messages(conversation_id, seq);
+    CREATE TABLE IF NOT EXISTS blob_refs(ref TEXT NOT NULL, message_id TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(ref, message_id));
+    CREATE INDEX IF NOT EXISTS blob_refs_msg ON blob_refs(message_id);
+    CREATE INDEX IF NOT EXISTS blob_refs_conv ON blob_refs(conversation_id);
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, conversation_id UNINDEXED, content='messages', content_rowid='rowid', tokenize='porter unicode61');
     CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
         INSERT INTO messages_fts(rowid, text, conversation_id) VALUES (new.rowid, new.text, new.conversation_id); END;
@@ -53,7 +56,20 @@ enum Schema_ {
 
 final class ConversationStore: @unchecked Sendable {
     let db: Database
-    init(db: Database) { self.db = db }
+    /// Image payloads of this database's lessons (messages keep only references).
+    let blobs: BlobStore
+    init(db: Database) {
+        self.db = db
+        blobs = BlobStore(databasePath: db.path)
+        // Orphans (a crash between writing a blob and saving its message, a truncated turn) go at launch, off the main thread.
+        Task.detached(priority: .background) { [self] in blobs.collect(blobs.all(), inUse: inUse) }
+    }
+
+    /// A blob a message refers to; when the lookup fails it counts as in use (never delete on doubt).
+    private func inUse(_ ref: String) -> Bool {
+        guard let rows = try? db.query("SELECT 1 AS x FROM blob_refs WHERE ref=? LIMIT 1", ref) else { return true }
+        return !rows.isEmpty
+    }
 
     private let enc: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .secondsSince1970; return e }()
     private let dec: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .secondsSince1970; return d }()
@@ -70,8 +86,11 @@ final class ConversationStore: @unchecked Sendable {
     }
 
     func delete(_ id: String) {
+        let refs = ((try? db.query("SELECT DISTINCT ref FROM blob_refs WHERE conversation_id=?", id)) ?? []).compactMap { $0.string("ref") }
         try? db.execute("DELETE FROM messages WHERE conversation_id=?", id)
         try? db.execute("DELETE FROM conversations WHERE id=?", id)
+        try? db.execute("DELETE FROM blob_refs WHERE conversation_id=?", id)
+        blobs.collect(refs, inUse: inUse)
     }
 
     func messages(_ conversationID: String) -> [ChatMessage] {
@@ -103,10 +122,16 @@ final class ConversationStore: @unchecked Sendable {
             INSERT INTO messages(id, conversation_id, seq, data, text, created_at) VALUES(?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET data=excluded.data, text=excluded.text, seq=excluded.seq
             """, m.id, conversationID, seq, String(decoding: data, as: UTF8.self), text, m.createdAt)
+        try? db.execute("DELETE FROM blob_refs WHERE message_id=?", m.id)
+        for ref in Set(m.blobRefs) { try? db.execute("INSERT OR IGNORE INTO blob_refs(ref, message_id, conversation_id) VALUES(?,?,?)", ref, m.id, conversationID) }
     }
 
     func deleteMessages(_ conversationID: String, fromSeq: Int) {
+        let gone = "SELECT id FROM messages WHERE conversation_id=? AND seq>=?"
+        let refs = ((try? db.query("SELECT DISTINCT ref FROM blob_refs WHERE message_id IN (\(gone))", conversationID, fromSeq)) ?? []).compactMap { $0.string("ref") }
+        try? db.execute("DELETE FROM blob_refs WHERE message_id IN (\(gone))", conversationID, fromSeq)
         try? db.execute("DELETE FROM messages WHERE conversation_id=? AND seq>=?", conversationID, fromSeq)
+        blobs.collect(refs, inUse: inUse)   // a regenerated turn's screenshots; the grace period covers ones about to be re-saved
     }
 
     /// Full-text search across all lessons. Returns conversation ids with a snippet.

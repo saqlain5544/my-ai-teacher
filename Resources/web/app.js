@@ -10,6 +10,21 @@
   const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const hash = (s) => { let h = 2166136261 >>> 0; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return (h >>> 0).toString(36); };
   const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+  // Render caches are bounded by entries AND characters (one huge diagram or code block can't hold the page's memory),
+  // oldest out first; `T.dropCaches` empties them all when the app is short of memory.
+  const caches = [];
+  class Cache extends Map {
+    constructor(maxEntries, maxChars) { super(); this.maxEntries = maxEntries; this.maxChars = maxChars; this.chars = 0; caches.push(this); }
+    static size(v) { return typeof v === 'string' ? v.length : v && typeof v.svg === 'string' ? v.svg.length : 64; }
+    set(k, v) {
+      this.delete(k);
+      super.set(k, v); this.chars += Cache.size(v);
+      for (const old of super.keys()) { if (this.size <= this.maxEntries && this.chars <= this.maxChars) break; this.delete(old); }
+      return this;
+    }
+    delete(k) { if (!super.has(k)) return false; this.chars -= Cache.size(super.get(k)); return super.delete(k); }
+    clear() { this.chars = 0; super.clear(); }
+  }
 
   // ───────────────────────── State ─────────────────────────
   const S = {
@@ -35,7 +50,7 @@
   md.renderer.rules.html_block = (tokens, idx) => cleanHTML(tokens[idx].content);
   md.linkify.set({ fuzzyEmail: false });
 
-  const katexCache = new Map();
+  const katexCache = new Cache(4000, 2e6);
   const katexMacros = { '\\RR': '\\mathbb{R}', '\\NN': '\\mathbb{N}', '\\ZZ': '\\mathbb{Z}', '\\QQ': '\\mathbb{Q}', '\\CC': '\\mathbb{C}' };
   function tex(src, display) {
     const key = (display ? 'D' : 'I') + src;
@@ -43,7 +58,6 @@
     if (html === undefined) {
       try { html = katex.renderToString(src, { displayMode: display, throwOnError: false, strict: 'ignore', output: 'htmlAndMathml', macros: katexMacros, trust: false }); }
       catch (e) { html = '<span class="math-error">' + esc(src) + '</span>'; }
-      if (katexCache.size > 4000) katexCache.clear();
       katexCache.set(key, html);
     }
     return display ? '<div class="math-display">' + html + '</div>' : '<span class="math-inline">' + html + '</span>';
@@ -135,9 +149,9 @@
   // ───────────────────────── Fences ─────────────────────────
   const RUNNABLE = new Set(['python', 'py', 'python3', 'javascript', 'js', 'node', 'typescript', 'ts', 'swift', 'c', 'cpp', 'c++', 'go', 'golang', 'rust', 'rs', 'ruby', 'rb', 'bash', 'sh', 'zsh', 'shell', 'java']);
   const ALIAS = { js: 'javascript', ts: 'typescript', py: 'python', python3: 'python', rb: 'ruby', sh: 'bash', zsh: 'bash', shell: 'bash', console: 'bash', 'c++': 'cpp', cs: 'csharp', 'c#': 'csharp', kt: 'kotlin', rs: 'rust', golang: 'go', yml: 'yaml', md: 'markdown', html: 'xml', svg: 'xml', tex: 'latex', ps1: 'powershell', objc: 'objectivec', hs: 'haskell', ex: 'elixir', exs: 'elixir', erl: 'erlang', ml: 'ocaml', fs: 'fsharp', jl: 'julia', asm: 'x86asm', docker: 'dockerfile', make: 'makefile', proto: 'protobuf', vb: 'vbnet', clj: 'clojure', scm: 'scheme', el: 'lisp', tsx: 'typescript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', h: 'c', hpp: 'cpp', m: 'objectivec', pl: 'perl', text: 'plaintext', txt: 'plaintext' };
-  const hlCache = new Map();
+  const hlCache = new Cache(2000, 4e6);
   const loadingLangs = new Set();
-  const codeSources = new Map();
+  const codeSources = new Cache(1500, 4e6);
 
   function highlight(code, lang) {
     const key = lang + '\u0000' + code;
@@ -150,7 +164,6 @@
       else if (window.HLJS_LANGS && window.HLJS_LANGS.includes(name)) loadLang(name);
     }
     if (out === null) return esc(code);
-    if (hlCache.size > 2000) hlCache.clear();
     hlCache.set(key, out);
     return out;
   }
@@ -170,7 +183,7 @@
   function renderCode(code, lang, env) {
     code = code.replace(/\n$/, '');
     const key = 'c' + hash(lang + '|' + code);
-    codeSources.set(key, code); cap(codeSources, 1500);
+    codeSources.set(key, code);
     const l = (lang || '').toLowerCase();
     const runnable = RUNNABLE.has(l) && !(env && env.streamingFence);
     const out = S.codeOutputs.get(key);
@@ -181,7 +194,7 @@
       (out ? '<div class="code-output' + (out.failed ? ' failed' : '') + '"><span class="label">Output</span>' + esc(out.text) + '</div>' : '') + '</div>';
   }
 
-  const mermaidSvg = new Map(), mermaidSrc = new Map();
+  const mermaidSvg = new Cache(300, 4e6), mermaidSrc = new Cache(600, 2e6);
   let mermaidLoading = null, mermaidSeq = 0;
   function renderFence(tok, idx, tokens, env) {
     // The language is the first word, without punctuation models add: ```visual: ```{chart} ```Mermaid, ```python3.
@@ -199,7 +212,7 @@
     if (custom) { const out = custom(code, ctx, { open: isLastOpen }); if (out != null) return out; }
     if (lang === 'mermaid' || lang === 'mmd') {
       const key = 'm' + hash(code.trim() + (darkMQ.matches ? 'd' : 'l'));
-      mermaidSrc.set(key, code); cap(mermaidSrc, 600);
+      mermaidSrc.set(key, code);
       const tools = '<div class="diagram-tools"><button data-act="copy-src" data-src-key="' + key + '">Copy source</button></div>';
       if (isLastOpen) return '<div class="mermaid-block" data-key="' + key + '-p"><div class="diagram-pending">Drawing diagram…</div></div>';
       const done = mermaidSvg.get(key);
@@ -359,7 +372,7 @@
       if (!el.isConnected || !el.hasAttribute('data-pending')) continue;
       const code = mermaidSrc.get(key);
       if (!mermaidSvg.has(key)) {
-        try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); cap(mermaidSvg, 300); }
+        try { const { svg } = await renderMermaid(code.trim()); mermaidSvg.set(key, svg); }
         catch (e) {
           mermaidSvg.set(key, { error: String((e && (e.message || e.str)) || e).split('\n')[0].slice(0, 300) });
         }
@@ -387,7 +400,7 @@
   // A streaming reply is split at blank lines that can't change meaning (outside fences and $$ blocks, not before a
   // list item or an indented continuation). Finished sections come from a cache, so a frame costs O(the tail), not
   // O(the whole reply). Short replies and replies with footnotes/reference links render whole.
-  const segCache = new Map();
+  const segCache = new Cache(400, 4e6);
   function segments(text) {
     const lines = text.split('\n'), segs = [];
     let cur = [], fence = null, math = false;
@@ -410,13 +423,12 @@
     let html = '';
     for (let i = 0; i < segs.length - 1; i++) {
       let h = segCache.get(segs[i]);
-      if (h === undefined) { h = markdown(segs[i], false); segCache.set(segs[i], h); cap(segCache, 400); }
+      if (h === undefined) { h = markdown(segs[i], false); segCache.set(segs[i], h); }
       html += h;
     }
     return html + markdown(segs[segs.length - 1], true);
   }
   /** Keeps a Map to its newest `n` entries (Maps iterate in insertion order). */
-  function cap(map, n) { if (map.size > n) { const drop = map.size - n; let k = 0; for (const key of map.keys()) { if (k++ >= drop) break; map.delete(key); } } }
 
   /** Run component processors (language, tables, canvases…) on freshly inserted DOM. */
   function processNode(node) {
@@ -525,7 +537,10 @@
     const text = visibleText(m);
     let html = '';
     if (imgs.length || files.length) {
-      html += '<div class="attachments">' + imgs.filter(b => /^[A-Za-z0-9+/=\s]*$/.test(b.data || '')).map(b => '<img src="data:' + esc(/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + esc(b.data) + '" alt="">').join('') +
+      // Large images live on disk (Swift's blob store) and load by reference; small ones may still be inline.
+      const src = b => /^[0-9a-f]{64}$/.test(b.blob || '') ? 'teacher-blob://img/' + b.blob
+        : b.data && /^[A-Za-z0-9+/=\s]*$/.test(b.data) ? 'data:' + (/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + b.data : '';
+      html += '<div class="attachments">' + imgs.map(src).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
         files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
@@ -945,6 +960,22 @@
       });
     },
     notice(text) { if (window.TeacherToast) window.TeacherToast(text); },
+    // The app is short of memory: everything here re-renders on demand.
+    dropCaches() { caches.forEach(c => c.clear()); },
+    // The lesson's window moved on: everything before `id` is on disk only now, so its DOM goes (the page's memory stays
+    // bounded however long the lesson runs) and the "earlier" button says how many there are.
+    trimBefore(id, earlier) {
+      const i = S.messages.findIndex(m => m.id === id);
+      if (i <= 0) return;
+      for (const m of S.messages.splice(0, i)) {
+        const el = document.getElementById('m-' + m.id); if (el) el.remove();
+        S.byId.delete(m.id);
+        if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.delete(b.id));
+      }
+      let more = thread.querySelector('.earlier');
+      if (!more) { more = document.createElement('div'); more.className = 'earlier'; thread.prepend(more); }
+      more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(earlier).toLocaleString() + ' more)</button>';
+    },
     setFontSize(px) { document.documentElement.style.setProperty('--font-size', px + 'px'); },
     card(front, back, show) {
       document.body.classList.add('card-mode');

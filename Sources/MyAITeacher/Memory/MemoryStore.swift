@@ -74,6 +74,15 @@ final class MemoryStore: @unchecked Sendable {
         self.scope = scope
         MemorySchema.migrate(db)
         graph = scope == .learner ? ConceptGraph(db: db) : nil
+        Self.live.add(self)
+    }
+
+    private static let live = WeakRegistry<MemoryStore>()
+    /// Frees every index; each rebuilds from the database on its next use (memory pressure: see MemoryGovernor).
+    static func unloadAll() { live.all.forEach { $0.unload() } }
+    func unload() {
+        lock.lock(); defer { lock.unlock() }
+        docs = [:]; postings = [:]; byNorm = [:]; buckets = [:]; loadedVersion = nil
     }
 
     // MARK: Rows & index

@@ -218,12 +218,12 @@ struct OpenAIClient: LLMClient {
                     case .toolResult:
                         out.append(["role": "tool", "tool_call_id": .string(b.id ?? ""),
                                     "content": .string((b.text?.isEmpty ?? true) ? "(no output)" : b.text!)])
-                        if let d = b.data, let mime = b.mime {
+                        if let d = b.payload, let mime = b.mime {
                             pendingImages.append(["type": "image_url", "image_url": ["url": .string("data:\(mime);base64,\(d)")]])
                         }
                     case .text: if let t = b.text, !t.isEmpty { parts.append(["type": "text", "text": .string(t)]) }
                     case .file: parts.append(["type": "text", "text": .string("<file name=\"\(b.name ?? "file")\">\n\(b.text ?? "")\n</file>")])
-                    case .image: parts.append(["type": "image_url", "image_url": ["url": .string("data:\(b.mime ?? "image/png");base64,\(b.data ?? "")")]])
+                    case .image: parts.append(["type": "image_url", "image_url": ["url": .string("data:\(b.mime ?? "image/png");base64,\(b.payload ?? "")")]])
                     default: break
                     }
                 }

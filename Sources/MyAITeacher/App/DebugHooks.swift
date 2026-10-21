@@ -37,8 +37,15 @@ enum DebugHooks {
             transcript?.evaluateJavaScript(cmd["js"]?.string ?? "") { r, e in
                 AppLog.write("eval → \(e.map { "error: \($0.localizedDescription)" } ?? String(describing: r ?? "nil").prefix(4000))")
             }
+        case "shed":   // what memory pressure does: every rebuildable cache goes (the log says how much was freed)
+            MemoryGovernor.shared.shed(critical: cmd["critical"]?.bool == true, reason: "debug")
         case "send":
-            if let t = cmd["text"]?.string { session?.send(t); AppLog.write("sent: \(t.prefix(80))") }
+            if let t = cmd["text"]?.string {
+                // An image path attaches it, as a learner's drop would.
+                let img = cmd["image"]?.string.flatMap { ImageUtil.loadForModel(URL(fileURLWithPath: $0)) }
+                session?.send(t, attachments: img.map { [$0.block] } ?? [])
+                AppLog.write("sent: \(t.prefix(80))\(img == nil ? "" : " + image")")
+            }
         case "answer":
             // Only answers an interaction named explicitly (by tool-call id or title), never the learner's own.
             let match = app.interactions.pending.values.first { p in
@@ -147,20 +154,28 @@ enum DebugHooks {
             sv.cacheDisplay(in: sv.bounds, to: r)
             sheetRep = r; sheetSize = sv.bounds.size
         }
+        // Composited straight into one bitmap and encoded, all inside a pool: going through NSImage + TIFF left ~140 MB of
+        // image caches behind after a test run's snapshots.
         let finish: (NSImage?, NSRect) -> Void = { webImage, webFrame in
-            let img = NSImage(size: bounds.size)
-            img.lockFocus()
-            rep.draw(in: bounds)
-            if let webImage { webImage.draw(in: webFrame) }
-            if let sheetRep {
-                NSColor.black.withAlphaComponent(0.25).setFill()
-                bounds.fill(using: .sourceOver)
-                sheetRep.draw(in: NSRect(x: (bounds.width - sheetSize.width) / 2, y: bounds.height - sheetSize.height - 52, width: sheetSize.width, height: sheetSize.height))
-            }
-            img.unlockFocus()
-            if let tiff = img.tiffRepresentation, let r = NSBitmapImageRep(data: tiff), let png = r.representation(using: .png, properties: [:]) {
-                try? png.write(to: URL(fileURLWithPath: path))
-                AppLog.write("snapshot saved \(path)")
+            autoreleasepool {
+                guard let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh, bitsPerSample: 8,
+                                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
+                      let ctx = NSGraphicsContext(bitmapImageRep: out) else { return }
+                out.size = bounds.size
+                NSGraphicsContext.saveGraphicsState()
+                NSGraphicsContext.current = ctx
+                rep.draw(in: bounds)
+                if let webImage { webImage.draw(in: webFrame) }
+                if let sheetRep {
+                    NSColor.black.withAlphaComponent(0.25).setFill()
+                    bounds.fill(using: .sourceOver)
+                    sheetRep.draw(in: NSRect(x: (bounds.width - sheetSize.width) / 2, y: bounds.height - sheetSize.height - 52, width: sheetSize.width, height: sheetSize.height))
+                }
+                NSGraphicsContext.restoreGraphicsState()
+                if let png = out.representation(using: .png, properties: [:]) {
+                    try? png.write(to: URL(fileURLWithPath: path))
+                    AppLog.write("snapshot saved \(path)")
+                }
             }
         }
         if let web = transcript, web.window === window {

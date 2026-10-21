@@ -234,14 +234,14 @@ struct AnthropicClient: LLMClient {
                         content.append(["type": "thinking", "thinking": .string(b.text ?? ""), "signature": .string(sig)])
                     }
                 case .image:
-                    content.append(["type": "image", "source": ["type": "base64", "media_type": .string(b.mime ?? "image/png"), "data": .string(b.data ?? "")]])
+                    content.append(["type": "image", "source": ["type": "base64", "media_type": .string(b.mime ?? "image/png"), "data": .string(b.payload ?? "")]])
                 case .file:
                     content.append(["type": "text", "text": .string("<file name=\"\(b.name ?? "file")\">\n\(b.text ?? "")\n</file>")])
                 case .toolUse:
                     content.append(["type": "tool_use", "id": .string(b.id ?? ""), "name": .string(b.name ?? ""), "input": b.input ?? .object([:])])
                 case .toolResult:
                     var parts: [JSON] = [["type": "text", "text": .string((b.text?.isEmpty ?? true) ? "(no output)" : b.text!)]]
-                    if let d = b.data, let mime = b.mime {
+                    if let d = b.payload, let mime = b.mime {
                         parts.append(["type": "image", "source": ["type": "base64", "media_type": .string(mime), "data": .string(d)]])
                     }
                     var o: [String: JSON] = ["type": "tool_result", "tool_use_id": .string(b.id ?? ""), "content": .array(parts)]

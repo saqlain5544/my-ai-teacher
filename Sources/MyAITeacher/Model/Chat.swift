@@ -17,6 +17,18 @@ struct Block: Codable, Sendable, Hashable {
     var mime: String?
     var data: String?           // base64 payload for images
     var meta: JSON?             // UI-only metadata (search results, quiz state, timings…)
+    var blob: String?           // BlobStore reference once a large payload has moved to disk (then `data` is nil)
+
+    /// The base64 payload, inline or read back from disk. Only request builders call this, for what they actually send.
+    var payload: String? { data ?? blob.flatMap(BlobStore.base64) }
+    var hasPayload: Bool { data != nil || blob != nil }
+
+    /// Moves a large inline payload to `store`; false when there was nothing to move (or the write failed: it stays inline).
+    mutating func spill(into store: BlobStore) -> Bool {
+        guard let d = data, d.utf8.count >= BlobStore.spillChars, let ref = store.put(base64: d) else { return false }
+        blob = ref; data = nil
+        return true
+    }
 
     static func text(_ s: String) -> Block { Block(kind: .text, text: s) }
     static func thinking(_ s: String, signature: String? = nil) -> Block { Block(kind: .thinking, text: s, signature: signature) }
@@ -67,6 +79,21 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
     var turn: TurnMetrics?
     /// Extension-owned metadata (recalled memories, detected languages…).
     var meta: JSON?
+
+    /// Moves large image payloads to disk (see BlobStore); true when anything moved.
+    mutating func spill(into store: BlobStore) -> Bool {
+        var moved = false
+        for i in blocks.indices where blocks[i].spill(into: store) { moved = true }
+        return moved
+    }
+    var blobRefs: [String] { blocks.compactMap(\.blob) }
+
+    /// Roughly what this message costs in memory (text, payloads and tool input), for the lesson's window budget.
+    var approxBytes: Int {
+        blocks.reduce(256) { n, b in
+            n + (b.text?.utf8.count ?? 0) + (b.data?.utf8.count ?? 0) + (b.input.map { $0.compact.utf8.count } ?? 0) + 128
+        }
+    }
 
     var plainText: String {
         blocks.filter { $0.kind == .text }.compactMap(\.text).joined(separator: "\n")
