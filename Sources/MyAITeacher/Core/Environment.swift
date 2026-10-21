@@ -3,9 +3,12 @@ import Foundation
 enum AppPaths {
     /// Test profile: MYAITEACHER_HOME=/dir keeps the database, settings, default folder, quick questions and log under
     /// that directory, so end-to-end runs never touch the learner's own data.
+    /// Unit tests get a throwaway profile even without it: they must never open the learner's database or settings.
     static let testHome: URL? = ProcessInfo.processInfo.environment["MYAITEACHER_HOME"].flatMap {
         $0.isEmpty ? nil : URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath, isDirectory: true)
-    }
+    } ?? (NSClassFromString("XCTestCase") != nil
+        ? FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-tests-\(ProcessInfo.processInfo.processIdentifier)", isDirectory: true)
+        : nil)
     static let support: URL = {
         let base = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
         let url = testHome?.appendingPathComponent("support", isDirectory: true) ?? base.appendingPathComponent("MyAITeacher", isDirectory: true)
