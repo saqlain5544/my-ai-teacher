@@ -175,8 +175,10 @@ final class StudyStore: @unchecked Sendable {
     // MARK: Mastery
     @discardableResult
     func recordAttempt(subject: String, concept: String, correct: Bool, note: String?) -> MasteryItem {
-        let s = subject.trimmingCharacters(in: .whitespaces).lowercased(), c = concept.trimmingCharacters(in: .whitespaces)
-        let cur = mastery(subject: s, concept: c)
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        // One row per concept whatever its casing ("Chain rule" = "chain rule"): reuse the stored spelling.
+        let cur = mastery(subject: s, concept: concept.trimmingCharacters(in: .whitespaces))
+        let c = cur?.concept ?? concept.trimmingCharacters(in: .whitespaces)
         let p = BKT.update(cur?.pKnown ?? 0.2, correct: correct)
         let streak = correct ? (cur?.streak ?? 0) + 1 : 0
         try? db.execute("""
@@ -196,7 +198,7 @@ final class StudyStore: @unchecked Sendable {
     }
 
     func mastery(subject: String, concept: String) -> MasteryItem? {
-        (try? db.query("SELECT * FROM mastery WHERE subject=? AND concept=?", subject.lowercased(), concept))?.first.flatMap(masteryRow)
+        (try? db.query("SELECT * FROM mastery WHERE subject=? AND concept=? COLLATE NOCASE", subject.lowercased(), concept))?.first.flatMap(masteryRow)
     }
 
     func allMastery() -> [MasteryItem] {

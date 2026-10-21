@@ -82,7 +82,9 @@ enum Reflection {
         \(excerpt)
         """
         guard let json = await complete(client: client, model: model, system: system, user: user) else { return Outcome(title: nil, applied: 0) }
-        var out = apply(json, hub: hub, conversationID: conversationID)
+        // Only memories the model was shown may be changed or removed.
+        let shownIDs = Set((existing + "\n" + related).matches(of: #/\[#(\w+)\]/#).map { String($0.1) })
+        var out = apply(json, hub: hub, conversationID: conversationID, allowed: shownIDs)
         out.title = needsTitle ? json["title"]?.string?.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \n")) : nil
         return out
     }
@@ -115,23 +117,26 @@ enum Reflection {
 
     /// Two concept names that share at least half their content words (or one contains the other's words).
     static func sameConcept(_ a: String, _ b: String) -> Bool {
-        func words(_ s: String) -> Set<String> {
+        func words(_ s: String) -> [String] {
             let stop: Set<String> = ["and", "of", "the", "a", "an", "in", "to", "for", "basic", "basics", "intro", "introduction"]
-            return Set(s.lowercased().split { !$0.isLetter && !$0.isNumber }.map { w -> String in
+            return s.lowercased().split { !$0.isLetter && !$0.isNumber }.map { w -> String in
                 var w = String(w)
                 if w.count > 6, w.hasSuffix("ary") { w.removeLast(3) }        // planetary → planet
                 else if w.count > 3, w.hasSuffix("s") { w.removeLast() }     // planets → planet
                 return w
-            }.filter { !stop.contains($0) && $0.count > 1 })
+            }.filter { !stop.contains($0) }                                    // single letters count: Big O ≠ Big Theta
         }
         let x = words(a), y = words(b)
         guard !x.isEmpty, !y.isEmpty else { return false }
-        let shared = x.intersection(y).count
-        return x.isSubset(of: y) || y.isSubset(of: x) || Double(shared) / Double(x.union(y).count) >= 0.5
+        if Set(x) == Set(y) { return true }
+        // A longer name that only adds detail after the shorter one ("chain rule" → "chain rule for derivatives") is the
+        // same concept; one that adds a modifier in front is a narrower one (Calculus ≠ Multivariable calculus).
+        let (short, long) = x.count <= y.count ? (x, y) : (y, x)
+        return short.count >= 2 && Array(long.prefix(short.count)) == short
     }
 
-    /// Validates and applies model-proposed operations. Deterministic (unit-tested without a model).
-    static func apply(_ json: JSON, hub: MemoryHub, conversationID: String?, origin: String = "reflection") -> Outcome {
+    /// `allowed`: ids the model was shown; it may only change or remove those (nil = no restriction, for tests).
+    static func apply(_ json: JSON, hub: MemoryHub, conversationID: String?, origin: String = "reflection", allowed: Set<String>? = nil) -> Outcome {
         var out = Outcome(title: nil, applied: 0)
         // Concepts first, so memory adds can attach to them. Guards keep the graph a map of what was taught, not a log:
         // at most `maxNewConcepts` new nodes per lesson, no personal preferences as concepts, and near-duplicates
@@ -181,16 +186,20 @@ enum Reflection {
                 case .rejected: out.rejected += 1; out.rejections.append("\(c) — \(r.reason ?? "")")
                 }
             case "update":
-                guard let id, hub.exists(id) else { continue }
+                guard let id, hub.exists(id), allowed?.contains(id) ?? true else { continue }
+                let kind = op["kind"]?.string.flatMap(MemoryKind.init(rawValue:))
+                if kind == .episode { continue }                                                       // facts don't become logs
+                if hub.concept(id) != nil, (op["content"]?.string?.count ?? 0) > 80 { continue }     // a concept name, not a sentence
                 hub.update(id, content: op["content"]?.string, importance: op["importance"]?.double,
-                           kind: op["kind"]?.string.flatMap(MemoryKind.init(rawValue:)), concept: op["concept"]?.string, source: conversationID)
+                           kind: kind, concept: op["concept"]?.string, source: conversationID)
                 out.updated += 1
             case "resolve", "achieve", "archive":
-                guard let id, hub.get(id) != nil else { continue }
+                guard let id, hub.get(id) != nil, allowed?.contains(id) ?? true else { continue }
                 hub.resolveItem(id, source: conversationID); out.deleted += 1
             case "delete":
-                guard let id, hub.exists(id) else { continue }
-                hub.delete(id); out.deleted += 1
+                // Soft: archived with its history (a wrong deletion can be undone); concepts are never deleted here.
+                guard let id, hub.get(id) != nil, allowed?.contains(id) ?? true else { continue }
+                hub.archiveItem(id, status: "deleted", source: conversationID); out.deleted += 1
             default: continue
             }
         }

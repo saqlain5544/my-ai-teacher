@@ -11,6 +11,7 @@ final class ConceptGraph: @unchecked Sendable {
     private var alias: [String: Int64] = [:]
     private var keyStems: [Int64: [Set<String>]] = [:]
     private var postings: [String: Set<Int64>] = [:]
+    private var aliasesOf: [Int64: [String]] = [:]
     private var loadedVersion: Int?
 
     static let sql = """
@@ -38,7 +39,7 @@ final class ConceptGraph: @unchecked Sendable {
     private func ensureLoaded() {
         let v = MemorySchema.dataVersion(db)
         if loadedVersion == v { return }
-        nodes = [:]; alias = [:]; keyStems = [:]; postings = [:]
+        nodes = [:]; alias = [:]; keyStems = [:]; postings = [:]; aliasesOf = [:]
         var subjects: [Int64: [String]] = [:]
         for r in (try? db.query("SELECT concept_id, subject FROM concept_subjects ORDER BY subject")) ?? [] {
             if let c = r.int("concept_id"), let s = r.string("subject") { subjects[Int64(c), default: []].append(s) }
@@ -58,6 +59,7 @@ final class ConceptGraph: @unchecked Sendable {
 
     private func indexAlias(_ key: String, _ id: Int64) {
         alias[key] = id
+        aliasesOf[id, default: []].append(key)
         let st = Set(key.split(separator: " ").map(String.init).filter { MemoryText.keep($0) || $0.count >= 2 })
         guard !st.isEmpty else { return }
         keyStems[id, default: []].append(st)
@@ -65,6 +67,37 @@ final class ConceptGraph: @unchecked Sendable {
     }
 
     private func reload() { lock.lock(); loadedVersion = nil; ensureLoaded(); lock.unlock() }
+
+    /// Re-reads only these concepts into the index after our own writes — O(changed), not O(graph). (Writes by another
+    /// process change data_version and still trigger one full load.)
+    private func refresh(_ ids: [Int64]) {
+        lock.lock(); defer { lock.unlock() }
+        guard loadedVersion != nil else { ensureLoaded(); return }
+        for id in Set(ids) {
+            nodes[id] = nil
+            for k in aliasesOf.removeValue(forKey: id) ?? [] where alias[k] == id { alias[k] = nil }
+            for st in keyStems.removeValue(forKey: id) ?? [] { for s in st { postings[s]?.remove(id) } }
+            guard let r = (try? db.query("SELECT * FROM concepts WHERE id=?", id))?.first else { continue }
+            let subjects = ((try? db.query("SELECT subject FROM concept_subjects WHERE concept_id=? ORDER BY subject", id)) ?? []).compactMap { $0.string("subject") }
+            nodes[id] = Concept(rowid: id, name: r.string("name") ?? "", subjects: subjects, summary: r.string("summary"),
+                                status: r.string("status"), pKnown: r.double("p_known"), attempts: r.int("attempts") ?? 0,
+                                correct: r.int("correct") ?? 0, evidence: r.int("evidence") ?? 1, origin: r.string("origin") ?? "inferred",
+                                source: r.string("source"), createdAt: r.date("created_at") ?? Date(), updatedAt: r.date("updated_at") ?? Date())
+            for a in (try? db.query("SELECT norm FROM concept_aliases WHERE concept_id=?", id)) ?? [] { if let n = a.string("norm") { indexAlias(n, id) } }
+        }
+    }
+
+    /// True when `to` is reachable from `from` through prerequisite edges (bounded walk).
+    private func reachesByPrereq(_ from: Int64, _ to: Int64) -> Bool {
+        var seen: Set<Int64> = [from], frontier = [from]
+        while let n = frontier.popLast(), seen.count < 5000 {
+            if n == to { return true }
+            for r in (try? db.query("SELECT dst FROM concept_edges WHERE src=? AND rel='prereq'", n)) ?? [] {
+                if let d = r.int("dst").map(Int64.init), seen.insert(d).inserted { frontier.append(d) }
+            }
+        }
+        return false
+    }
 
     // MARK: Reads
 
@@ -176,7 +209,7 @@ final class ConceptGraph: @unchecked Sendable {
         for s in subjects.compactMap(MemoryText.subject) where s != "general" {
             try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s)
         }
-        reload()
+        refresh([id])
         return id
     }
 
@@ -192,19 +225,23 @@ final class ConceptGraph: @unchecked Sendable {
         let k = MemoryText.conceptKey(name)
         guard !k.isEmpty else { return }
         try? db.execute("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", k, id)
-        reload()
+        refresh([id])
     }
 
     func link(_ src: Int64, _ dst: Int64, _ rel: ConceptRelation) {
         guard src != dst else { return }
-        // Prerequisite edges must not form a 2-cycle (A needs B and B needs A): keep the newest claim.
-        if rel == .prerequisite { try? db.execute("DELETE FROM concept_edges WHERE src=? AND dst=? AND rel='prereq'", dst, src) }
+        // Prerequisite edges must not form a 2-cycle (A needs B and B needs A): keep the newest claim. A longer cycle
+        // (A→B→C→A) is refused: prerequisites are a DAG.
+        if rel == .prerequisite {
+            try? db.execute("DELETE FROM concept_edges WHERE src=? AND dst=? AND rel='prereq'", dst, src)
+            if reachesByPrereq(dst, src) { return }
+        }
         try? db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) VALUES(?,?,?,?)", src, dst, rel.rawValue, Date())
     }
     func unlink(_ src: Int64, _ dst: Int64) { try? db.execute("DELETE FROM concept_edges WHERE (src=? AND dst=?) OR (src=? AND dst=?)", src, dst, dst, src) }
 
     func update(_ id: Int64, name: String? = nil, summary: String? = nil, status: String? = nil, subjects: [String]? = nil) {
-        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty {
+        if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty, name.count <= 80 {   // a name, not a sentence
             try? db.execute("UPDATE concepts SET name=? WHERE id=?", name.trimmingCharacters(in: .whitespaces), id)
             try? db.execute("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", MemoryText.conceptKey(name), id)
         }
@@ -215,7 +252,7 @@ final class ConceptGraph: @unchecked Sendable {
             for s in subjects.compactMap(MemoryText.subject) { try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s) }
         }
         try? db.execute("UPDATE concepts SET updated_at=? WHERE id=?", Date(), id)
-        reload()
+        refresh([id])
     }
 
     /// Merges `from` concepts into `into`: aliases, subjects, edges and evidence move; memories are re-pointed by the caller.
@@ -234,7 +271,7 @@ final class ConceptGraph: @unchecked Sendable {
                 """, f, f, f, f, into, f)
             deleteRow(f)
         }
-        reload()
+        refresh([into] + from)
     }
 
     private func deleteRow(_ id: Int64) {
@@ -246,7 +283,7 @@ final class ConceptGraph: @unchecked Sendable {
     func delete(_ id: Int64) {
         deleteRow(id)
         try? db.execute("UPDATE memories SET concept_id=NULL WHERE concept_id=?", id)
-        reload()
+        refresh([id])
     }
     func deleteAll() {
         try? db.script("DELETE FROM concept_edges; DELETE FROM concept_subjects; DELETE FROM concept_aliases; DELETE FROM concepts;")
@@ -264,6 +301,7 @@ final class ConceptGraph: @unchecked Sendable {
         let rows = (try? db.query("SELECT * FROM mastery WHERE updated_at > ? ORDER BY updated_at", mark)) ?? []
         guard !rows.isEmpty else { return 0 }
         var newest = mark
+        var touched: [Int64] = []
         for r in rows {
             guard let name = r.string("concept"), let at = r.double("updated_at") else { continue }
             let subject = r.string("subject")
@@ -275,9 +313,10 @@ final class ConceptGraph: @unchecked Sendable {
                 WHERE id=? AND COALESCE(mastery_at, 0) <= ?
                 """, r.double("p_known"), r.int("attempts") ?? 0, r.int("correct") ?? 0, at, at, id, at)
             newest = max(newest, at)
+            touched.append(id)
         }
         MemorySchema.setMeta(db, "mastery_sync", String(newest))
-        reload()
+        refresh(touched)
         return rows.count
     }
 

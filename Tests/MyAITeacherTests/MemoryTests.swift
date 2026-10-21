@@ -254,7 +254,6 @@ final class MemoryModelTests: XCTestCase {
         let o = Reflection.apply(json, hub: hub, conversationID: "c")
         let names = Set(hub.graph!.all().map(\.name))
         XCTAssertFalse(names.contains("favourite planet"), "preferences are not concepts")
-        XCTAssertFalse(names.contains("planet size"), "folded into 'planetary order and size'")
         XCTAssertFalse(names.contains("world geography basics"), "folded into 'basic world geography'")
         XCTAssertEqual(names.count, 4, "existing + at most 3 new: \(names.sorted())")
         XCTAssertFalse(names.contains("orbits"), "4th new concept rejected")
@@ -320,4 +319,74 @@ final class MemoryModelTests: XCTestCase {
 /// GlobalStore always opens the real app DB; build Services over the fixture DB instead.
 enum GlobalStoreFixture {
     static func make(_ fx: MemoryFixture) throws -> GlobalStore { GlobalStore(db: fx.learnerDB) }
+}
+
+/// Correctness guards found by stress testing: updates win, nothing is folded or deleted that shouldn't be.
+final class MemoryCorrectnessTests: XCTestCase {
+    func testUpdatesSupersedeAndKeepHistory() throws {
+        let fx = try MemoryFixture()
+        let a = fx.hub.add(kind: .profile, content: "The learner is 15 years old and in year 10", subject: nil, importance: 0.6, origin: "inferred", source: "t")
+        let b = fx.hub.add(kind: .profile, content: "The learner is 16 years old and in year 10", subject: nil, importance: 0.6, origin: "inferred", source: "t")
+        XCTAssertEqual(a.id, b.id, "same fact restated")
+        XCTAssertTrue(fx.hub.get(a.id)!.content.contains("16"), "the newer number wins")
+        XCTAssertTrue(fx.hub.history(a.id).contains { $0.content.contains("15") }, "the old value is in history")
+        let p = fx.hub.add(kind: .preference, content: "Prefers Python for scripting exercises", subject: nil, importance: 0.6, origin: "inferred", source: "t")
+        _ = fx.hub.add(kind: .preference, content: "Does not prefer Python for scripting exercises", subject: nil, importance: 0.6, origin: "inferred", source: "t")
+        XCTAssertTrue(fx.hub.get(p.id)!.content.hasPrefix("Does not"), "a negation is an update, not lost")
+    }
+
+    func testReflectionOnlyTouchesWhatItWasShownAndNeverHardDeletes() throws {
+        let fx = try MemoryFixture()
+        let keep = fx.hub.add(kind: .goal, content: "Wants to pass the AP Physics exam in May", subject: "physics", importance: 0.7, origin: "explicit", source: "t")
+        let shown = fx.hub.add(kind: .fact, content: "Works night shifts as a nurse on weekdays", subject: nil, importance: 0.6, origin: "inferred", source: "t")
+        _ = Reflection.apply(["operations": [["op": "delete", "id": .string(keep.id)], ["op": "delete", "id": .string(shown.id)]]],
+                             hub: fx.hub, conversationID: "c", allowed: [shown.id])
+        XCTAssertTrue(fx.hub.all().contains { $0.id == keep.id }, "not shown → untouched")
+        XCTAssertFalse(fx.hub.all().contains { $0.id == shown.id }, "shown and deleted → gone from the active model")
+        XCTAssertFalse(fx.hub.history(shown.id).isEmpty, "…but archived with its history, not hard-deleted")
+        _ = Reflection.apply(["operations": [["op": "update", "id": .string(keep.id), "kind": "episode"]]], hub: fx.hub, conversationID: "c")
+        XCTAssertEqual(fx.hub.get(keep.id)?.kind, .goal, "a goal never turns into an episode")
+    }
+
+    func testDistinctConceptsDoNotFold() {
+        for (a, b) in [("Calculus", "Multivariable calculus"), ("Algebra", "Linear algebra"), ("WWI", "WWII"),
+                       ("Big O", "Big Theta"), ("Newton's 1st law", "Newton's 2nd law"), ("Integration by parts", "Integration by substitution")] {
+            XCTAssertFalse(Reflection.sameConcept(a, b), "\(a) vs \(b)")
+        }
+        XCTAssertTrue(Reflection.sameConcept("Planets", "planet"))
+    }
+
+    func testDurableFactsAreNotRejected() {
+        for c in ["Is a backend developer building a REST API", "Works as a tool and die maker", "Has completed a bachelor's degree in physics",
+                  "Finished high school in 2019"] {
+            XCTAssertNil(MemoryPolicy.rejection(c, kind: .profile, explicit: false), c)
+        }
+        XCTAssertNotNil(MemoryPolicy.rejection("Completed the quiz on fractions", kind: .fact, explicit: false))
+        XCTAssertNotNil(MemoryPolicy.rejection("The app crashed during the quiz", kind: .fact, explicit: false))
+    }
+
+    func testMasteryIsOneRowPerConceptWhateverTheCase() throws {
+        let fx = try MemoryFixture()
+        fx.study.recordAttempt(subject: "Calculus", concept: "Chain rule", correct: false, note: nil)
+        fx.study.recordAttempt(subject: "calculus", concept: "chain rule", correct: true, note: nil)
+        fx.study.recordAttempt(subject: "calculus", concept: "Chain Rule", correct: true, note: nil)
+        let rows = fx.study.allMastery().filter { $0.concept.lowercased() == "chain rule" }
+        XCTAssertEqual(rows.count, 1); XCTAssertEqual(rows.first?.attempts, 3)
+    }
+
+    func testPrerequisitesStayAcyclicAndGraphWritesScale() throws {
+        let fx = try MemoryFixture()
+        guard let g = fx.hub.graph else { return XCTFail("graph") }
+        let a = g.upsert(name: "Limits")!, b = g.upsert(name: "Derivatives")!, c = g.upsert(name: "Integrals")!
+        g.link(b, a, .prerequisite); g.link(c, b, .prerequisite)
+        g.link(a, c, .prerequisite)   // would close A→…→A
+        let edges = (try fx.learnerDB.query("SELECT src, dst FROM concept_edges WHERE rel='prereq'")).map { "\($0.int("src")!)>\($0.int("dst")!)" }
+        XCTAssertFalse(edges.contains("\(a)>\(c)"), "cycle refused: \(edges)")
+        let t0 = Date()
+        for i in 0..<3000 { _ = g.upsert(name: "Concept \(i) of the big graph", subjects: ["s\(i % 7)"]) }
+        let per = Date().timeIntervalSince(t0) / 3000 * 1000
+        print("[memory] concept upsert at 3k: \(String(format: "%.2f", per)) ms each")
+        XCTAssertLessThan(per, 5, "incremental index: no full reload per write")
+        XCTAssertNotNil(g.find("concept 2999 of the big graph"))
+    }
 }

@@ -104,6 +104,13 @@ final class MemoryHub: @unchecked Sendable {
         EventBus.publish(.memoryChanged(MemoryChange(kind: .deleted, ids: [id])))
     }
 
+    /// Soft removal with history (used by automatic passes, so a wrong call can be undone).
+    func archiveItem(_ id: String, status: String, source: String? = nil) {
+        guard let (st, n) = resolve(id) else { return }
+        st.archive(n, status: status, source: source)
+        EventBus.publish(.memoryChanged(MemoryChange(kind: .deleted, ids: [id])))
+    }
+
     func delete(_ id: String) {
         switch ref(id) {
         case .memory(let st, let n): st.delete(n)

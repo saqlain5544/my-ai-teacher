@@ -87,6 +87,18 @@ enum MemoryText {
     }
 
     static func clip(_ s: String, _ n: Int) -> String { s.count <= n ? s : String(s.prefix(n - 1)) + "…" }
+
+    private static let negation = try! NSRegularExpression(pattern: #"\b(not|no|never|none|cannot|without|nor)\b|n['’]t\b"#, options: [.caseInsensitive])
+    private static func negations(_ s: String) -> Int { negation.numberOfMatches(in: s, range: NSRange(s.startIndex..., in: s)) }
+    private static func numbers(_ s: String) -> Set<String> { Set(tokens(s).filter { $0.contains(where: \.isNumber) }) }
+
+    /// `new` restates `old` with a changed number, negation, or a short/stop-word difference: an update, not a duplicate.
+    static func isUpdate(_ new: String, of old: String) -> Bool {
+        guard new != old else { return false }
+        if numbers(new) != numbers(old) { return true }
+        if negations(new) % 2 != negations(old) % 2 { return true }
+        return Set(stems(new)) == Set(stems(old)) && Set(tokens(new)) != Set(tokens(old))
+    }
 }
 
 /// Decides whether a candidate memory is durable and non-derivable. Explicit requests ("remember that…") bypass it.
@@ -94,9 +106,9 @@ enum MemoryPolicy {
     private static func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p, options: [.caseInsensitive]) }
     private static let habitual = re(#"\b(often|always|usually|frequently|repeatedly|tends? to|keeps?|regularly|consistently|every time|prefers?|likes?|struggles?|confuses?|mixes up)\b"#)
     private static let request = re(#"\b(asked|asks|requested|wanted to know|wants to know|wondered|inquired|queried|was curious|needed help with|asked for help)\b"#)
-    private static let oneOffResult = re(#"\b(solved|computed|calculated|answered|scored|got \d|worked (on|through)|completed|finished|attempted|submitted)\b"#)
+    private static let oneOffResult = re(#"\b(solved|computed|calculated|answered|scored|got \d|attempted|submitted)\b|\b(worked (on|through)|completed|finished) (the|this|a|an|that|its|their|one|two|\d+) (quiz|problem|exercise|question|task|worksheet|example|practice|flashcards?|review)s?\b"#)
     private static let sessionBound = re(#"\b(today|tonight|this (lesson|session|conversation|chat|turn)|just now|right now|earlier in|in the last message|in this quiz)\b"#)
-    private static let mechanics = re(#"\b(the app|tool call|tool|interrupted|cancell?ed|skipped (the|a) (question|quiz)|api|error message|the assistant|the teacher (used|called|ran|showed)|system prompt|memory tool|flashcard screen)\b"#)
+    private static let mechanics = re(#"\b(the app (crashed|froze|closed|showed|opened|failed)|tool calls?|(memory|quiz|search) tool|interrupted|cancell?ed|skipped (the|a) (question|quiz)|api (key|error)|error message|the assistant|the teacher (used|called|ran|showed)|system prompt|flashcard screen)\b"#)
 
     /// Returns a reason when the content should NOT be stored.
     static func rejection(_ content: String, kind: MemoryKind, explicit: Bool) -> String? {

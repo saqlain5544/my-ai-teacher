@@ -207,9 +207,12 @@ final class MemoryStore: @unchecked Sendable {
 
         let now = Date()
         if let old = existing {
-            // Keep the more specific text: the new one if it covers the old one's terms or is longer.
+            // Same fact restated. A change of number, of negation, or of words the normaliser ignores (15 → 16 years old,
+            // "prefers" → "does not prefer", AB → BC) is an update: the newer text wins and the old one goes to history.
+            // Otherwise keep the more specific text: the new one if it covers the old one's terms or is longer.
             let oldStems = Set(MemoryText.stems(old.content))
-            let takeNew = oldStems.isSubset(of: stems) && content != old.content || content.count > old.content.count + 10
+            let takeNew = MemoryText.isUpdate(content, of: old.content)
+                || oldStems.isSubset(of: stems) && content != old.content || content.count > old.content.count + 10
             let newContent = takeNew ? content : old.content
             if takeNew { recordHistory(old.rowid, content: old.content, change: "merged", source: source) }
             try? db.execute("""
