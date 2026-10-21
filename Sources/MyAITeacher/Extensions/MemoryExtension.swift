@@ -58,9 +58,10 @@ final class MemoryExtension: AgentExtension {
         let convID = session.id
         let client = provider.client(apiKey: key)
         let box = WeakBox(session), me = WeakBox(self)
-        // Supervised: a reflection that hangs (a stalled provider) is ended by its watchdog and tried once more.
-        Task { await Runtime.job(job, limit: Intensity(maxRestarts: 1, period: 600), watchdog: 300) { _ in
-            let outcome = await Reflection.run(messages: slice, conversationID: convID, client: client, model: model,
+        // Supervised: a reflection whose model goes silent for 180 s (every streamed event is a heartbeat) is ended by its
+        // watchdog and tried once more; a long answer is never cut off.
+        Task { await Runtime.job(job, limit: Intensity(maxRestarts: 1, period: 600), watchdog: 180) { job in
+            let outcome = await Reflection.run(messages: slice, conversationID: convID, client: BeatingClient(inner: client, beat: job.beat), model: model,
                                                services: services, needsTitle: needsTitle)
             await MainActor.run {
                 box.value?.applyReflection(outcome, messageCount: count)
@@ -87,8 +88,8 @@ final class WeakBox<T: AnyObject>: @unchecked Sendable {
 extension MemoryExtension {
     /// Runs a consolidation pass in the background and announces the result.
     func consolidate(services: Services, client: LLMClient, model: String) {
-        Task { await Runtime.job("memory.consolidate", limit: Intensity(maxRestarts: 1, period: 600), watchdog: 600) { _ in
-            let o = await Reflection.consolidate(client: client, model: model, services: services)
+        Task { await Runtime.job("memory.consolidate", limit: Intensity(maxRestarts: 1, period: 600), watchdog: 180) { job in
+            let o = await Reflection.consolidate(client: BeatingClient(inner: client, beat: job.beat), model: model, services: services)
             AppLog.write("memory consolidation: \(o.updated) updated, \(o.deleted) removed")
             if o.applied > 0 {
                 EventBus.publish(.memoryChanged(MemoryChange(kind: .reflected, summary: "consolidated")))

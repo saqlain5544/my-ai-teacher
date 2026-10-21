@@ -622,10 +622,11 @@ final class ChatSession: ObservableObject, Identifiable {
             """
             let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
                                  messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
-            // A supervised job (Runtime › jobs): a failed or hung summary call is retried with backoff, then the digest below.
-            var text = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 180) {
+            // A supervised job (Runtime › jobs): a failed call, or one silent for 120 s (every streamed event is a heartbeat),
+            // is retried with backoff, then the digest below.
+            var text = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 120) { beat in
                 var t = ""
-                for try await ev in client.stream(req) { if case .text(let s) = ev { t += s } }
+                for try await ev in BeatingClient(inner: client, beat: beat).stream(req) { if case .text(let s) = ev { t += s } }
                 return t
             }) ?? ""
             if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }

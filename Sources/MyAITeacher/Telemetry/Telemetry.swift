@@ -67,10 +67,13 @@ final class Telemetry: @unchecked Sendable {
             self?.flushSync()
         }
         // A supervised service (Runtime › services): a flush that hangs (a locked database) is ended by the watchdog and
-        // the service restarts with backoff. The work itself stays on the telemetry queue (serial, utility QoS).
+        // the service restarts with backoff. The work itself stays on the telemetry queue (serial, utility QoS); while a
+        // tick is still stuck there, a restarted service doesn't queue another behind it.
+        let inFlight = Locked(false)
         Task { [weak self, queue, flushInterval] in
             await Runtime.every("telemetry.flush", seconds: flushInterval, watchdog: 60) {
-                await withCheckedContinuation { c in queue.async { self?.tick(); c.resume() } }
+                guard inFlight.mutate({ busy in defer { busy = true }; return !busy }) else { return }
+                await withCheckedContinuation { c in queue.async { self?.tick(); inFlight.mutate { $0 = false }; c.resume() } }
             }
         }
         queue.async { [weak self] in self?.pruneIfDue(force: true) }

@@ -95,21 +95,29 @@ enum Runtime {
 
     static var metrics: RuntimeMetrics { registry.snapshot() }
 
+    /// What a job's work gets: which attempt this is, and the heartbeat its watchdog listens for. The watchdog measures
+    /// silence, not running time: work that streams from a model beats on every event (`BeatingClient`), so a long
+    /// answer is never cut off and paid for twice; only work that stops making progress is ended.
+    struct Job: Sendable {
+        let attempt: Int
+        let beat: @Sendable () -> Void
+    }
+
     /// Background work under `jobs`: a watchdog, a restart with backoff after a crash (up to `limit`), and a place in the
     /// metrics. One job per name at a time: false when `name` is already running or waiting to restart.
     @discardableResult
     static func job(_ name: String, restart: Restart = .transient, limit: Intensity = Intensity(maxRestarts: 2, period: 60),
-                    watchdog: TimeInterval? = 300, _ work: @escaping @Sendable (_ attempt: Int) async throws -> Void) async -> Bool {
+                    watchdog: TimeInterval? = 300, _ work: @escaping @Sendable (Job) async throws -> Void) async -> Bool {
         guard let jobs = await supervisor("jobs") else { return false }
         return await jobs.startChild(ChildSpec(id: name, restart: restart, intensity: limit, backoff: Backoff(initial: 1, max: 20), start: { attempt in
-            Proc.spawn(name, of: Never.self, watchdog: watchdog) { _ in try await work(attempt) }.proc
+            Proc.spawn(name, of: Never.self, watchdog: watchdog) { ctx in try await work(Job(attempt: attempt, beat: { ctx.heartbeat() })) }.proc
         }))
     }
 
-    /// Runs `work` as a job and returns its result. A crash (a thrown error, the watchdog) restarts it with backoff; past
-    /// `limit` this throws. Cancelling the caller stops the job.
+    /// Runs `work` as a job and returns its result. A crash (a thrown error, the watchdog: no `beat` for `watchdog`
+    /// seconds) restarts it with backoff; past `limit` this throws. Cancelling the caller stops the job.
     static func call<T: Sendable>(_ name: String, limit: Intensity = Intensity(maxRestarts: 2, period: 120), watchdog: TimeInterval? = 300,
-                                  _ work: @escaping @Sendable () async throws -> T) async throws -> T {
+                                  _ work: @escaping @Sendable (_ beat: @escaping @Sendable () -> Void) async throws -> T) async throws -> T {
         guard let jobs = await supervisor("jobs") else { throw RuntimeError(message: "The runtime isn't available.") }
         let id = "\(name)#\(PID.next().id)"
         let result = OneShot<T>()
@@ -119,7 +127,10 @@ enum Runtime {
                 Task {
                     guard !result.isDone else { return }
                     let started = await jobs.startChild(ChildSpec(id: id, restart: .transient, intensity: limit, backoff: Backoff(initial: 1, max: 10), start: { _ in
-                        Proc.spawn(id, of: Never.self, watchdog: watchdog) { _ in result.finish(.success(try await work())) }.proc
+                        Proc.spawn(id, of: Never.self, watchdog: watchdog) { ctx in
+                            guard !result.isDone else { return }   // the caller gave up (cancelled) before this incarnation began
+                            result.finish(.success(try await work({ ctx.heartbeat() })))
+                        }.proc
                     }, onExit: { reason in
                         result.finish(.failure(RuntimeError(message: "\(name) failed (\(reason)).")))
                     }))
@@ -169,5 +180,25 @@ final class OneShot<T: Sendable>: @unchecked Sendable {
             return .some(s.cont)
         }
         if case .some(let cont?) = c { cont.resume(with: r) }
+    }
+}
+
+/// A model client whose every streamed event is a heartbeat: wrapped around a job's client, the job's watchdog measures
+/// how long the model has been silent, not how long it has been answering.
+struct BeatingClient: LLMClient {
+    let inner: LLMClient
+    let beat: @Sendable () -> Void
+    func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+        let (inner, beat) = (inner, beat)
+        return AsyncThrowingStream { c in
+            let t = Task {
+                do {
+                    beat()
+                    for try await ev in inner.stream(request) { beat(); c.yield(ev) }
+                    c.finish()
+                } catch { c.finish(throwing: error) }
+            }
+            c.onTermination = { _ in t.cancel() }
+        }
     }
 }

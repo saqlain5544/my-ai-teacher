@@ -146,19 +146,58 @@ final class RuntimeTests: XCTestCase {
 
     func testWatchdogEndsAHungProcessAndItIsRestarted() async {
         let log = Log()
+        let id = "w-" + UUID().uuidString   // restart counts are global: a name of its own
+        // A 1 s watchdog against 0.1 s heartbeats: ten times the margin, so a busy machine can't fake a hang.
         let sup = await Supervisor.start("rt.dog", intensity: Intensity(maxRestarts: 5, period: 10), backoff: .none, children: [
-            ChildSpec(id: "w", restart: .transient, start: { n in
-                Proc.spawn("rt.dog.w", of: Never.self, watchdog: 0.2) { ctx in
+            ChildSpec(id: id, restart: .transient, start: { n in
+                Proc.spawn("rt.dog.w", of: Never.self, watchdog: 1) { ctx in
                     log.add("w\(n)")
-                    if n == 0 { try await Task.sleep(nanoseconds: 10_000_000_000) }   // hangs without a heartbeat
-                    for _ in 0..<5 { try await Task.sleep(nanoseconds: 100_000_000); ctx.heartbeat() }   // alive: beats in time
+                    if n == 0 { try await Task.sleep(nanoseconds: 30_000_000_000) }   // hangs without a heartbeat
+                    for _ in 0..<15 { try await Task.sleep(nanoseconds: 100_000_000); ctx.heartbeat() }   // alive for 1.5 s: beats in time
                 }.proc
             }, onExit: { r in log.add("exit \(r)") }),
         ])
-        await eventually(4, "restarted after the watchdog, then finished") { log.all.contains("exit normal") }
+        await eventually(6, "restarted after the watchdog, then finished") { log.all.contains("exit normal") }
         XCTAssertEqual(log.all.filter { $0.hasPrefix("w") }, ["w0", "w1"])
-        XCTAssertEqual(Runtime.registry.restarts("w"), 1)
+        XCTAssertEqual(Runtime.registry.restarts(id), 1)
         await sup.stop()
+    }
+
+    func testCallWatchdogMeasuresSilenceNotRunningTime() async throws {
+        let attempts = Locked(0)
+        // 1.5 s of work that beats every 0.1 s under a 0.5 s watchdog: never cut off (a long model answer).
+        let v = try await Runtime.call("rt.long", limit: Intensity(maxRestarts: 2, period: 60), watchdog: 0.5) { beat -> Int in
+            attempts.mutate { $0 += 1 }
+            for _ in 0..<15 { try await Task.sleep(nanoseconds: 100_000_000); beat() }
+            return 7
+        }
+        XCTAssertEqual(v, 7); XCTAssertEqual(attempts.get(), 1, "not restarted")
+        // The same work through a model client: every streamed event is a heartbeat.
+        let slow = ScriptedLLM([step(.text("x"), delay: 0.2)])
+        let events = try await Runtime.call("rt.client", watchdog: 0.5) { beat -> Int in
+            var n = 0
+            for try await _ in BeatingClient(inner: slow, beat: beat).stream(LLMRequest(model: "m", system: "", messages: [])) { n += 1 }
+            return n
+        }
+        XCTAssertEqual(events, 3)
+        // Silent work is ended and tried again.
+        let silent = Locked(0)
+        _ = try? await Runtime.call("rt.silent", limit: Intensity(maxRestarts: 1, period: 60), watchdog: 0.3) { _ -> Int in
+            silent.mutate { $0 += 1 }
+            try await Task.sleep(nanoseconds: 3_000_000_000)
+            return 0
+        }
+        XCTAssertEqual(silent.get(), 2, "the watchdog ended it, then the retry")
+    }
+
+    func testMailboxHandsOverWhatWasNeverReceived() async {
+        let p = Proc.spawn("rt.handover", of: Int.self) { ctx in try await Task.sleep(nanoseconds: 10_000_000_000) }
+        for i in 1...3 { p.send(i) }
+        p.stop()
+        _ = await p.wait()
+        let left = await p.mailbox.remaining()
+        XCTAssertEqual(left, [1, 2, 3], "a successor gets them, in order")
+        XCTAssertFalse(p.send(4))
     }
 
     func testStopEndsEverythingAndLeavesNoTasks() async {
@@ -170,10 +209,11 @@ final class RuntimeTests: XCTestCase {
                 while await ctx.receive() != nil {}
             }.proc })
         }
-        let before = Runtime.metrics.count
         let sup = await Supervisor.start("rt.leak", intensity: Intensity(maxRestarts: 1, period: 1), children: children)
         await eventually(2, "all started") { alive.get() == 50 }
-        XCTAssertGreaterThanOrEqual(Runtime.metrics.count, before + 51)
+        // Each by name (a count would include whatever else the process runs meanwhile).
+        XCTAssertTrue((0..<50).allSatisfy { Runtime.registry.whereis("rt.leak.\($0)") != nil })
+        XCTAssertNotNil(Runtime.registry.supervisor("rt.leak"))
         let t0 = Date()
         await sup.stop()
         XCTAssertLessThan(Date().timeIntervalSince(t0), 2, "cooperative bodies stop at once")
@@ -223,17 +263,17 @@ final class RuntimeTests: XCTestCase {
 
     func testCallRetriesThenReturnsOrGivesUp() async throws {
         let tries = Locked(0)
-        let v = try await Runtime.call("rt.call", limit: Intensity(maxRestarts: 2, period: 60)) { () -> Int in
+        let v = try await Runtime.call("rt.call", limit: Intensity(maxRestarts: 2, period: 60)) { _ -> Int in
             if tries.mutate({ $0 += 1; return $0 }) < 2 { throw Boom() }
             return 42
         }
         XCTAssertEqual(v, 42); XCTAssertEqual(tries.get(), 2)
         do {
-            _ = try await Runtime.call("rt.call.fail", limit: Intensity(maxRestarts: 1, period: 60)) { () -> Int in throw Boom() }
+            _ = try await Runtime.call("rt.call.fail", limit: Intensity(maxRestarts: 1, period: 60)) { _ -> Int in throw Boom() }
             XCTFail("must give up")
         } catch { XCTAssertTrue("\(error.localizedDescription)".contains("gave up"), error.localizedDescription) }
         let t0 = Date()
-        let task = Task { try await Runtime.call("rt.call.slow") { () -> Int in try await Task.sleep(nanoseconds: 5_000_000_000); return 1 } }
+        let task = Task { try await Runtime.call("rt.call.slow") { _ -> Int in try await Task.sleep(nanoseconds: 5_000_000_000); return 1 } }
         try await Task.sleep(nanoseconds: 100_000_000)
         task.cancel()
         let r = await task.result

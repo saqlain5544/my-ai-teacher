@@ -73,7 +73,10 @@ final class AppModel: ObservableObject {
             self.showSubAgent(run.id)
         }
         touchRecent(ws)
-        Task { await Runtime.job("embeddings.warmup", restart: .temporary) { _ in _ = Embedder.shared.vector("warm up") } }   // loads the on-device model off the main thread
+        // Loads the on-device model on a GCD thread (it blocks for a while), not on the main thread or the cooperative pool.
+        Task { await Runtime.job("embeddings.warmup", restart: .temporary) { _ in
+            await withCheckedContinuation { c in DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up"); c.resume() } }
+        } }
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
     }
 

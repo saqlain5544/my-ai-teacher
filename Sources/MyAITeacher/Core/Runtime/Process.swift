@@ -47,8 +47,9 @@ final class Locked<T>: @unchecked Sendable {
 final class Mailbox<M: Sendable>: @unchecked Sendable {
     fileprivate enum Envelope: Sendable { case message(M), marker(UInt64) }
     private let input: AsyncStream<Envelope>.Continuation
-    private var iterator: AsyncStream<Envelope>.Iterator   // touched only by the receiving process
+    private var iterator: AsyncStream<Envelope>.Iterator   // touched only by the receiving process (and `remaining`)
     private let counts = Locked((queued: 0, marker: UInt64(0)))
+    private let receiving = Locked(false)
 
     init() {
         let (stream, input) = AsyncStream.makeStream(of: Envelope.self)
@@ -78,7 +79,8 @@ final class Mailbox<M: Sendable>: @unchecked Sendable {
                 if !Task.isCancelled { input.yield(.marker(id)) }
             }
         }
-        defer { timer?.cancel() }
+        defer { timer?.cancel(); receiving.mutate { $0 = false } }
+        receiving.mutate { $0 = true }
         while let e = await iterator.next() {
             switch e {
             case .message(let m): counts.mutate { $0.queued -= 1 }; return m
@@ -93,6 +95,8 @@ final class Mailbox<M: Sendable>: @unchecked Sendable {
     func drain() async -> [M] {
         let id = newMarker()
         guard case .enqueued = input.yield(.marker(id)) else { return [] }
+        receiving.mutate { $0 = true }
+        defer { receiving.mutate { $0 = false } }
         var out: [M] = []
         while let e = await iterator.next() {
             if case .message(let m) = e { counts.mutate { $0.queued -= 1 }; out.append(m) }
@@ -102,6 +106,19 @@ final class Mailbox<M: Sendable>: @unchecked Sendable {
     }
 
     func close() { input.finish() }
+
+    /// What was sent but never received, once the owning process has ended: a successor (a restarted incarnation)
+    /// takes it over, so nothing sent to a process that crashed is lost. Closes the mailbox. Empty if a receive is still
+    /// running after a second (an abandoned body stuck inside one): two receivers must never touch the iterator at once.
+    func remaining() async -> [M] {
+        input.finish()
+        for _ in 0..<50 where receiving.get() { try? await Task.sleep(nanoseconds: 20_000_000) }
+        guard receiving.mutate({ busy in defer { busy = true }; return !busy }) else { return [] }
+        defer { receiving.mutate { $0 = false } }
+        var out: [M] = []
+        while let e = await iterator.next() { if case .message(let m) = e { counts.mutate { $0.queued -= 1 }; out.append(m) } }
+        return out
+    }
 
     private func newMarker() -> UInt64 { counts.mutate { $0.marker += 1; return $0.marker } }
 }
