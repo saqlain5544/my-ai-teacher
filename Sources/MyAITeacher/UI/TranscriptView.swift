@@ -94,14 +94,20 @@ struct TranscriptView: NSViewRepresentable {
         // MARK: TranscriptSink
         func reset(_ messages: [ChatMessage], conversation: Conversation) {
             pendingDeltas.removeAll()
-            let payload = "[" + messages.map(Self.script).joined(separator: ",") + "]"
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
             if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }
             if let s = session, s.base > 0 { opts["earlier"] = .number(Double(s.base)) }
             if let anchor = pendingAnchor { opts["anchor"] = .string(anchor); pendingAnchor = nil }
-            run("T.reset(\(payload), \(JSON.object(opts).compact))", replaceQueue: true)
+            // Built in one buffer of the exact size: every intermediate copy of a long lesson's payload (8 MB for 4,000
+            // messages) would stay in the footprint, as freed large blocks do.
+            let parts = messages.map(Self.script), tail = "], " + JSON.object(opts).compact + ")"
+            var js = "T.reset(["
+            js.reserveCapacity(parts.reduce(js.utf8.count + tail.utf8.count) { $0 + $1.utf8.count + 1 })
+            for (i, p) in parts.enumerated() { if i > 0 { js += "," }; js += p }
+            js += tail
+            run(js, replaceQueue: true)
             if ready {
                 web?.evaluateJavaScript("document.querySelectorAll('.msg').length + ' rendered / ' + document.body.scrollHeight + 'px'") { r, _ in
                     AppLog.write("reset \(conversation.title.prefix(40)): \(messages.count) messages → \(r ?? "?")")

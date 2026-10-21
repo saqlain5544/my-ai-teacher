@@ -160,9 +160,14 @@ enum AppLog {
     static let url: URL = AppPaths.testHome?.appendingPathComponent("MyAITeacher.log")
         ?? FileManager.default.urls(for: .libraryDirectory, in: .userDomainMask)[0].appendingPathComponent("Logs/MyAITeacher.log")
 
+    /// Used on `queue` only. A formatter per line cost the caller (often the main thread) an ICU time-zone load: one
+    /// took 373 ms under load in a perf run.
+    nonisolated(unsafe) private static let stamps = ISO8601DateFormatter()
+
     static func write(_ line: String) {
-        let stamp = ISO8601DateFormatter().string(from: Date())
+        let now = Date()
         queue.async {
+            let stamp = stamps.string(from: now)
             let fm = FileManager.default
             try? fm.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
             if let size = (try? fm.attributesOfItem(atPath: url.path))?[.size] as? Int, size > 2_000_000 {
