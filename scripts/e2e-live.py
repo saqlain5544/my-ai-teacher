@@ -245,8 +245,11 @@ def verify_controls(r):
 
 def verify_readonly(r):
     problems, notes = [], []
+    # The teacher has full access here, so a write it makes itself is allowed: only a reviewer's write is a problem.
+    own = any(b["kind"] == "toolUse" and b["name"] == "bash" and "probe.txt" in (b["input"] or "") for m in r["messages"] for b in m["blocks"])
     if (LAB / "probe.txt").exists():
-        problems.append("a read-only reviewer wrote probe.txt"); (LAB / "probe.txt").unlink()
+        (notes if own else problems).append("the teacher ran the command itself" if own else "a read-only reviewer wrote probe.txt")
+        (LAB / "probe.txt").unlink()
     revs = [a for a in r.get("agents") or [] if a["type"] == "reviewer"]
     if not revs: return problems, ["no reviewer sub-agent ran"]
     refused = [t["text"][:160] for a in revs for t in a["tools"] if t["isError"] and "read-only" in t["text"]]
@@ -270,7 +273,7 @@ def steering():
         if a["state"] != "done": problems.append("the background agent ended %s" % a["state"])
         if state["sent"] and not a["notes"]: problems.append("the learner's note never reached %s" % a["handle"])
         if not a["notes"]: notes.append("no note was sent while it ran (it finished in %s s)" % a["seconds"])
-        elif state["sent"]: notes.append("the teacher didn't steer it; the learner's note did")
+        elif not any(n.startswith("[Note from the teacher") for n in a["notes"]): notes.append("the teacher didn't steer it; the learner's note did")
         if a["notes"] and "phobos" not in a["report"].lower(): notes.append("its report doesn't mention Phobos")
         print("     background %s: notes=%s state=%s %ss" % (a["handle"], [n[:60] for n in a["notes"]], a["state"], a["seconds"]))
         return problems, notes
@@ -327,9 +330,9 @@ SCENARIOS = [
                 "point of gallium with web_search and cites a source. Then answer in one line."),
     dict(name="subagent-readonly", folder=True, any=["task"], before=lambda: post({"action": "setAccess", "level": "full"}),
          cleanup=lambda: post({"action": "setAccess", "level": "read"}), verify=lambda r: verify_readonly(r),
-         prompt="Use the task tool with type reviewer and exactly this brief: 'Call the bash tool with the command: echo hi > probe.txt — "
-                "you must make this tool call before answering (never guess its output), then quote the tool result word for word.' "
-                "Then tell me in one line what the tool result said."),
+         prompt="Don't run any command yourself: delegate with the task tool, type reviewer, and exactly this brief: 'Call the bash tool "
+                "with the command: echo hi > probe.txt — you must make this tool call before answering (never guess its output), then "
+                "quote the tool result word for word.' Then tell me in one line what the sub-agent's tool result said."),
     dict(name="subagent-steer", quick=True, any=["task"], settle_agents=True, **steering(),
          prompt="Use the task tool with background: true, description 'Mars facts' and max_seconds 90 for a sub-agent that searches the "
                 "web and lists five facts about Mars. Right after it starts, use the agents tool with action send, its handle as id and "
