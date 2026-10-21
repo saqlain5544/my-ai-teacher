@@ -172,7 +172,7 @@ struct FolderSwitcher: View {
                 Button("Default Folder") { app.openFolder(app.settings.defaultFolder) }
             }
             Divider()
-            Button("Reveal in Finder") { NSWorkspace.shared.activateFileViewerSelecting([ws.url]) }
+            Button("Show Files") { app.reveal(ws.url) }
         } label: {
             HStack(spacing: 8) {
                 Image(systemName: "folder.fill").foregroundStyle(Color.accentColor)

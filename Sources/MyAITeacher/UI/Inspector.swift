@@ -1,0 +1,345 @@
+import SwiftUI
+import WebKit
+import PDFKit
+import Combine
+
+/// Right-side panel: the lesson folder's files and an in-app web page viewer. Nothing here opens another app.
+enum InspectorTab: String, CaseIterable, Identifiable {
+    case files, page
+    var id: String { rawValue }
+    var title: String { self == .files ? "Files" : "Page" }
+}
+
+struct InspectorPanel: View {
+    @EnvironmentObject var app: AppModel
+    var session: ChatSession?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            Picker("", selection: $app.inspectorTab) {
+                ForEach(InspectorTab.allCases) { Text($0.title).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().padding(8)
+            Divider()
+            switch app.inspectorTab {
+            case .files: FileExplorer(root: app.workspace.url, session: session)
+            case .page: PageViewer()
+            }
+        }
+        .frame(minWidth: 260)
+    }
+}
+
+// MARK: Files
+
+/// One directory entry. Children load when first expanded (O(entries in expanded folders), never the whole tree).
+@MainActor
+final class FileNode: ObservableObject, Identifiable {
+    let url: URL
+    let isDir: Bool
+    @Published var children: [FileNode]?
+    @Published var expanded = false { didSet { if expanded, children == nil { load() } } }
+    nonisolated let id: String
+    var more = 0
+
+    static let skipped: Set<String> = [".git", "node_modules", ".build", "build", "DerivedData", "__pycache__", ".venv", "venv", ".DS_Store"]
+    static let limit = 400
+
+    init(url: URL, isDir: Bool) { self.url = url; self.isDir = isDir; self.id = url.path }
+
+    func load() {
+        let keys: [URLResourceKey] = [.isDirectoryKey]
+        let items = (try? FileManager.default.contentsOfDirectory(at: url, includingPropertiesForKeys: keys, options: [])) ?? []
+        let visible = items.filter { u in
+            let n = u.lastPathComponent
+            return !Self.skipped.contains(n) && (!n.hasPrefix(".") || n == ".teacher")
+        }
+        let nodes = visible.map { u in FileNode(url: u, isDir: (try? u.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false) }
+            .sorted { ($0.isDir ? 0 : 1, $0.url.lastPathComponent.localizedLowercase) < ($1.isDir ? 0 : 1, $1.url.lastPathComponent.localizedLowercase) }
+        more = max(0, nodes.count - Self.limit)
+        // Keep expansion state of folders that are still there.
+        let old = Dictionary((children ?? []).map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        children = nodes.prefix(Self.limit).map { n in
+            if let o = old[n.id], o.isDir == n.isDir { return o }
+            return n
+        }
+    }
+
+    /// Re-reads every expanded folder (after the teacher writes files).
+    func refresh() {
+        guard isDir, children != nil else { return }
+        load()
+        children?.filter(\.expanded).forEach { $0.refresh() }
+    }
+}
+
+struct FileExplorer: View {
+    @EnvironmentObject var app: AppModel
+    let root: URL
+    var session: ChatSession?
+    @StateObject private var tree = FileTreeModel()
+
+    var body: some View {
+        VSplitView {
+            VStack(spacing: 0) {
+                HStack {
+                    Image(systemName: "folder").foregroundStyle(.secondary)
+                    Text(root.lastPathComponent).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                    Spacer()
+                    Button { tree.root?.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                        .buttonStyle(.borderless).help("Refresh")
+                }
+                .padding(.horizontal, 10).padding(.vertical, 6)
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 0) {
+                        if let r = tree.root { NodeChildren(node: r, depth: 0, selected: $tree.selected) }
+                    }.padding(.vertical, 4)
+                }
+            }
+            .frame(minHeight: 160)
+            if let sel = tree.selected, !sel.isDir {
+                FilePreview(url: sel.url, root: root, session: session).frame(minHeight: 160)
+            }
+        }
+        .onAppear {
+            tree.open(root)
+            if let u = app.revealRequest { tree.reveal(u, root: root); app.revealRequest = nil }
+        }
+        .onChange(of: root) { _, r in tree.open(r) }
+        .onReceive(EventBus.subject.receive(on: RunLoop.main)) { e in
+            if case .toolFinished(_, let tool, _, _) = e, ["write", "edit", "bash", "run_code", "visual"].contains(tool) { tree.root?.refresh() }
+        }
+        .onChange(of: app.revealRequest) { _, u in if let u { tree.reveal(u, root: root); app.revealRequest = nil } }
+    }
+}
+
+@MainActor
+final class FileTreeModel: ObservableObject {
+    @Published var root: FileNode?
+    @Published var selected: FileNode?
+
+    func open(_ url: URL) {
+        guard root?.url != url else { return }
+        let r = FileNode(url: url, isDir: true)
+        r.expanded = true
+        root = r; selected = nil
+    }
+
+    /// Expands the folders down to `url` and selects it.
+    func reveal(_ url: URL, root rootURL: URL) {
+        open(rootURL)
+        guard var node = root, url.path.hasPrefix(rootURL.path) else { return }
+        let parts = url.path.dropFirst(rootURL.path.count).split(separator: "/")
+        for p in parts {
+            if node.children == nil { node.load() }
+            guard let next = node.children?.first(where: { $0.url.lastPathComponent == p }) else { break }
+            if next.isDir { next.expanded = true }
+            node = next
+        }
+        selected = node
+    }
+}
+
+private struct NodeChildren: View {
+    @ObservedObject var node: FileNode
+    let depth: Int
+    @Binding var selected: FileNode?
+
+    var body: some View {
+        ForEach(node.children ?? []) { c in
+            NodeRow(node: c, depth: depth, selected: $selected)
+        }
+        if node.more > 0 {
+            Text("… \(node.more) more").font(.caption).foregroundStyle(.tertiary).padding(.leading, CGFloat(depth) * 14 + 28)
+        }
+    }
+}
+
+private struct NodeRow: View {
+    @ObservedObject var node: FileNode
+    let depth: Int
+    @Binding var selected: FileNode?
+
+    var body: some View {
+        Button {
+            if node.isDir { node.expanded.toggle() } else { selected = node }
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: node.isDir ? (node.expanded ? "chevron.down" : "chevron.right") : "")
+                    .font(.caption2).frame(width: 10).foregroundStyle(.secondary)
+                Image(systemName: icon).foregroundStyle(node.isDir ? Color.accentColor : .secondary).frame(width: 16)
+                Text(node.url.lastPathComponent).lineLimit(1).truncationMode(.middle)
+                Spacer(minLength: 0)
+            }
+            .font(.callout)
+            .padding(.leading, CGFloat(depth) * 14 + 6).padding(.vertical, 3).padding(.trailing, 6)
+            .background(selected?.id == node.id ? Color.accentColor.opacity(0.18) : .clear)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        if node.isDir && node.expanded {
+            NodeChildren(node: node, depth: depth + 1, selected: $selected)
+        }
+    }
+
+    private var icon: String {
+        if node.isDir { return node.url.lastPathComponent == ".teacher" ? "graduationcap" : "folder.fill" }
+        switch node.url.pathExtension.lowercased() {
+        case "png", "jpg", "jpeg", "gif", "heic", "webp", "svg": return "photo"
+        case "pdf": return "doc.richtext"
+        case "md", "txt", "rtf": return "doc.text"
+        case "json", "yaml", "yml", "toml", "csv": return "tablecells"
+        case "swift", "py", "js", "ts", "c", "cpp", "h", "rs", "go", "java", "rb", "sh", "zig", "html", "css": return "chevron.left.forwardslash.chevron.right"
+        default: return "doc"
+        }
+    }
+}
+
+/// In-app preview: text/code, images and PDFs; anything can be attached to the next message.
+struct FilePreview: View {
+    @EnvironmentObject var app: AppModel
+    let url: URL
+    let root: URL
+    var session: ChatSession?
+    @State private var content: Content = .loading
+
+    enum Content { case loading, text(String, truncated: Bool), image(NSImage), pdf(PDFDocument), other(String) }
+    nonisolated static let textLimit = 200_000
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Text(url.lastPathComponent).font(.caption.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                Spacer()
+                if let session {
+                    Button("Attach") { Composer.attach([url], to: session) }.help("Attach to your next message")
+                    Button("Ask") {
+                        let rel = url.path.hasPrefix(root.path) ? String(url.path.dropFirst(root.path.count + 1)) : url.path
+                        session.draft = (session.draft.isEmpty ? "" : session.draft + "\n") + "About `\(rel)`: "
+                    }.help("Ask the teacher about this file")
+                }
+            }
+            .controlSize(.small).padding(.horizontal, 10).padding(.vertical, 6)
+            Divider()
+            Group {
+                switch content {
+                case .loading: ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+                case .text(let s, let truncated):
+                    ScrollView([.vertical, .horizontal]) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(s).font(.system(.caption, design: .monospaced)).textSelection(.enabled)
+                            if truncated { Text("… preview truncated").font(.caption2).foregroundStyle(.tertiary) }
+                        }.padding(8).frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                case .image(let img): Image(nsImage: img).resizable().scaledToFit().padding(8)
+                case .pdf(let doc): PDFKitView(document: doc)
+                case .other(let info): Text(info).font(.caption).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+                }
+            }
+        }
+        .task(id: url) { content = .loading; content = await Self.load(url) }
+    }
+
+    nonisolated static func load(_ url: URL) async -> Content {
+        let ext = url.pathExtension.lowercased()
+        if ext == "pdf", let d = PDFDocument(url: url) { return .pdf(d) }
+        if ["png", "jpg", "jpeg", "gif", "heic", "webp", "tiff", "bmp"].contains(ext), let img = NSImage(contentsOf: url) { return .image(img) }
+        guard let h = try? FileHandle(forReadingFrom: url) else { return .other("Can't read this file.") }
+        defer { try? h.close() }
+        let data = (try? h.read(upToCount: textLimit + 1)) ?? Data()
+        if data.prefix(4096).contains(0) {
+            let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? data.count
+            return .other("Binary file · \(ByteCountFormatter.string(fromByteCount: Int64(size), countStyle: .file))")
+        }
+        return .text(String(decoding: data.prefix(textLimit), as: UTF8.self), truncated: data.count > textLimit)
+    }
+}
+
+struct PDFKitView: NSViewRepresentable {
+    let document: PDFDocument
+    func makeNSView(context: Context) -> PDFView {
+        let v = PDFView(); v.autoScales = true; v.displayMode = .singlePageContinuous; v.document = document; return v
+    }
+    func updateNSView(_ v: PDFView, context: Context) { if v.document !== document { v.document = document } }
+}
+
+// MARK: Page viewer
+
+/// In-app browser for links from lessons. Ephemeral storage (no cookies kept), downloads and popups stay inside.
+struct PageViewer: View {
+    @EnvironmentObject var app: AppModel
+    @StateObject private var page = PageModel()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 6) {
+                Button { page.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!page.canGoBack)
+                Button { page.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!page.canGoForward)
+                Button { page.web.reload() } label: { Image(systemName: page.loading ? "xmark" : "arrow.clockwise") }
+                Text(page.url?.host() ?? "No page").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
+                    .frame(maxWidth: .infinity, alignment: .leading).help(page.url?.absoluteString ?? "")
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(page.url?.absoluteString ?? "", forType: .string)
+                } label: { Image(systemName: "link") }.help("Copy link").disabled(page.url == nil)
+            }
+            .buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 6)
+            Divider()
+            if app.webURL == nil {
+                Text("Links you open in a lesson appear here.").font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                WebPageView(web: page.web)
+            }
+        }
+        .onAppear { if let u = app.webURL { page.load(u) } }
+        .onChange(of: app.webURL) { _, u in if let u { page.load(u) } }
+    }
+}
+
+@MainActor
+final class PageModel: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
+    let web: WKWebView
+    @Published var url: URL?
+    @Published var loading = false
+    @Published var canGoBack = false
+    @Published var canGoForward = false
+    private var observers: [NSKeyValueObservation] = []
+
+    override init() {
+        let cfg = WKWebViewConfiguration()
+        cfg.websiteDataStore = .nonPersistent()
+        web = WKWebView(frame: .zero, configuration: cfg)
+        super.init()
+        web.navigationDelegate = self
+        web.uiDelegate = self
+        observers = [
+            web.observe(\.url) { [weak self] w, _ in MainActor.assumeIsolated { self?.url = w.url } },
+            web.observe(\.isLoading) { [weak self] w, _ in MainActor.assumeIsolated { self?.loading = w.isLoading } },
+            web.observe(\.canGoBack) { [weak self] w, _ in MainActor.assumeIsolated { self?.canGoBack = w.canGoBack } },
+            web.observe(\.canGoForward) { [weak self] w, _ in MainActor.assumeIsolated { self?.canGoForward = w.canGoForward } },
+        ]
+    }
+
+    func load(_ u: URL) { if web.url != u { web.load(URLRequest(url: u)) } }
+
+    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
+        let scheme = action.request.url?.scheme ?? ""
+        decisionHandler(["http", "https", "about", "data", "blob"].contains(scheme) ? .allow : .cancel)
+    }
+
+    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
+        decisionHandler(response.canShowMIMEType ? .allow : .cancel)   // no downloads
+    }
+
+    // target=_blank and window.open load here instead of a new window.
+    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
+        if let u = action.request.url { webView.load(URLRequest(url: u)) }
+        return nil
+    }
+}
+
+struct WebPageView: NSViewRepresentable {
+    let web: WKWebView
+    func makeNSView(context: Context) -> WKWebView { web }
+    func updateNSView(_ nsView: WKWebView, context: Context) {}
+}

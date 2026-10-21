@@ -31,6 +31,14 @@ struct ChatView: View {
                 LessonInfoButton(session: session)
             }
         }
+        .inspector(isPresented: $app.inspectorShown) {
+            InspectorPanel(session: session)
+                .inspectorColumnWidth(min: 260, ideal: 340, max: 640)
+                .toolbar {
+                    Spacer()
+                    Button { app.inspectorShown.toggle() } label: { Label("Files", systemImage: "sidebar.right") }.help("Files and pages")
+                }
+        }
         .onDrop(of: [.fileURL, .image], isTargeted: $dropTargeted) { providers in
             Composer.handleDrop(providers, session: session)
             return true

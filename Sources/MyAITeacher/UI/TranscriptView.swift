@@ -163,7 +163,7 @@ struct TranscriptView: NSViewRepresentable {
                 decisionHandler(action.request.url?.scheme == "about" ? .allow : .cancel); return
             }
             if [.other, .reload].contains(action.navigationType), action.request.url?.isFileURL == true { decisionHandler(.allow); return }
-            if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") { NSWorkspace.shared.open(url) }
+            if let url = action.request.url, ["http", "https", "mailto"].contains(url.scheme ?? "") { AppModel.shared.openLink(url) }
             decisionHandler(.cancel)
         }
 
@@ -194,7 +194,7 @@ struct TranscriptView: NSViewRepresentable {
             case "telemetry":
                 WebTelemetry.handle(j, webView: web)
             case "open":
-                if let u = j["url"]?.string.flatMap(URL.init(string:)), ["http", "https", "mailto"].contains(u.scheme ?? "") { NSWorkspace.shared.open(u) }
+                if let u = j["url"]?.string.flatMap(URL.init(string:)) { app.openLink(u) }
             case "copy":
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(j["text"]?.string ?? "", forType: .string)
@@ -237,7 +237,7 @@ struct TranscriptView: NSViewRepresentable {
 
         // Disable the default context menu items that navigate.
         func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for navigationAction: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-            if let u = navigationAction.request.url { NSWorkspace.shared.open(u) }
+            if let u = navigationAction.request.url { AppModel.shared.openLink(u) }
             return nil
         }
     }

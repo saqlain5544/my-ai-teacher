@@ -30,6 +30,11 @@ final class AppModel: ObservableObject {
     @Published var modelErrors: [String: String] = [:]
     /// Provider metadata per model (context window, max output, reasoning, vision, pricing), from the provider's /models.
     @Published var modelMeta: [String: [String: ModelInfo]] = [:]
+    // Right-side inspector (files + in-app page viewer).
+    @Published var inspectorShown = false
+    @Published var inspectorTab: InspectorTab = .files
+    @Published var webURL: URL?
+    @Published var revealRequest: URL?
     @Published var dueCount = 0
     @Published var memoryCount = 0
     @Published var searchResults: [String]? = nil
@@ -231,6 +236,24 @@ final class AppModel: ObservableObject {
     func flushAll() { for s in sessions.values { s.close() } }
     func isRunning(_ id: String) -> Bool { sessions[id]?.isRunning ?? false }
     var anyRunning: Bool { sessions.values.contains { $0.isRunning } || !interactions.pending.isEmpty }
+
+    // MARK: In-app navigation (nothing opens another app)
+
+    /// Opens a link in the inspector's page viewer; mailto copies the address instead of launching Mail.
+    func openLink(_ url: URL) {
+        switch url.scheme?.lowercased() {
+        case "http", "https":
+            webURL = url; inspectorTab = .page; inspectorShown = true
+        case "mailto":
+            let addr = url.absoluteString.dropFirst("mailto:".count).split(separator: "?").first.map(String.init) ?? ""
+            NSPasteboard.general.clearContents(); NSPasteboard.general.setString(addr, forType: .string)
+            EventBus.publish(.notice(conversationID: nil, text: "Copied \(addr)"))
+        default: break
+        }
+    }
+
+    /// Shows a file or folder in the inspector's file explorer.
+    func reveal(_ url: URL) { inspectorTab = .files; inspectorShown = true; revealRequest = url }
 
     // MARK: Providers & models
 

@@ -65,6 +65,12 @@ enum DebugHooks {
         case "dismissSheet": app.accessPrompt = nil
         case "openFolder":
             if let p = cmd["path"]?.string { app.openFolder(URL(fileURLWithPath: p)) }
+        case "inspector":   // {"action":"inspector","url":"https://…"} | {"action":"inspector","reveal":"/path"} | {"action":"inspector","show":false}
+            let app = AppModel.shared
+            if let u = cmd["url"]?.string.flatMap(URL.init(string:)) { app.openLink(u) }
+            else if let p = cmd["reveal"]?.string { app.reveal(URL(fileURLWithPath: p)) }
+            else { app.inspectorShown = cmd["show"]?.bool ?? !app.inspectorShown }
+            AppLog.write("inspector shown=\(app.inspectorShown) tab=\(app.inspectorTab.rawValue)")
         case "status":
             AppLog.write("status running=\(session?.isRunning ?? false) msgs=\(session?.messages.count ?? -1) status=\(session?.status ?? "-") error=\(session?.errorMessage ?? "-")")
         case "resize":

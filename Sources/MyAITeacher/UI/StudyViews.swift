@@ -39,7 +39,7 @@ struct CardFaceView: NSViewRepresentable {
         func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
             guard let body = m.body as? [String: Any], let type = body["type"] as? String else { return }
             if type == "ready" { ready = true; if let p = pending { web?.evaluateJavaScript(p); pending = nil } }
-            if type == "open", let s = body["url"] as? String, let u = URL(string: s) { NSWorkspace.shared.open(u) }
+            if type == "open", let s = body["url"] as? String, let u = URL(string: s) { AppModel.shared.openLink(u) }
         }
     }
 }

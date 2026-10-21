@@ -187,7 +187,7 @@ struct ToolsSettings: View {
                         let panel = NSOpenPanel(); panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
                         if panel.runModal() == .OK, let u = panel.url { settings.value.workspacePath = u.path }
                     }
-                    Button("Reveal") { NSWorkspace.shared.open(settings.defaultFolder) }
+                    Button("Show") { AppModel.shared.reveal(settings.defaultFolder) }
                 }
                 Text("Used when no other folder is open.").font(.caption).foregroundStyle(.secondary)
             }
