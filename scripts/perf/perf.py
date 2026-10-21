@@ -18,7 +18,7 @@ app and its WebKit WebContent/GPU/Networking processes every 250 ms (proc_pid_ru
 heap by call stack after each workload (MallocStackLogging + heap/malloc_history/vmmap/leaks). Never waits on a dialog:
 a recorder that does not start in time is dropped for its fallback.
 """
-import argparse, ctypes, json, os, pathlib, plistlib, re, shutil, signal, statistics, subprocess, sys, threading, time
+import argparse, ctypes, fcntl, json, os, pathlib, plistlib, re, shutil, signal, statistics, subprocess, sys, threading, time
 from datetime import datetime
 
 HERE = pathlib.Path(__file__).resolve().parent
@@ -150,6 +150,11 @@ class App:
         stamp.write_text(mtime)
 
     def check_stopped(self):
+        # One run per home: two would share (and delete) one profile and pid file.
+        self.home.mkdir(parents=True, exist_ok=True)
+        self.lock = open(self.home / "run.lock", "w")
+        try: fcntl.flock(self.lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: sys.exit(f"another perf run is using {self.home}; wait for it or pass another --home")
         old = self.pid_from_file()
         if old and rusage(old) and pids_running(self.exe) & {old}: sys.exit(f"the instance from the last run (--keep) is still running: kill {old}")
 

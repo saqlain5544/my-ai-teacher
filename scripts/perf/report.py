@@ -114,7 +114,8 @@ function lineChart(el, valueIdx, unit, height) {
   const procs = (D.processes || []).filter(p => p.points.length);
   const kinds = KINDS.filter(k => procs.some(p => p.kind === k));
   const t0 = sel === 'all' ? 0 : (W.find(w => w.name === sel) || { t0: 0 }).t0, t1 = sel === 'all' ? Math.max(1, ...procs.map(p => p.points[p.points.length - 1][0])) : W.find(w => w.name === sel).t1;
-  const series = kinds.map(k => ({ k, pts: procs.filter(p => p.kind === k).flatMap(p => p.points).filter(p => p[0] >= t0 && p[0] <= t1).sort((a, b) => a[0] - b[0]) })).filter(s => s.pts.length);
+  // One line per process (a kind can have several: the lesson's page and a sub-agent's, or a restarted one), coloured by kind.
+  const series = procs.filter(p => kinds.includes(p.kind)).map(p => ({ k: p.kind, pid: p.pid, pts: p.points.filter(q => q[0] >= t0 && q[0] <= t1) })).filter(s => s.pts.length);
   const w = el.clientWidth || 900, h = height, m = { l: 52, r: 12, t: 10, b: 24 };
   const ymax = Math.max(1, ...series.flatMap(s => s.pts.map(p => p[valueIdx]))) * 1.08;
   const x = t => m.l + (t - t0) / Math.max(1e-6, t1 - t0) * (w - m.l - m.r), y = v => h - m.b - v / ymax * (h - m.t - m.b);
@@ -140,10 +141,10 @@ function lineChart(el, valueIdx, unit, height) {
     xh.setAttribute('x1', px); xh.setAttribute('x2', px); xh.setAttribute('visibility', 'visible');
     const wl = W.find(z => t >= z.t0 && t <= z.t1);
     showTip(e, '<b>' + t.toFixed(1) + ' s</b>' + (wl ? ' · ' + esc(wl.name) : '') + '<br>' + series.map(sr => { let best = sr.pts[0]; for (const p of sr.pts) if (Math.abs(p[0] - t) < Math.abs(best[0] - t)) best = p;
-      return Math.abs(best[0] - t) < 2 ? '<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + kindColor(sr.k) + '"></i> ' + esc(sr.k) + ': <b>' + fmt(best[valueIdx]) + '</b> ' + unit : ''; }).filter(Boolean).join('<br>'));
+      return Math.abs(best[0] - t) < 2 ? '<i style="display:inline-block;width:8px;height:8px;border-radius:2px;background:' + kindColor(sr.k) + '"></i> ' + esc(sr.k) + ' <span class="muted">' + sr.pid + '</span>: <b>' + fmt(best[valueIdx]) + '</b> ' + unit : ''; }).filter(Boolean).join('<br>'));
   });
   s.addEventListener('mouseleave', () => { hideTip(); xh.setAttribute('visibility', 'hidden'); });
-  return series.map(s => s.k);
+  return [...new Set(series.map(s => s.k))];
 }
 function charts() {
   const ks = lineChart($('#mem'), 1, 'MB', 280); lineChart($('#cpu'), 2, '%', 170);

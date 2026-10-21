@@ -324,6 +324,41 @@ The app's footprint must not grow with how much the learner has done: data lives
   `--cli --tool web_search '{"query":"…"}'` runs any tool; `--cli --spec ask_learner` prints a tool's schema.
   `MYAITEACHER_TRACE_SSE=1` prints every raw stream event (to tell a model's output from a parsing bug).
 
+## Performance
+* `scripts/perf/perf.py run [--workloads lesson,stream,recall,fetch,agents,render] [--allocations] [--system-wide]` —
+  runs the release bundle (a copy in `--home`, default `/tmp/myaiteacher-perf`, re-signed with get-task-allow so tools
+  can attach) on a throwaway profile and drives six workloads through debug hooks: a 4,000-message lesson
+  (`seedLesson`, then paging back, leaving, reopening), a 60k-character streamed reply, recall over 10,000 memories
+  (`seedMemories`, `recall`), web_fetch of a 3 MB page (`runTool`), four parallel sub-agents, and the renderer stress
+  suite (`scripts/perf/render-stress.js`). Replies come from a local mock model (`mockllm.py`, free and repeatable);
+  `--provider minimax` or an OpenRouter `:free` model run the same scenarios live.
+* Recorded: xctrace Time Profiler attached to the app (`sample` in 2 s windows if xctrace can't start; never waits on a
+  dialog), with `--system-wide` the WebContent stacks too (named with `atos`); main-thread hangs (xctrace plus the app's
+  own `HangWatch`); `os_signpost` intervals (`Telemetry/Signposts.swift`: turns, model streams, tools, render batches,
+  SQL, lesson loads, recall, context, compaction, HTML conversion; on only with `MYAITEACHER_SIGNPOSTS=1`); phys_footprint
+  and CPU of the app and each WebKit process every 250 ms; with `--allocations` the live heap by allocating stack after
+  each workload (MallocStackLogging, `heap`, `malloc_history`, `vmmap`, `leaks`).
+* Output in `<home>/runs/<label>/`: `report.html` (one file, no network: flame graph, CPU heatmap, memory and CPU per
+  process, signpost p50/p95, hangs with the main thread's stacks, allocation stacks), `summary.json`, raw traces.
+  `scripts/perf/top.py RUN [--workload w --kind WebContent]` lists the heaviest frames as text.
+* Regression gate: `--baseline FILE` saves a run's summary, `--compare FILE` (or `perf.py compare A B`) diffs every
+  metric (all are costs) against thresholds (memory +10% and +15 MB, times +25% and +25 ms…; `--thresholds` overrides)
+  and exits 1 on a regression.
+* Freed memory stays in the footprint on this macOS (a 150 MB burst of 40 KB–3 MB blocks, freed, stays at 150 MB;
+  `malloc_zone_pressure_relief` returns 0), so every transient peak becomes steady-state memory: keep peaks small.
+
+| Measured (release, mock model, M5, sequential runs) | Before | After |
+|---|---|---|
+| Open a 4,000-message lesson / reopen it | 6.0–6.4 s / 26–28 s | **2.0–2.3 s / 2.1–2.4 s** |
+| Main-thread stall opening it | 225–284 ms | **0** (none ≥ 100 ms) |
+| WebContent CPU opening a 2,000-message lesson | 14.9 s | **7.0 s** |
+| App footprint, peak while opening it | 139–157 MB | **111–114 MB** |
+| App footprint after a 60k-character reply (long lesson reflected on) | 187–201 MB | **130–133 MB** |
+| WebContent peak, 4,000-message lesson | 991–1,406 MB | **783–849 MB** |
+| Renderer: reset 2,000 messages / page back 1,000 | 5.1–5.7 s / 1.6–1.8 s | **1.0 s / 0.7 s** |
+| Renderer: 60k-character stream, frame p50 / p95 / max | 18 / 29 / 34 ms | **17 / 19 / 26 ms** |
+| Recall over 10,000 memories (main thread) | p50 4–5 ms | same |
+
 ## Tool parity with Claude Code
 | Claude Code tool | My AI Teacher | Notes |
 |---|---|---|
