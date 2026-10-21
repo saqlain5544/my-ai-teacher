@@ -22,14 +22,19 @@ struct InspectorPanel: View {
             }
             .pickerStyle(.segmented).labelsHidden().padding(8)
             Divider()
-            switch app.inspectorTab {
-            case .files: FileExplorer(root: app.workspace.url, session: session)
-            case .changes: ChangesPanel()
-            case .page: PageViewer()
-            case .agents: SubAgentPanel(conversationID: session?.id)
+            // The tab always fills the rest of the panel: an empty state (no agents, no changes) is shorter than the
+            // panel, and without this the whole column, picker included, was centred and jumped down.
+            Group {
+                switch app.inspectorTab {
+                case .files: FileExplorer(root: app.workspace.url, session: session)
+                case .changes: ChangesPanel()
+                case .page: PageViewer()
+                case .agents: SubAgentPanel(conversationID: session?.id)
+                }
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .frame(minWidth: 260)
+        .frame(minWidth: 260, maxHeight: .infinity, alignment: .top)
     }
 }
 

@@ -22,12 +22,14 @@ struct ChangesPanel: View {
                     Button("Track changes") { Task { await model.initRepo(folder) } }.disabled(!canWrite)
                     if !canWrite { Text("Needs write access to this folder.").font(.caption).foregroundStyle(.secondary) }
                 }
+                .frame(maxHeight: .infinity)
             case .ready:
                 header(folder, canWrite: canWrite)
                 Divider()
                 if model.files.isEmpty {
                     ContentUnavailableView("No changes since the last checkpoint", systemImage: "checkmark.circle",
                                            description: Text(model.lastCommit.map { "Last checkpoint: \($0)" } ?? ""))
+                        .frame(maxHeight: .infinity)
                 } else {
                     List(model.files, selection: $model.selected) { f in
                         HStack(spacing: 6) {
@@ -44,6 +46,7 @@ struct ChangesPanel: View {
                 }
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // the header stays on top when the list is empty
         .task(id: folder) { await model.reload(folder) }
         .onChange(of: model.selected) { _, p in Task { await model.loadDiff(folder, p) } }
         .onReceive(EventBus.subject.filter {
