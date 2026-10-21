@@ -27,9 +27,13 @@
   }
   function state(id) {
     let F = forms.get(id);
-    if (!F) { F = { answers: [], other: [], hints: [], confidence: 0, started: Date.now(), perms: {}, matchPerm: {}, selected: [] }; forms.set(id, F); }
+    if (!F) { F = { answers: [], other: [], hints: [], certainty: [], started: Date.now(), perms: {}, matchPerm: {}, selected: [] }; forms.set(id, F); }
     return F;
   }
+  /** A question's hints, gentlest first (`hints`, or the older single `hint`). */
+  const ladder = q => (Array.isArray(q.hints) ? q.hints : []).concat(q.hint && !(q.hints || []).includes(q.hint) ? [q.hint] : []).filter(Boolean);
+  const CERTAINTY = [[1, 'Guessing'], [2, 'Unsure'], [3, 'Sure']];
+  const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => x == null || x === '' || x === -1));
   const dis = a => a ? '' : ' disabled';
 
   // ── Type renderers ────────────────────────────────────────────────────
@@ -201,6 +205,7 @@
     const active = !!pend && !r;
     const qs = normalize(active && pend.payload && pend.payload.questions ? pend.payload.questions : input.questions);
     const F = state(id);
+    F.ctx = ctx; F.active = active && !locked(F, pend);
     const gradedList = r && r.meta && r.meta.graded;
     const answeredList = r && r.meta && r.meta.answers;
     let h = '<div class="quiz' + (graded ? '' : ' askform') + '" data-form="' + ctx.esc(id) + '"><div class="quiz-head"><span class="title">' + (graded ? '📝 ' : '💬 ') + ctx.esc(input.title || (graded ? 'Quiz' : 'A few questions')) + '</span>' +
@@ -213,19 +218,34 @@
       h += '<div class="quiz-q" data-qi="' + qi + '"><div class="qn">' + (qs.length > 1 ? 'Question ' + (qi + 1) : '') + (q.concept ? (qs.length > 1 ? ' · ' : '') + ctx.esc(q.concept) : '') + '</div>' +
         (q.type !== 'fill_blanks' || q.text ? '<div class="prompt md">' + ctx.md(q.prompt || '') + '</div>' : '') +
         impl.render(q, qi, F, ctx, active, g, id);
-      if (q.hint && active) h += F.hints[qi] ? '<div class="hint">💡 ' + ctx.inline(q.hint) + '</div>' : '<button class="hint-btn" data-act="q-hint" data-q="' + qi + '">Show hint</button>';
+      // Hints open one at a time, gentlest first; an answer after a hint is logged as helped (no mastery gain).
+      const hs = ladder(q), opened = Math.min(+F.hints[qi] || 0, hs.length);
+      if (hs.length && active) {
+        for (let k = 0; k < opened; k++) h += '<div class="hint">' + (F.nudged === qi && k === 0 ? '<span class="nudge">Stuck? Here\'s a nudge.</span> ' : '') + '💡 ' + (hs.length > 1 ? '<b>Hint ' + (k + 1) + ':</b> ' : '') + ctx.inline(hs[k]) + '</div>';
+        if (opened < hs.length) h += '<button class="hint-btn" data-act="q-hint" data-q="' + qi + '">' + (opened ? 'Another hint (' + (opened + 1) + ' of ' + hs.length + ')' : 'Show hint') + '</button>';
+      }
+      // How sure, before the result: a confident mistake is the one most worth correcting.
+      if (graded && active) {
+        h += '<div class="certainty" role="radiogroup" aria-label="How sure are you?"><span class="c-label">How sure?</span>' + CERTAINTY.map(([v, t]) =>
+          '<button data-act="q-sure" data-q="' + qi + '" data-v="' + v + '" role="radio" aria-checked="' + (F.certainty[qi] === v) + '" class="' + (F.certainty[qi] === v ? 'sel' : '') + '">' + t + '</button>').join('') + '</div>';
+      }
       if (g && graded) {
         const ok = g.correct;
         const cls = ok === true ? 'good' : ok === false ? 'bad' : 'neutral';
         const label = ok === true ? '✅ Correct' : ok === false ? (g.score > 0 ? '🟡 Partly right (' + Math.round(g.score * 100) + '%)' : '❌ Not quite') : '📝 Your teacher will review this';
         let expl = g.explanation ? '<div class="md">' + ctx.md(g.explanation) + '</div>' : '';
         if (ok === false && g.expected && !['single_choice', 'multiple_choice', 'true_false', 'ordering', 'matching', 'fill_blanks'].includes(q.type)) expl = '<div>Expected: <b>' + (q.type === 'math' ? ctx.tex(g.expected, false) : ctx.esc(g.expected)) + '</b></div>' + expl;
-        h += '<div class="feedback ' + cls + '"><b>' + label + '</b>' + expl + '</div>';
+        if (ok === false && g.misconception) expl = '<div class="mis">Common mix-up: ' + ctx.inline(g.misconception) + '</div>' + expl;
+        const notes = [];
+        if (ok === false && g.certainty === 3) notes.push('You were sure: worth a closer look.');
+        if (ok === true && g.certainty === 1) notes.push('Right, but a guess: it will come back.');
+        if (ok === true && g.hints > 0) notes.push('With a hint: try one without next time.');
+        h += '<div class="feedback ' + cls + '"><b>' + label + '</b>' + expl + (notes.length ? '<div class="fb-note">' + notes.map(ctx.esc).join(' ') + '</div>' : '') + '</div>';
       }
       h += '</div>';
     });
     if (active) {
-      h += '<div class="quiz-foot">' + (graded ? '<div class="confidence">Confidence: ' + [1, 2, 3, 4, 5].map(n => '<button data-act="q-conf" data-v="' + n + '" class="' + (F.confidence === n ? 'sel' : '') + '">' + n + '</button>').join('') + '</div>' : '<span></span>') +
+      h += '<div class="quiz-foot"><span></span>' +
         (locked(F, pend) ? '<div class="btn-row"><span class="answered"><span class="spinner"></span> Sent</span></div></div>'
           : '<div class="btn-row"><button class="btn" data-act="q-skip">' + (graded ? 'Skip' : 'Dismiss') + '</button><button class="btn primary" data-act="q-submit">' + ctx.esc(input.submit_label || (graded ? 'Submit answers' : 'Send')) + '</button></div></div>');
     } else if (gradedList) {
@@ -294,8 +314,11 @@
   });
   R.registerAction('q-tf', (el, e, ctx) => { const id = toolOf(el); state(id).answers[qi(el)] = el.getAttribute('data-v') === 'true'; ctx.refreshCard(id); });
   R.registerAction('q-scale', (el, e, ctx) => { const id = toolOf(el); state(id).answers[qi(el)] = +el.getAttribute('data-v'); ctx.refreshCard(id); });
-  R.registerAction('q-hint', (el, e, ctx) => { const id = toolOf(el); state(id).hints[qi(el)] = true; ctx.refreshCard(id); });
-  R.registerAction('q-conf', (el, e, ctx) => { const id = toolOf(el); state(id).confidence = +el.getAttribute('data-v'); ctx.refreshCard(id); });
+  R.registerAction('q-hint', (el, e, ctx) => { const id = toolOf(el), F = state(id), q = qi(el); F.hints[q] = (+F.hints[q] || 0) + 1; ctx.refreshCard(id); });
+  R.registerAction('q-sure', (el, e, ctx) => {
+    const id = toolOf(el), F = state(id), q = qi(el), v = +el.getAttribute('data-v');
+    F.certainty[q] = F.certainty[q] === v ? undefined : v; ctx.refreshCard(id);
+  });
   R.registerAction('q-move', (el, e, ctx) => {
     const id = toolOf(el), F = state(id), q = qi(el), pos = +el.getAttribute('data-pos'), d = +el.getAttribute('data-d');
     const order = F.perms[q]; const j = pos + d;
@@ -322,8 +345,28 @@
     });
     if (locked(F, ctx.pending(id))) return;
     lock(F, ctx, id); el.disabled = true; el.textContent = 'Sent';
-    ctx.post({ type: 'answer', id, value: { answers, confidence: F.confidence || null, seconds: (Date.now() - F.started) / 1000 } });
+    ctx.post({ type: 'answer', id, value: { answers, hints: Array.from({ length: n }, (_, i) => +F.hints[i] || 0),
+      certainty: Array.from({ length: n }, (_, i) => F.certainty[i] || null), seconds: (Date.now() - F.started) / 1000 } });
   });
+
+  // ── Stuck: after a quiet spell the first hint opens by itself (once per form), on the first unanswered question that has one ──
+  const STALL_MS = 75000;
+  ['input', 'pointerdown', 'keydown'].forEach(t => document.addEventListener(t, e => {
+    const card = e.target && e.target.closest && e.target.closest('[data-tool-id]');
+    const F = card && forms.get(card.getAttribute('data-tool-id'));
+    if (F) F.touched = Date.now();
+  }, true));
+  function nudgeStuck(now) {
+    if (document.hidden) return;
+    forms.forEach((F, id) => {
+      if (!F.active || !F.ctx || F.nudged != null || now - (F.touched || F.started) < STALL_MS) return;
+      if (!document.querySelector('[data-tool-id="' + CSS.escape(id) + '"]')) return;
+      const k = questionsOf(id, F.ctx).findIndex((q, i) => ladder(q).length && !(+F.hints[i]) && blank(F.answers[i]));
+      if (k < 0) return;
+      F.nudged = k; F.hints[k] = 1; F.ctx.refreshCard(id);
+    });
+  }
+  setInterval(() => nudgeStuck(Date.now()), 5000);
   R.registerAction('ask-opt', (el, e, ctx) => {
     const id = toolOf(el), F = state(id), o = +el.getAttribute('data-o'), card = el.closest('[data-tool-id]');
     const input = inputOf(id, card, ctx);
@@ -406,11 +449,8 @@
     card.querySelectorAll('[data-q-input]').forEach(inp => { const msg = showProblem(card, inp, true); if (msg && msg !== FORMAT_HINT && !first) first = inp; });
     if (first) { first.focus(); return false; }
     // Nothing answered at all: say so instead of sending an empty form (Skip is the way to pass).
-    const answered = (qs || []).some((q, i) => {
-      if (q.type === 'ordering' || q.type === 'scale') return false;
-      const a = F.answers[i];
-      return a != null && a !== '' && !(Array.isArray(a) && a.every(x => x == null || x === '' || x === -1));
-    }) || (qs || []).every(q => q.type === 'ordering' || q.type === 'scale');
+    const answered = (qs || []).some((q, i) => q.type !== 'ordering' && q.type !== 'scale' && !blank(F.answers[i]))
+      || (qs || []).every(q => q.type === 'ordering' || q.type === 'scale');
     const foot = card.querySelector('.quiz-foot');
     let note = card.querySelector('.q-empty');
     if (!answered && foot) {
@@ -527,5 +567,5 @@
     });
   });
 
-  window.TeacherForms = { state, normalize };
+  window.TeacherForms = { state, normalize, nudgeStuck, STALL_MS };
 })();

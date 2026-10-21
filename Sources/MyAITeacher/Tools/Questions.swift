@@ -21,12 +21,13 @@ enum Questions {
                 Fields by type — choice types: options[] (+allow_other, multiple_choice: max_select); fill_blanks: text with {{}} per \
                 blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit, min, max, \
                 integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter. \
-                Optional on all: hint, concept, placeholder. The app enforces these while the learner types.
+                Optional on all: hints[] (a ladder, gentlest first: nudge → targeted hint → one step; shown one at a time), concept, \
+                placeholder. The app enforces these while the learner types.
                 """],
             "prompt": ["type": "string", "description": "Markdown/LaTeX question text."],
             "options": strs, "text": str, "blank_options": ["type": "array", "items": strs], "items": strs,
             "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
-            "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "concept": str,
+            "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "hints": strs, "concept": str,
             "allow_other": ["type": "boolean"],
             "min_length": ["type": "integer"], "max_length": ["type": "integer"], "pattern": str, "integer": ["type": "boolean"],
         ]
@@ -34,6 +35,8 @@ enum Questions {
             props["answer"] = ["description": .string("Graded only. single_choice: index; multiple_choice: [indices]; true_false: bool; numeric: number (+tolerance); short_text: string|[accepted]; fill_blanks: [per blank: string|[alts]]; math: expression (checked symbolically). Omit for ordering/matching/long_text/code/drawing.")]
             props["tolerance"] = num
             props["explanation"] = ["type": "string", "description": "Shown after grading."]
+            props["misconceptions"] = ["type": "array", "description": .string("Graded only: the wrong answers that reveal a known misconception — [{\"answer\": option index or value, \"misconception\": \"what the learner who picks it believes\"}]. Tag every distractor of a choice question; numeric/short_text: the result of a typical mistake. The app tells you which one the learner hit and remembers it."),
+                                       "items": Schema.object(["answer": ["description": "Option index (choice types) or the wrong value."], "misconception": str])]
         }
         return Schema.object(props, required: ["type", "prompt"])
     }
@@ -48,6 +51,8 @@ enum Questions {
                        "cloze": "fill_blanks", "order": "ordering", "match": "matching", "likert": "scale", "rating": "scale"]
             if let t = o["type"]?.string, let m = map[t] { o["type"] = .string(m) }
             if o["type"] == nil { o["type"] = o["options"] != nil ? "single_choice" : "short_text" }
+            // Models wrap the key ({"item": "3/x"}, {"value": 2}): the one value inside is the answer.
+            if let w = o["answer"]?.object, w.count == 1, let v = w.values.first { o["answer"] = v }
             if let p = o["pattern"]?.string, !Self.isFormatPattern(p, answers: o["answer"]) { o["pattern"] = nil }
             return .object(o)
         }
@@ -74,12 +79,17 @@ enum Questions {
         }
     }
 
-    /// Structural problems the model must fix before the learner sees the form.
-    static func validate(_ qs: [JSON]) -> [String] {
+    /// Structural problems the model must fix before the learner sees the form. A graded question the app could check needs its
+    /// key: without one nothing is auto-graded, so mastery, calibration and follow-ups learn nothing from the answer.
+    static func validate(_ qs: [JSON], graded: Bool = false) -> [String] {
         var errs: [String] = []
         for (i, q) in qs.enumerated() {
             let n = i + 1
-            switch q["type"]?.string ?? "" {
+            let type = q["type"]?.string ?? ""
+            if graded, ["single_choice", "multiple_choice", "true_false", "numeric", "math"].contains(type), q["answer"]?.isNull ?? true {
+                errs.append("Q\(n): a graded \(type) question needs `answer` (the key the app checks the learner against)\(type == "math" ? "; for an open question use long_text" : "").")
+            }
+            switch type {
             case "single_choice", "multiple_choice":
                 if (q["options"]?.array?.count ?? 0) < 2 { errs.append("Q\(n): \(q["type"]!.string!) needs at least 2 options.") }
             case "matching":
@@ -103,7 +113,7 @@ enum Questions {
     /// The view never sees answers or explanations.
     static func publicView(_ q: JSON) -> JSON {
         var o = q.object ?? [:]
-        for k in ["answer", "explanation", "tolerance"] { o.removeValue(forKey: k) }
+        for k in ["answer", "explanation", "tolerance", "misconceptions"] { o.removeValue(forKey: k) }
         return .object(o)
     }
 
@@ -111,6 +121,34 @@ enum Questions {
         var correct: Bool?        // nil = needs the teacher's judgement
         var score: Double?        // 0…1 partial credit
         var expected: String?
+    }
+
+    /// The misconception a wrong answer reveals, when the question tagged that answer in `misconceptions`
+    /// ([{"answer": option index or value, "misconception": "…"}]).
+    static func misconception(_ q: JSON, answer a: JSON) -> String? {
+        guard !a.isNull, let tags = q["misconceptions"]?.array else { return nil }
+        let opts = q["options"]?.array?.compactMap(\.string) ?? []
+        // Options may be named by index or by their text.
+        let index = { (j: JSON) -> Int? in
+            if let s = j.string, let i = opts.firstIndex(where: { norm($0) == norm(s) }) { return i }
+            return j.int
+        }
+        for t in tags {
+            guard let text = t["misconception"]?.string ?? t["why"]?.string, !text.isEmpty, let tagged = t["answer"] else { continue }
+            switch q["type"]?.string ?? "" {
+            case "single_choice":
+                if let g = index(a), g == index(tagged) { return text }
+            case "multiple_choice":
+                if let ti = index(tagged), (a.array ?? []).compactMap(index).contains(ti) { return text }
+            case "true_false":
+                if let g = a.bool, g == tagged.bool { return text }
+            case "numeric":
+                if let g = number(a), let e = number(tagged), abs(g - e) <= (q["tolerance"]?.double ?? max(1e-9, abs(e) * 1e-3)) { return text }
+            default:
+                if let g = a.string, let e = tagged.string ?? tagged.double.map({ String($0) }), norm(g) == norm(e) { return text }
+            }
+        }
+        return nil
     }
 
     static func norm(_ s: String) -> String {
@@ -202,9 +240,16 @@ enum Questions {
             return Grade(correct: ok == pairs.count && g.count == pairs.count, score: Double(ok) / Double(pairs.count),
                          expected: pairs.map { "\($0[0]?.string ?? "") ↔ \($0[1]?.string ?? "")" }.joined(separator: "; "))
         case "math":
-            guard let e = ans?.string ?? ans?.double.map({ String($0) }), let g = a.string else { return Grade(expected: ans.map(describe)) }
-            let eq = await MathEquivalence.equivalent(g, e)
-            return Grade(correct: eq, score: eq == true ? 1 : (eq == false ? 0 : nil), expected: e)
+            // One expression, or several accepted forms: right when it equals any of them.
+            let keys = (ans?.array ?? ans.map { [$0] } ?? []).compactMap { $0.string ?? $0.double.map { String($0) } }
+            guard let e = keys.first, let g = a.string else { return Grade(expected: ans.map(describe)) }
+            var verdict: Bool? = false
+            for k in keys {
+                let eq = await MathEquivalence.equivalent(g, k)
+                if eq == true { verdict = true; break }
+                if eq == nil { verdict = nil }
+            }
+            return Grade(correct: verdict, score: verdict == true ? 1 : (verdict == false ? 0 : nil), expected: e)
         default:
             return Grade(expected: ans.map(describe))     // long_text, code, drawing, scale: teacher judges
         }
@@ -396,33 +441,68 @@ struct QuizTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let questions = Questions.normalize(input["questions"]?.array ?? [])
         guard !questions.isEmpty else { return .error(Questions.missingQuestions) }
-        let errs = Questions.validate(questions)
+        let errs = Questions.validate(questions, graded: true)
         if !errs.isEmpty { return .error("Fix the quiz and call it again:\n" + errs.joined(separator: "\n")) }
         let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null,
                              "questions": .array(questions.map(Questions.publicView)), "graded": true]
         let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "quiz", conversationID: ctx.conversationID, payload: payload)
         if reply["cancelled"]?.bool == true { return .error("The learner skipped the quiz.") }
         let answers = reply["answers"]?.array ?? []
+        // Per question: hints the learner opened (the app also opens one when they're stuck) and how sure they were.
+        let hintsOpened = reply["hints"]?.array ?? [], certainties = reply["certainty"]?.array ?? []
         let subject = input["subject"]?.string ?? "general"
+        let study = ctx.services.study
         var graded: [JSON] = []
         var score = 0.0
         var autoTotal = 0
         var lines: [String] = []
+        var wrong = 0, hinted = 0
+        var sureButWrong: [String] = [], luckyGuesses: [String] = [], missedAgain: [String] = []
+        let missedBefore = study.missedInLesson(ctx.conversationID)
         for (i, q) in questions.enumerated() {
             let a = answers[safe: i] ?? .null
-            let g = await Questions.grade(q, answer: a)
+            var g = await Questions.grade(q, answer: a)
+            let mis = g.correct == true ? nil : Questions.misconception(q, answer: a)
+            if mis != nil, g.correct == nil { g.correct = false; g.score = 0 }   // a tagged wrong answer needs no judgement
+            let hints = hintsOpened[safe: i]?.int ?? 0
+            let help: Help = hints > 0 ? .hint : .none
+            let certainty = certainties[safe: i]?.int.flatMap(Certainty.init(rawValue:))
+            let concept = q["concept"]?.string
             if g.correct != nil { autoTotal += 1; score += g.score ?? (g.correct == true ? 1 : 0) }
-            if let concept = q["concept"]?.string, let c = g.correct {
-                ctx.services.study.recordAttempt(subject: subject, concept: concept, correct: c, note: nil)
+            if let c = g.correct {
+                study.recordResponse(subject: subject, concept: concept, correct: c, certainty: certainty, help: help, source: "quiz", conversationID: ctx.conversationID)
+                if let concept { study.recordAttempt(subject: subject, concept: concept, correct: c, note: nil, help: help, certainty: certainty) }
+                if !c, let concept, missedBefore.contains(MemoryText.conceptKey(concept)) { missedAgain.append("Q\(i + 1) (\(concept))") }
+                else if !c { wrong += 1 }
+                if !c, certainty == .sure { sureButWrong.append("Q\(i + 1)") }
+                if c, certainty == .guess, help == .none { luckyGuesses.append("Q\(i + 1)") }
+            }
+            if hints > 0 { hinted += 1 }
+            // A wrong answer comes back in a later lesson; a confident one sooner, with its flashcards brought forward.
+            if g.correct == false, let concept {
+                let sure = certainty == .sure
+                if sure { study.reviewSoon(concept: concept) }
+                study.scheduleFollowUp(subject: subject, concept: concept, kind: .recheck,
+                                       note: mis.map { "misconception: \($0)" } ?? "answered wrong\(sure ? " while sure" : ""): \(MemoryText.clip(q["prompt"]?.string ?? "", 120))",
+                                       after: sure ? 1 : 2, conversationID: ctx.conversationID)
+            }
+            if let mis {
+                ctx.services.memory.add(kind: .misconception, content: mis, subject: subject, importance: 0.6, origin: "quiz",
+                                        source: ctx.conversationID, concept: concept)
             }
             let verdict = g.correct.map { $0 ? "✅ correct" : "❌ incorrect" } ?? "📝 needs your grading"
-            lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(q["concept"]?.string.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   Learner: \(Questions.describeAnswer(q, a))\n   Expected: \(g.expected ?? "—")\n   → \(verdict)\(g.score.map { $0 > 0 && $0 < 1 ? String(format: " (partial %.0f%%)", $0 * 100) : "" } ?? "")")
+            var notes: [String] = []
+            if let mis { notes.append("misconception: \(mis)") }
+            if let certainty { notes.append(certainty.title.lowercased()) }
+            if hints > 0 { notes.append("after \(hints) hint\(hints == 1 ? "" : "s")") }
+            lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(concept.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   Learner: \(Questions.describeAnswer(q, a))\n   Expected: \(g.expected ?? "—")\n   → \(verdict)\(g.score.map { $0 > 0 && $0 < 1 ? String(format: " (partial %.0f%%)", $0 * 100) : "" } ?? "")\(notes.isEmpty ? "" : " · " + notes.joined(separator: " · "))")
             graded.append(["correct": g.correct.map { .bool($0) } ?? .null, "score": g.score.map { .number($0) } ?? .null,
                            "explanation": q["explanation"] ?? .null, "expected": g.expected.map { .string($0) } ?? .null,
-                           "answer": q["answer"] ?? .null, "given": a])
+                           "answer": q["answer"] ?? .null, "given": a, "misconception": mis.map { .string($0) } ?? .null,
+                           "certainty": certainty.map { .number(Double($0.rawValue)) } ?? .null, "hints": .number(Double(hints))])
         }
-        ctx.services.study.recordQuiz(conversationID: ctx.conversationID, title: input["title"]?.string ?? "Quiz", topic: subject,
-                                      score: score, total: autoTotal, data: ["questions": .array(questions), "answers": .array(answers)])
+        study.recordQuiz(conversationID: ctx.conversationID, title: input["title"]?.string ?? "Quiz", topic: subject, score: score, total: autoTotal,
+                         data: ["questions": .array(questions), "answers": .array(answers), "hints": .array(hintsOpened), "certainty": .array(certainties)])
         EventBus.publish(.studyDataChanged)
         var text = "Quiz \"\(input["title"]?.string ?? "")\" submitted. " + (autoTotal == 0
             ? "Nothing could be auto-graded (no answer key), so grade every answer below.\n"
@@ -430,8 +510,35 @@ struct QuizTool: Tool {
         if let c = reply["confidence"]?.int { text += "Self-rated confidence before answering: \(c)/5.\n" }
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
         text += "\n" + lines.joined(separator: "\n")
-        text += "\n\nGive warm, specific feedback: praise what's right, explain each mistake and the misconception behind it, and grade anything marked for your grading."
+        text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
+                                            ungraded: questions.count - autoTotal)
         return ToolOutput(text: text, images: Questions.images(from: answers),
                           meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
+    }
+
+    /// What to do with the result: a first mistake is corrected now with a retry; a concept missed again in the same lesson
+    /// gets a worked example instead of yet another quiz (more questions alone don't help a learner who lacks the method).
+    static func feedbackSteps(wrong: Int, missedAgain: [String] = [], sureButWrong: [String], luckyGuesses: [String], hinted: Int, ungraded: Int = 0) -> String {
+        var s: [String] = []
+        if ungraded > 0 {
+            s.append("Grade the 📝 answers yourself and record each with `mastery` (concept, correct). A wrong one is a mistake like any other: name the misconception, then one near-identical retry; if the learner's answers make no sense, ask what they meant before quizzing again.")
+        }
+        if wrong > 0 {
+            s.append("For each ❌: say what the learner most likely believed (the misconception named above, if any), why it's tempting, and the fix in a sentence or two. Then give ONE near-identical retry per mistake (same concept, new numbers or wording) with `ask_learner` (graded) before moving on.")
+        }
+        if !missedAgain.isEmpty {
+            s.append("\(missedAgain.joined(separator: ", ")): missed again in this lesson. Don't quiz it again in this turn: teach it with one worked example, step by step, then ask the learner to explain the key step back in their own words, and end your turn. Try a fresh question later.")
+        }
+        if !sureButWrong.isEmpty {
+            s.append("\(sureButWrong.joined(separator: ", ")): wrong although the learner was sure. Corrections stick best right now: contrast their reasoning with the right one explicitly.")
+        }
+        if !luckyGuesses.isEmpty {
+            s.append("\(luckyGuesses.joined(separator: ", ")): right but guessed. Treat as not known yet and check it again later in this lesson.")
+        }
+        if hinted > 0 { s.append("Answers given after a hint don't raise mastery: say briefly what the hint unlocked.") }
+        if ungraded == 0 {
+            s.append(wrong == 0 && missedAgain.isEmpty ? "Praise specifically and briefly, then move on (harder questions or the next step)." : "Praise what's right briefly.")
+        }
+        return s.joined(separator: "\n")
     }
 }

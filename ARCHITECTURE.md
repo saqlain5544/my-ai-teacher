@@ -79,7 +79,12 @@ rewording the tool mattered more than placement (fence 2/3 in both arms), so **d
   scripts run through indirect eval with async callbacks wrapped, so real error messages reach the learner and the
   Fix button sends them to the teacher; frames size to their content and load lazily.
 * ```` ```practice ```` self-check cards and ```` ```steps {"reveal":true} ```` worked examples run entirely in the
-  transcript (no tool call, nothing added to the context).
+  transcript (no tool call, nothing added to the context). Once every practice card is marked and one was missed, the
+  result goes to the teacher unasked.
+* ```` ```problem ```` cards are attempt first: the teacher's hints and solution stay hidden until the learner sends
+  an attempt (it arrives as their message) or opens them. Opening help posts `study` events (logged as help); a solution
+  seen before any attempt is also told to the teacher with the learner's next message (`ChatSession.studyNotes`). After
+  90 s in view with nothing typed, the first hint opens by itself, once.
 
 ## Native hardware
 WebKit renders the transcript in its own GPU-accelerated process; visuals run in sandboxed frames inside it.
@@ -244,6 +249,31 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 * Guards: restated facts with changed numbers/negations supersede (old text in history); reflection only edits what it
   was shown and archives instead of deleting; concepts fold only with the same words or a trailing qualifier;
   prerequisites stay acyclic; the concept index updates incrementally.
+
+## Learning first
+Two kinds of default came out of the AI-tutor trials. Answers on demand helped practice and hurt exams (Bastani, PNAS 2025);
+help the learner had to ask for went unused. So these are app behaviour, not just prompt text:
+* **Attempt first, in every teaching mode** (prompt rule plus ```` ```problem ```` cards). Graded questions carry a
+  `hints` ladder, opened one at a time; after 75 s with nothing done, the first hint opens by itself.
+* **Only unaided success counts.** `StudyStore.recordAttempt(help:certainty:)`: a right answer after a hint or a shown
+  solution is logged with no mastery gain. A guess earns less (BKT guess 0.5). A wrong answer always counts.
+* **Wrong answers name their misconception.** Graded questions tag wrong answers in `misconceptions`, which the page
+  never sees. A hit goes into the result, into learner memory (kind misconception) and into a re-check follow-up. The result
+  asks for one near-identical retry. A concept missed again in the same lesson gets a worked example instead of another quiz.
+* **Certainty per question** (Guessing / Unsure / Sure, in `responses`):
+  * a confident mistake is re-checked tomorrow and its flashcards come forward;
+  * a lucky guess is flagged for a later check;
+  * Progress › Confidence check shows how often the learner is right at each level.
+* **Follow-ups** (`followups`), matched by concept key:
+  * `recheck`, after a wrong answer: 2 days, or 1 when the learner was sure;
+  * `transfer`, 3 days after reaching mastery: apply it in a new context;
+  * `missed`, a forgotten flashcard: expires after a week.
+
+  Due ones go into the lesson's instructions (`TeachingContextExtension.followUpSection`), so the teacher raises them.
+  An unaided answer settles a follow-up only once it is due: a right answer closes it, a missed transfer check becomes a
+  re-check, and a missed re-check comes back tomorrow.
+* Graded choice, true/false, numeric and math questions must carry an `answer`. Without one, nothing is auto-graded and the
+  learner model learns nothing from the answer. Wrapped keys (`{"item": …}`) and lists of accepted math forms are read.
 
 ## Long lessons
 * A lesson loads as a window (from the compaction point or the last 400 messages); earlier messages page in on request.

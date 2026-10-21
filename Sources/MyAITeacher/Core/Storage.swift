@@ -51,6 +51,12 @@ enum Schema_ {
         cache_write INTEGER NOT NULL DEFAULT 0, reasoning INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(day, provider, model));
     CREATE TABLE IF NOT EXISTS study_log(day TEXT PRIMARY KEY, seconds REAL NOT NULL DEFAULT 0, messages INTEGER NOT NULL DEFAULT 0,
         reviews INTEGER NOT NULL DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS responses(id INTEGER PRIMARY KEY AUTOINCREMENT, at REAL NOT NULL, subject TEXT, concept TEXT,
+        correct INTEGER, certainty INTEGER, help INTEGER NOT NULL DEFAULT 0, source TEXT, conversation_id TEXT);
+    CREATE INDEX IF NOT EXISTS responses_at ON responses(at);
+    CREATE TABLE IF NOT EXISTS followups(id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, concept TEXT NOT NULL,
+        kind TEXT NOT NULL, note TEXT, due REAL NOT NULL, created_at REAL NOT NULL, resolved_at REAL, outcome TEXT, conversation_id TEXT);
+    CREATE INDEX IF NOT EXISTS followups_open ON followups(resolved_at, due);
     """
 }
 

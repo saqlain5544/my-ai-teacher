@@ -8,7 +8,7 @@ data is never touched) and MYAITEACHER_DEBUG=1, then drives lessons through the 
 questions and approvals by clicking the rendered cards, and after every turn checks the lesson state and the rendered
 page (errors, stuck spinners, undrawn diagrams, failed tools). Exits non-zero if any scenario fails.
 """
-import json, os, shutil, subprocess, sys, time, argparse, pathlib
+import json, os, re, shutil, sqlite3, subprocess, sys, time, argparse, pathlib
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 BIN = ROOT / ".build/debug/MyAITeacher"
@@ -106,6 +106,8 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
             const q = card().querySelectorAll('.quiz-q')[i];
             const pick = q.querySelector('[data-act="q-pick"], [data-act="q-toggle"], [data-act="q-tf"][data-v="true"], [data-act="q-scale"]');
             if (pick) pick.click();
+            const sure = %s && card().querySelectorAll('.quiz-q')[i].querySelector('[data-act="q-sure"][data-v="%s"]');
+            if (sure && !sure.classList.contains('sel')) sure.click();
           }
           // A value the field accepts, as a learner would type after reading its hint: whole numbers, ranges, minimum lengths.
           card().querySelectorAll('[data-q-input], [data-q-blank], textarea').forEach(t => {
@@ -120,7 +122,8 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
             t.value = v; t._touched = true; fire(t);
           });
           const s = card().querySelector('[data-act="q-submit"]'); if (s) s.click(); })()"""
-           % (sel, "true" if retry else "false", json.dumps(scenario.get("reply", "1/2"))))
+           % (sel, "true" if retry else "false", "true" if scenario.get("certainty") else "false", scenario.get("certainty", 0),
+              json.dumps(scenario.get("reply", "1/2"))))
     return kind
 
 def run_turn(text, scenario, timeout=240):
@@ -297,6 +300,84 @@ def verify_readonly(r):
     else: notes.append("the reviewer never tried the write (its tools: %s)" % [t["name"] for a in revs for t in a["tools"]])
     return problems, notes
 
+# ───────────── Learning-first checks (read the test profile's database) ─────────────
+def learner_db():
+    return sqlite3.connect("file:%s?mode=ro" % (HOME / "support/teacher.sqlite"), uri=True, timeout=5)
+
+def visible_reply(r, start):
+    """What the learner reads in the turn's replies, without what a ```problem card holds back."""
+    txt = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
+    return re.sub(r"```(?:problem|exercise|try)\b.*?(```|$)", " ", txt, flags=re.S)
+
+def verify_attempt_first(r, start):
+    shown = visible_reply(r, start)
+    gave = re.search(r"\bx\s*=\s*5\b", shown)
+    if gave: return ["solved before any attempt: …%s…" % shown[max(0, gave.start() - 80):gave.end() + 30].replace("\n", " ")], []
+    full = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
+    return [], ([] if "```problem" in full else ["no ```problem card (asked for an attempt in prose)"])
+
+def verify_attempt_sent(r, start):
+    users = [b.get("text") or "" for m in r["messages"][start:] if m["role"] == "user" for b in m["blocks"] if b["kind"] == "text"]
+    if not any(u.startswith("My attempt") for u in users): return ["the attempt never reached the lesson (%r)" % [u[:60] for u in users]], []
+    return [], []
+
+def verify_misconceptions(r, start):
+    """The quiz's own record: a tagged wrong option the learner picked is reported, remembered and comes back later."""
+    problems, notes = [], []
+    with learner_db() as db:
+        rows = db.execute("SELECT data, created_at FROM quiz_attempts WHERE conversation_id=? ORDER BY id", (r.get("lesson"),)).fetchall()
+        if not rows: return ["no graded quiz was recorded"], []
+        at, hits, qs, sure, picks = rows[0][1], [], [], [], []
+        for data in (json.loads(x[0]) for x in rows):   # the first quiz and any retries in the turn
+            answers = data.get("answers", [])
+            qs += data.get("questions", []); sure += data.get("certainty", []); picks.append(answers)
+            for i, q in enumerate(data.get("questions", [])):
+                # Options are named by index or text, loosely written (as the app reads them).
+                loose = lambda s: re.sub(r"[\s$\\{}]", "", str(s).lower())
+                opts = [loose(o) for o in q.get("options") or []]
+                for t in q.get("misconceptions") or []:
+                    a, tag = answers[i] if i < len(answers) else None, t.get("answer")
+                    tag_i = opts.index(loose(tag)) if isinstance(tag, str) and loose(tag) in opts else tag
+                    if a is not None and a == tag_i and a != q.get("answer"): hits.append((q.get("concept"), t.get("misconception")))
+        answers = picks
+        if not any(q.get("misconceptions") for q in qs): notes.append("the model tagged no misconceptions")
+        if not any(s == 3 for s in sure): problems.append("the learner's 'Sure' never reached the quiz (%s)" % sure)
+        n_sure = db.execute("SELECT COUNT(*) FROM responses WHERE at>=? AND certainty=3", (at - 5,)).fetchone()[0]
+        if not n_sure: problems.append("no answer logged with its certainty")
+        if not hits: notes.append("the learner's picks hit no tagged option (answers %s)" % answers)
+        for concept, mis in hits:
+            if not db.execute("SELECT COUNT(*) FROM memories WHERE kind='misconception' AND created_at>=? - 5", (at,)).fetchone()[0]:
+                problems.append("misconception %r was not remembered" % mis)
+            if concept and not db.execute("SELECT COUNT(*) FROM followups WHERE resolved_at IS NULL AND kind='recheck' AND concept=? COLLATE NOCASE", (concept,)).fetchone()[0]:
+                problems.append("no re-check scheduled for %r" % concept)
+        if hits: print("     misconceptions hit: %s" % [m for _, m in hits])
+    res = [b.get("text") or "" for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolResult" and b["name"] in ("quiz", "ask_learner")]
+    if hits and not any("misconception:" in t for t in res): problems.append("the quiz result never told the tutor which misconception was hit")
+    return problems, notes
+
+def plant_followup():
+    """A re-check due from an earlier lesson (written as the app would), for the next lesson to bring up."""
+    with sqlite3.connect(str(HOME / "support/teacher.sqlite"), timeout=10) as db:
+        now = time.time()
+        db.execute("INSERT INTO followups(subject, concept, kind, note, due, created_at) VALUES('calculus', 'the chain rule', 'recheck', "
+                   "'misconception: forgets to multiply by the derivative of the inner function', ?, ?)", (now - 3600, now - 2 * 86400))
+
+def verify_followup(r, start):
+    shown = visible_reply(r, start).lower()
+    inputs = " ".join(b.get("input") or "" for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolUse").lower()
+    if "chain rule" not in shown and "chain rule" not in inputs: return ["the tutor never brought up the due re-check"], []
+    return [], []
+
+def verify_followup_settled(r, start):
+    """The re-check question is graded on the same concept, so the learner's answer settles it (or brings it back tomorrow)."""
+    with learner_db() as db:
+        answered = db.execute("SELECT correct FROM responses WHERE concept LIKE '%chain rule%' COLLATE NOCASE").fetchall()
+        f = db.execute("SELECT resolved_at, outcome, due FROM followups WHERE concept='the chain rule'").fetchone()
+    if not answered: return [], ["the re-check question wasn't graded on the chain rule (concept missing or renamed)"]
+    if f[0] is None and f[2] <= time.time(): return ["answered (%s) but the re-check is still due" % [a[0] for a in answered]], []
+    print("     re-check: %s" % (f[1] or "missed, back tomorrow"))
+    return [], []
+
 def steering():
     """The teacher should steer its background agent (`agents` send); if it hasn't after 10 s, the learner does (the
     panel's note box, through the debug hook), so the delivery is checked either way."""
@@ -371,6 +452,21 @@ SCENARIOS = [
          click="""(() => { const u = document.querySelector('.msg.user'); u.querySelector('[data-act="edit"]').click();
            const ta = u.querySelector('textarea'); ta.value = 'In two sentences: what is an octopus?'; u.querySelector('[data-act="edit-save"]').click(); })()"""),
     dict(name="quiz-mode", mode="quiz", prompt="Quiz me on the planets of the solar system: 3 questions.", any=["ask_learner", "quiz"]),
+    # Learning first: a problem the learner brings isn't solved for them; their attempt (from the problem card, or typed) gets
+    # an answer; a tagged wrong option the learner was sure of is reported, remembered and comes back; a due re-check is raised.
+    dict(name="attempt-first", quick=True, prompt="Solve 3x + 7 = 22 for me.", verify_turn=verify_attempt_first),
+    dict(name="problem-attempt", same_lesson=True, prompt="(Attempt from the problem card)", verify_turn=verify_attempt_sent,
+         click="""(() => { const cards = document.querySelectorAll('.problem'), p = cards[cards.length - 1], t = 'I subtracted 7 and got 3x = 15, so x = 4';
+           if (p) { const ta = p.querySelector('.pb-attempt'); ta.value = t; ta.dispatchEvent(new Event('input', {bubbles: true})); p.querySelector('[data-act="pb-send"]').click(); return; }
+           window.webkit.messageHandlers.bridge.postMessage({type: 'suggest', text: 'My attempt: ' + t}); })()"""),
+    dict(name="misconception-quiz", quick=True, certainty=3, any=["ask_learner", "quiz"], verify_turn=verify_misconceptions,
+         prompt="Give me a graded quiz with ask_learner: exactly 2 single_choice questions on adding fractions, each with concept "
+                "'adding fractions' and subject math. Make the FIRST option a wrong answer in both, and tag every wrong option with the "
+                "misconception behind it."),
+    dict(name="follow-up", quick=True, before=plant_followup, verify_turn=verify_followup,
+         prompt="Hi! I have about ten minutes today. What should we do?"),
+    dict(name="follow-up-check", same_lesson=True, verify_turn=verify_followup_settled, any=["ask_learner", "quiz"],
+         prompt="Sounds good. Give me the quick check as one graded ask_learner question."),
     dict(name="stop", quick=True, prompt="Write a 1500-word essay on the history of mathematics.", stop_after=6),
     dict(name="after-stop", same_lesson=True, prompt="Thanks. Now just tell me in one sentence who Euclid was."),
     # Sub-agent controls: another model with an effort and a time budget; a read-only type refused a write even with
@@ -434,6 +530,8 @@ def main():
             if sc.get("stop_after") and r["running"]: problems.append("still running after stop")
             if sc.get("verify"):
                 more_p, more_n = sc["verify"](r); problems += more_p; notes += more_n
+            if sc.get("verify_turn"):
+                more_p, more_n = sc["verify_turn"](r, start); problems += more_p; notes += more_n
             if sc.get("cleanup"): sc["cleanup"]()
             if sc.get("page_js"):
                 if sc.get("page_prep"): js(sc["page_prep"]); time.sleep(1.5)   # e.g. open cards (bodies render on open)

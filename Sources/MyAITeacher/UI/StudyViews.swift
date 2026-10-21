@@ -223,6 +223,9 @@ struct StudyProgressView: View {
     @State private var activity: [String: (seconds: Double, messages: Int, reviews: Int)] = [:]
     @State private var streak = 0
     @State private var usage: [(provider: String, model: String, requests: Int, input: Int, output: Int, cacheRead: Int)] = []
+    @State private var calibration: [Certainty: (answers: Int, right: Int)] = [:]
+    @State private var help = (hints: 0, solutions: 0)
+    @State private var followUps: [FollowUp] = []
 
     var body: some View {
         ScrollView {
@@ -250,6 +253,45 @@ struct StudyProgressView: View {
                                 }
                             }
                         }.padding(.bottom, 8)
+                    }
+                }
+                section("Confidence check") {
+                    if calibration.isEmpty {
+                        Text("Mark how sure you are on quiz questions: this shows how often you're right at each level.").foregroundStyle(.secondary)
+                    } else {
+                        ForEach(Certainty.allCases, id: \.rawValue) { c in
+                            if let v = calibration[c], v.answers > 0 {
+                                let rate = Double(v.right) / Double(v.answers)
+                                HStack {
+                                    Text(c.title).frame(width: 90, alignment: .leading)
+                                    ProgressView(value: rate).tint(rate >= 0.8 ? .green : (rate >= 0.5 ? .blue : .orange))
+                                    Text("\(Int((rate * 100).rounded()))% right").monospacedDigit().frame(width: 80, alignment: .trailing)
+                                    Text("\(v.answers) answer\(v.answers == 1 ? "" : "s")").font(.caption).foregroundStyle(.secondary).frame(width: 80, alignment: .trailing)
+                                }
+                            }
+                        }
+                        Text(Self.calibrationReading(calibration)).font(.callout).foregroundStyle(.secondary)
+                    }
+                    if help.hints + help.solutions > 0 {
+                        Text("Last 30 days: \(help.hints) hint\(help.hints == 1 ? "" : "s") opened, \(help.solutions) solution\(help.solutions == 1 ? "" : "s") seen before trying. Answers after help are logged but don't raise mastery.")
+                            .font(.callout).foregroundStyle(.secondary)
+                    }
+                }
+                if !followUps.isEmpty {
+                    section("Coming back to") {
+                        ForEach(followUps) { f in
+                            HStack(alignment: .firstTextBaseline) {
+                                Image(systemName: f.kind == .transfer ? "arrow.triangle.branch" : (f.kind == .missed ? "rectangle.on.rectangle.angled" : "arrow.clockwise"))
+                                    .foregroundStyle(.secondary).frame(width: 18)
+                                VStack(alignment: .leading, spacing: 2) {
+                                    Text(Self.plainMath(f.concept)).lineLimit(1)
+                                    if let n = f.note { Text(Self.plainMath(n)).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                }
+                                Spacer()
+                                Text(f.due <= Date() ? "Next lesson" : f.due.formatted(.relative(presentation: .named)))
+                                    .font(.caption).foregroundStyle(f.due <= Date() ? .orange : .secondary)
+                            }
+                        }
                     }
                 }
                 section("Learning plans") {
@@ -300,6 +342,30 @@ struct StudyProgressView: View {
         let s = app.services.study
         mastery = s.allMastery(); plans = s.plans(); quizzes = s.recentQuizzes(); activity = s.activity(); streak = s.streakDays()
         usage = app.services.usageSummary(days: 30)
+        calibration = s.calibration(); help = s.helpUsed(); followUps = s.openFollowUps(limit: 8)
+    }
+
+    /// Inline LaTeX as plain text for a label (notes quote the teacher's math): "$\frac{1+3}{6+4}$" → "(1+3)/(6+4)".
+    static func plainMath(_ s: String) -> String {
+        guard s.contains("$") || s.contains("\\") else { return s }
+        var t = s
+        for _ in 0..<4 { t = t.replacingOccurrences(of: #"\\[dt]?frac\{([^{}]*)\}\{([^{}]*)\}"#, with: "($1)/($2)", options: .regularExpression) }
+        t = t.replacingOccurrences(of: #"\(([\w.]+)\)/\(([\w.]+)\)"#, with: "$1/$2", options: .regularExpression)
+        for (a, b) in [("\\left", ""), ("\\right", ""), ("\\neq", "≠"), ("\\cdot", "·"), ("\\times", "×"), ("\\div", "÷"), ("\\sqrt", "√"),
+                       ("\\pi", "π"), ("\\leq", "≤"), ("\\geq", "≥"), ("\\le", "≤"), ("\\ge", "≥"), ("\\to", "→")] {
+            t = t.replacingOccurrences(of: a, with: b)
+        }
+        return t.replacingOccurrences(of: #"\\([a-zA-Z]+)"#, with: "$1", options: .regularExpression)
+            .replacingOccurrences(of: "[${}]", with: "", options: .regularExpression)
+    }
+
+    /// One sentence on how well certainty matches being right (needs a handful of answers at a level before saying much).
+    static func calibrationReading(_ c: [Certainty: (answers: Int, right: Int)]) -> String {
+        let rate = { (k: Certainty) -> Double? in c[k].flatMap { $0.answers >= 5 ? Double($0.right) / Double($0.answers) : nil } }
+        if let s = rate(.sure), s < 0.75 { return "When you're sure, you're right \(Int((s * 100).rounded()))% of the time: double-check answers that feel obvious." }
+        if let g = rate(.guess), g >= 0.7 { return "Your guesses are usually right: you know more than you think." }
+        if let s = rate(.sure), s >= 0.9 { return "When you're sure, you're almost always right." }
+        return "The picture gets clearer after a few more quizzes."
     }
 
     private func stat(_ icon: String, _ value: String, _ label: String) -> some View {

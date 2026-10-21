@@ -131,6 +131,30 @@ final class TeachingContextExtension: AgentExtension {
     unowned let app: AppModel
     init(app: AppModel) { self.app = app }
 
+    /// Due re-checks, transfer checks and forgotten cards from earlier lessons: the tutor brings them up unasked.
+    nonisolated static func followUpSection(_ items: [FollowUp], now: Date = Date()) -> String {
+        let lines = items.map { f -> String in
+            let ago = max(0, Int(now.timeIntervalSince(f.createdAt) / 86400))
+            let when = ago == 0 ? "today" : ago == 1 ? "yesterday" : "\(ago) days ago"
+            let what = switch f.kind { case .recheck: "re-check"; case .transfer: "transfer check"; case .missed: "forgotten flashcard" }
+            return "- \(what): \(f.concept) (\(f.subject), \(when))\(f.note.map { " — \($0)" } ?? "")"
+        }
+        return """
+        # Follow up from earlier lessons
+        Bring these up yourself when they fit, or early in the lesson if the learner has nothing planned: one fresh question \
+        each (`ask_learner`, graded, with the same `concept`), never the old question again. The learner's answer settles it.
+        \(lines.joined(separator: "\n"))
+        """
+    }
+
+    func willSend(_ message: inout ChatMessage, session: ChatSession) {
+        guard !session.studyNotes.isEmpty else { return }
+        let notes = session.studyNotes.suffix(4)
+        session.studyNotes = []
+        message.blocks.insert(Block(kind: .text, text: "<context>\nSince your last reply:\n" + notes.map { "- " + $0 }.joined(separator: "\n") + "\n</context>",
+                                    meta: ["hidden": true]), at: 0)
+    }
+
     func systemPromptSections(_ session: ChatSession) -> [String] {
         guard !session.conversation.mode.isAgent else { return [] }
         let s = session.services
@@ -138,6 +162,8 @@ final class TeachingContextExtension: AgentExtension {
         // Concept mastery is part of the learner model's "Learning map" in the core memory block.
         let due = s.study.dueCount()
         if due > 0 { out.append("# Spaced repetition\n\(due) flashcard(s) are due. Mention it at a natural moment (the learner reviews in the Flashcards screen).") }
+        let follow = s.study.dueFollowUps(limit: 5)
+        if !follow.isEmpty { out.append(Self.followUpSection(follow)) }
         let plans = s.study.plans().prefix(3)
         if !plans.isEmpty {
             var p = "# Active learning plans\n"
@@ -155,8 +181,8 @@ final class TeachingContextExtension: AgentExtension {
         if app.isQuick(ws) {
             out.append("""
             # Quick question
-            This lesson isn't tied to a project folder. Answer directly and concisely; scratch files may go in \(ws.url.path) \
-            (full access). You can still read files anywhere on this Mac.
+            This lesson isn't tied to a project folder. Answer questions directly and concisely (a problem for the learner to \
+            solve is still attempt first); scratch files may go in \(ws.url.path) (full access). You can still read files anywhere on this Mac.
             """)
             return out
         }

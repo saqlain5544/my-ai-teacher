@@ -548,12 +548,69 @@
     click($('[data-act="pr-hint"]', items[0])); ok(!$('.pr-hint', items[0]).hidden, 'hint shown');
     click($('[data-act="pr-show"]', items[0])); ok(!$('.pr-a', items[0]).hidden, 'answer shown');
     click($('[data-act="pr-mark"][data-v="got"]', items[0]));
+    // A miss on the last card: the result goes to the teacher without the learner asking.
+    posts.length = 0;
     click($('[data-act="pr-show"]', items[1])); click($('[data-act="pr-mark"][data-v="miss"]', items[1]));
     ok($('.pr-score', el).textContent.includes('1 / 2'), 'score');
-    ok(!$('.pr-foot', el).hidden, 'report button');
-    posts.length = 0; click($('[data-act="pr-send"]', el));
     const s = lastPost('suggest'); ok(s && s.text.includes('1 of 2') && s.text.includes('Capital of France'), 'report text: ' + (s && s.text));
+    ok(!$('.pr-foot', el).hidden && $('.pr-foot button', el).disabled, 'report shown as sent');
     click($('[data-act="pr-send"]', el)); eq(posts.filter(p => p.type === 'suggest').length, 1, 'report sent once');
+  });
+
+  test('practice: all right waits for the learner to report', () => {
+    const el = show('```practice\n[{"q":"3+3?","a":"6"}]\n```');
+    posts.length = 0;
+    click($('[data-act="pr-show"]', el)); click($('[data-act="pr-mark"][data-v="got"]', el));
+    eq(posts.filter(p => p.type === 'suggest').length, 0, 'nothing sent unasked');
+    click($('[data-act="pr-send"]', el)); ok(lastPost('suggest').text.includes('1 of 1'));
+  });
+
+  test('problem: attempt first, hints one at a time, the attempt goes to the teacher', () => {
+    const el = show('```problem\n{"q":"Solve $3x+5=20$","hints":["What undoes +5?","Subtract 5 from both sides"],"solution":"$3x=15$, so $x=5$","answer":"$x=5$","concept":"linear equations","subject":"algebra"}\n```');
+    noErrors(el, 'problem');
+    const p = $('.problem', el); ok(p, 'problem card');
+    ok($('.pb-solution', p).hidden, 'solution hidden'); ok($$('.pb-hint', p).every(h => h.hidden), 'hints hidden');
+    posts.length = 0;
+    click($('[data-act="pb-send"]', p)); eq(posts.filter(x => x.type === 'suggest').length, 0, 'an empty attempt is not sent');
+    click($('[data-act="pb-hint"]', p));
+    ok(!$$('.pb-hint', p)[0].hidden && $$('.pb-hint', p)[1].hidden, 'one hint at a time');
+    ok($('[data-act="pb-hint"]', p).textContent.includes('2 of 2'), 'next rung offered');
+    const h = lastPost('study'); ok(h && h.event === 'hint' && h.concept === 'linear equations' && h.subject === 'algebra', 'hint logged: ' + JSON.stringify(h));
+    const ta = $('.pb-attempt', p); ta.value = 'x = 5'; ta.dispatchEvent(new Event('input', { bubbles: true }));
+    click($('[data-act="pb-send"]', p));
+    const s = lastPost('suggest'); ok(s && s.text.includes('x = 5') && s.text.includes('after 1 hint') && s.text.includes('Solve'), 'attempt sent: ' + (s && s.text));
+    ok(!$('.pb-sent', p).hidden, 'sent shown');
+    eq($('[data-act="pb-solution"]', p).textContent, 'Compare with the solution');
+    posts.length = 0; click($('[data-act="pb-solution"]', p));
+    ok(!$('.pb-solution', p).hidden && $('.pb-solution .katex', p), 'solution shown');
+    eq(posts.filter(x => x.type === 'study').length, 0, 'comparing after an attempt is not help');
+  });
+
+  test('problem: a solution opened before trying is logged and told to the teacher', () => {
+    const el = show('```problem\n{"q":"Factor $x^2-1$","solution":"$(x-1)(x+1)$","concept":"factoring"}\n```');
+    posts.length = 0; click($('[data-act="pb-solution"]', el));
+    const s = lastPost('study'); ok(s && s.event === 'solution' && /without attempting/.test(s.note || ''), 'logged: ' + JSON.stringify(s));
+    ok(!$('[data-act="pb-hint"]', el), 'no hint button without hints');
+  });
+
+  test('problem: stuck with it in view, the first hint opens by itself', () => {
+    const el = show('```problem\n{"q":"Integrate $2x$","hints":["Power rule backwards","x^2"]}\n```');
+    const p = $('.problem', el); p.scrollIntoView();
+    posts.length = 0;
+    window.TeacherPractice.nudgeProblems(Date.now() + window.TeacherPractice.STALL_MS + 1000);
+    ok(!$$('.pb-hint', p)[0].hidden && $$('.pb-hint', p)[1].hidden, 'first hint open');
+    ok(!$('.pb-hint .nudge', p).hidden, 'labelled as a nudge'); ok(lastPost('study'), 'logged as help');
+    window.TeacherPractice.nudgeProblems(Date.now() + 2 * window.TeacherPractice.STALL_MS);
+    ok($$('.pb-hint', p)[1].hidden, 'only once');
+  });
+
+  test('problem: a problem in an older reply is never nudged', () => {
+    T.status('', false);
+    const a1 = A('```problem\n{"q":"Old one","hints":["old hint"]}\n```'), a2 = A('```problem\n{"q":"New one","hints":["new hint"]}\n```');
+    T.reset([U('q'), a1, U('next'), a2], {});
+    window.TeacherPractice.nudgeProblems(Date.now() + 2 * window.TeacherPractice.STALL_MS);
+    ok($('#m-' + a1.id + ' .pb-hint').hidden, 'old problem left alone');
+    ok(!$('#m-' + a2.id + ' .pb-hint').hidden, 'the latest one nudged');
   });
 
   test('practice state survives re-render while streaming continues', async () => {
@@ -836,6 +893,40 @@
     T.reset([U('q'), a, R('qz2', 'quiz', 'Score 1/2', { meta: { graded, score: 0.5 } })], {});
     const card = $('[data-tool-id="qz2"]'); noErrors(card, 'graded');
     ok($('.correct', card), 'correct marked'); ok(card.textContent.includes('5 is prime'), 'explanation shown');
+  });
+
+  test('quiz: hint ladder, how sure, and a nudge when stuck', () => {
+    const input = { title: 'Powers', questions: [{ type: 'numeric', prompt: '2^3?', hints: ['Multiply 2s', '2·2·2'] }, { type: 'true_false', prompt: 'x^0 = 1', hint: 'Divide x^n by itself' }] };
+    const a = A([{ kind: 'toolUse', id: 'qh1', name: 'quiz', input }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'qh1', kind: 'quiz', payload: input }, true);
+    const card = () => $('[data-tool-id="qh1"]');
+    eq($$('.hint', card()).length, 0, 'hints closed');
+    click($('[data-act="q-hint"][data-q="0"]', card()));
+    eq($$('.quiz-q[data-qi="0"] .hint', card()).length, 1, 'one hint');
+    ok($('[data-act="q-hint"][data-q="0"]', card()).textContent.includes('2 of 2'), 'next rung offered');
+    click($('[data-act="q-hint"][data-q="0"]', card()));
+    ok(!$('[data-act="q-hint"][data-q="0"]', card()), 'ladder climbed');
+    click($('[data-act="q-sure"][data-q="1"][data-v="3"]', card()));
+    ok($('[data-act="q-sure"][data-q="1"][data-v="3"]', card()).classList.contains('sel'), 'sure picked');
+    // Stuck: the first unanswered question with an unopened hint gets it, once.
+    window.TeacherForms.nudgeStuck(Date.now() + window.TeacherForms.STALL_MS + 1000);
+    ok($('.quiz-q[data-qi="1"] .nudge', card()), 'nudge on Q2');
+    click($('[data-act="q-tf"][data-q="1"][data-v="true"]', card()));
+    const n = $('[data-q-input="0"]', card()); n.value = '8'; n.dispatchEvent(new Event('input', { bubbles: true }));
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    const ans = lastPost('answer'); ok(ans, 'sent');
+    eq(ans.value.hints, [2, 1], 'hints opened per question'); eq(ans.value.certainty, [null, 3], 'how sure per question');
+    T.interaction({ id: 'qh1' }, false); T.status('', false);
+  });
+
+  test('quiz review names the misconception and a confident miss', () => {
+    const a = A([{ kind: 'toolUse', id: 'qz3', name: 'quiz', input: { questions: [{ type: 'single_choice', prompt: 'x^2·x^3', options: ['x^6', 'x^5'] }] } }]);
+    const graded = [{ correct: false, given: 0, answer: 1, misconception: 'multiplies the exponents', certainty: 3, hints: 0 }];
+    T.reset([U('q'), a, R('qz3', 'quiz', 'Score 0/1', { meta: { graded, score: 0, total: 1 } })], {});
+    const card = $('[data-tool-id="qz3"]'); noErrors(card, 'graded');
+    ok($('.mis', card) && $('.mis', card).textContent.includes('multiplies the exponents'), 'mix-up shown');
+    ok(card.textContent.includes('You were sure'), 'confident miss noted');
   });
 
   test('ask_learner: quick options and free text', () => {

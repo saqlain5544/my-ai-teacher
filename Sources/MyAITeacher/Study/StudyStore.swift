@@ -59,11 +59,35 @@ enum FSRS {
 /// Bayesian Knowledge Tracing for concept mastery.
 enum BKT {
     static let slip = 0.1, guess = 0.2, learn = 0.15
-    static func update(_ p: Double, correct: Bool) -> Double {
+    /// `guess`: how likely a right answer is without knowing it (higher when the learner says they guessed).
+    static func update(_ p: Double, correct: Bool, guess: Double = guess) -> Double {
         let post = correct ? p * (1 - slip) / (p * (1 - slip) + (1 - p) * guess)
                            : p * slip / (p * slip + (1 - p) * (1 - guess))
         return min(0.999, post + (1 - post) * learn)
     }
+}
+
+/// How much help an answer had. Only answers without help move mastery up: practice that leans on hints or a shown
+/// solution looks like progress but doesn't hold on a test without them.
+enum Help: Int, Sendable { case none = 0, hint = 1, solution = 2 }
+
+/// How sure the learner was, picked before the result is shown.
+enum Certainty: Int, Sendable, CaseIterable {
+    case guess = 1, unsure = 2, sure = 3
+    var title: String { switch self { case .guess: "Guessing"; case .unsure: "Unsure"; case .sure: "Sure" } }
+}
+
+/// Something to come back to in a later lesson: a misconception to re-check, a fresh mastery to test in a new
+/// context ("transfer"), a flashcard the learner forgot ("missed").
+struct FollowUp: Identifiable, Hashable, Sendable {
+    enum Kind: String, Sendable { case recheck, transfer, missed }
+    var id: Int64
+    var subject: String
+    var concept: String
+    var kind: Kind
+    var note: String?
+    var due: Date
+    var createdAt: Date
 }
 
 struct Flashcard: Identifiable, Hashable, Sendable {
@@ -157,6 +181,15 @@ final class StudyStore: @unchecked Sendable {
                         c.id, rating.rawValue, now, elapsed, days)
         logActivity(reviews: 1)
         if let concept = c.concept { recordAttempt(subject: c.subject ?? c.deck, concept: concept, correct: rating != .again, note: nil) }
+        // A forgotten card is the next lesson's business: the tutor sees it and can teach it another way.
+        let key = c.concept ?? String(c.front.prefix(80))
+        if rating == .again {
+            let leech = s.lapses >= 3 ? " (forgotten \(s.lapses) times: teach it another way, e.g. an example or a memory hook)" : ""
+            scheduleFollowUp(subject: c.subject ?? c.deck, concept: key, kind: .missed,
+                             note: "forgot the card “\(String(c.front.prefix(140)))” → \(String(c.back.prefix(140)))\(leech)", after: 0)
+        } else if rating != .hard {
+            resolveFollowUps(concept: key, kinds: [.missed], outcome: "remembered")
+        }
         var u = c
         u.due = due; u.stability = s.stability; u.difficulty = s.difficulty; u.reps = s.reps; u.lapses = s.lapses; u.lastReview = now
         return u
@@ -175,19 +208,32 @@ final class StudyStore: @unchecked Sendable {
     func updateCard(_ id: Int64, front: String, back: String) { try? db.execute("UPDATE cards SET front=?, back=? WHERE id=?", front, back, id) }
 
     // MARK: Mastery
+    /// One answer on a concept. A wrong answer always counts; a right one raises mastery only without help (with help it is
+    /// logged as an attempt and nothing more), and less when the learner says they guessed.
+    /// Due follow-ups on the concept are settled by answers without help; reaching mastery schedules a transfer check.
     @discardableResult
-    func recordAttempt(subject: String, concept: String, correct: Bool, note: String?) -> MasteryItem {
+    func recordAttempt(subject: String, concept: String, correct: Bool, note: String?, help: Help = .none,
+                       certainty: Certainty? = nil, now: Date = Date()) -> MasteryItem {
         let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
         // One row per concept whatever its casing ("Chain rule" = "chain rule"): reuse the stored spelling.
         let cur = mastery(subject: s, concept: concept.trimmingCharacters(in: .whitespaces))
         let c = cur?.concept ?? concept.trimmingCharacters(in: .whitespaces)
-        let p = BKT.update(cur?.pKnown ?? 0.2, correct: correct)
-        let streak = correct ? (cur?.streak ?? 0) + 1 : 0
+        let before = cur?.pKnown ?? 0.2
+        let earned = correct && help == .none
+        let p = correct && help != .none ? before
+            : BKT.update(before, correct: correct, guess: earned && certainty == .guess ? 0.5 : BKT.guess)
+        let streak = earned ? (cur?.streak ?? 0) + 1 : (correct ? cur?.streak ?? 0 : 0)
         try? db.execute("""
             INSERT INTO mastery(subject, concept, p_known, attempts, correct, streak, notes, updated_at) VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(subject, concept) DO UPDATE SET p_known=excluded.p_known, attempts=excluded.attempts, correct=excluded.correct,
             streak=excluded.streak, notes=COALESCE(excluded.notes, mastery.notes), updated_at=excluded.updated_at
-            """, s, c, p, (cur?.attempts ?? 0) + 1, (cur?.correct ?? 0) + (correct ? 1 : 0), streak, note, Date())
+            """, s, c, p, (cur?.attempts ?? 0) + 1, (cur?.correct ?? 0) + (earned ? 1 : 0), streak, note, now)
+        if help == .none { settleFollowUps(subject: s, concept: c, correct: correct, now: now) }
+        // Mastery on the practice it came from isn't proof yet: ask again in a few days, in a new context.
+        if earned, before < 0.95, p >= 0.95 {
+            scheduleFollowUp(subject: s, concept: c, kind: .transfer,
+                             note: "just reached mastery: ask one question that applies it in a new context, not a repeat", after: 3, now: now)
+        }
         return mastery(subject: s, concept: c)!
     }
 
@@ -221,6 +267,101 @@ final class StudyStore: @unchecked Sendable {
             let pct = Int(m.pKnown * 100)
             return "- \(m.subject) › \(m.concept): \(pct)% (\(m.correct)/\(m.attempts) correct)\(m.mastered ? " ✓ mastered" : "")"
         }.joined(separator: "\n")
+    }
+
+    // MARK: Answers & follow-ups
+
+    /// Logs one graded answer (with or without a concept): how sure the learner was and how much help they had.
+    func recordResponse(subject: String?, concept: String?, correct: Bool?, certainty: Certainty?, help: Help,
+                        source: String, conversationID: String?, now: Date = Date()) {
+        try? db.execute("INSERT INTO responses(at, subject, concept, correct, certainty, help, source, conversation_id) VALUES(?,?,?,?,?,?,?,?)",
+                        now, subject?.lowercased(), concept, correct, certainty?.rawValue, help.rawValue, source, conversationID)
+    }
+
+    /// Concepts the learner already answered wrong in this lesson, as concept keys (`MemoryText.conceptKey`).
+    func missedInLesson(_ conversationID: String) -> Set<String> {
+        Set(((try? db.query("SELECT DISTINCT concept FROM responses WHERE conversation_id=? AND correct=0 AND concept IS NOT NULL", conversationID)) ?? [])
+            .compactMap { $0.string("concept").map(MemoryText.conceptKey) })
+    }
+
+    /// Per certainty level: answers and how many were right (graded answers without help, last `days`).
+    func calibration(days: Int = 180, now: Date = Date()) -> [Certainty: (answers: Int, right: Int)] {
+        let rows = (try? db.query("""
+            SELECT certainty, COUNT(*) AS n, SUM(correct) AS ok FROM responses
+            WHERE at>=? AND certainty IS NOT NULL AND correct IS NOT NULL AND help=0 GROUP BY certainty
+            """, now.addingTimeInterval(-Double(days) * 86400))) ?? []
+        var out: [Certainty: (Int, Int)] = [:]
+        for r in rows { if let c = r.int("certainty").flatMap(Certainty.init(rawValue:)) { out[c] = (r.int("n") ?? 0, r.int("ok") ?? 0) } }
+        return out
+    }
+
+    /// Hints used and solutions shown in the last `days`.
+    func helpUsed(days: Int = 30, now: Date = Date()) -> (hints: Int, solutions: Int) {
+        let r = (try? db.query("SELECT SUM(help=1) AS h, SUM(help=2) AS s FROM responses WHERE at>=?", now.addingTimeInterval(-Double(days) * 86400)))?.first
+        return (r?.int("h") ?? 0, r?.int("s") ?? 0)
+    }
+
+    /// Open follow-ups of these kinds on the concept, matched by concept key ("the chain rule" = "Chain rule").
+    private func open(_ kinds: [FollowUp.Kind], concept: String) -> [FollowUp] {
+        let key = MemoryText.conceptKey(concept)
+        let rows = (try? db.query("SELECT * FROM followups WHERE resolved_at IS NULL AND kind IN (\(kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")))")) ?? []
+        return rows.compactMap(followUp).filter { $0.concept.caseInsensitiveCompare(concept) == .orderedSame || MemoryText.conceptKey($0.concept) == key }
+    }
+
+    /// Adds a follow-up, or refreshes the open one of the same kind for the concept (the earlier due date wins).
+    func scheduleFollowUp(subject: String, concept: String, kind: FollowUp.Kind, note: String?, after days: Double,
+                          conversationID: String? = nil, now: Date = Date()) {
+        let due = now.addingTimeInterval(days * 86400)
+        if let id = open([kind], concept: concept).first?.id {
+            try? db.execute("UPDATE followups SET due=MIN(due, ?), note=COALESCE(?, note) WHERE id=?", due, note, id)
+        } else {
+            try? db.execute("INSERT INTO followups(subject, concept, kind, note, due, created_at, conversation_id) VALUES(?,?,?,?,?,?,?)",
+                            subject.lowercased(), concept, kind.rawValue, note, due, now, conversationID)
+        }
+    }
+
+    /// Open follow-ups that are due, oldest first. Forgotten-card notes that nobody took up expire after a week.
+    func dueFollowUps(limit: Int = 6, now: Date = Date()) -> [FollowUp] {
+        try? db.execute("UPDATE followups SET resolved_at=?, outcome='expired' WHERE resolved_at IS NULL AND kind='missed' AND created_at<?",
+                        now, now.addingTimeInterval(-7 * 86400))
+        return ((try? db.query("SELECT * FROM followups WHERE resolved_at IS NULL AND due<=? ORDER BY due LIMIT ?", now, limit)) ?? []).compactMap(followUp)
+    }
+
+    /// Every open follow-up, soonest first (the Progress screen).
+    func openFollowUps(limit: Int = 20) -> [FollowUp] {
+        ((try? db.query("SELECT * FROM followups WHERE resolved_at IS NULL ORDER BY due LIMIT ?", limit)) ?? []).compactMap(followUp)
+    }
+
+    func resolveFollowUps(concept: String, kinds: [FollowUp.Kind], outcome: String, now: Date = Date()) {
+        for f in open(kinds, concept: concept) { try? db.execute("UPDATE followups SET resolved_at=?, outcome=? WHERE id=?", now, outcome, f.id) }
+    }
+
+    /// An answer without help settles the concept's due re-check and transfer checks: right closes them; a missed transfer
+    /// check becomes a re-check tomorrow; a missed re-check comes back tomorrow. Follow-ups not due yet wait: an answer
+    /// in the same lesson isn't the delayed check.
+    private func settleFollowUps(subject: String, concept: String, correct: Bool, now: Date) {
+        for f in open([.recheck, .transfer], concept: concept) where f.due <= now {
+            let id = f.id
+            if correct {
+                try? db.execute("UPDATE followups SET resolved_at=?, outcome='passed' WHERE id=?", now, id)
+            } else if f.kind == .transfer {
+                try? db.execute("UPDATE followups SET resolved_at=?, outcome='failed' WHERE id=?", now, id)
+                scheduleFollowUp(subject: subject, concept: concept, kind: .recheck, note: "missed the transfer check: it didn't carry over to a new context", after: 1, now: now)
+            } else {
+                try? db.execute("UPDATE followups SET due=? WHERE id=?", now.addingTimeInterval(86400), id)
+            }
+        }
+    }
+
+    private func followUp(_ r: Row) -> FollowUp? {
+        guard let id = r.int("id"), let c = r.string("concept"), let k = r.string("kind").flatMap(FollowUp.Kind.init(rawValue:)) else { return nil }
+        return FollowUp(id: Int64(id), subject: r.string("subject") ?? "general", concept: c, kind: k, note: r.string("note"),
+                        due: r.date("due") ?? Date(), createdAt: r.date("created_at") ?? Date())
+    }
+
+    /// Brings the concept's flashcards forward to tomorrow at the latest (after a confident mistake).
+    func reviewSoon(concept: String, now: Date = Date()) {
+        try? db.execute("UPDATE cards SET due=MIN(due, ?) WHERE suspended=0 AND concept=? COLLATE NOCASE", now.addingTimeInterval(86400), concept)
     }
 
     // MARK: Plans

@@ -30,6 +30,9 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Composer state lives with the lesson so switching lessons keeps drafts.
     @Published var draft = ""
     @Published var attachments: [Attachment] = []
+    /// What the learner did in the transcript that the tutor should hear with their next message (e.g. opening a
+    /// problem's solution without trying it).
+    var studyNotes: [String] = []
 
     private(set) var messages: [ChatMessage] = []
     unowned let app: AppModel

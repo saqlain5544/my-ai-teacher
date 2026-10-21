@@ -331,6 +331,14 @@ struct TranscriptView: NSViewRepresentable {
                 if let id = j["id"]?.string, let t = j["text"]?.string { session?.edit(messageID: id, newText: t) }
             case "suggest":
                 if let t = j["text"]?.string { session?.send(t) }
+            case "study":
+                // A hint or solution opened on a ```problem: logged as help; a solution seen without an attempt also goes to
+                // the tutor with the learner's next message.
+                guard let s = session else { return }
+                s.services.study.recordResponse(subject: j["subject"]?.string, concept: j["concept"]?.string, correct: nil, certainty: nil,
+                                                help: j["event"]?.string == "solution" ? .solution : .hint, source: "problem", conversationID: s.id)
+                if let note = j["note"]?.string, !note.isEmpty, !s.studyNotes.contains(note) { s.studyNotes.append(String(note.prefix(400))) }
+                EventBus.publish(.studyDataChanged)
             case "quick":
                 let prompts = [
                     "simpler": "Can you explain that again more simply, with an everyday analogy?",

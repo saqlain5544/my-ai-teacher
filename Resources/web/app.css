@@ -262,9 +262,14 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .feedback.bad { background: var(--bad-soft); }
 .feedback.neutral { background: var(--card); }
 .quiz-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 11px 15px; border-top: 1px solid var(--border); background: var(--card); flex-wrap: wrap; }
-.confidence { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 0.85em; }
-.confidence button { width: 28px; height: 28px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg); cursor: pointer; }
-.confidence button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+.certainty { display: flex; align-items: center; gap: 5px; margin-top: 7px; color: var(--muted); font-size: 0.82em; flex-wrap: wrap; }
+.certainty .c-label { margin-right: 2px; }
+.certainty button { border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 999px; padding: 2px 10px; cursor: pointer; font: inherit; }
+.certainty button:hover { border-color: var(--accent); }
+.certainty button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
+.hint .nudge { color: var(--accent); font-weight: 600; }
+.feedback .mis { margin: 3px 0; }
+.feedback .fb-note { margin-top: 4px; color: var(--muted); font-size: 0.92em; }
 .score { font-weight: 700; font-size: 1.05em; }
 .score.great { color: var(--good); }
 .ask { border: 1px solid var(--accent); border-radius: 14px; padding: 12px 14px; background: var(--accent-soft); }
@@ -515,4 +520,21 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .pr-mark .btn.sel { border-color: var(--accent); color: var(--accent); }
 .pr-foot { padding: 8px 14px; display: flex; justify-content: flex-end; }
 .pr-foot[hidden], .pr-mark[hidden], .pr-a[hidden], .pr-hint[hidden], .steps-more[hidden], .step[hidden] { display: none; }
+
+/* Problem (attempt first) */
+.problem { border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
+.pb-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 14px; background: var(--accent-soft); flex-wrap: wrap; }
+.pb-title { font-weight: 650; }
+.pb-sub { color: var(--muted); font-size: 0.82em; }
+.pb-q { padding: 10px 14px 4px; overflow-wrap: anywhere; }
+.problem .pb-hint { margin: 4px 14px; }
+.pb-attempt { display: block; width: calc(100% - 28px); margin: 8px 14px 0; box-sizing: border-box; min-height: 64px; resize: vertical; }
+.pb-attempt.invalid { border-color: var(--bad, #e5484d); }
+.pb-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; justify-content: flex-end; padding: 8px 14px 10px; }
+.pb-actions .btn.primary { margin-left: 4px; }
+.pb-sent { color: var(--good, #30a46c); font-size: 0.85em; margin-right: auto; }
+.problem.attempted [data-act="pb-send"] { background: var(--bg); color: var(--fg); border-color: var(--border); }
+.pb-solution { margin: 0 14px 12px; padding: 8px 11px; border-radius: 8px; background: var(--card); border: 1px solid var(--border); }
+.pb-answer { margin-bottom: 4px; }
+.pb-hint[hidden], .pb-solution[hidden], .pb-sent[hidden], .problem .nudge[hidden], .problem .btn[hidden] { display: none; }
 .steps-more { margin-top: 4px; }

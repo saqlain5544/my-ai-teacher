@@ -54,8 +54,9 @@ struct MasteryTool: Tool {
     let name = "mastery"
     let description = """
     Track the learner's concept mastery (Bayesian Knowledge Tracing). action="record" after the learner answers a question \
-    (correct true/false) — mastery updates automatically; action="set" to set an estimated level 0..1 from a diagnostic; \
-    action="get" to see mastery (optionally for one subject). Treat ≥0.95 as mastered; aim for ~85% success while practising.
+    (correct true/false; assisted true when they needed hints or saw the solution: logged, no mastery gain) — mastery updates \
+    automatically; action="set" to set an estimated level 0..1 from a diagnostic; action="get" to see mastery (optionally for \
+    one subject). Treat ≥0.95 as mastered; aim for ~85% success while practising.
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
@@ -64,6 +65,7 @@ struct MasteryTool: Tool {
             "subject": Schema.string("Subject, e.g. algebra."),
             "concept": Schema.string("Concept, e.g. \"solving linear equations\"."),
             "correct": Schema.boolean("For record: was the answer correct?"),
+            "assisted": Schema.boolean("For record: the learner needed hints, a worked step or the solution."),
             "level": Schema.number("For set: 0..1."),
             "note": Schema.string("Optional evidence/note."),
         ], required: ["action"])
@@ -76,9 +78,11 @@ struct MasteryTool: Tool {
         switch input["action"]?.string ?? "get" {
         case "record":
             let concept = try input.req("concept")
-            let m = study.recordAttempt(subject: subject, concept: concept, correct: input["correct"]?.bool ?? false, note: input["note"]?.string)
+            let assisted = input["assisted"]?.bool == true
+            let m = study.recordAttempt(subject: subject, concept: concept, correct: input["correct"]?.bool ?? false, note: input["note"]?.string,
+                                        help: assisted ? .hint : .none)
             post()
-            return ToolOutput(text: "\(concept): mastery \(Int(m.pKnown * 100))% (\(m.correct)/\(m.attempts) correct, streak \(m.streak))\(m.mastered ? " — mastered ✓" : "")")
+            return ToolOutput(text: "\(concept): mastery \(Int(m.pKnown * 100))% (\(m.correct)/\(m.attempts) correct, streak \(m.streak))\(m.mastered ? " — mastered ✓" : "")\(assisted && input["correct"]?.bool == true ? " · with help, so mastery didn't rise" : "")")
         case "set":
             let concept = try input.req("concept")
             study.setMastery(subject: subject, concept: concept, level: input["level"]?.double ?? 0.5, note: input["note"]?.string)
