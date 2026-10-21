@@ -51,8 +51,104 @@
   md.linkify.set({ fuzzyEmail: false });
 
   const katexCache = new Cache(4000, 2e6);
-  const katexMacros = { '\\RR': '\\mathbb{R}', '\\NN': '\\mathbb{N}', '\\ZZ': '\\mathbb{Z}', '\\QQ': '\\mathbb{Q}', '\\CC': '\\mathbb{C}' };
+  // KaTeX lacks the packages models write with (siunitx units, physics shorthands, \label/\ref): an unknown command
+  // isn't an error box, it prints raw and red inside the formula. Fixed-arity ones are macros; the rest, whose meaning
+  // depends on what follows, are rewritten by texCompat first.
+  const U = (s) => s;   // unit symbols are plain text inside \mathrm{…}
+  const katexMacros = {
+    '\\RR': '\\mathbb{R}', '\\NN': '\\mathbb{N}', '\\ZZ': '\\mathbb{Z}', '\\QQ': '\\mathbb{Q}', '\\CC': '\\mathbb{C}',
+    // physics
+    '\\abs': '\\left\\lvert #1\\right\\rvert', '\\norm': '\\left\\lVert #1\\right\\rVert', '\\vb': '\\mathbf{#1}', '\\vu': '\\hat{\\mathbf{#1}}',
+    '\\va': '\\vec{#1}', '\\dd': '\\mathrm{d}', '\\grad': '\\nabla', '\\curl': '\\nabla\\times', '\\laplacian': '\\nabla^2', '\\cross': '\\times',
+    '\\vdot': '\\cdot', '\\tr': '\\operatorname{tr}', '\\Tr': '\\operatorname{Tr}', '\\rank': '\\operatorname{rank}', '\\erf': '\\operatorname{erf}',
+    '\\Res': '\\operatorname{Res}', '\\order': '\\mathcal{O}\\left(#1\\right)', '\\comm': '\\left[#1,#2\\right]', '\\acomm': '\\left\\{#1,#2\\right\\}',
+    '\\mel': '\\left\\langle #1\\middle\\vert #2\\middle\\vert #3\\right\\rangle',
+    // siunitx (\qty and \num in texCompat)
+    '\\SI': '#1\\,\\mathrm{#2}', '\\si': '\\mathrm{#1}', '\\unit': '\\mathrm{#1}', '\\ang': '#1^{\\circ}', '\\celsius': '{}^{\\circ}\\mathrm{C}',
+    '\\degreeCelsius': '{}^{\\circ}\\mathrm{C}', '\\per': U('/'), '\\squared': '^{2}', '\\cubed': '^{3}', '\\percent': '\\%',
+    '\\pico': U('p'), '\\nano': U('n'), '\\micro': '\\mu', '\\milli': U('m'), '\\centi': U('c'), '\\deci': U('d'), '\\kilo': U('k'),
+    '\\mega': U('M'), '\\giga': U('G'), '\\tera': U('T'), '\\metre': U('m'), '\\meter': U('m'), '\\gram': U('g'), '\\kilogram': U('kg'),
+    '\\second': U('s'), '\\minute': U('min'), '\\hour': U('h'), '\\ampere': U('A'), '\\kelvin': U('K'), '\\mole': U('mol'), '\\candela': U('cd'),
+    '\\newton': U('N'), '\\joule': U('J'), '\\watt': U('W'), '\\pascal': U('Pa'), '\\hertz': U('Hz'), '\\volt': U('V'), '\\ohm': '\\Omega',
+    '\\coulomb': U('C'), '\\farad': U('F'), '\\tesla': U('T'), '\\weber': U('Wb'), '\\litre': U('L'), '\\liter': U('L'), '\\electronvolt': U('eV'),
+    '\\angstrom': '\\text{Å}', '\\becquerel': U('Bq'), '\\siemens': U('S'), '\\lux': U('lx'),
+    // A chat has no equation numbering: a label disappears, a reference reads as its name.
+    '\\label': ctx => { ctx.consumeArgs(1); return ''; }, '\\eqref': '\\text{(#1)}', '\\ref': '\\text{#1}',
+  };
+  /** One balanced `{…}` group at i (spaces skipped): [content, index after it], or null. */
+  function brace(s, i) {
+    while (s[i] === ' ') i++;
+    if (s[i] !== '{') return null;
+    for (let d = 0, k = i; k < s.length; k++) {
+      if (s[k] === '\\') { k++; continue; }
+      if (s[k] === '{') d++;
+      else if (s[k] === '}' && --d === 0) return [s.slice(i + 1, k), k + 1];
+    }
+    return null;
+  }
+  function braces(s, i, max) { const out = []; for (let g; out.length < max && (g = brace(s, i)); ) { out.push(g[0]); i = g[1]; } return [out, i]; }
+  /** The closing bracket matching s[i] (( [ |), or -1. */
+  function closing(s, i) {
+    const open = s[i], close = { '(': ')', '[': ']', '|': '|' }[open];
+    for (let d = 0, k = i; k < s.length; k++) {
+      if (s[k] === '\\') { k++; continue; }
+      if (open !== '|' && s[k] === open) d++;
+      else if (s[k] === close && (open === '|' ? k > i : --d === 0)) return k;
+    }
+    return -1;
+  }
+  const D = '\\mathrm{d}';
+  function texCompat(src) {
+    src = src.replace(/\\newcommand\b/g, '\\providecommand')   // redefining a built-in (\R) is an error in KaTeX
+      .replace(/\\DeclareMathOperator(\*?)\s*\{\s*(\\[A-Za-z]+)\s*\}\s*\{([^{}]*)\}/g, (m, star, cmd, name) => '\\providecommand{' + cmd + '}{\\operatorname' + star + '{' + name + '}}');
+    if (!/\\(?:qty|dv|pdv|expval|braket|eval|num)(?![A-Za-z])/.test(src)) return src;
+    let out = '', i = 0;
+    const re = /\\(qty|dv|pdv|expval|braket|eval|num)(?![A-Za-z])/g;
+    for (let m; (m = re.exec(src)); ) {
+      const cmd = m[1], at = m.index + m[0].length;
+      let rep = null, end = at;
+      if (cmd === 'qty') {
+        let j = at; while (src[j] === ' ') j++;
+        const c = closing(src, j);
+        if ('([|'.includes(src[j]) && c > 0) {
+          const L = { '(': '(', '[': '[', '|': '\\vert' }[src[j]], R = { '(': ')', '[': ']', '|': '\\vert' }[src[j]];
+          rep = '\\left' + L + texCompat(src.slice(j + 1, c)) + '\\right' + R; end = c + 1;
+        } else {
+          const [g, e] = braces(src, at, 2);
+          if (g.length === 2) { rep = texCompat(g[0]) + '\\,\\mathrm{' + g[1] + '}'; end = e; }        // siunitx \qty{3}{m}
+          else if (g.length === 1) { rep = '\\left\\{' + texCompat(g[0]) + '\\right\\}'; end = e; }
+        }
+      } else if (cmd === 'dv' || cmd === 'pdv') {
+        const d = cmd === 'dv' ? D : '\\partial ';   // the space: "\partial" + "x" would read as \partialx
+        let j = at, n = '';
+        const opt = /^\s*\[([^\]]*)\]/.exec(src.slice(j)); if (opt) { n = opt[1]; j += opt[0].length; }
+        const [g, e] = braces(src, j, 3), pow = n ? '^{' + n + '}' : '';
+        if (g.length === 1) rep = '\\frac{' + d + pow + '}{' + d + texCompat(g[0]) + pow + '}';
+        else if (g.length === 2) rep = '\\frac{' + d + pow + ' ' + texCompat(g[0]) + '}{' + d + texCompat(g[1]) + pow + '}';
+        else if (g.length === 3) rep = '\\frac{' + d + '^{2} ' + texCompat(g[0]) + '}{' + d + texCompat(g[1]) + '\\,' + d + texCompat(g[2]) + '}';
+        if (rep) end = e;
+      } else if (cmd === 'expval') {
+        const [g, e] = braces(src, at, 2);
+        if (g.length === 1) rep = '\\left\\langle ' + texCompat(g[0]) + '\\right\\rangle';
+        else if (g.length === 2) rep = '\\left\\langle ' + g[1] + '\\middle\\vert ' + texCompat(g[0]) + '\\middle\\vert ' + g[1] + '\\right\\rangle';
+        if (rep) end = e;
+      } else if (cmd === 'braket') {
+        const [g, e] = braces(src, at, 2);   // one argument is KaTeX's own \braket{φ|ψ}
+        if (g.length === 2) { rep = '\\left\\langle ' + texCompat(g[0]) + '\\middle\\vert ' + texCompat(g[1]) + '\\right\\rangle'; end = e; }
+      } else if (cmd === 'eval') {
+        const [g, e] = braces(src, at, 1);
+        if (g.length === 1) { rep = '\\left. ' + texCompat(g[0]) + '\\right\\vert'; end = e; }
+      } else if (cmd === 'num') {
+        const [g, e] = braces(src, at, 1);
+        if (g.length === 1) { rep = g[0].replace(/^\s*([-+]?[\d.]+)\s*[eE]\s*([-+]?\d+)\s*$/, '$1\\times10^{$2}'); end = e; }
+      }
+      if (rep === null) continue;
+      out += src.slice(i, m.index) + rep; i = end; re.lastIndex = end;
+    }
+    return out + src.slice(i);
+  }
   function tex(src, display) {
+    src = texCompat(src);
     const key = (display ? 'D' : 'I') + src;
     let html = katexCache.get(key);
     if (html === undefined) {

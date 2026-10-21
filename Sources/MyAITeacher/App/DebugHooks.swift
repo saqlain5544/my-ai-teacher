@@ -117,7 +117,7 @@ enum DebugHooks {
     (() => { const all = s => Array.from(document.querySelectorAll(s));
       const last = document.querySelector('.msg.assistant.last');
       return JSON.stringify({ messages: all('.msg').length,
-        errors: all('.comp-error, .diagram-error, .math-error, .katex-error, .msg-error, .visual-error:not([hidden])').map(e => e.textContent.trim().slice(0, 300)),
+        errors: all('.comp-error, .diagram-error, .math-error, .katex-error, .katex [style*="#cc0000"], .msg-error, .visual-error:not([hidden])').map(e => e.textContent.trim().slice(0, 300)),
         spinners: all('.tool .spinner').length, pendingDiagrams: all('.mermaid-block[data-pending]').length,
         visuals: all('.visual iframe').length, katex: all('.katex').length, diagrams: all('.mermaid-block svg').length,
         tables: all('.md table').length, practice: all('.practice').length, tools: all('[data-tool-id]').map(e => e.getAttribute('data-tool-id')),

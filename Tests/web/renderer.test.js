@@ -414,6 +414,44 @@
     }
   });
 
+  // What models actually write in lessons: chemistry, units, numbered equations, physics/siunitx shorthands, operators.
+  const MODEL_MATH = [
+    '$\\ce{2H2 + O2 -> 2H2O}$', '$\\pu{123 kJ/mol}$', '$\\SI{9.81}{m/s^2}$', '$\\si{\\kilo\\gram\\per\\metre\\cubed}$', '$\\qty{3.0}{m}$',
+    '$\\unit{m/s}$', '$\\ang{30}$', '$\\num{6.022e23}$',
+    '$$\\begin{equation} E=mc^2 \\label{eq:energy} \\end{equation}$$', '$$\\begin{align} a &= b \\\\ c &= d \\end{align}$$',
+    '$$\\begin{aligned} a &= b \\\\ c &= d \\end{aligned}$$', '$$\\begin{gather} x \\\\ y \\end{gather}$$', 'see $\\eqref{eq:energy}$ and $\\ref{eq:energy}$',
+    '$\\DeclareMathOperator{\\sgn}{sgn} \\sgn(x)$', '$\\operatorname{sgn}(x)$', '$90\\degree$ and $90^\\circ$', '$\\text{speed} = \\frac{\\text{distance}}{\\text{time}}$',
+    '$\\mathbb{R}$ and $\\RR$', '$\\vec{v}$, $\\overrightarrow{AB}$, $\\hat{\\imath}$', '$\\bm{x}$ $\\boldsymbol{x}$', '$\\cancel{x}$ $\\boxed{x}$',
+    '$\\displaystyle\\sum_{i=1}^n i$', '$a \\lt b \\gt c$', '$\\textbf{bold}$ $\\emph{em}$', 'inline \\(x^2\\) and display \\[x^3\\]',
+    '$\\begin{pmatrix}1&2\\\\3&4\\end{pmatrix}$', '$f(x)=\\begin{cases} x & x>0 \\\\ -x & \\text{otherwise}\\end{cases}$', '$$x \\tag{1}$$',
+    '$\\newcommand{\\R}{\\mathbb{R}} \\R$', '$\\mathrm{d}x$', '$\\dd x$', '$\\abs{x}$ $\\norm{x}$', '$\\dv{f}{x}$ $\\pdv{f}{x}$',
+    '$\\begin{array}{c|c} a & b \\\\ \\hline c & d\\end{array}$', '$\\underbrace{a+b}_{c}$', '$\\xrightarrow{\\Delta}$', '$\\therefore\\ \\because$',
+    '$\\checkmark$', '$\\textcolor{red}{x}$ $\\colorbox{yellow}{x}$', '$\\overset{!}{=}$', '$\\mathcal{O}(n \\log n)$', '$\\lvert x \\rvert$',
+    '$\\dfrac{1}{2}$ $\\tfrac12$', '$\\varnothing \\emptyset$', '$\\implies \\iff$', '$\\celsius$', '$5\\,\\text{m/s}^2$', '$\\si{\\degreeCelsius}$',
+    '$\\SI{25}{\\celsius}$', '$\\ohm$ $\\Omega$', '$\\micro$', '$\\angstrom$', '$\\vb{F}$ $\\vu{x}$', '$\\expval{x}$ $\\bra{\\psi}\\ket{\\phi}$',
+    'It costs $5 and $10 today.',
+  ];
+  test('math models commonly write renders: no error boxes, no raw red commands', () => {
+    const bad = [];
+    for (const src of MODEL_MATH) {
+      const el = show(src);
+      // An unknown command isn't an error box: KaTeX prints it raw, in red, inside the formula.
+      if ($('.katex-error, .math-error, .katex [style*="#cc0000"]', el)) bad.push(src);
+    }
+    ok(!bad.length, bad.length + ' failed: ' + bad.join('   |   '));
+    // And they mean what they should (KaTeX's text: the visible glyphs, then the TeX annotation).
+    const seen = src => { const el = show(src); return $('.katex-html', el).textContent; };
+    ok(seen('$\\SI{9.81}{m/s^2}$').startsWith('9.81m/s2'), 'quantity: ' + seen('$\\SI{9.81}{m/s^2}$'));
+    ok(seen('$\\si{\\kilo\\gram\\per\\metre\\cubed}$').startsWith('kg/m3'), 'units: ' + seen('$\\si{\\kilo\\gram\\per\\metre\\cubed}$'));
+    ok(seen('$\\qty{3.0}{m}$').startsWith('3.0m'), 'siunitx qty');
+    ok(seen('$\\qty(1+x)$').startsWith('(1+x)'), 'physics qty(): ' + seen('$\\qty(1+x)$'));
+    ok(seen('$\\num{6.022e23}$').startsWith('6.022×1023'), 'num: ' + seen('$\\num{6.022e23}$'));
+    ok(seen('$\\pdv{f}{x}{y}$').includes('∂2f') && seen('$\\pdv{f}{x}{y}$').includes('∂x∂y'), 'mixed partial: ' + seen('$\\pdv{f}{x}{y}$'));
+    ok(seen('$\\abs{x}$').includes('∣x∣') || seen('$\\abs{x}$').includes('|x|'), 'abs: ' + seen('$\\abs{x}$'));
+    ok(seen('$\\expval{A}{\\psi}$').includes('ψ∣A∣ψ'), 'expectation value: ' + seen('$\\expval{A}{\\psi}$'));
+    ok(seen('$$\\begin{equation} E=mc^2 \\label{eq:e} \\end{equation}$$').includes('E=mc2') && !seen('$$\\begin{equation} E=mc^2 \\label{eq:e} \\end{equation}$$').includes('eq:e'), 'label vanishes');
+  });
+
   test('invalid component JSON shows an inline error, not a crash', () => {
     const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');
