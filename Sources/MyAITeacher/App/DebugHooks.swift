@@ -211,9 +211,11 @@ enum DebugHooks {
         let finish: (NSImage?, NSRect) -> Void = { webImage, webFrame in
             autoreleasepool {
                 guard let out = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: rep.pixelsWide, pixelsHigh: rep.pixelsHigh, bitsPerSample: 8,
-                                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0),
-                      let ctx = NSGraphicsContext(bitmapImageRep: out) else { return }
+                                                 samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0)
+                else { return }
+                // The point size before the context: a context made first draws at 1x, into a quarter of a Retina bitmap.
                 out.size = bounds.size
+                guard let ctx = NSGraphicsContext(bitmapImageRep: out) else { return }
                 NSGraphicsContext.saveGraphicsState()
                 NSGraphicsContext.current = ctx
                 rep.draw(in: bounds)
