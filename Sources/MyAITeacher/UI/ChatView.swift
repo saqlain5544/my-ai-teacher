@@ -128,10 +128,13 @@ struct ModelPickerPopover: View {
     var dismiss: () -> Void
     @State private var search = ""
     @State private var expanded: Set<String> = []
+    @FocusState private var searchFocused: Bool
 
     var body: some View {
         VStack(spacing: 0) {
             TextField("Search models", text: $search).textFieldStyle(.roundedBorder).padding(10)
+                .focused($searchFocused)
+                .onAppear { DispatchQueue.main.async { searchFocused = true } }   // type to filter right away
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {

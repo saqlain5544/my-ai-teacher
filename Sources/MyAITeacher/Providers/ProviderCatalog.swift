@@ -81,7 +81,7 @@ enum ProviderCatalog {
         guard status < 400 else { throw HTTPError(status: status, body: String(decoding: data, as: UTF8.self)) }
         guard let j = JSON.parse(data) else { return [] }
         let raw = (p.api == .gemini ? j["models"] : j["data"])?.array ?? []
-        let skip = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe", "realtime", "audio", "guard", "orpheus", "image", "sora", "rerank", "search-preview", "safety", "aqa"]
+        let skip = ["embed", "whisper", "tts", "dall-e", "moderation", "transcribe", "realtime", "audio", "guard", "orpheus", "image", "sora", "rerank", "search-preview", "safety", "aqa", "babbage", "davinci", "gpt-3.5-turbo-instruct"]
         var seen = Set<String>()
         return raw.compactMap { m -> ModelInfo? in
             if p.api == .gemini, !(m["supportedGenerationMethods"]?.array?.contains("generateContent") ?? true) { return nil }

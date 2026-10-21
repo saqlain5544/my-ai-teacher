@@ -38,9 +38,10 @@ enum Reflection {
     You maintain the long-term LEARNER MODEL of a personal AI tutor. It is not a log: store only durable, non-derivable \
     facts that change how to teach this learner in FUTURE lessons.
     Memory kinds: profile (who they are: age/grade/job, languages, background) · preference (how they learn best) · \
-    goal (exams, projects, deadlines) · misconception (a specific, recurring error — say exactly what they confuse) · \
+    goal (exams, projects, deadlines) · misconception (a specific error the learner made at least twice or said they find confusing — say exactly what they confuse; never a guess from one slip) · \
     fact (other durable facts: tools, interests).
-    Concepts (skills/topics) are graph nodes, NOT memories: report each concept the lesson really worked on, with its \
+    Concepts (skills/topics) are graph nodes, NOT memories: report only the few (≤3) concepts the lesson actually taught or \
+    practised in depth — reuse the names under "Known concepts" when they fit — with its \
     subjects (one concept may belong to several subjects, e.g. "Arabic prosody" → ["arabic","poetry"]), its \
     prerequisites (other concepts it builds on, possibly from other subjects) and a status: struggling | learning | solid. \
     Optional "mastery" 0..1 only when the lesson gives clear evidence and no quiz measured it.
@@ -100,12 +101,53 @@ enum Reflection {
         return (j?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }
     }
 
+    static let maxNewConcepts = 3
+
+    /// "favourite planet", "preferred language" — facts about the learner, not things to learn.
+    static func isPersonal(_ name: String) -> Bool {
+        name.range(of: #"^(the\s+)?(learner'?s?\s+|my\s+|their\s+)?(favou?rite|preferred|personal)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Hedged claims ("may confuse", "possibly") are guesses, not recurring errors.
+    static func isSpeculative(_ text: String) -> Bool {
+        text.range(of: #"\b(may|might|possibly|perhaps|probably|could be|seems to|appears to)\b"#, options: [.regularExpression, .caseInsensitive]) != nil
+    }
+
+    /// Two concept names that share at least half their content words (or one contains the other's words).
+    static func sameConcept(_ a: String, _ b: String) -> Bool {
+        func words(_ s: String) -> Set<String> {
+            let stop: Set<String> = ["and", "of", "the", "a", "an", "in", "to", "for", "basic", "basics", "intro", "introduction"]
+            return Set(s.lowercased().split { !$0.isLetter && !$0.isNumber }.map { w -> String in
+                var w = String(w)
+                if w.count > 6, w.hasSuffix("ary") { w.removeLast(3) }        // planetary → planet
+                else if w.count > 3, w.hasSuffix("s") { w.removeLast() }     // planets → planet
+                return w
+            }.filter { !stop.contains($0) && $0.count > 1 })
+        }
+        let x = words(a), y = words(b)
+        guard !x.isEmpty, !y.isEmpty else { return false }
+        let shared = x.intersection(y).count
+        return x.isSubset(of: y) || y.isSubset(of: x) || Double(shared) / Double(x.union(y).count) >= 0.5
+    }
+
     /// Validates and applies model-proposed operations. Deterministic (unit-tested without a model).
     static func apply(_ json: JSON, hub: MemoryHub, conversationID: String?, origin: String = "reflection") -> Outcome {
         var out = Outcome(title: nil, applied: 0)
-        // Concepts first, so memory adds can attach to them.
+        // Concepts first, so memory adds can attach to them. Guards keep the graph a map of what was taught, not a log:
+        // at most `maxNewConcepts` new nodes per lesson, no personal preferences as concepts, and near-duplicates
+        // (≥50% shared words with an existing or same-batch concept) fold into that concept.
+        var known = (hub.graph?.all() ?? []).map(\.name)
+        var newConcepts = 0
         for c in json["concepts"]?.array ?? [] {
-            guard let name = c["name"]?.string, !name.isEmpty else { continue }
+            guard var name = c["name"]?.string?.trimmingCharacters(in: .whitespaces), !name.isEmpty else { continue }
+            if Self.isPersonal(name) { out.rejected += 1; out.rejections.append("\(name) — a preference, not a concept"); continue }
+            if hub.graph?.find(name) == nil {
+                if let twin = known.first(where: { Self.sameConcept($0, name) }) { name = twin }
+                else {
+                    guard newConcepts < Self.maxNewConcepts else { out.rejected += 1; out.rejections.append("\(name) — too many new concepts for one lesson"); continue }
+                    newConcepts += 1; known.append(name)
+                }
+            }
             if hub.saveConcept(name: name, subjects: strings(c["subjects"]) + strings(c["subject"]),
                                prerequisites: strings(c["prerequisites"]) + strings(c["prereqs"]), related: strings(c["related"]),
                                partOf: strings(c["part_of"]), summary: c["summary"]?.string, status: c["status"]?.string,
@@ -127,6 +169,9 @@ enum Reflection {
                 guard let c = op["content"]?.string, !c.isEmpty else { continue }
                 let kind = op["kind"]?.string.flatMap(MemoryKind.init(rawValue:)) ?? .fact
                 guard kind != .episode else { continue }
+                if kind == .misconception, Self.isSpeculative(c) {
+                    out.rejected += 1; out.rejections.append("\(c) — speculative misconception"); continue
+                }
                 let r = hub.add(kind: kind, content: c, subject: op["subject"]?.string, importance: op["importance"]?.double ?? 0.5,
                                 origin: origin, source: conversationID,
                                 scope: op["scope"]?.string.flatMap(MemoryScope.init(rawValue:)) ?? .learner, concept: op["concept"]?.string)

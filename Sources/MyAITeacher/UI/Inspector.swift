@@ -84,7 +84,7 @@ struct FileExplorer: View {
             VStack(spacing: 0) {
                 HStack {
                     Image(systemName: "folder").foregroundStyle(.secondary)
-                    Text(root.lastPathComponent).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
+                    Text(app.workspace.name).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                     Spacer()
                     Button { tree.root?.refresh() } label: { Image(systemName: "arrow.clockwise") }
                         .buttonStyle(.borderless).help("Refresh")

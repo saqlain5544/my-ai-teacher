@@ -240,6 +240,29 @@ final class MemoryModelTests: XCTestCase {
         XCTAssertEqual(hub.learner.count(), before)
     }
 
+    /// Replays what a two-question geography/planets test lesson produced before the guards existed.
+    func testReflectionDoesNotSpamConcepts() throws {
+        let fx = try MemoryFixture()
+        let hub = fx.hub
+        _ = hub.saveConcept(name: "basic world geography", subjects: ["geography"])
+        let json = JSON.parse("""
+        {"operations":[{"op":"add","kind":"misconception","content":"The learner may confuse Jupiter with Saturn as the largest planet"},
+                       {"op":"add","kind":"misconception","content":"Repeatedly mixes up Jupiter and Saturn when ranking planets by size"}],
+         "concepts":[{"name":"favourite planet"},{"name":"solar system structure"},{"name":"planetary order and size"},
+                     {"name":"planet size"},{"name":"Italian geography"},{"name":"world geography basics"},{"name":"orbits"}]}
+        """)!
+        let o = Reflection.apply(json, hub: hub, conversationID: "c")
+        let names = Set(hub.graph!.all().map(\.name))
+        XCTAssertFalse(names.contains("favourite planet"), "preferences are not concepts")
+        XCTAssertFalse(names.contains("planet size"), "folded into 'planetary order and size'")
+        XCTAssertFalse(names.contains("world geography basics"), "folded into 'basic world geography'")
+        XCTAssertEqual(names.count, 4, "existing + at most 3 new: \(names.sorted())")
+        XCTAssertFalse(names.contains("orbits"), "4th new concept rejected")
+        XCTAssertEqual(o.added, 1, "speculative misconception rejected, the repeated one kept")
+        XCTAssertTrue(Reflection.sameConcept("Chain Rule", "chain rule for derivatives"))
+        XCTAssertFalse(Reflection.sameConcept("chain rule", "product rule"))
+    }
+
     func testLocalConsolidation() throws {
         let fx = try MemoryFixture()
         let st = fx.hub.learner
