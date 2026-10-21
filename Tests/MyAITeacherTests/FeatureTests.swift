@@ -109,6 +109,47 @@ final class FeatureTests: XCTestCase {
         XCTAssertTrue(langs.contains("en") && langs.contains("ar"), "\(langs)")
     }
 
+    /// Long text is embedded in ≤400-character pieces cut at spaces (bounded model memory) and averaged into one vector.
+    func testEmbedderPiecesLongText() throws {
+        let text = String(repeating: "The chain rule differentiates composite functions such as sin(x^2). ", count: 30) + String(repeating: "x", count: 900)
+        let pieces = Embedder.pieces(String(text.prefix(2000)), max: Embedder.pieceLength)
+        XCTAssertTrue(pieces.allSatisfy { !$0.isEmpty && $0.count <= Embedder.pieceLength })
+        XCTAssertEqual(pieces.joined(separator: " "), String(text.prefix(2000)), "nothing lost or reordered")
+        XCTAssertEqual(Embedder.pieces("short question", max: 400), ["short question"])
+        let long = try XCTUnwrap(Embedder.shared.vector(text)), short = try XCTUnwrap(Embedder.shared.vector("The chain rule differentiates composite functions."))
+        XCTAssertEqual(long.count, short.count)
+        XCTAssertGreaterThan(Embedder.cosine(long, short), 0.5, "the averaged vector still means the same thing")
+    }
+
+    /// The reflection excerpt is built newest-first and stops when full; it must equal rendering the whole lesson and
+    /// keeping the tail.
+    func testTranscriptExcerptMatchesTheWholeLessonTail() {
+        func reference(_ messages: [ChatMessage], maxChars: Int) -> String {
+            var parts: [String] = []
+            for m in messages {
+                for b in m.blocks {
+                    switch b.kind {
+                    case .text where b.meta?["hidden"]?.bool != true: parts.append("[\(m.role == .user ? "Learner" : "Teacher")]: \(b.text ?? "")")
+                    case .toolUse where !(b.name ?? "").hasPrefix("memory"): parts.append("[Teacher used \(b.name ?? "tool")]: \((b.input ?? .null).compact.prefix(300))")
+                    case .toolResult where ["quiz", "ask_learner"].contains(b.name ?? ""): parts.append("[Result of \(b.name ?? "")]: \((b.text ?? "").prefix(1200))")
+                    case .image: parts.append("[Learner attached an image]")
+                    case .file: parts.append("[Learner attached file \(b.name ?? "")]")
+                    default: break
+                    }
+                }
+            }
+            var s = parts.joined(separator: "\n\n")
+            if s.count > maxChars { s = "…" + String(s.suffix(maxChars)) }
+            return s
+        }
+        let lesson = (0..<1200).map { PerfSeed.message($0) } + [ChatMessage(role: .user, blocks: [Block(kind: .text, text: "<context>x</context>", meta: ["hidden": true]), .text("Last question")])]
+        for n in [0, 3, 9, 40, 1201] {
+            for maxChars in [100, 999, 14_000, 60_000] {
+                XCTAssertEqual(Reflection.transcriptExcerpt(Array(lesson.suffix(n)), maxChars: maxChars), reference(Array(lesson.suffix(n)), maxChars: maxChars), "\(n) messages, \(maxChars)")
+            }
+        }
+    }
+
     func testEmbedderIsSafeUnderConcurrency() async {
         await withTaskGroup(of: Int.self) { g in
             for i in 0..<64 { g.addTask { Embedder.shared.vector("concurrent memory search number \(i) about derivatives")?.count ?? 0 } }

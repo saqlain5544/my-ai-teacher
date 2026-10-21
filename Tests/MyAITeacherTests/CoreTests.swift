@@ -207,6 +207,20 @@ final class CoreTests: XCTestCase {
         XCTAssertLessThan(days, 365 * 12, "longest interval about a decade")
     }
 
+    /// The transcript gets each message as JSON text in one pass; it must say exactly what the JSON-tree route said.
+    @MainActor
+    func testTranscriptScriptMatchesTheJSONTree() {
+        var m = ChatMessage(role: .assistant, blocks: [.text("Say \"hi\" </script>\u{2028} é 𝑥\n$x^2$"), .thinking("plan", signature: "sig"),
+                                                       .toolUse(id: "t1", name: "read", input: ["path": "/tmp/a b", "n": 3, "deep": ["k": [1, true, .null]]])],
+                            model: "m")
+        m.turn = TurnMetrics(startedAt: Date(timeIntervalSince1970: 1_700_000_000.25), duration: 1.5, steps: 2)
+        m.meta = ["recalled": [["id": "12", "score": 0.82]]]
+        let r = ChatMessage(role: .user, blocks: [.toolResult(id: "t1", name: "read", content: "1\tok", isError: false, meta: ["ms": 12.5])])
+        for msg in [m, r] {
+            XCTAssertEqual(JSON.parse(TranscriptView.Coordinator.script(msg)), TranscriptView.Coordinator.encode(msg))
+        }
+    }
+
     @MainActor
     func testChangesPanelTracksEditsAndCheckpoints() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chg-\(UUID().uuidString.prefix(6))")

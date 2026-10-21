@@ -135,13 +135,34 @@ final class Embedder: @unchecked Sendable {
     private let lock = NSLock()
     private var model: NLEmbedding?
     private var loaded = false
+    /// The model's working memory grows with its input and malloc keeps it afterwards (2,000 characters in one call left
+    /// ~80 MB in the app's footprint, 400 ~15 MB), so longer text is embedded in pieces and averaged: about as fast, and
+    /// the mean ranks related memories at least as well as one long vector.
+    static let pieceLength = 400
 
     /// NLEmbedding is not thread-safe (concurrent calls crash inside BNNS), so every call is serialised.
     func vector(_ text: String) -> [Float]? {
         lock.lock(); defer { lock.unlock() }
         if !loaded { model = NLEmbedding.sentenceEmbedding(for: .english); loaded = true }
-        guard let model, let v = model.vector(for: String(text.prefix(2000))) else { return nil }
-        return v.map { Float($0) }
+        guard let model else { return nil }
+        var sum: [Double]?, n = 0.0
+        for p in Self.pieces(String(text.prefix(2000)), max: Self.pieceLength) {
+            guard let v = model.vector(for: String(p)) else { continue }
+            sum = sum.map { zip($0, v).map(+) } ?? v; n += 1
+        }
+        return sum?.map { Float($0 / n) }
+    }
+
+    /// Consecutive pieces of at most `max` characters, cut at a space when there is one.
+    static func pieces(_ s: String, max: Int) -> [Substring] {
+        var out: [Substring] = [], rest = Substring(s)
+        while rest.count > max {
+            let window = rest.prefix(max), cut = window.lastIndex(of: " ") ?? window.endIndex
+            if cut > rest.startIndex { out.append(rest[..<cut]) }
+            rest = rest[cut...].drop { $0 == " " }
+        }
+        if !rest.isEmpty { out.append(rest) }
+        return out
     }
 
     static func encode(_ v: [Float]) -> Data { v.withUnsafeBufferPointer { Data(buffer: $0) } }

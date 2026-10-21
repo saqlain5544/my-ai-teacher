@@ -12,9 +12,11 @@ enum Reflection {
     }
 
     static func transcriptExcerpt(_ messages: [ChatMessage], maxChars: Int = 14_000) -> String {
-        var parts: [String] = []
-        for m in messages {
-            for b in m.blocks {
+        // Newest first, stopping once the excerpt is full: a long lesson's reflection on close used to render every message
+        // to text to keep the last 14k characters.
+        var parts: [String] = [], total = 0
+        for m in messages.reversed() where total <= maxChars + 2 {   // + the separator not yet joined
+            for b in m.blocks.reversed() {
                 switch b.kind {
                 case .text where b.meta?["hidden"]?.bool != true:
                     parts.append("[\(m.role == .user ? "Learner" : "Teacher")]: \(b.text ?? "")")
@@ -25,11 +27,12 @@ enum Reflection {
                     parts.append("[Result of \(b.name ?? "")]: \((b.text ?? "").prefix(1200))")
                 case .image: parts.append("[Learner attached an image]")
                 case .file: parts.append("[Learner attached file \(b.name ?? "")]")
-                default: break
+                default: continue
                 }
+                total += parts[parts.count - 1].count + 2
             }
         }
-        var s = parts.joined(separator: "\n\n")
+        var s = parts.reversed().joined(separator: "\n\n")
         if s.count > maxChars { s = "…" + String(s.suffix(maxChars)) }
         return s
     }

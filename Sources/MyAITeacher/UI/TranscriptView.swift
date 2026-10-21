@@ -94,14 +94,14 @@ struct TranscriptView: NSViewRepresentable {
         // MARK: TranscriptSink
         func reset(_ messages: [ChatMessage], conversation: Conversation) {
             pendingDeltas.removeAll()
-            let payload = JSON.array(messages.map(Self.encode))
+            let payload = "[" + messages.map(Self.script).joined(separator: ",") + "]"
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
             if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }
             if let s = session, s.base > 0 { opts["earlier"] = .number(Double(s.base)) }
             if let anchor = pendingAnchor { opts["anchor"] = .string(anchor); pendingAnchor = nil }
-            run("T.reset(\(payload.compact), \(JSON.object(opts).compact))", replaceQueue: true)
+            run("T.reset(\(payload), \(JSON.object(opts).compact))", replaceQueue: true)
             if ready {
                 web?.evaluateJavaScript("document.querySelectorAll('.msg').length + ' rendered / ' + document.body.scrollHeight + 'px'") { r, _ in
                     AppLog.write("reset \(conversation.title.prefix(40)): \(messages.count) messages → \(r ?? "?")")
@@ -113,7 +113,7 @@ struct TranscriptView: NSViewRepresentable {
 
         func upsert(_ message: ChatMessage) {
             flushDeltas()
-            run("T.upsert(\(Self.encode(message).compact))")
+            run("T.upsert(\(Self.script(message)))")
         }
 
         func delta(_ messageID: String, index: Int, kind: Block.Kind, text: String) {
@@ -161,6 +161,13 @@ struct TranscriptView: NSViewRepresentable {
             let running = session?.isRunning ?? false
             run("T.status(\(status.map { JSON.string($0).compact } ?? "null"), \(running))")
         }
+
+        /// A message as JSON text for the page, in one pass: through a JSON tree it took three, ~200 ms of the main thread
+        /// to open a 4,000-message lesson.
+        static func script(_ m: ChatMessage) -> String {
+            (try? scriptEncoder.encode(m)).map { String(decoding: $0, as: UTF8.self) } ?? "null"
+        }
+        private static let scriptEncoder: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .secondsSince1970; return e }()
 
         static func encode(_ m: ChatMessage) -> JSON {
             let enc = JSONEncoder()
