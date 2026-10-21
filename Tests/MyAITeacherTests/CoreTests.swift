@@ -147,4 +147,22 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(store.messages("L", from: 400, to: 600).map(\.plainText).last, "m599")
         XCTAssertEqual(store.seq(ofMessage: msgs[742].id), 742)
     }
+
+    func testGradingReadsNumbersAndKeepsMeaningfulPunctuation() {
+        let cases: [(String, Double)] = [("12 seconds", 12), ("12 m/s", 12), ("1 1/2", 1.5), ("3/4", 0.75), ("3,5", 3.5), ("1,234", 1234),
+                                         ("5%", 5), ("10^3", 1000), ("2.5e3", 2500), ("−4", -4), ("about 9.81 m/s²", 9.81)]
+        for (s, v) in cases { XCTAssertEqual(Questions.number(.string(s))!, v, accuracy: 1e-9, s) }
+        XCTAssertNotEqual(Questions.norm("-5"), Questions.norm("5"))
+        XCTAssertNotEqual(Questions.norm("C#"), Questions.norm("C"))
+        XCTAssertNotEqual(Questions.norm("3.14"), Questions.norm("3 14"))
+        XCTAssertEqual(Questions.norm("Paris!"), Questions.norm("paris"))
+    }
+
+    func testFSRSIntervalsAreBounded() {
+        var st = FSRS.State(stability: 0, difficulty: 0, reps: 0, lapses: 0, lastReview: nil)
+        var now = Date(), days = 0.0
+        for _ in 0..<30 { (st, days) = FSRS.review(st, rating: .easy, now: now); now = now.addingTimeInterval(days * 86_400) }
+        XCTAssertLessThanOrEqual(st.stability, FSRS.maxStability)
+        XCTAssertLessThan(days, 365 * 12, "longest interval about a decade")
+    }
 }

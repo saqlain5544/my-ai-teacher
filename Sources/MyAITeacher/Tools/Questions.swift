@@ -92,20 +92,31 @@ enum Questions {
     }
 
     static func norm(_ s: String) -> String {
+        // Punctuation that changes meaning survives: a leading minus (-5 ≠ 5), # and + (C# ≠ C), a decimal point (3.14).
         s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
-            .replacingOccurrences(of: "[\\p{P}\\s]+", with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "−", with: "-")
+            .replacingOccurrences(of: #"(?<![\w])-(?=\d)"#, with: "\u{1}", options: .regularExpression)
+            .replacingOccurrences(of: #"(?<=\d)\.(?=\d)"#, with: "\u{2}", options: .regularExpression)
+            .replacingOccurrences(of: #"[^\p{L}\p{N}#+\x{01}\x{02}]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: "\u{1}", with: "-").replacingOccurrences(of: "\u{2}", with: ".")
             .trimmingCharacters(in: .whitespaces)
     }
 
+    /// The number in an answer: "12 seconds", "12 m/s" → 12; "1 1/2" → 1.5; "3/4"; "3,5" → 3.5; "1,234" → 1234;
+    /// "5%" → 5; "10^3" → 1000; "2.5e3". Units and words around it are ignored.
     static func number(_ a: JSON) -> Double? {
         if let d = a.double { return d }
-        guard var s = a.string?.trimmingCharacters(in: .whitespaces) else { return nil }
-        s = s.replacingOccurrences(of: ",", with: "").replacingOccurrences(of: "−", with: "-")
-        s = s.replacingOccurrences(of: "[^0-9eE+\\-./]", with: "", options: .regularExpression)
-        if let d = Double(s) { return d }
-        let parts = s.split(separator: "/")
-        if parts.count == 2, let a = Double(parts[0]), let b = Double(parts[1]), b != 0 { return a / b }
-        return nil
+        guard var s = a.string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+        s = s.replacingOccurrences(of: "−", with: "-").replacingOccurrences(of: "×", with: "*")
+        if let m = s.firstMatch(of: #/^([+-]?\d+)\s+(\d+)\s*/\s*(\d+)/#), let w = Double(m.1), let n = Double(m.2), let d = Double(m.3), d != 0 {
+            return w < 0 ? w - n / d : w + n / d   // mixed number
+        }
+        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)(?![\d.])/#), let a = Double(m.1), let b = Double(m.2), b != 0 { return a / b }
+        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\^|\*\*)\s*([+-]?\d+)/#), let b = Double(m.1), let e = Double(m.2) { return pow(b, e) }
+        if s.wholeMatch(of: #/[+-]?\d{1,3}(,\d{3})+(\.\d+)?.*/#) != nil { s = s.replacingOccurrences(of: ",", with: "") }
+        else if let m = s.firstMatch(of: #/^([+-]?\d+),(\d+)\b/#) { s = m.1 + "." + m.2 + s[m.range.upperBound...] }   // decimal comma
+        guard let m = s.firstMatch(of: #/[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/#) else { return nil }
+        return Double(m.0)
     }
 
     static func grade(_ q: JSON, answer a: JSON) async -> Grade {

@@ -7,6 +7,8 @@ enum FSRS {
     static let decay = -0.5
     static let factor = 19.0 / 81.0
     static let retention = 0.9
+    /// Cap on stability (days): with it the longest interval is ~10 years, as FSRS's own maximum_interval does.
+    static let maxStability = 3650.0
 
     enum Rating: Int, CaseIterable { case again = 1, hard, good, easy
         var title: String { switch self { case .again: "Again"; case .hard: "Hard"; case .good: "Good"; case .easy: "Easy" } }
@@ -47,7 +49,7 @@ enum FSRS {
                 }
             }
         }
-        n.stability = max(0.01, n.stability)
+        n.stability = min(maxStability, max(0.01, n.stability))   // no 30-billion-year intervals
         n.lastReview = now
         let days: Double = rating == .again ? (10.0 / 1440.0) : (rating == .hard && s.reps == 0 ? 1 : interval(n.stability))
         return (n, days)
