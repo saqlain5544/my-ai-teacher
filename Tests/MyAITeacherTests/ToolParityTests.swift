@@ -32,6 +32,24 @@ final class ToolParityTests: XCTestCase {
         }
     }
 
+    func testCodeAgentHasItsToolsetAndProjectMemory() async throws {
+        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name))
+        for t in ["read", "write", "edit", "glob", "grep", "bash", "todo_write", "task", "project_memory"] { XCTAssertTrue(names.contains(t), t) }
+        for t in ["memory", "flashcards", "mastery", "load_tools"] { XCTAssertFalse(names.contains(t), t) }
+        var o = try await ProjectMemoryTool().run(["action": "add", "section": "Commands", "text": "Run tests: swift test"], ctx)
+        XCTAssertTrue(o.text.contains("Commands"), o.text)
+        o = try await ProjectMemoryTool().run(["action": "add", "section": "Commands", "text": "Run tests: swift test"], ctx)
+        XCTAssertEqual(o.text, "Already noted.")
+        _ = try await ProjectMemoryTool().run(["action": "add", "section": "Gotchas", "text": "The build needs Xcode 27"], ctx)
+        let doc = ProjectMemory.read(dir)
+        XCTAssertTrue(doc.contains("## Commands\n- Run tests: swift test") && doc.contains("## Gotchas"), doc)
+        try "Use tabs.".write(to: dir.appendingPathComponent("AGENTS.md"), atomically: true, encoding: .utf8)
+        let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: ProjectMemory.contextBlock(dir))
+        XCTAssertTrue(prompt.contains("Run tests: swift test") && prompt.contains("Use tabs.") && prompt.contains("coding agent"))
+        _ = try await ProjectMemoryTool().run(["action": "remove", "text": "xcode"], ctx)
+        XCTAssertFalse(ProjectMemory.read(dir).contains("Xcode"))
+    }
+
     func testBackgroundSubAgentReportsLaterAndCanBeManaged() async throws {
         let got = expectation(description: "report delivered")
         await MainActor.run { SubAgentCenter.shared.onReport = { run, out in if run.title == "BG" { got.fulfill() } } }

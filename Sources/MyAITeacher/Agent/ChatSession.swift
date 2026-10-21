@@ -82,7 +82,10 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func setMode(_ mode: TeachingMode) {
         guard mode != conversation.mode else { return }
+        // Into or out of the code agent: a different persona and toolset, so the system prompt is rebuilt.
+        if mode.isAgent != conversation.mode.isAgent { conversation.systemPrompt = nil }
         conversation.mode = mode
+        if messages.isEmpty { sink?.reset(messages, conversation: conversation) }   // the welcome fits the mode
         if !messages.isEmpty { pendingModeNote = "[The learner switched the teaching mode to \(mode.title).]\n" + SystemPrompt.modeInstructions(mode) }
         save()
     }
@@ -262,7 +265,7 @@ final class ChatSession: ObservableObject, Identifiable {
             steps += 1
             await compactIfNeeded(client: client)
             setStatus(steps == 1 ? "Thinking…" : "Continuing…")
-            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id)
+            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: requestMessages(),
@@ -463,7 +466,7 @@ final class ChatSession: ObservableObject, Identifiable {
         if layout.deferred.contains(where: { $0.name == name }), !(conversation.loadedTools ?? []).contains(name), !settings.disabledTools.contains(name) {
             conversation.loadedTools = (conversation.loadedTools ?? []) + [name]
         }
-        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id).contains { $0.name == name } || name == "quiz"
+        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode).contains { $0.name == name } || (name == "quiz" && !conversation.mode.isAgent)
         guard callable, let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
             record(false)
             return .toolResult(id: callID, name: name, content: "Tool `\(name)` is not available.", isError: true)
@@ -531,6 +534,10 @@ final class ChatSession: ObservableObject, Identifiable {
     // MARK: Context
 
     private func buildSystemPrompt(model: String) -> String {
+        if conversation.mode.isAgent {
+            return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
+                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url))
+        }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
         return s

@@ -328,8 +328,20 @@ final class AppModel: ObservableObject {
 
     // MARK: Welcome screen content
 
-    func welcomePayload() -> JSON {
+    func welcomePayload(mode: TeachingMode = .tutor) -> JSON {
         let name = settings.value.learnerName
+        if mode.isAgent {
+            let hasMemory = !ProjectMemory.read(workspace.url).isEmpty
+            return ["title": .string("What shall we build in \(workspace.name)?"),
+                    "subtitle": .string("A coding agent with the full toolset, working in this folder (\(access(for: workspace).title.lowercased())). It remembers this project in .teacher/code-memory.md."),
+                    "suggestions": [
+                        ["title": "Explain this codebase", "subtitle": "Structure, entry points, how to build and test", "prompt": "Explore this project and explain its structure, entry points, and how to build and test it. Save the build and test commands to project memory."],
+                        ["title": "Fix failing tests", "subtitle": "Run the tests, find the cause, fix it", "prompt": "Run this project's tests, find the cause of any failures, fix them, and run the tests again to confirm."],
+                        ["title": "Review my changes", "subtitle": "git diff, bugs and risks", "prompt": "Review the uncommitted changes in this repository (git diff) for bugs, risks and missing tests. Don't change anything yet."],
+                        ["title": "Add a feature", "subtitle": "Plan, implement, verify", "prompt": "I want to add a feature. Ask me what it is, then plan it with a todo list, implement it in small steps and verify with the tests."],
+                    ],
+                    "stats": .array([.string("📁 \(workspace.name) · \(access(for: workspace).title)"), .string(hasMemory ? "🧠 project memory loaded" : "🧠 no project memory yet")])]
+        }
         var stats: [JSON] = []
         let streak = services.study.streakDays()
         if streak > 0 { stats.append(.string("🔥 \(streak)-day streak")) }

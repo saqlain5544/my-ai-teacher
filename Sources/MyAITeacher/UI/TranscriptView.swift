@@ -93,8 +93,9 @@ struct TranscriptView: NSViewRepresentable {
             pendingDeltas.removeAll()
             let payload = JSON.array(messages.map(Self.encode))
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
-            if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload() }
+            if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
+            if conversation.mode.isAgent { opts["agent"] = true }
             if let s = session, s.base > 0 { opts["earlier"] = .number(Double(s.base)) }
             if let anchor = pendingAnchor { opts["anchor"] = .string(anchor); pendingAnchor = nil }
             run("T.reset(\(payload.compact), \(JSON.object(opts).compact))", replaceQueue: true)

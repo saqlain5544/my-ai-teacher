@@ -21,7 +21,8 @@ ap.add_argument("--home", default=os.environ.get("E2E_HOME", "/tmp/myaiteacher-e
 ap.add_argument("--compact", type=int, default=48000)
 args = ap.parse_args()
 # Free models only: OpenRouter's :free models, or NVIDIA NIM's free tier (when OpenRouter's daily free quota is used up).
-assert (args.provider == "openrouter" and args.model.endswith(":free")) or args.provider == "nvidia", "free models only"
+# MiniMax: the learner's prepaid token plan (allowed for testing; thinking is off so replies end fast).
+assert (args.provider == "openrouter" and args.model.endswith(":free")) or args.provider in ("nvidia", "minimax"), "free / prepaid models only"
 HOME = pathlib.Path(args.home)
 LOG = HOME / "MyAITeacher.log"
 REPORT = HOME / "report.json"
@@ -172,7 +173,7 @@ def launch():
     time.sleep(2)
     return proc
 
-SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b"}[args.provider]
+SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash"}[args.provider]
 
 SCENARIOS = [
     dict(name="render", quick=True, prompt="Explain the Pythagorean theorem. Include: the formula in LaTeX, a ```mermaid flowchart of the proof idea, "
@@ -189,6 +190,9 @@ SCENARIOS = [
     dict(name="files", folder=True, prompt="List the files in this folder, read notes.md and summarise it in one line. Then buggy.py should print 55 (the sum of 1..10) "
          "but doesn't: fix it with the edit tool and run it with bash to verify.", expect=["read", "edit", "bash"], any=["ls", "glob"],
          after=lambda: (LAB / "buggy.py").read_text()),
+    dict(name="code-agent", folder=True, mode_after_open="agent", expect=["edit", "bash"], any=["project_memory"],
+         prompt="buggy.py should print 55 (the sum of 1..10) but doesn't. Fix it, run it to verify, and save how to run it to project memory.",
+         after=lambda: (LAB / "buggy.py").read_text() + "\n#MEM " + ((LAB / ".teacher/code-memory.md").read_text() if (LAB / ".teacher/code-memory.md").exists() else "(none)")),
     dict(name="visual", quick=True, prompt="Show me an interactive ```visual: a slider from 1 to 10 that sets a circle's radius and shows its area. Keep it small.",
          page=["visuals"]),
     dict(name="memory-save", quick=True, prompt="Please remember for future lessons: I learn best from worked examples with real-world analogies. Save that to memory.",
@@ -224,7 +228,9 @@ def main():
             elif not sc.get("same_lesson"):
                 post({"action": "quick"} if sc.get("quick") else {"action": "openFolder", "path": str(LAB)})
                 time.sleep(1.5)
-                if sc.get("folder"): post({"action": "dismissSheet"}); time.sleep(0.5); post({"action": "newLesson"}); time.sleep(1.0)
+                if sc.get("folder"):
+                    post({"action": "dismissSheet"}); time.sleep(0.5)
+                    post({"action": "newLesson", "mode": sc.get("mode_after_open", "tutor")}); time.sleep(1.0)
             r0 = report(); start = len(r0["messages"]); start_log = len(log_lines())
             t0 = time.time()
             if sc.get("stop_after"):
@@ -251,6 +257,7 @@ def main():
             if sc.get("after"):
                 out = sc["after"]()
                 if "range(1, 11)" not in out and "range(11)" not in out and "+ 1)" not in out: notes.append("buggy.py not fixed: " + out.replace("\n", " | "))
+                if "#MEM " in out and "#MEM (none)" in out: notes.append("no project memory written")
             snap = HOME / ("snap-%s.png" % sc["name"]); post({"action": "snapshot", "path": str(snap)})
             (HOME / ("report-%s.json" % sc["name"])).write_text(json.dumps(r, indent=1, ensure_ascii=False))
             results.append((sc["name"], problems, notes, used, secs, answered))

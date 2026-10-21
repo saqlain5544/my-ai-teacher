@@ -86,7 +86,9 @@ struct Composer: View {
     }
 
     private var placeholder: String {
-        session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…"
+        session.conversation.mode.isAgent
+            ? (session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
+            : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
     }
     private var canSend: Bool {
         !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.attachments.isEmpty
