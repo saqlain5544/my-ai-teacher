@@ -75,11 +75,27 @@ struct Concept: Identifiable, Hashable, Sendable {
     var source: String?
     var createdAt: Date
     var updatedAt: Date
+    /// When mastery evidence last arrived (a quiz/practice answer).
+    var masteryAt: Date? = nil
     var id: String { "c\(rowid)" }
     var masteryLabel: String {
         if let p = pKnown { return "\(Int((p * 100).rounded()))%" + (attempts > 0 ? " (\(correct)/\(attempts))" : "") }
         return status ?? "seen"
     }
+
+    /// Mastery now, with forgetting: since the last practice the estimate decays (never below 40% of what was learned),
+    /// and every correct recall lengthens the half-life — the spacing effect (≈5 days new, ≈1.5 years after 8 recalls).
+    func effectiveMastery(at now: Date = Date()) -> Double? {
+        guard let p = pKnown else { return nil }
+        guard let at = masteryAt else { return p }
+        let days = max(0, now.timeIntervalSince(at) / 86_400)
+        let halfLife = 5.0 * pow(1.8, Double(min(correct, 8)))
+        return p * (0.4 + 0.6 * pow(0.5, days / halfLife))
+    }
+    /// Was solid, is slipping: worth a quick retrieval question.
+    func isFading(at now: Date = Date()) -> Bool { (pKnown ?? 0) >= 0.8 && (effectiveMastery(at: now) ?? 1) < 0.7 }
+    /// Solid enough to build on.
+    func isSolid(at now: Date = Date()) -> Bool { (effectiveMastery(at: now) ?? (status == "solid" ? 0.85 : 0)) >= 0.8 }
 }
 
 enum ConceptRelation: String, Codable, CaseIterable, Sendable {

@@ -217,6 +217,17 @@ final class MemoryHub: @unchecked Sendable {
 
     /// The always-in-context learner model. Built once per lesson (prompt-cache stable), hard-capped at `maxChars`
     /// (~4 chars/token → ≤ 1.3k tokens). Sections are filled in priority order, rendered in reading order.
+    /// The learning model's suggestions for the teacher: the frontier (ready to learn) and fading concepts.
+    func studyNext(now: Date = Date()) -> [String] {
+        guard let graph else { return [] }
+        var lines: [String] = []
+        let ready = graph.readyToLearn(limit: 5, now: now).map { "\($0.name) #c\($0.rowid)" + ($0.pKnown.map { " \(Int(($0 * 100).rounded()))%" } ?? "") }
+        if !ready.isEmpty { lines.append("- ready: " + ready.joined(separator: " · ")) }
+        let fading = graph.fading(limit: 4, now: now).map { "\($0.name) #c\($0.rowid) now ~\(Int((($0.effectiveMastery(at: now) ?? 0) * 100).rounded()))%" }
+        if !fading.isEmpty { lines.append("- fading: " + fading.joined(separator: " · ")) }
+        return lines
+    }
+
     func coreBlock(maxChars: Int = 5200) -> String {
         graph?.syncMastery()
         func items(_ ms: [Memory]) -> [String] {
@@ -248,6 +259,7 @@ final class MemoryHub: @unchecked Sendable {
             (4, 2, "Watch for (misconceptions)", items(learner.top(kinds: [.misconception], limit: 6))),
             (5, 6, "Other facts", items(learner.top(kinds: [.fact, .knowledge], limit: 5))),
             (6, 5, "About this folder", folderFacts.map { "- [#\($0.id)] (\($0.kind.rawValue)) \(MemoryText.clip($0.content, 200))" }),
+            (8, 2, "Study next (ready: prerequisites solid · fading: revisit with a quick question)", studyNext()),
             (7, 7, "Recent lessons", episodes.reversed().map { "- \(df.string(from: $0.createdAt))\($0.scope == .folder ? " (this folder)" : ""): \(MemoryText.clip($0.content, 240))" }),
         ]
         sections.removeAll { $0.lines.isEmpty }

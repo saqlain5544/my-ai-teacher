@@ -49,7 +49,8 @@ final class ConceptGraph: @unchecked Sendable {
             nodes[id] = Concept(rowid: id, name: r.string("name") ?? "", subjects: subjects[id] ?? [], summary: r.string("summary"),
                                 status: r.string("status"), pKnown: r.double("p_known"), attempts: r.int("attempts") ?? 0,
                                 correct: r.int("correct") ?? 0, evidence: r.int("evidence") ?? 1, origin: r.string("origin") ?? "inferred",
-                                source: r.string("source"), createdAt: r.date("created_at") ?? Date(), updatedAt: r.date("updated_at") ?? Date())
+                                source: r.string("source"), createdAt: r.date("created_at") ?? Date(), updatedAt: r.date("updated_at") ?? Date(),
+                                masteryAt: r.date("mastery_at"))
         }
         for r in (try? db.query("SELECT norm, concept_id FROM concept_aliases")) ?? [] {
             if let n = r.string("norm"), let c = r.int("concept_id") { indexAlias(n, Int64(c)) }
@@ -82,7 +83,8 @@ final class ConceptGraph: @unchecked Sendable {
             nodes[id] = Concept(rowid: id, name: r.string("name") ?? "", subjects: subjects, summary: r.string("summary"),
                                 status: r.string("status"), pKnown: r.double("p_known"), attempts: r.int("attempts") ?? 0,
                                 correct: r.int("correct") ?? 0, evidence: r.int("evidence") ?? 1, origin: r.string("origin") ?? "inferred",
-                                source: r.string("source"), createdAt: r.date("created_at") ?? Date(), updatedAt: r.date("updated_at") ?? Date())
+                                source: r.string("source"), createdAt: r.date("created_at") ?? Date(), updatedAt: r.date("updated_at") ?? Date(),
+                                masteryAt: r.date("mastery_at"))
             for a in (try? db.query("SELECT norm FROM concept_aliases WHERE concept_id=?", id)) ?? [] { if let n = a.string("norm") { indexAlias(n, id) } }
         }
     }
@@ -126,6 +128,29 @@ final class ConceptGraph: @unchecked Sendable {
             return Edge(src: Int64(s), dst: Int64(d), rel: rel)
         }
     }
+    // MARK: Learning model
+
+    /// Concepts to learn next: not solid yet, with every prerequisite solid (the frontier of what you can learn now).
+    /// Struggling ones first, then the most recently active.
+    func readyToLearn(limit: Int = 8, now: Date = Date()) -> [Concept] {
+        let nodes = all()
+        let byID = Dictionary(uniqueKeysWithValues: nodes.map { ($0.rowid, $0) })
+        var prereqs: [Int64: [Int64]] = [:]
+        for e in edges() where e.rel == .prerequisite { prereqs[e.src, default: []].append(e.dst) }
+        return nodes.filter { c in
+            // Once-mastered concepts that are slipping are review (fading), not new learning.
+            !c.isSolid(at: now) && (c.pKnown ?? 0) < 0.8 && (prereqs[c.rowid] ?? []).allSatisfy { byID[$0]?.isSolid(at: now) ?? true }
+        }.sorted { a, b in
+            let sa = a.status == "struggling" || (a.pKnown ?? 1) < 0.5, sb = b.status == "struggling" || (b.pKnown ?? 1) < 0.5
+            return sa != sb ? sa : a.updatedAt > b.updatedAt
+        }.prefix(limit).map { $0 }
+    }
+
+    /// Concepts that were solid and are slipping (spaced retrieval due), weakest first.
+    func fading(limit: Int = 8, now: Date = Date()) -> [Concept] {
+        all().filter { $0.isFading(at: now) }.sorted { ($0.effectiveMastery(at: now) ?? 0) < ($1.effectiveMastery(at: now) ?? 0) }.prefix(limit).map { $0 }
+    }
+
     /// What `id` builds on (its prerequisites).
     func prerequisites(of id: Int64) -> [Concept] {
         ((try? db.query("SELECT dst FROM concept_edges WHERE src=? AND rel='prereq'", id)) ?? []).compactMap { $0.int("dst").flatMap { concept(Int64($0)) } }

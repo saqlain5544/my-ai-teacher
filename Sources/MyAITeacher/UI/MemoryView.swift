@@ -5,9 +5,12 @@ import SwiftUI
 struct MemoryView: View {
     @EnvironmentObject var app: AppModel
 
-    enum Tab: String, CaseIterable, Identifiable { case map = "Learning map", me = "About me", all = "All memories"; var id: String { rawValue } }
+    enum Tab: String, CaseIterable, Identifiable { case overview = "Overview", map = "Learning map", me = "About me", all = "All memories"; var id: String { rawValue } }
 
-    @State private var tab: Tab = .map
+    @State private var tab: Tab = .overview
+    @State private var concepts: [Concept] = []
+    @State private var ready: [Concept] = []
+    @State private var fading: [Concept] = []
     @State private var memories: [Memory] = []
     @State private var subjects: [(subject: String, concepts: [Concept])] = []
     @State private var links: [ConceptGraph.SubjectLink] = []
@@ -30,6 +33,7 @@ struct MemoryView: View {
                 .pickerStyle(.segmented).labelsHidden().padding(.horizontal, 28).padding(.bottom, 8)
             List {
                 switch tab {
+                case .overview: overviewTab
                 case .map: mapTab
                 case .me: aboutTab
                 case .all: allTab
@@ -72,6 +76,110 @@ struct MemoryView: View {
                 .help("Merge duplicates, link concepts across subjects, sharpen vague facts and remove noise")
             Button("Forget everything…", role: .destructive) { confirmClear = true }
         }.padding(.horizontal, 28).padding(.vertical, 10)
+    }
+
+    // MARK: Overview
+
+    /// The learner model at a glance: where you stand, what to learn next, what's slipping, what trips you up.
+    @ViewBuilder private var overviewTab: some View {
+        if concepts.isEmpty && memories.isEmpty {
+            Text("Your teacher builds this as you learn: concepts with mastery that fades unless practised, what you're ready to learn next, misconceptions to watch for, and your goals.")
+                .foregroundStyle(.secondary).padding(.vertical, 8)
+        } else {
+            Section { statsRow } header: { Label("Where you stand", systemImage: "gauge.with.dots.needle.67percent") }
+            if !ready.isEmpty {
+                Section { chips(ready, tint: .accentColor, detail: { c in c.pKnown == nil ? (c.status ?? "new") : "\(Int(((c.effectiveMastery() ?? 0) * 100).rounded()))%" }) }
+                header: { Label("Ready to learn next — everything it builds on is solid", systemImage: "arrow.forward.circle") }
+            }
+            if !fading.isEmpty {
+                Section { chips(fading, tint: .orange, detail: { c in "was \(Int(((c.pKnown ?? 0) * 100).rounded()))% → ~\(Int(((c.effectiveMastery() ?? 0) * 100).rounded()))%" }) }
+                header: { Label("Fading — a quick review question will lock these in", systemImage: "hourglass") }
+            }
+            let watch = memories.filter { $0.kind == .misconception }
+            if !watch.isEmpty {
+                Section { ForEach(watch.prefix(8)) { m in Label { Text(m.content) } icon: { Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange) } } }
+                header: { Label("Watch for", systemImage: "eye") }
+            }
+            let goals = memories.filter { $0.kind == .goal }
+            if !goals.isEmpty {
+                Section { ForEach(goals.prefix(6)) { m in Label(m.content, systemImage: "flag") } } header: { Label("Goals", systemImage: "target") }
+            }
+            if !subjects.isEmpty {
+                Section { ForEach(subjects, id: \.subject) { g in subjectTiles(g.subject, g.concepts) } }
+                header: { Label("Mastery by subject (with forgetting)", systemImage: "square.grid.3x3.fill") }
+            }
+        }
+    }
+
+    private var statsRow: some View {
+        let measured = concepts.compactMap { $0.effectiveMastery() }
+        let solid = concepts.filter { $0.isSolid() }.count
+        let weak = concepts.filter { ($0.effectiveMastery() ?? 1) < 0.5 || $0.status == "struggling" }.count
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                stat("\(concepts.count)", "concepts")
+                stat("\(solid)", "solid", .green)
+                stat("\(concepts.count - solid - weak)", "learning", .accentColor)
+                stat("\(weak)", "need work", .orange)
+                stat("\(fading.count)", "fading", .orange)
+                stat("\(memories.filter { $0.kind == .misconception }.count)", "misconceptions", .red)
+            }
+            if !measured.isEmpty {
+                // Distribution of current mastery across measured concepts.
+                GeometryReader { geo in
+                    let buckets = [measured.filter { $0 < 0.5 }.count, measured.filter { $0 >= 0.5 && $0 < 0.8 }.count, measured.filter { $0 >= 0.8 }.count]
+                    let total = max(1, measured.count)
+                    HStack(spacing: 2) {
+                        ForEach(Array(zip([Color.orange, .accentColor, .green], buckets).enumerated()), id: \.offset) { _, pair in
+                            if pair.1 > 0 { RoundedRectangle(cornerRadius: 3).fill(pair.0.opacity(0.8)).frame(width: max(4, geo.size.width * CGFloat(pair.1) / CGFloat(total) - 2)) }
+                        }
+                    }
+                }.frame(height: 8)
+                Text("Average current mastery \(Int((measured.reduce(0, +) / Double(measured.count) * 100).rounded()))% across \(measured.count) measured concepts · mastery fades without practice; each correct recall makes it last longer")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+        }.padding(.vertical, 4)
+    }
+
+    private func stat(_ value: String, _ label: String, _ color: Color = .primary) -> some View {
+        VStack(alignment: .leading, spacing: 1) {
+            Text(value).font(.title2.weight(.semibold).monospacedDigit()).foregroundStyle(color)
+            Text(label).font(.caption).foregroundStyle(.secondary)
+        }
+        .frame(minWidth: 84, alignment: .leading)
+        .padding(.horizontal, 10).padding(.vertical, 6)
+        .background(RoundedRectangle(cornerRadius: 9).fill(Color.secondary.opacity(0.08)))
+    }
+
+    private func chips(_ cs: [Concept], tint: Color, detail: @escaping (Concept) -> String) -> some View {
+        FlowRow(spacing: 6) {
+            ForEach(cs) { c in
+                Button { search = c.name; tab = .map } label: {
+                    HStack(spacing: 5) {
+                        Text(c.name).lineLimit(1)
+                        Text(detail(c)).foregroundStyle(.secondary).font(.caption.monospacedDigit())
+                    }
+                    .padding(.horizontal, 9).padding(.vertical, 4)
+                    .background(Capsule().fill(tint.opacity(0.12)))
+                }.buttonStyle(.plain).help("Open in the learning map")
+            }
+        }.padding(.vertical, 2)
+    }
+
+    private func subjectTiles(_ subject: String, _ cs: [Concept]) -> some View {
+        VStack(alignment: .leading, spacing: 5) {
+            Text(subject.capitalized).font(.subheadline.weight(.semibold))
+            FlowRow(spacing: 3) {
+                ForEach(cs) { c in
+                    let p = c.effectiveMastery()
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(p.map { $0 >= 0.8 ? Color.green : $0 >= 0.5 ? Color.accentColor : Color.orange }.map { AnyShapeStyle($0.opacity(0.35 + 0.65 * (p ?? 0))) } ?? AnyShapeStyle(Color.secondary.opacity(0.18)))
+                        .frame(width: 18, height: 18)
+                        .help("\(c.name): " + (p.map { "\(Int(($0 * 100).rounded()))% now" + (c.isFading() ? " (fading)" : "") } ?? (c.status ?? "no quiz data yet")))
+                        .onTapGesture { search = c.name; tab = .map }
+                }
+            }
+        }.padding(.vertical, 3)
     }
 
     // MARK: Learning map
@@ -251,6 +359,9 @@ struct MemoryView: View {
         hub.graph?.syncMastery()
         subjects = hub.graph?.subjects() ?? []
         links = hub.graph?.crossSubjectLinks() ?? []
+        concepts = hub.graph?.all() ?? []
+        ready = hub.graph?.readyToLearn(limit: 12) ?? []
+        fading = hub.graph?.fading(limit: 12) ?? []
         lessonTitles = Dictionary(app.services.conversations.all().map { ($0.id, $0.title) }, uniquingKeysWith: { a, _ in a })
     }
 
@@ -352,5 +463,30 @@ private struct ConceptEditor: View {
         hub.saveConcept(name: name, prerequisites: split(prereqs), origin: "explicit")
         EventBus.publish(.memoryChanged(MemoryChange(kind: .updated, ids: [concept.id])))
         onSave()
+    }
+}
+
+
+/// Wrapping row of chips (a minimal flow layout).
+struct FlowRow: Layout {
+    var spacing: CGFloat = 6
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let width = proposal.width ?? 600
+        var x: CGFloat = 0, y: CGFloat = 0, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > width, x > 0 { x = 0; y += row + spacing; row = 0 }
+            x += s.width + spacing; row = max(row, s.height)
+        }
+        return CGSize(width: width, height: y + row)
+    }
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var x = bounds.minX, y = bounds.minY, row: CGFloat = 0
+        for v in subviews {
+            let s = v.sizeThatFits(.unspecified)
+            if x + s.width > bounds.maxX, x > bounds.minX { x = bounds.minX; y += row + spacing; row = 0 }
+            v.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(s))
+            x += s.width + spacing; row = max(row, s.height)
+        }
     }
 }

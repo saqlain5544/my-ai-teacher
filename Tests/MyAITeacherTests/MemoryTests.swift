@@ -390,3 +390,37 @@ final class MemoryCorrectnessTests: XCTestCase {
         XCTAssertNotNil(g.find("concept 2999 of the big graph"))
     }
 }
+
+final class LearningModelTests: XCTestCase {
+    func testMasteryFadesAndPracticeMakesItLast() {
+        let now = Date()
+        var c = Concept(rowid: 1, name: "x", subjects: [], pKnown: 0.95, attempts: 1, correct: 1, evidence: 1, origin: "t",
+                        createdAt: now, updatedAt: now, masteryAt: now.addingTimeInterval(-30 * 86_400))
+        let once = c.effectiveMastery(at: now)!
+        c.correct = 8; c.attempts = 8
+        let practised = c.effectiveMastery(at: now)!
+        XCTAssertLessThan(once, 0.7, "a month after one success it has faded")
+        XCTAssertGreaterThan(practised, 0.9, "after 8 successful recalls it lasts")
+        XCTAssertGreaterThanOrEqual(once, 0.95 * 0.4, "never below 40% of what was learned")
+        c.correct = 1; XCTAssertTrue(c.isFading(at: now))
+    }
+
+    func testFrontierAndFading() throws {
+        let fx = try MemoryFixture()
+        guard let g = fx.hub.graph else { return XCTFail() }
+        let limits = g.upsert(name: "Limits", subjects: ["calculus"])!, deriv = g.upsert(name: "Derivatives", subjects: ["calculus"])!
+        let chain = g.upsert(name: "Chain rule", subjects: ["calculus"])!
+        g.link(deriv, limits, .prerequisite); g.link(chain, deriv, .prerequisite)
+        for _ in 0..<4 { fx.study.recordAttempt(subject: "calculus", concept: "Limits", correct: true, note: nil) }
+        g.syncMastery()
+        let ready = g.readyToLearn().map(\.name)
+        XCTAssertTrue(ready.contains("Derivatives"), "its prerequisite is solid: \(ready)")
+        XCTAssertFalse(ready.contains("Chain rule"), "needs derivatives first")
+        XCTAssertFalse(ready.contains("Limits"), "already solid")
+        let later = Date().addingTimeInterval(90 * 86_400)
+        XCTAssertEqual(g.fading(now: later).map(\.name), ["Limits"], "three months later it needs review")
+        XCTAssertFalse(g.readyToLearn(now: later).map(\.name).contains("Limits"), "slipping = review, not new learning")
+        XCTAssertTrue(fx.hub.studyNext().joined().contains("Derivatives"))
+        _ = chain
+    }
+}
