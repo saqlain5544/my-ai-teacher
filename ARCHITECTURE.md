@@ -273,7 +273,9 @@ The app's footprint must not grow with how much the learner has done: data lives
   buffers allocated once, with bounded top-k heaps. Dedup and the duplicate sweep use the same candidates (equal norms
   via `memories_norm`, rare terms, near vectors); a sweep run stops at 2,000 changed memories or 1,000 merges and the
   next one resumes. Shedding drops the index and the scan connections. Every memory test also runs on the disk path
-  (`*OnDiskTests`); on the labelled set it recalls exactly what the index recalls.
+  (`*OnDiskTests`); on the labelled set it recalls exactly what the index recalls. An older database is copied once
+  (`VACUUM INTO <db>.pre-int8-<date>.sqlite`) before its embeddings are converted, in batches that each commit, so a
+  crash resumes on the next open; without a copy nothing is converted (`MemoryMigrationTests`).
 * Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
   segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that

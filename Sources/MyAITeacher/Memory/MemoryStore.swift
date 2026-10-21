@@ -8,41 +8,83 @@ enum MemorySchema {
         change TEXT NOT NULL, source TEXT, changed_at REAL NOT NULL);
     CREATE INDEX IF NOT EXISTS memory_history_m ON memory_history(memory_id);
     CREATE TABLE IF NOT EXISTS memory_meta(key TEXT PRIMARY KEY, value TEXT);
+    """
+    /// This version's indexes (`memories_rank` covers what `memories_kind` did).
+    static let indexes = """
     DROP INDEX IF EXISTS memories_kind;
     CREATE INDEX IF NOT EXISTS memories_rank ON memories(archived, kind, importance, updated_at);
     CREATE INDEX IF NOT EXISTS memories_updated ON memories(archived, updated_at);
+    CREATE INDEX IF NOT EXISTS memories_norm ON memories(kind, norm) WHERE archived=0;
     """
     static let columns: [(String, String)] = [
         ("concept_id", "INTEGER"), ("evidence", "INTEGER NOT NULL DEFAULT 1"), ("status", "TEXT"), ("norm", "TEXT"),
     ]
+    /// Rows this version rewrites: Float32 embeddings (to int8) and rows from before the `norm` column.
+    private static let legacy = "(norm IS NULL OR (length(embedding) % 4 = 0 AND length(embedding) > 0))"
 
     static func migrate(_ db: Database) {
         let have = Set(((try? db.query("PRAGMA table_info(memories)")) ?? []).compactMap { $0.string("name") })
         for (c, t) in columns where !have.contains(c) { try? db.execute("ALTER TABLE memories ADD COLUMN \(c) \(t)") }
         try? db.script(sql)
         try? db.script("CREATE INDEX IF NOT EXISTS memories_concept ON memories(concept_id)")
-        try? db.script("CREATE INDEX IF NOT EXISTS memories_norm ON memories(kind, norm) WHERE archived=0")
-        upgradeRows(db)
+        // The learner's own data: nothing of this version touches it before a copy exists. Without one (disk full), it
+        // stays as it is — Float32 rows still read — and the next open tries again.
+        if meta(db, "rows_v2") == nil, (try? db.query("SELECT 1 AS x FROM memories WHERE \(legacy) LIMIT 1"))?.isEmpty == false, !backUp(db) { return }
+        try? db.script(indexes)
+        if meta(db, "rows_v2") == nil, convert(db) { setMeta(db, "rows_v2", "1") }
     }
 
-    /// Once per database: Float32 embeddings become int8 (a quarter of what the disk path scans), and rows from before
-    /// the `norm` column get one, so exact-duplicate checks can use `memories_norm`.
-    private static func upgradeRows(_ db: Database) {
-        guard meta(db, "rows_v2") == nil else { return }
-        var last = 0
-        while let rows = try? db.query("""
-            SELECT id, content, embedding FROM memories WHERE id > ? AND (norm IS NULL OR length(embedding) % 4 = 0) ORDER BY id LIMIT 2048
-            """, last), let end = rows.last?.int("id") {
-            try? db.transaction {
-                for r in rows {
-                    let blob = r.data("embedding").flatMap { $0.count % 4 == 0 && !$0.isEmpty ? Embedder.stored(Embedder.decode($0)) : nil }
-                    try db.execute("UPDATE memories SET embedding=COALESCE(?, embedding), norm=COALESCE(norm, ?) WHERE id=?",
-                                   blob, MemoryText.norm(r.string("content") ?? ""), r.int("id"))
-                }
-            }
-            last = end
+    /// The database as it was, copied once beside it (`<db>.pre-int8-<date>.sqlite`) before this version first rewrites
+    /// it. The copy is written under a temporary name and renamed, so a crash mid-copy never passes for a backup.
+    private static func backUp(_ db: Database) -> Bool {
+        guard !db.path.isEmpty, db.path != ":memory:" else { return true }
+        let fm = FileManager.default, url = URL(fileURLWithPath: db.path), dir = url.deletingLastPathComponent()
+        let prefix = url.lastPathComponent + ".pre-int8-"
+        let existing = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
+        if existing.contains(where: { $0.hasPrefix(prefix) && $0.hasSuffix(".sqlite") }) { return true }
+        let day = DateFormatter()
+        day.locale = Locale(identifier: "en_US_POSIX"); day.dateFormat = "yyyy-MM-dd"
+        let final = dir.appendingPathComponent(prefix + day.string(from: Date()) + ".sqlite"), partial = final.appendingPathExtension("partial")
+        try? fm.removeItem(at: partial)
+        let t0 = Date()
+        do {
+            try db.execute("VACUUM INTO ?", partial.path)
+            try fm.moveItem(at: partial, to: final)
+        } catch {
+            try? fm.removeItem(at: partial)
+            AppLog.write("memory: no backup of \(url.lastPathComponent) (\(error.localizedDescription)); its embeddings stay Float32 until one can be made")
+            return false
         }
-        setMeta(db, "rows_v2", "1")
+        AppLog.write(String(format: "memory: backed up %@ to %@ (%.0f ms) before converting it", url.lastPathComponent, final.lastPathComponent, Date().timeIntervalSince(t0) * 1000))
+        return true
+    }
+
+    /// Float32 embeddings become int8 (a quarter of what the disk path scans) and missing norms are filled in, so
+    /// exact-duplicate checks can use `memories_norm`. Each batch commits on its own: a crash leaves whole batches done
+    /// and the rest as they were, and the next open carries on. True when every row is done.
+    private static func convert(_ db: Database) -> Bool {
+        var last = 0, done = 0
+        let t0 = Date()
+        do {
+            while case let rows = try db.query("SELECT id, content, embedding FROM memories WHERE id > ? AND \(legacy) ORDER BY id LIMIT 2048", last),
+                  let end = rows.last?.int("id") {
+                try db.transaction {
+                    for r in rows {
+                        let blob = r.data("embedding").flatMap { $0.count % 4 == 0 && !$0.isEmpty ? Embedder.stored(Embedder.decode($0)) : nil }
+                        try db.execute("UPDATE memories SET embedding=COALESCE(?, embedding), norm=COALESCE(norm, ?) WHERE id=?",
+                                       blob, MemoryText.norm(r.string("content") ?? ""), r.int("id"))
+                    }
+                }
+                last = end; done += rows.count
+            }
+        } catch {
+            AppLog.write("memory: converting \(URL(fileURLWithPath: db.path).lastPathComponent) stopped after \(done) rows (\(error.localizedDescription)); the next open carries on")
+            return false
+        }
+        if done > 0 {
+            AppLog.write(String(format: "memory: converted %d rows of %@ (int8 embeddings, norms) in %.0f ms", done, URL(fileURLWithPath: db.path).lastPathComponent, Date().timeIntervalSince(t0) * 1000))
+        }
+        return true
     }
 
     static func meta(_ db: Database, _ key: String) -> String? {
