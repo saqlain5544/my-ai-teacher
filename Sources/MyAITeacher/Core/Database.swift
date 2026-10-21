@@ -46,6 +46,8 @@ final class Database: @unchecked Sendable {
     private var cache: [String: OpaquePointer] = [:]
     private let lock = NSRecursiveLock()
     let path: String
+    /// How long a statement waits for another connection's lock before failing with SQLITE_BUSY (tests shorten it).
+    nonisolated(unsafe) static var busyTimeout = 5_000
 
     /// `readOnly` opens a scanner: its reads come through a memory map (the OS file cache — clean pages that are not
     /// the app's footprint) instead of its own page cache, and it never holds up the writer's connection. Our lock already
@@ -56,6 +58,7 @@ final class Database: @unchecked Sendable {
         guard sqlite3_open_v2(path, &db, flags, nil) == SQLITE_OK else {
             throw SQLiteError(message: "Cannot open database at \(path)")
         }
+        sqlite3_busy_timeout(db, Int32(Self.busyTimeout))
         if readOnly {
             try execute("PRAGMA mmap_size=1073741824")
             try execute("PRAGMA cache_size=-1000")
@@ -206,4 +209,7 @@ final class Database: @unchecked Sendable {
     }
 
     var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(db) }
+    /// Rows this connection has changed since it opened: with `PRAGMA data_version` (other connections' commits), a key
+    /// for "the database as this connection sees it" that a cached aggregate can be checked against.
+    var totalChanges: Int { lock.lock(); defer { lock.unlock() }; return Int(sqlite3_total_changes64(db)) }
 }

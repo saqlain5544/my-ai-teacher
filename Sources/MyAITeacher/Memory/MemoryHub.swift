@@ -135,6 +135,11 @@ final class MemoryHub: @unchecked Sendable {
     }
 
     func all() -> [Memory] { learner.all() + folder.all() }
+    /// The most important memories of both scopes, by importance (what consolidation shows the model), without reading the rest.
+    func top(excluding: MemoryKind, limit: Int) -> [Memory] {
+        let kinds = MemoryKind.allCases.filter { $0 != excluding }
+        return Array((learner.top(kinds: kinds, limit: limit) + folder.top(kinds: kinds, limit: limit)).sorted { $0.importance > $1.importance }.prefix(limit))
+    }
     /// Memories plus concept nodes (what the learner sees in the Memory screen).
     func count() -> Int { learner.count() + folder.count() + (graph?.count() ?? 0) }
     func deleteAll() { learner.deleteAll(); folder.deleteAll(); EventBus.publish(.memoryChanged(MemoryChange(kind: .deleted))) }

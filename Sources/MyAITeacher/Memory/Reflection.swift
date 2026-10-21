@@ -219,7 +219,7 @@ enum Reflection {
     static func consolidate(client: LLMClient, model: String, services: Services) async -> Outcome {
         let hub = services.memory
         let local = hub.maintenance()
-        let all = hub.all().filter { $0.kind != .episode }.sorted { $0.importance > $1.importance }.prefix(150)
+        let all = hub.top(excluding: .episode, limit: 150)
         let concepts = (hub.graph?.all() ?? []).sorted { $0.updatedAt > $1.updatedAt }.prefix(120)
         guard all.count + concepts.count >= 2 else { return Outcome(title: nil, applied: local.merged) }
         let listing = all.map { "- [#\($0.id)] (\($0.kind.rawValue)\($0.scope == .folder ? ", folder" : "")\($0.subject.map { ", \($0)" } ?? "")) \($0.content)" }.joined(separator: "\n")

@@ -164,33 +164,41 @@ final class Embedder: @unchecked Sendable {
         if !rest.isEmpty { out.append(rest) }
         return out
     }
+    /// The model's vector size: what stored vectors must have (a blob of any other size is no vector). nil without a model.
+    var dimension: Int? {
+        lock.lock(); defer { lock.unlock() }
+        if !loaded { model = NLEmbedding.sentenceEmbedding(for: .english); loaded = true }
+        return model?.dimension
+    }
 
-    /// Stored form: a one-byte tag, then the unit vector as int8 (×127) — a quarter of Float32, and the precision every
-    /// comparison uses anyway. Blobs whose length is a multiple of 4 are the older Float32 form; they still decode.
-    static func encode(_ v: [Float]) -> Data { stored(quantize(normalized(v))) }
-    static func stored(_ q: [Int8]) -> Data { Data([1] + q.map { UInt8(bitPattern: $0) }) }
-    static func dimension(_ blob: UnsafeRawBufferPointer) -> Int { blob.isEmpty ? 0 : blob.count % 4 == 0 ? blob.count / 4 : blob.count - 1 }
-    /// A stored vector as int8 into `out`; all zeros (no evidence) when absent or of another dimension.
+    /// A unit vector as stored in `memories.vec`: int8 (×127), `dimension` bytes — a quarter of Float32, and the precision
+    /// every comparison uses anyway. Older builds wrote Float32 into `embedding`; that column is left to them.
+    static func int8(_ v: [Float]) -> Data { Data(quantize(normalized(v)).map { UInt8(bitPattern: $0) }) }
+    /// A memory's vector as int8 into `out`. A Float32 `embedding` of the model's size (finite values) comes first: this
+    /// version clears it whenever it writes `vec`, so one that is there was written by an older build — after us, if
+    /// the learner went back to one, which leaves `vec` stale. Then `vec` of the model's size; otherwise all zeros (no
+    /// evidence). False when there is none.
     @discardableResult
-    static func decode(_ blob: UnsafeRawBufferPointer, into out: UnsafeMutableBufferPointer<Int8>) -> Bool {
+    static func decode(vec: UnsafeRawBufferPointer, legacy: UnsafeRawBufferPointer, into out: UnsafeMutableBufferPointer<Int8>) -> Bool {
         let n = out.count
-        if blob.count == n + 1, blob.count % 4 != 0, blob[0] == 1 {
-            UnsafeMutableRawBufferPointer(out).copyMemory(from: UnsafeRawBufferPointer(rebasing: blob[1...]))
-            return true
+        if n > 0, legacy.count == n * 4 {
+            let f = (0..<n).map { legacy.loadUnaligned(fromByteOffset: $0 * 4, as: Float.self) }
+            if f.allSatisfy(\.isFinite) {
+                for (i, x) in quantize(normalized(f)).enumerated() { out[i] = x }
+                return true
+            }
         }
-        if n > 0, blob.count == n * 4 {
-            for (i, x) in quantize(normalized((0..<n).map { blob.loadUnaligned(fromByteOffset: $0 * 4, as: Float.self) })).enumerated() { out[i] = x }
+        if n > 0, vec.count == n {
+            UnsafeMutableRawBufferPointer(out).copyMemory(from: vec)
             return true
         }
         out.update(repeating: 0)
         return false
     }
-    static func decode(_ d: Data) -> [Int8] {
-        d.withUnsafeBytes { b in
-            var v = [Int8](repeating: 0, count: dimension(b))
-            v.withUnsafeMutableBufferPointer { _ = decode(b, into: $0) }
-            return v
-        }
+    static func decode(vec: Data?, legacy: Data?, dimension n: Int) -> [Int8]? {
+        var out = [Int8](repeating: 0, count: n)
+        let ok = (vec ?? Data()).withUnsafeBytes { v in (legacy ?? Data()).withUnsafeBytes { l in out.withUnsafeMutableBufferPointer { decode(vec: v, legacy: l, into: $0) } } }
+        return ok ? out : nil
     }
     static func cosine(_ a: [Float], _ b: [Float]) -> Double {
         guard a.count == b.count, !a.isEmpty else { return 0 }

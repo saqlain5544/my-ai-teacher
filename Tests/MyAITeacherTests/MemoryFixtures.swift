@@ -16,8 +16,23 @@ final class MemoryFixture {
         let ws = try Workspace(url: dir)
         hub = MemoryHub(learner: MemoryStore(db: learnerDB, scope: .learner), folder: ws.memory)
         study = StudyStore(db: learnerDB)
+        // Tests start once the stores' background upgrade (indexes on an empty table) is done, not racing it.
+        hub.learner.upgraded(); hub.folder.upgraded()
     }
     deinit { try? FileManager.default.removeItem(at: dir) }
+}
+
+extension MemoryStore {
+    /// Waits for this store's background upgrade; its result.
+    @discardableResult
+    func upgraded() -> Bool {
+        final class Box: @unchecked Sendable { var ok = false }
+        let box = Box(), done = DispatchSemaphore(value: 0)
+        let task = upgrade
+        Task.detached { box.ok = await task.value; done.signal() }
+        done.wait()
+        return box.ok
+    }
 }
 
 /// Labelled retrieval set: a realistic multi-subject learner and queries with the memories that SHOULD be recalled.

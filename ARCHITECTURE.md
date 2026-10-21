@@ -264,18 +264,25 @@ The app's footprint must not grow with how much the learner has done: data lives
 * The page is a smaller window of that window: it renders the newest 300 messages (from a learner's turn) and says
   how many are earlier; "Show earlier" reveals in-memory ones 200 at a time, then loads older ones from disk. A long
   session drops the oldest from the page once it is a step past 300. Collapsed tool cards carry no body until opened.
-* Learner memory: a store's index lives in RAM only within `MemoryTuning.indexBudget` (32 MB, ≈ 40k memories at under
+* Learner memory: a store's index lives in RAM only under `MemoryTuning.indexBudget` (32 MB, ≈ 40k memories at under
   1 KB each: stems interned as UInt32 ids with sorted postings, vectors in one int8 slab, kind/importance/recency as
-  Float32 struct-of-arrays). Content, subjects and norms stay in SQLite; a search reads only its result rows. Past the
-  budget nothing is kept per memory: lexical candidates come from `memories_fts` (each term's rows read up to a cap;
-  FTS5's bm25 would score every match of a common term, ~1 s for 100k), and vectors stream from the `embedding` column
-  (int8 now, a quarter of Float32) in 512-row chunks on four read-only, memory-mapped connections in parallel, into
-  buffers allocated once, with bounded top-k heaps. Dedup and the duplicate sweep use the same candidates (equal norms
-  via `memories_norm`, rare terms, near vectors); a sweep run stops at 2,000 changed memories or 1,000 merges and the
-  next one resumes. Shedding drops the index and the scan connections. Every memory test also runs on the disk path
-  (`*OnDiskTests`); on the labelled set it recalls exactly what the index recalls. An older database is copied once
-  (`VACUUM INTO <db>.pre-int8-<date>.sqlite`) before its embeddings are converted, in batches that each commit, so a
-  crash resumes on the next open; without a copy nothing is converted (`MemoryMigrationTests`).
+  Float32 struct-of-arrays). It loads under 80% of the budget and leaves past 100% (judged on counts, not capacities),
+  and comes back once removals bring it under 80%. Content, subjects and norms stay in SQLite; a search reads only its
+  result rows. Past the budget nothing is kept per memory: lexical candidates are FTS5 matches checked against
+  `memories_active` (the FTS table also holds archived rows; each term's active rows read up to a cap, common terms
+  counted exactly; FTS5's bm25 would score every match of a common term, ~1 s for 100k), and vectors stream from `vec`
+  in 512-row chunks on four read-only, memory-mapped connections in parallel, into buffers allocated once, with bounded
+  top-k heaps. Where the disk path can differ from the index is written down in `MemoryStore.search`. Dedup and the
+  duplicate sweep use the same candidates (equal norms, rare terms, near vectors); a sweep run stops at 2,000 changed
+  memories or 1,000 merges and the next one resumes from its own marker. Shedding drops the index and the scan
+  connections. Every memory test also runs on the disk path (`*OnDiskTests`; recall on the labelled set is identical);
+  `MemoryPlanTests` checks each statement's plan (nothing runs ANALYZE).
+* Older databases: vectors are int8 in a new `vec` column; `embedding` stays the older builds' Float32 column, which this
+  version only clears, so a build from before still reads a valid vector or none. The one-time work runs in the
+  background after launch (`MemorySchema.upgrade`): a copy of the database as it was (`VACUUM INTO
+  <db>.pre-int8-<date>.sqlite`, from a read-only connection, renamed into place), this version's indexes, then the rows
+  in batches that each commit; a crash, a lock held past the busy timeout or a full disk stops it unmarked, and the next
+  launch carries on (`MemoryMigrationTests`). Until then older rows still decode.
 * Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
   segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
@@ -416,6 +423,9 @@ The app's footprint must not grow with how much the learner has done: data lives
 
   | Memories | Footprint the index adds | Search, median |
   |---|---|---|
-  | 10k (in RAM) | +33.7 MB (3.5 KB each) → **+9.5 MB** (index 7.9 MB, ~0.8 KB each) | 1.4 → **0.6 ms** |
-  | 50k (disk path) | +124.6 MB → **+2.8 MB** | 12.6 → **11.6 ms** |
-  | 500k (disk path) | +1,430 MB → **+0.5 MB** | 132 → **65 ms** |
+  | 10k (in RAM) | +33.7 MB (3.5 KB each) → **+10.2 MB** (index 7.5 MB, ~0.8 KB each) | 1.4 → **0.6 ms** |
+  | 50k (disk path) | +124.6 MB → **+1.9 MB** | 12.6 → **8.2 ms** |
+  | 500k (disk path) | +1,430 MB → **+1.8 MB** | 132 → **48 ms** |
+
+  Opening a 20k-memory database from an older build takes 28 ms; its one-time upgrade (copy 85 ms, conversion 3.4 s,
+  debug build) runs in the background.

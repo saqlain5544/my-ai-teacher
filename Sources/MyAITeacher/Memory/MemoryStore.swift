@@ -1,89 +1,125 @@
 import Foundation
 import Accelerate
 
-/// Schema additions for the learner model. Idempotent; runs on every open (old databases are migrated in place).
+/// Schema additions for the learner model. `migrate` runs on every open and is cheap; `upgrade` does this version's
+/// one-time work on an older database, in the background.
 enum MemorySchema {
-    static let sql = """
-    CREATE TABLE IF NOT EXISTS memory_history(id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER NOT NULL, content TEXT NOT NULL,
-        change TEXT NOT NULL, source TEXT, changed_at REAL NOT NULL);
-    CREATE INDEX IF NOT EXISTS memory_history_m ON memory_history(memory_id);
-    CREATE TABLE IF NOT EXISTS memory_meta(key TEXT PRIMARY KEY, value TEXT);
-    """
-    /// This version's indexes (`memories_rank` covers what `memories_kind` did).
-    static let indexes = """
-    DROP INDEX IF EXISTS memories_kind;
-    CREATE INDEX IF NOT EXISTS memories_rank ON memories(archived, kind, importance, updated_at);
-    CREATE INDEX IF NOT EXISTS memories_updated ON memories(archived, updated_at);
-    CREATE INDEX IF NOT EXISTS memories_norm ON memories(kind, norm) WHERE archived=0;
-    """
-    static let columns: [(String, String)] = [
-        ("concept_id", "INTEGER"), ("evidence", "INTEGER NOT NULL DEFAULT 1"), ("status", "TEXT"), ("norm", "TEXT"),
+    static let tables = [
+        """
+        CREATE TABLE IF NOT EXISTS memory_history(id INTEGER PRIMARY KEY AUTOINCREMENT, memory_id INTEGER NOT NULL, content TEXT NOT NULL,
+            change TEXT NOT NULL, source TEXT, changed_at REAL NOT NULL)
+        """,
+        "CREATE INDEX IF NOT EXISTS memory_history_m ON memory_history(memory_id)",
+        "CREATE TABLE IF NOT EXISTS memory_meta(key TEXT PRIMARY KEY, value TEXT)",
+        "CREATE INDEX IF NOT EXISTS memories_concept ON memories(concept_id)",
     ]
-    /// Rows this version rewrites: Float32 embeddings (to int8) and rows from before the `norm` column.
-    private static let legacy = "(norm IS NULL OR (length(embedding) % 4 = 0 AND length(embedding) > 0))"
+    /// This version's indexes. Every query works without them (only slower), so building them — minutes of CREATE INDEX
+    /// on a big database — waits for `upgrade`. `memories_rank` covers what `memories_kind` did; `memories_active` lets
+    /// FTS5 matches be checked against active rows without reading the rows.
+    static let indexes = [
+        "DROP INDEX IF EXISTS memories_kind",
+        "CREATE INDEX IF NOT EXISTS memories_rank ON memories(archived, kind, importance, updated_at)",
+        "CREATE INDEX IF NOT EXISTS memories_updated ON memories(archived, updated_at)",
+        "CREATE INDEX IF NOT EXISTS memories_norm ON memories(kind, norm) WHERE archived=0",
+        "CREATE INDEX IF NOT EXISTS memories_active ON memories(id) WHERE archived=0",
+    ]
+    /// `vec` holds this version's int8 vectors. `embedding` stays the older builds' Float32 column: this version only ever
+    /// clears it (after the backup), so a build from before sees a valid vector or none, never bytes it would misread.
+    static let columns: [(String, String)] = [
+        ("concept_id", "INTEGER"), ("evidence", "INTEGER NOT NULL DEFAULT 1"), ("status", "TEXT"), ("norm", "TEXT"), ("vec", "BLOB"),
+    ]
+    /// Rows `upgrade` rewrites: a Float32 `embedding` (an older build's) moves to `vec`; rows from before `norm` get one.
+    static let legacy = "(embedding IS NOT NULL OR norm IS NULL)"
+    static let upgraded = "vec_v1"
 
+    /// On every open: the columns and tables this version reads (cheap, idempotent); the next open retries what failed.
     static func migrate(_ db: Database) {
         let have = Set(((try? db.query("PRAGMA table_info(memories)")) ?? []).compactMap { $0.string("name") })
-        for (c, t) in columns where !have.contains(c) { try? db.execute("ALTER TABLE memories ADD COLUMN \(c) \(t)") }
-        try? db.script(sql)
-        try? db.script("CREATE INDEX IF NOT EXISTS memories_concept ON memories(concept_id)")
-        // The learner's own data: nothing of this version touches it before a copy exists. Without one (disk full), it
-        // stays as it is — Float32 rows still read — and the next open tries again.
-        if meta(db, "rows_v2") == nil, (try? db.query("SELECT 1 AS x FROM memories WHERE \(legacy) LIMIT 1"))?.isEmpty == false, !backUp(db) { return }
-        try? db.script(indexes)
-        if meta(db, "rows_v2") == nil, convert(db) { setMeta(db, "rows_v2", "1") }
+        run(db, columns.filter { !have.contains($0.0) }.map { "ALTER TABLE memories ADD COLUMN \($0.0) \($0.1)" } + tables)
     }
 
-    /// The database as it was, copied once beside it (`<db>.pre-int8-<date>.sqlite`) before this version first rewrites
-    /// it. The copy is written under a temporary name and renamed, so a crash mid-copy never passes for a backup.
+    /// Statements one by one, stopping at the first that fails (under a lock each would wait out the busy timeout) and
+    /// saying which: nothing is silently missing, and whoever called it knows not to count it as done.
+    @discardableResult
+    private static func run(_ db: Database, _ statements: [String]) -> Bool {
+        for s in statements {
+            do { try db.execute(s) } catch {
+                AppLog.write("memory: \(name(db)): \(error.localizedDescription) — in: \(s.prefix(90)); the next run retries")
+                return false
+            }
+        }
+        return true
+    }
+    private static func name(_ db: Database) -> String { URL(fileURLWithPath: db.path).lastPathComponent }
+
+    private static let upgrading = NSLock()
+
+    /// This version's one-time work, in the background after launch: a copy of the database as it was, before anything of
+    /// this version rewrites it; this version's indexes; then the rows, in batches. Until it is done older rows still
+    /// decode. It can stop anywhere (a crash, a lock held past the busy timeout, a full disk) and the next run carries on;
+    /// only when every step succeeded is it marked done. True when done.
+    @discardableResult
+    static func upgrade(_ db: Database) -> Bool {
+        upgrading.lock(); defer { upgrading.unlock() }
+        // The copy and CREATE INDEX are long: they run on a connection of their own, so the store's stays free.
+        let side = db.path.isEmpty || db.path == ":memory:" ? db : (try? Database(path: db.path)) ?? db
+        if meta(db, upgraded) == "1" { return run(side, indexes) }
+        let pending = (try? db.query("SELECT 1 AS x FROM memories WHERE \(legacy) LIMIT 1"))?.isEmpty == false
+        guard !pending || backUp(db), run(side, indexes), convert(db) else { return false }
+        setMeta(db, upgraded, "1")
+        return true
+    }
+
+    /// The database as it was, copied once beside it (`<db>.pre-int8-<date>.sqlite`), from a read-only connection (a
+    /// snapshot; nothing waits for it). Written under a temporary name and renamed, so a crash mid-copy never passes for a
+    /// backup. False when it could not be made.
     private static func backUp(_ db: Database) -> Bool {
         guard !db.path.isEmpty, db.path != ":memory:" else { return true }
         let fm = FileManager.default, url = URL(fileURLWithPath: db.path), dir = url.deletingLastPathComponent()
         let prefix = url.lastPathComponent + ".pre-int8-"
-        let existing = (try? fm.contentsOfDirectory(atPath: dir.path)) ?? []
-        if existing.contains(where: { $0.hasPrefix(prefix) && $0.hasSuffix(".sqlite") }) { return true }
+        if ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains(where: { $0.hasPrefix(prefix) && $0.hasSuffix(".sqlite") }) { return true }
         let day = DateFormatter()
         day.locale = Locale(identifier: "en_US_POSIX"); day.dateFormat = "yyyy-MM-dd"
         let final = dir.appendingPathComponent(prefix + day.string(from: Date()) + ".sqlite"), partial = final.appendingPathExtension("partial")
         try? fm.removeItem(at: partial)
         let t0 = Date()
         do {
-            try db.execute("VACUUM INTO ?", partial.path)
+            try Database(path: db.path, readOnly: true).execute("VACUUM INTO ?", partial.path)
             try fm.moveItem(at: partial, to: final)
         } catch {
             try? fm.removeItem(at: partial)
-            AppLog.write("memory: no backup of \(url.lastPathComponent) (\(error.localizedDescription)); its embeddings stay Float32 until one can be made")
+            AppLog.write("memory: no backup of \(name(db)) (\(error.localizedDescription)); nothing converted, the next launch tries again")
             return false
         }
-        AppLog.write(String(format: "memory: backed up %@ to %@ (%.0f ms) before converting it", url.lastPathComponent, final.lastPathComponent, Date().timeIntervalSince(t0) * 1000))
+        AppLog.write(String(format: "memory: backed up %@ to %@ (%.0f ms) before converting it", name(db), final.lastPathComponent, Date().timeIntervalSince(t0) * 1000))
         return true
     }
 
-    /// Float32 embeddings become int8 (a quarter of what the disk path scans) and missing norms are filled in, so
-    /// exact-duplicate checks can use `memories_norm`. Each batch commits on its own: a crash leaves whole batches done
-    /// and the rest as they were, and the next open carries on. True when every row is done.
+    /// A Float32 `embedding` of the model's size moves to `vec` (int8: a quarter of what the disk path scans) and missing
+    /// norms are filled in, 512 rows a transaction on the store's connection (it is free between batches; nothing else
+    /// sees a half-converted row). A crash leaves whole batches done and the rest as they were. True when every row is.
     private static func convert(_ db: Database) -> Bool {
+        let dim = Embedder.shared.dimension
         var last = 0, done = 0
         let t0 = Date()
         do {
-            while case let rows = try db.query("SELECT id, content, embedding FROM memories WHERE id > ? AND \(legacy) ORDER BY id LIMIT 2048", last),
+            while case let rows = try db.query("SELECT id, content, embedding FROM memories WHERE id > ? AND \(legacy) ORDER BY id LIMIT 512", last),
                   let end = rows.last?.int("id") {
                 try db.transaction {
                     for r in rows {
-                        let blob = r.data("embedding").flatMap { $0.count % 4 == 0 && !$0.isEmpty ? Embedder.stored(Embedder.decode($0)) : nil }
-                        try db.execute("UPDATE memories SET embedding=COALESCE(?, embedding), norm=COALESCE(norm, ?) WHERE id=?",
-                                       blob, MemoryText.norm(r.string("content") ?? ""), r.int("id"))
+                        // Any other blob (another model's size) is left as it is, for the build that wrote it.
+                        let v = dim.flatMap { d in Embedder.decode(vec: nil, legacy: r.data("embedding"), dimension: d) }.map { Data($0.map { UInt8(bitPattern: $0) }) }
+                        try db.execute("UPDATE memories SET vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END, norm=COALESCE(norm, ?) WHERE id=?",
+                                       v, v, MemoryText.norm(r.string("content") ?? ""), r.int("id"))
                     }
                 }
                 last = end; done += rows.count
             }
         } catch {
-            AppLog.write("memory: converting \(URL(fileURLWithPath: db.path).lastPathComponent) stopped after \(done) rows (\(error.localizedDescription)); the next open carries on")
+            AppLog.write("memory: converting \(name(db)) stopped after \(done) rows (\(error.localizedDescription)); the next launch carries on")
             return false
         }
-        if done > 0 {
-            AppLog.write(String(format: "memory: converted %d rows of %@ (int8 embeddings, norms) in %.0f ms", done, URL(fileURLWithPath: db.path).lastPathComponent, Date().timeIntervalSince(t0) * 1000))
-        }
+        if done > 0 { AppLog.write(String(format: "memory: converted %d rows of %@ (int8 vectors, norms) in %.0f ms", done, name(db), Date().timeIntervalSince(t0) * 1000)) }
         return true
     }
 
@@ -94,6 +130,29 @@ enum MemorySchema {
         try? db.execute("INSERT INTO memory_meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
     }
     static func dataVersion(_ db: Database) -> Int { (try? db.query("PRAGMA data_version"))?.first?.int("data_version") ?? 0 }
+}
+
+/// The statements whose plans matter at scale (`MemoryPlanTests` checks each with EXPLAIN QUERY PLAN). Nothing runs
+/// ANALYZE, so the planner guesses; `+archived` keeps it off an index on `archived` where a rowid lookup is meant.
+enum MemorySQL {
+    static let columns = "id, kind, subject, content, importance, confidence, origin, source, created_at, updated_at, last_used_at, use_count, concept_id, evidence"
+    static let rows = "SELECT \(columns) FROM memories WHERE +archived=0 AND id IN (SELECT value FROM json_each(?))"
+    static let probes = "SELECT id, kind, content, subject, vec, embedding FROM memories WHERE +archived=0 AND id IN (SELECT value FROM json_each(?))"
+    static let members = "SELECT id, concept_id FROM memories WHERE +archived=0 AND concept_id IN (SELECT value FROM json_each(?)) ORDER BY importance DESC LIMIT 512"
+    static let ofConcept = "SELECT \(columns) FROM memories WHERE +archived=0 AND concept_id=? ORDER BY importance DESC"
+    static let page = "SELECT id, kind, content, subject, importance, updated_at, vec, embedding FROM memories WHERE id > ? AND +archived=0 ORDER BY id LIMIT 2048"
+    static let span = "SELECT (SELECT min(id) FROM memories) AS lo, (SELECT max(id) FROM memories) AS hi"
+    /// The disk path's pass walks the table in rowid order (an index entry plus a b-tree seek per row would be 2× slower).
+    static let scan = "SELECT id, CASE kind " + MemoryKind.allCases.enumerated().map { "WHEN '\($1.rawValue)' THEN \($0) " }.joined()
+        + "ELSE 255 END, importance, updated_at, vec, embedding FROM memories WHERE id BETWEEN ? AND ? AND +archived=0"
+    /// FTS5 matches that are active memories: the FTS table also holds archived ones. Driven from the match, checked
+    /// against `memories_active` (never `rowid IN (subquery)`, which re-runs the match per row).
+    static let ftsRows = "SELECT m.id FROM memories_fts f JOIN memories m ON m.id = f.rowid WHERE memories_fts MATCH ? AND m.archived=0 LIMIT ?"
+    static let ftsCount = "SELECT count(*) AS n FROM memories_fts f JOIN memories m ON m.id = f.rowid WHERE memories_fts MATCH ? AND m.archived=0"
+    static let changed = "SELECT id, updated_at FROM memories WHERE archived=0 AND (updated_at, id) > (?, ?) ORDER BY updated_at, id LIMIT 2000"
+    static let topOfKind = "SELECT id, importance, updated_at FROM memories WHERE archived=0 AND kind=? ORDER BY importance DESC, updated_at DESC LIMIT ?"
+    static let sameNorm = "SELECT id FROM memories WHERE archived=0 AND kind=? AND norm=? ORDER BY id"
+    static let count = "SELECT count(*) AS n FROM memories WHERE archived=0"
 }
 
 /// Tunables for retrieval and dedup (calibrated in `MemoryQualityTests`).
@@ -111,20 +170,23 @@ enum MemoryTuning {
     nonisolated(unsafe) static var recallThreshold = 0.65
     /// Threshold for explicit `memory` search.
     nonisolated(unsafe) static var searchThreshold = 0.4
-    /// Bytes a store's in-RAM index may use (≈ 40k memories). Past it the store keeps nothing per memory.
+    /// Bytes a store's in-RAM index may use (≈ 40k memories). It loads only under 80% of it and leaves for the disk path
+    /// past 100%, so a load near the line doesn't flip with every write. Past it the store keeps nothing per memory.
     nonisolated(unsafe) static var indexBudget = 32 << 20
 }
 
 /// One memory table, indexed for retrieval and dedup. Within `MemoryTuning.indexBudget` the index lives in RAM
 /// (`MemoryIndex`, under 1 KB a memory); past it nothing is kept per memory — lexical candidates come from `memories_fts`
-/// and vectors stream from the `embedding` column — so the footprint stays flat however many memories there are.
-/// Content and subjects stay in SQLite either way; only the rows of results are read. The index is rebuilt on first use
-/// and whenever another connection changes the database (`PRAGMA data_version`).
+/// and vectors stream from SQLite — so the footprint stays flat however many memories there are. Content and subjects
+/// stay in SQLite either way; only the rows of results are read. The index is rebuilt on first use and whenever another
+/// connection changes the database (`PRAGMA data_version`).
 final class MemoryStore: @unchecked Sendable {
     let db: Database
     let scope: MemoryScope
     /// The concept graph (learner scope only — concepts follow the learner).
     let graph: ConceptGraph?
+    /// This version's one-time work on an older database (`MemorySchema.upgrade`), off the launch path.
+    let upgrade: Task<Bool, Never>
 
     private let lock = NSRecursiveLock()
     /// nil before the first use, and on the disk path.
@@ -132,12 +194,16 @@ final class MemoryStore: @unchecked Sendable {
     private var loadedVersion: Int?
     /// The disk path's vector scans run on their own read-only, memory-mapped connections (opened on first use).
     private var scanners: [Database] = []
+    /// `count()` as of a database state: (data_version, this connection's total changes).
+    private var counted: (key: [Int], n: Int)?
 
     init(db: Database, scope: MemoryScope) {
         self.db = db
         self.scope = scope
         MemorySchema.migrate(db)
         graph = scope == .learner ? ConceptGraph(db: db) : nil
+        // On a GCD thread: the work blocks on SQLite, and must not hold one of Swift concurrency's few threads meanwhile.
+        upgrade = Task { await withCheckedContinuation { done in DispatchQueue.global(qos: .utility).async { done.resume(returning: MemorySchema.upgrade(db)) } } }
         Self.live.add(self)
     }
 
@@ -153,8 +219,6 @@ final class MemoryStore: @unchecked Sendable {
 
     // MARK: Rows & index
 
-    private static let columns = "id, kind, subject, content, importance, confidence, origin, source, created_at, updated_at, last_used_at, use_count, concept_id, evidence"
-
     private func row(_ r: Row) -> Memory? {
         guard let id = r.int("id"), let k = r.string("kind").flatMap(MemoryKind.init(rawValue:)), let c = r.string("content") else { return nil }
         return Memory(rowid: Int64(id), scope: scope, kind: k, subject: r.string("subject"), content: c, importance: r.double("importance") ?? 0.5,
@@ -166,58 +230,77 @@ final class MemoryStore: @unchecked Sendable {
     /// Active memories by id, in one statement whatever their number (the ids go in as a JSON array).
     private func rows(_ ids: some Collection<Int64>) -> [Memory] {
         guard !ids.isEmpty else { return [] }
-        return ((try? db.query("SELECT \(Self.columns) FROM memories WHERE archived=0 AND id IN (SELECT value FROM json_each(?))", Self.json(ids))) ?? []).compactMap(row)
+        return ((try? db.query(MemorySQL.rows, Self.json(ids))) ?? []).compactMap(row)
     }
     private static func json(_ ids: some Sequence<Int64>) -> String { "[" + ids.map(String.init).joined(separator: ",") + "]" }
     private static func indexText(_ content: String, _ subject: String?) -> String { content + " " + (subject ?? "") }
+    private var onDiskPath: Bool { loadedVersion != nil && index == nil }
 
-    /// Builds the index — or, past the budget, settles on the disk path — when this connection hasn't seen the latest
-    /// data. Rows stream in, so loading never holds more than the index itself.
+    /// Builds the index — or, past 80% of the budget, settles on the disk path — when this connection hasn't seen the
+    /// latest data. It pages through the table (2,048 rows a statement), so other users of the connection get it between
+    /// pages, and arrays are sized for a quarter more than the load, so the next writes don't regrow them.
     private func ensureLoaded() {
         let v = MemorySchema.dataVersion(db)
         if loadedVersion == v { return }
         index = nil; loadedVersion = v
-        let n = count()
-        guard n * MemoryIndex.estimate <= MemoryTuning.indexBudget else { return }
-        let ix = MemoryIndex(capacity: n)
-        try? db.each("SELECT id, kind, content, subject, importance, updated_at, embedding FROM memories WHERE archived=0") { r in
-            if let k = r.text(1).flatMap(MemoryKind.init(rawValue:)) {
-                ix.insert(r.int64(0), kind: k.code, importance: r.double(4), updated: r.double(5), text: Self.indexText(r.text(2) ?? "", r.text(3)), vector: r.blob(6))
+        let n = count(), dim = Embedder.shared.dimension ?? 0
+        guard MemoryIndex.cost(n, dim: dim) <= MemoryTuning.indexBudget / 5 * 4 else { return }
+        let ix = MemoryIndex(capacity: n + n / 4 + 64, dim: dim)
+        var last: Int64 = 0, page = 2048
+        while page == 2048 {
+            page = 0
+            try? db.each(MemorySQL.page, last) { r in
+                last = r.int64(0); page += 1
+                if let k = r.text(1).flatMap(MemoryKind.init(rawValue:)) {
+                    ix.insert(last, kind: k.code, importance: r.double(4), updated: r.double(5), text: Self.indexText(r.text(2) ?? "", r.text(3)),
+                              vec: r.blob(6), legacy: r.blob(7))
+                }
+                return true
             }
-            return ix.bytes <= MemoryTuning.indexBudget
+            if ix.bytes > MemoryTuning.indexBudget { return }
         }
-        if ix.bytes <= MemoryTuning.indexBudget { ix.repack(); index = ix }
+        ix.repack()
+        index = ix
     }
 
-    /// Re-indexes one memory after our own write: O(1), not a reload (the disk path has nothing to update).
+    /// Re-indexes one memory after our own write: O(1), not a reload (the disk path has nothing to update). Past the
+    /// budget it leaves for the disk path (`removed` brings it back).
     private func refresh(_ id: Int64) {
         lock.lock(); defer { lock.unlock() }
         guard let ix = index else { return }
         ix.remove(id)
-        try? db.each("SELECT kind, content, subject, importance, updated_at, embedding FROM memories WHERE id=? AND archived=0", id) { r in
+        try? db.each("SELECT kind, content, subject, importance, updated_at, vec, embedding FROM memories WHERE id=? AND archived=0", id) { r in
             if let k = r.text(0).flatMap(MemoryKind.init(rawValue:)) {
-                ix.insert(id, kind: k.code, importance: r.double(3), updated: r.double(4), text: Self.indexText(r.text(1) ?? "", r.text(2)), vector: r.blob(5))
+                ix.insert(id, kind: k.code, importance: r.double(3), updated: r.double(4), text: Self.indexText(r.text(1) ?? "", r.text(2)),
+                          vec: r.blob(5), legacy: r.blob(6))
             }
             return false
         }
-        if ix.bytes > MemoryTuning.indexBudget { index = nil }   // the disk path until the next reload
+        if ix.bytes > MemoryTuning.indexBudget { index = nil }
     }
 
     // MARK: Reads
 
+    /// Every memory (the Memory screen lists them all); consolidation and the core block use `top` instead.
     func all() -> [Memory] {
         let order = Dictionary(uniqueKeysWithValues: MemoryKind.allCases.enumerated().map { ($1, $0) })
-        return ((try? db.query("SELECT \(Self.columns) FROM memories WHERE archived=0")) ?? []).compactMap(row).sorted {
+        return ((try? db.query("SELECT \(MemorySQL.columns) FROM memories WHERE archived=0")) ?? []).compactMap(row).sorted {
             if $0.kind != $1.kind { return order[$0.kind]! < order[$1.kind]! }
             if $0.importance != $1.importance { return $0.importance > $1.importance }
             return $0.updatedAt > $1.updatedAt
         }
     }
-    func count() -> Int { (try? db.query("SELECT count(*) AS n FROM memories WHERE archived=0"))?.first?.int("n") ?? 0 }
-    func get(_ id: Int64) -> Memory? { (try? db.query("SELECT \(Self.columns) FROM memories WHERE id=?", id))?.first.flatMap(row) }
-    func memories(conceptID: Int64) -> [Memory] {
-        ((try? db.query("SELECT \(Self.columns) FROM memories WHERE archived=0 AND concept_id=? ORDER BY importance DESC", conceptID)) ?? []).compactMap(row)
+    /// Active memories, counted once per database state (a count reads every active row's index entry: 8 ms at 500k).
+    func count() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        let key = [MemorySchema.dataVersion(db), db.totalChanges]
+        if let c = counted, c.key == key { return c.n }
+        let n = (try? db.query(MemorySQL.count))?.first?.int("n") ?? 0
+        counted = (key, n)
+        return n
     }
+    func get(_ id: Int64) -> Memory? { (try? db.query("SELECT \(MemorySQL.columns) FROM memories WHERE id=?", id))?.first.flatMap(row) }
+    func memories(conceptID: Int64) -> [Memory] { ((try? db.query(MemorySQL.ofConcept, conceptID)) ?? []).compactMap(row) }
     func history(_ id: Int64) -> [MemoryHistoryEntry] {
         ((try? db.query("SELECT * FROM memory_history WHERE memory_id=? ORDER BY changed_at DESC", id)) ?? []).map {
             MemoryHistoryEntry(content: $0.string("content") ?? "", change: $0.string("change") ?? "", source: $0.string("source"), date: $0.date("changed_at") ?? Date())
@@ -280,20 +363,20 @@ final class MemoryStore: @unchecked Sendable {
             let oldStems = Set(MemoryText.stems(old.content))
             let takeNew = MemoryText.isUpdate(content, of: old.content)
                 || oldStems.isSubset(of: Set(terms.map(\.stem))) && content != old.content || content.count > old.content.count + 10
-            let newContent = takeNew ? content : old.content
+            let newContent = takeNew ? content : old.content, blob = takeNew ? vec.map(Embedder.int8) : nil
             if takeNew { recordHistory(old.rowid, content: old.content, change: "merged", source: source) }
+            // A new vector replaces an older build's Float32 one, which would otherwise win over it (see Embedder.decode).
             try? db.execute("""
                 UPDATE memories SET content=?, importance=?, updated_at=?, evidence=evidence+1, concept_id=COALESCE(?, concept_id),
-                subject=COALESCE(subject, ?), norm=?, embedding=COALESCE(?, embedding) WHERE id=?
-                """, newContent, max(importance, old.importance), now, conceptID, subject, MemoryText.norm(newContent),
-                takeNew ? vec.map(Embedder.encode) : nil, old.rowid)
+                subject=COALESCE(subject, ?), norm=?, vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
+                """, newContent, max(importance, old.importance), now, conceptID, subject, MemoryText.norm(newContent), blob, blob, old.rowid)
             refresh(old.rowid)
             return WriteOutcome(rowid: old.rowid, status: .merged, reason: nil, similar: [])
         }
         try? db.execute("""
-            INSERT INTO memories(kind, subject, content, importance, origin, source, created_at, updated_at, embedding, concept_id, norm, evidence)
+            INSERT INTO memories(kind, subject, content, importance, origin, source, created_at, updated_at, vec, concept_id, norm, evidence)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
-            """, kind.rawValue, subject, content, min(1, max(0, importance)), origin, source, now, now, vec.map(Embedder.encode), conceptID, norm)
+            """, kind.rawValue, subject, content, min(1, max(0, importance)), origin, source, now, now, vec.map(Embedder.int8), conceptID, norm)
         let id = db.lastInsertRowID
         refresh(id)
         return WriteOutcome(rowid: id, status: .added, reason: nil, similar: similar.sorted { $0.1 > $1.1 }.prefix(3).map(\.0))
@@ -306,19 +389,20 @@ final class MemoryStore: @unchecked Sendable {
     func update(_ id: Int64, content: String? = nil, importance: Double? = nil, kind: MemoryKind? = nil, subject: String? = nil,
                 conceptID: Int64?? = nil, source: String? = nil) {
         guard var m = get(id) else { return }
-        var newVec: [Float]?
+        var blob: Data?
         if let content, !Self.clean(content).isEmpty, Self.clean(content) != m.content {
             recordHistory(id, content: m.content, change: "updated", source: source)
             m.content = MemoryText.clip(Self.clean(content), 400)
-            newVec = Embedder.shared.vector(m.content)
+            blob = Embedder.shared.vector(m.content).map(Embedder.int8)
         }
         if let importance { m.importance = min(1, max(0, importance)) }
         if let kind { m.kind = kind }
         if let subject { m.subject = MemoryText.subject(subject) }
         if let conceptID { m.conceptID = conceptID }
-        try? db.execute("UPDATE memories SET content=?, importance=?, kind=?, subject=?, concept_id=?, updated_at=?, norm=?, embedding=COALESCE(?, embedding) WHERE id=?",
-                        m.content, m.importance, m.kind.rawValue, m.subject, m.conceptID, Date(), MemoryText.norm(m.content),
-                        newVec.map(Embedder.encode), id)
+        try? db.execute("""
+            UPDATE memories SET content=?, importance=?, kind=?, subject=?, concept_id=?, updated_at=?, norm=?, vec=COALESCE(?, vec),
+            embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
+            """, m.content, m.importance, m.kind.rawValue, m.subject, m.conceptID, Date(), MemoryText.norm(m.content), blob, blob, id)
         refresh(id)
     }
 
@@ -326,13 +410,18 @@ final class MemoryStore: @unchecked Sendable {
     func archive(_ id: Int64, status: String, source: String? = nil) {
         if let m = get(id) { recordHistory(id, content: m.content, change: status, source: source) }
         try? db.execute("UPDATE memories SET archived=1, status=?, updated_at=? WHERE id=?", status, Date(), id)
-        lock.lock(); index?.remove(id); lock.unlock()
+        removed(id)
     }
 
     func delete(_ id: Int64) {
         try? db.execute("DELETE FROM memories WHERE id=?", id)
         try? db.execute("DELETE FROM memory_history WHERE memory_id=?", id)
-        lock.lock(); index?.remove(id); lock.unlock()
+        removed(id)
+    }
+    private func removed(_ id: Int64) {
+        lock.lock(); defer { lock.unlock() }
+        index?.remove(id)
+        if onDiskPath { loadedVersion = nil }   // fewer memories: the next use checks whether they fit in RAM again
     }
     func deleteAll() {
         try? db.execute("DELETE FROM memories")
@@ -385,9 +474,12 @@ final class MemoryStore: @unchecked Sendable {
             let ev = Dictionary(best.items.map { ($0.value.id, ($0.value.lex, $0.value.cos)) }, uniquingKeysWith: { a, _ in a })
             return rank(ev.keys, limit: limit, kinds: kinds, minRelevance: minRelevance, conceptBoost: conceptBoost) { ev[$0.rowid] ?? (0, 0) }
         }
-        // Past the budget: rows of the rarer terms (FTS5) and of routed concepts are candidates; one streamed pass over the
-        // vectors gives their cosines and the best other matches, admitted on their cosine plus the most the unread common
-        // terms could add. Lexical evidence is recounted with our stems from the few rows read at the end.
+        // Past the budget: active rows sharing the rarer terms (FTS5) and on routed concepts are candidates; one streamed
+        // pass over the vectors gives their cosines and the best other matches with semantic evidence, admitted on their
+        // cosine plus the most the unread common terms could add. Lexical evidence is then recounted with our stems from
+        // the few rows read at the end. Where it can differ from the index: a row whose only evidence is common terms
+        // past the row budget (no cosine above semLow) is not a candidate; a concept contributes its 512 most important
+        // memories; FTS5's porter stemmer counts documents a little differently from our stems.
         let lx = lexical(terms, maxDF: .max, limit: 256, n: count())
         let watch = Set(lx.ids.keys).union(members.keys)
         var cos: [Int64: Double] = [:]
@@ -397,7 +489,7 @@ final class MemoryStore: @unchecked Sendable {
                 for i in 0..<c.count {
                     let id = c.ids[i], x = Double(c.cos[i])
                     if watch.contains(id) { acc.cos[id] = x; continue }
-                    guard x > MemoryTuning.semLow || lx.unread > 0, allowed?.contains(c.kinds[i]) ?? true else { continue }
+                    guard x > MemoryTuning.semLow, allowed?.contains(c.kinds[i]) ?? true else { continue }
                     let rel = Self.relevance(lx.unread, x, 0)
                     if rel >= minRelevance { acc.best.add(Self.score(rel, Double(c.importance[i]), age: now - Double(c.updated[i])), (id, x)) }
                 }
@@ -439,8 +531,7 @@ final class MemoryStore: @unchecked Sendable {
     private func conceptMembers(_ boost: [Int64: Double]) -> [Int64: Double] {
         guard !boost.isEmpty else { return [:] }
         var out: [Int64: Double] = [:]
-        try? db.each("SELECT id, concept_id FROM memories WHERE archived=0 AND concept_id IN (SELECT value FROM json_each(?)) ORDER BY importance DESC LIMIT 512",
-                     Self.json(boost.keys)) { r in out[r.int64(0)] = boost[r.int64(1)]; return true }
+        try? db.each(MemorySQL.members, Self.json(boost.keys)) { r in out[r.int64(0)] = boost[r.int64(1)]; return true }
         return out
     }
 
@@ -448,14 +539,16 @@ final class MemoryStore: @unchecked Sendable {
 
     private func sameNorm(_ kind: MemoryKind, _ norm: String) -> [Int64] {
         guard !norm.isEmpty else { return [] }
-        return ((try? db.query("SELECT id FROM memories WHERE archived=0 AND kind=? AND norm=? ORDER BY id", kind.rawValue, norm)) ?? []).compactMap { $0.int("id").map(Int64.init) }
+        return ((try? db.query(MemorySQL.sameNorm, kind.rawValue, norm)) ?? []).compactMap { $0.int("id").map(Int64.init) }
     }
 
-    /// Memories sharing a stem that at most `maxDF` of the `n` memories have, with the summed idf of what they share
-    /// (best `limit`), each term's idf, and the idf of the terms whose rows were not read. From the postings or, past the
-    /// budget, from FTS5, whose porter tokens approximate our stems. FTS5's bm25 ranking would score every match of a
-    /// common term (~1 s for 100k), so each term's rows are read up to a small cap instead (exact df for rare terms, cheap
-    /// at any size); a term past it is counted, and read only while a budget lasts, rarest first.
+    /// Active memories sharing a stem that at most `maxDF` of the `n` active memories have, with the summed idf of what
+    /// they share (best `limit`), each term's idf, and the idf of the common terms whose rows were not read (counted only
+    /// when `maxDF` allows rows past the cap). From the postings or, past the budget, from FTS5 matches checked against
+    /// `memories_active`, whose porter tokens approximate our stems. FTS5's bm25 ranking would score every match of a
+    /// common term (~1 s for 100k), so each term's active rows are read up to a small cap instead (exact df for rare
+    /// terms, cheap at any size); a term past it is counted (8 ms for 42k matches at 500k), and its rows read only while
+    /// a budget lasts, rarest first.
     private func lexical(_ terms: [(stem: String, tokens: [String])], maxDF: Int, limit: Int, n: Int) -> (ids: [Int64: Double], idf: [String: Double], unread: Double) {
         var acc: [Int64: Double] = [:], idf: [String: Double] = [:], unread = 0.0
         let nd = Double(max(1, n))
@@ -468,18 +561,18 @@ final class MemoryStore: @unchecked Sendable {
                 if p.count <= maxDF { for x in p { acc[ix.ids[Int(x)], default: 0] += w } } else { unread += w }
             }
         } else {
-            let cap = 1024
+            let cap = min(1024, maxDF)
             var common: [(stem: String, match: String, df: Int)] = []
             for t in terms {
                 let match = t.tokens.map { "\"\($0)\"" }.joined(separator: " OR ")
                 var rows: [Int64] = []
-                try? db.each("SELECT rowid FROM memories_fts WHERE memories_fts MATCH ? LIMIT ?", match, cap + 1) { rows.append($0.int64(0)); return true }
+                try? db.each(MemorySQL.ftsRows, match, cap + 1) { rows.append($0.int64(0)); return true }
                 if rows.count <= cap {
                     guard !rows.isEmpty else { continue }
                     let w = weight(rows.count)
                     idf[t.stem] = w
-                    if rows.count <= maxDF { for r in rows { acc[r, default: 0] += w } } else { unread += w }
-                } else if maxDF > cap, let df = (try? db.query("SELECT count(*) AS n FROM memories_fts WHERE memories_fts MATCH ?", match))?.first?.int("n") {
+                    for r in rows { acc[r, default: 0] += w }
+                } else if maxDF > cap, let df = (try? db.query(MemorySQL.ftsCount, match))?.first?.int("n") {
                     common.append((t.stem, match, df))
                 }
             }
@@ -489,7 +582,7 @@ final class MemoryStore: @unchecked Sendable {
                 idf[t.stem] = w
                 guard t.df <= min(maxDF, budget) else { unread += w; continue }
                 budget -= t.df
-                try? db.each("SELECT rowid FROM memories_fts WHERE memories_fts MATCH ?", t.match) { acc[$0.int64(0), default: 0] += w; return true }
+                try? db.each(MemorySQL.ftsRows, t.match, t.df) { acc[$0.int64(0), default: 0] += w; return true }
             }
         }
         guard acc.count > limit else { return (acc, idf, unread) }
@@ -526,11 +619,11 @@ final class MemoryStore: @unchecked Sendable {
         if let ix = index {
             for id in ids { if let s = ix.slot[id].map(Int.init) { out[id] = Probe(kind: ix.kinds[s], stems: Array(ix.stems(s)), vector: ix.vector(s)) } }
         } else if !ids.isEmpty {
-            try? db.each("SELECT id, kind, content, subject, embedding FROM memories WHERE archived=0 AND id IN (SELECT value FROM json_each(?))", Self.json(ids)) { r in
+            let dim = Embedder.shared.dimension ?? 0
+            try? db.each(MemorySQL.probes, Self.json(ids)) { r in
                 if let k = r.text(1).flatMap(MemoryKind.init(rawValue:)) {
-                    let b = r.blob(4)
-                    var v = [Int8](repeating: 0, count: Embedder.dimension(b))
-                    v.withUnsafeMutableBufferPointer { _ = Embedder.decode(b, into: $0) }
+                    var v = [Int8](repeating: 0, count: dim)
+                    v.withUnsafeMutableBufferPointer { _ = Embedder.decode(vec: r.blob(4), legacy: r.blob(5), into: $0) }
                     out[r.int64(0)] = Probe(kind: k.code, stems: keys(MemoryText.stems(Self.indexText(r.text(2) ?? "", r.text(3)))), vector: v)
                 }
                 return true
@@ -559,14 +652,9 @@ final class MemoryStore: @unchecked Sendable {
         var count: Int { ids.count }
     }
 
-    /// Walks the table in rowid order: `+archived` keeps the planner off `memories_rank`, which would turn every row into
-    /// an index entry plus a b-tree seek (2× slower).
-    private static let scanSQL = "SELECT id, CASE kind " + MemoryKind.allCases.enumerated().map { "WHEN '\($1.rawValue)' THEN \($0) " }.joined()
-        + "ELSE 255 END, importance, updated_at, embedding FROM memories WHERE id BETWEEN ? AND ? AND +archived=0"
-
     /// Every active vector's cosines with `queries`, `Cosines.chunk` rows at a time, folded into one accumulator per
-    /// partition: the slab as one partition or, past the budget, the `embedding` column streamed by rowid range on up to
-    /// four read-only connections in parallel, each into buffers allocated once — O(chunk) memory whatever the count.
+    /// partition: the slab as one partition or, past the budget, the table streamed by rowid range on up to four
+    /// read-only connections in parallel, each into buffers allocated once — O(chunk) memory whatever the count.
     private func scan<A>(_ queries: [[Float]], into initial: A, _ body: (inout A, Chunk) -> Void) -> [A] {
         if let ix = index {
             guard var k = Cosines(queries), ix.dim == k.dim else { return [] }
@@ -583,7 +671,7 @@ final class MemoryStore: @unchecked Sendable {
             } } }
             return [acc]
         }
-        guard let span = (try? db.query("SELECT min(id) AS lo, max(id) AS hi FROM memories"))?.first, let lo = span.int("lo"), let hi = span.int("hi") else { return [] }
+        guard let span = (try? db.query(MemorySQL.span))?.first, let lo = span.int("lo"), let hi = span.int("hi") else { return [] }
         // Parallel once there are enough rows to split (measured at 500k: 4 connections ≈ 2× one; more add little).
         let want = hi - lo < 16_384 ? 1 : 4
         if !(db.path.isEmpty || db.path == ":memory:") {
@@ -616,11 +704,11 @@ final class MemoryStore: @unchecked Sendable {
                                             updated: .init(rebasing: upd[r]), cos: $0, first: 0)) }
             n = 0
         }
-        try? conn.each(Self.scanSQL, range.lowerBound, range.upperBound) { r in
+        try? conn.each(MemorySQL.scan, range.lowerBound, range.upperBound) { r in
             let i = n
             ids[i] = r.int64(0); kinds[i] = UInt8(truncatingIfNeeded: r.int64(1)); imp[i] = Float(r.double(2))
             upd[i] = Float(r.double(3) - Date.timeIntervalBetween1970AndReferenceDate)
-            Embedder.decode(r.blob(4), into: .init(rebasing: vecs[i * d ..< (i + 1) * d]))
+            Embedder.decode(vec: r.blob(4), legacy: r.blob(5), into: .init(rebasing: vecs[i * d ..< (i + 1) * d]))
             n = i + 1
             if n == size { flush() }
             return true
@@ -630,18 +718,24 @@ final class MemoryStore: @unchecked Sendable {
 
     // MARK: Core block & maintenance
 
-    /// The best `limit` by importance, then recency: ids from the covering index (`memories_rank`), then those rows only.
+    /// The best `limit` by importance, then recency: each kind read in `memories_rank` order (`limit` index entries, not a
+    /// sort of the kind's rows), merged, then only those rows.
     func top(kinds: [MemoryKind], limit: Int) -> [Memory] {
-        guard limit > 0, !kinds.isEmpty else { return [] }
-        let list = kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")
-        let ids = ((try? db.query("SELECT id FROM memories WHERE archived=0 AND kind IN (\(list)) ORDER BY importance DESC, updated_at DESC LIMIT ?", limit)) ?? [])
-            .compactMap { $0.int("id").map(Int64.init) }
-        let byID = Dictionary(uniqueKeysWithValues: rows(ids).map { ($0.rowid, $0) })
-        return ids.compactMap { byID[$0] }
+        guard limit > 0 else { return [] }
+        var ranked: [(id: Int64, importance: Double, updated: Double)] = []
+        for k in kinds {
+            for r in (try? db.query(MemorySQL.topOfKind, k.rawValue, limit)) ?? [] {
+                if let id = r.int("id") { ranked.append((Int64(id), r.double("importance") ?? 0, r.double("updated_at") ?? 0)) }
+            }
+        }
+        ranked.sort { $0.importance != $1.importance ? $0.importance > $1.importance : $0.updated > $1.updated }
+        let best = ranked.prefix(limit).map(\.id)
+        let byID = Dictionary(uniqueKeysWithValues: rows(best).map { ($0.rowid, $0) })
+        return best.compactMap { byID[$0] }
     }
     func recentEpisodes(limit: Int) -> [Memory] {
         guard limit > 0 else { return [] }
-        return ((try? db.query("SELECT \(Self.columns) FROM memories WHERE archived=0 AND kind='episode' ORDER BY created_at DESC LIMIT ?", limit)) ?? []).compactMap(row)
+        return ((try? db.query("SELECT \(MemorySQL.columns) FROM memories WHERE archived=0 AND kind='episode' ORDER BY created_at DESC LIMIT ?", limit)) ?? []).compactMap(row)
     }
 
     struct MaintenanceReport { var decayed = 0, archived = 0, merged = 0 }
@@ -666,20 +760,23 @@ final class MemoryStore: @unchecked Sendable {
         return rep
     }
 
-    /// Duplicate sweep, incremental: memories changed since the last sweep (oldest first, resuming where the last run
-    /// stopped) are checked against everything through the candidates `add` uses — equal norms, shared rare terms, near
-    /// vectors (one pass per 128 changed) — so it costs O(changed), not O(all). A run stops after 2,000 changed memories
-    /// or 1,000 merges (a bulk import of near-copies), whichever comes first; the next run carries on.
+    /// A run of the duplicate sweep stops after this many merges (a bulk import of near-copies); the next one carries on.
+    static let sweepMerges = 1000
+
+    /// Duplicate sweep, incremental: memories changed since the last sweep (2,000 a run, oldest first) are checked
+    /// against everything through the candidates `add` uses — equal norms, shared rare terms, near vectors (one pass per
+    /// 128 changed) — so it costs O(changed), not O(all). It resumes after the last memory it finished: a memory cut off
+    /// by the merge cap is checked again next run.
     private func sweep(_ rep: inout MaintenanceReport) {
-        let key = "sweep_\(scope.rawValue)", mark = (MemorySchema.meta(db, key) ?? "").split(separator: " ")
-        // "time id" of the last memory swept; a bare time (older versions) means everything up to that time.
+        // Its own marker ("time id"); the first run starts from an older build's (a bare time, under the key that build
+        // still reads and that is left to it).
+        let key = "sweep2_\(scope.rawValue)"
+        let mark = (MemorySchema.meta(db, key) ?? MemorySchema.meta(db, "sweep_\(scope.rawValue)") ?? "").split(separator: " ")
         let at = mark.first.flatMap { Double($0) } ?? -1, after = mark.count > 1 ? Int64(mark[1]) ?? 0 : .max
-        // In `memories_updated` order, so this reads 2,000 index entries, not a sort of every memory.
-        let changed = ((try? db.query("SELECT id, updated_at FROM memories WHERE archived=0 AND (updated_at, id) > (?, ?) ORDER BY updated_at, id LIMIT 2000",
-                                      at, after)) ?? []).compactMap { r in r.int("id").map { (id: Int64($0), at: r.double("updated_at") ?? 0) } }
+        let changed = ((try? db.query(MemorySQL.changed, at, after)) ?? []).compactMap { r in r.int("id").map { (id: Int64($0), at: r.double("updated_at") ?? 0) } }
         var gone = Set<Int64>(), done: (id: Int64, at: Double)?
         var n = 0, close: [Int64: [Int64]] = [:]
-        for (i, e) in changed.enumerated() {
+        sweeping: for (i, e) in changed.enumerated() {
             if i % 128 == 0 {
                 let batch = changed[i..<min(changed.count, i + 128)].map(\.id)
                 lock.lock(); ensureLoaded()
@@ -689,35 +786,39 @@ final class MemoryStore: @unchecked Sendable {
                                                                          minCos: 0.95, cap: 200)))
                 lock.unlock()
             }
-            guard rep.merged < 1000 else { break }
-            done = e
             let id = e.id
-            guard !gone.contains(id), let m = get(id) else { continue }
+            guard !gone.contains(id), let m = get(id) else { done = e; continue }
             lock.lock()
             let equal = Set(sameNorm(m.kind, MemoryText.norm(m.content)))
             var cands = equal.union(lexical(MemoryText.terms(Self.indexText(m.content, m.subject)), maxDF: 50, limit: 256, n: n).ids.keys).union(close[id] ?? [])
             cands.remove(id); cands.subtract(gone)
             let others = probes(cands.union([id]))
             lock.unlock()
-            guard let p = others[id] else { continue }
+            guard let p = others[id] else { done = e; continue }
             for c in cands.sorted() where !gone.contains(c) {
                 guard let o = others[c], o.kind == p.kind else { continue }
                 let shared = Self.overlap(p.stems, o.stems), jac = Double(shared) / Double(max(1, p.stems.count + o.stems.count - shared))
                 let cs = Double(Embedder.dot(p.vector, o.vector))
                 guard equal.contains(c) || jac >= 0.8 || (cs >= 0.95 && jac >= 0.5) else { continue }
+                guard rep.merged < Self.sweepMerges else { break sweeping }
                 // Keep the older id (stable references); absorb the other's evidence. The newer text wins when it is an
                 // update (changed number/negation), otherwise the longer one.
                 let (keep, drop) = id < c ? (id, c) : (c, id)
                 guard let k = get(keep), let x = get(drop) else { continue }
                 let newer = x.updatedAt > k.updatedAt ? x : k, older = newer.rowid == x.rowid ? k : x
                 let keepNew = MemoryText.isUpdate(newer.content, of: older.content) ? newer.rowid == drop : x.content.count > k.content.count
-                if keepNew { try? db.execute("UPDATE memories SET content=?, norm=?, embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?", x.content, MemoryText.norm(x.content), drop, keep) }
+                if keepNew {
+                    try? db.execute("""
+                        UPDATE memories SET content=?, norm=?, vec=(SELECT vec FROM memories WHERE id=?), embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?
+                        """, x.content, MemoryText.norm(x.content), drop, drop, keep)
+                }
                 try? db.execute("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", x.evidence, x.importance, keep)
                 archive(drop, status: "merged into #\(keep)")
                 if keepNew { refresh(keep) }
                 gone.insert(drop); rep.merged += 1
                 if drop == id { break }
             }
+            done = e
         }
         if let done { MemorySchema.setMeta(db, key, "\(done.at) \(done.id)") }
     }
@@ -727,8 +828,8 @@ final class MemoryStore: @unchecked Sendable {
         let now = Date()
         try? db.transaction {
             for r in rows {
-                try db.execute("INSERT INTO memories(kind, subject, content, importance, origin, created_at, updated_at, embedding, norm) VALUES(?,?,?,?,?,?,?,?,?)",
-                               r.kind.rawValue, r.subject, r.content, 0.5, "inferred", now, now, r.vector.map(Embedder.encode), MemoryText.norm(r.content))
+                try db.execute("INSERT INTO memories(kind, subject, content, importance, origin, created_at, updated_at, vec, norm) VALUES(?,?,?,?,?,?,?,?,?)",
+                               r.kind.rawValue, r.subject, r.content, 0.5, "inferred", now, now, r.vector.map(Embedder.int8), MemoryText.norm(r.content))
             }
         }
         lock.lock(); loadedVersion = nil; lock.unlock()
@@ -738,10 +839,9 @@ final class MemoryStore: @unchecked Sendable {
 /// The in-RAM index, struct-of-arrays by slot: under 1 KB a memory, most of it the vector. Stems are interned as UInt32
 /// ids with sorted slot postings; vectors sit in one contiguous int8 slab; ranking fields are Float32. Content, subjects
 /// and norms are not here — they stay in SQLite.
-private final class MemoryIndex {
-    /// Bytes a memory costs (measured: 512-dim vector, ~15 stems), to decide before loading; `bytes` is the real account.
-    static let estimate = 840
-    private(set) var dim = 0
+final class MemoryIndex {
+    /// The model's vector size (from the embedder, never from the data: a malformed blob is no vector, not a new size).
+    let dim: Int
     private(set) var ids: [Int64] = []            // slot → rowid; 0 for a free slot
     private(set) var kinds: [UInt8] = []
     private(set) var importance: [Float] = []
@@ -754,14 +854,11 @@ private final class MemoryIndex {
     private var free: [Int32] = []
     private var holes = 0, lists = 0, entries = 0
 
-    /// Memories expected (a load knows its count): arrays are sized once instead of growing by doubling.
-    private let capacity: Int
-
-    init(capacity: Int = 0) {
-        self.capacity = capacity
+    init(capacity: Int, dim: Int) {
+        self.dim = dim
         ids.reserveCapacity(capacity); kinds.reserveCapacity(capacity); importance.reserveCapacity(capacity)
         updated.reserveCapacity(capacity); stemAt.reserveCapacity(capacity); stemCount.reserveCapacity(capacity)
-        slot.reserveCapacity(capacity)
+        slot.reserveCapacity(capacity); slab.reserveCapacity(capacity * dim)
     }
 
     /// After a bulk load: lists grown one slot at a time are copied to their exact size, in one sweep, so the freed
@@ -772,23 +869,18 @@ private final class MemoryIndex {
     }
 
     var live: Int { slot.count }
-    /// Capacities in bytes, with dictionary buckets and per-list allocations at their usual cost.
-    var bytes: Int {
-        slab.capacity + ids.capacity * 8 + kinds.capacity + stemCount.capacity
-            + (importance.capacity + updated.capacity + stemAt.capacity + pool.capacity + free.capacity) * 4
-            + slot.capacity * 12 + vocab.capacity * 20 + postings.capacity * 8 + lists * 48 + entries * 6
-    }
+    /// What the index holds, by count: capacities come and go with growth, so judging the budget on them would flip a load
+    /// near the line to the disk path on the next write. Per slot the vector and ranking fields, per stem occurrence a
+    /// pool entry and a posting, per distinct stem a vocabulary entry and its list (malloc rounding included).
+    var bytes: Int { ids.count * (dim + 22) + slot.count * 16 + pool.count * 4 + entries * 4 + lists * 48 + vocab.count * 28 }
+    /// The same for `n` memories before loading them (measured: ~15 stems, ~2 of them unique, a memory).
+    static func cost(_ n: Int, dim: Int) -> Int { n * (dim + 300) }
 
     func stems(_ s: Int) -> ArraySlice<UInt32> { pool[Int(stemAt[s]) ..< Int(stemAt[s]) + Int(stemCount[s])] }
     func vector(_ s: Int) -> [Int8] { Array(slab[s * dim ..< (s + 1) * dim]) }
 
-    func insert(_ id: Int64, kind: UInt8, importance imp: Double, updated upd: Double, text: String, vector: UnsafeRawBufferPointer) {
+    func insert(_ id: Int64, kind: UInt8, importance imp: Double, updated upd: Double, text: String, vec: UnsafeRawBufferPointer, legacy: UnsafeRawBufferPointer) {
         remove(id)
-        if dim == 0, !vector.isEmpty {
-            dim = Embedder.dimension(vector)
-            slab = [Int8](repeating: 0, count: ids.count * dim)
-            slab.reserveCapacity(max(capacity, ids.count + 1) * dim)
-        }
         let s: Int
         if let f = free.popLast() { s = Int(f) } else {
             s = ids.count
@@ -797,7 +889,7 @@ private final class MemoryIndex {
         }
         ids[s] = id; slot[id] = Int32(s); kinds[s] = kind; importance[s] = Float(imp)
         updated[s] = Float(upd - Date.timeIntervalBetween1970AndReferenceDate)
-        if dim > 0 { slab.withUnsafeMutableBufferPointer { _ = Embedder.decode(vector, into: UnsafeMutableBufferPointer(rebasing: $0[s * dim ..< (s + 1) * dim])) } }
+        if dim > 0 { slab.withUnsafeMutableBufferPointer { _ = Embedder.decode(vec: vec, legacy: legacy, into: UnsafeMutableBufferPointer(rebasing: $0[s * dim ..< (s + 1) * dim])) } }
         let ts = MemoryText.stems(text).map { st -> UInt32 in
             if let t = vocab[st] { return t }
             vocab[st] = UInt32(postings.count); postings.append([])
