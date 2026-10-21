@@ -14,19 +14,66 @@ enum HTMLToMarkdown {
     private static let blockTags: Set<String> = ["p", "div", "section", "article", "main", "figure", "figcaption", "dl", "dt", "dd",
                                                  "address", "center", "details", "summary", "hgroup"]
 
-    /// Foundation's tidy parser drops unknown (HTML5) elements, so map them to divs/spans first,
-    /// and lift TeX out of MathML annotations.
+    /// Foundation's tidy parser drops unknown (HTML5) elements, so map them to divs/spans first, lift TeX out of MathML
+    /// annotations, and drop comments, scripts, styles, SVG, templates and other MathML. One pass over the bytes: the eight
+    /// regex passes this replaces held several UTF-16 copies of the page at once (+65 MB for a 3 MB page, which the
+    /// allocator then keeps).
     static func preprocess(_ html: String) -> String {
-        var s = html.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
-        s = s.replacingOccurrences(of: "<(script|style|noscript|svg|template)\\b[\\s\\S]*?</\\1>", with: "", options: [.regularExpression, .caseInsensitive])
-        s = s.replacingOccurrences(of: "<math\\b([^>]*)>(?:(?!</math>)[\\s\\S])*?<annotation[^>]*encoding=\"application/x-tex\"[^>]*>([\\s\\S]*?)</annotation>(?:(?!</math>)[\\s\\S])*?</math>",
-                                   with: "<span data-tex=\"1\"$1>$2</span>", options: [.regularExpression, .caseInsensitive])
-        s = s.replacingOccurrences(of: "<math\\b[\\s\\S]*?</math>", with: "", options: [.regularExpression, .caseInsensitive])
-        let blocks = "article|main|nav|footer|aside|header|section|figure|figcaption|details|summary|hgroup|address|search|dialog"
-        s = s.replacingOccurrences(of: "<(\\/?)(\(blocks))\\b", with: "<$1div data-h5=\"$2\"", options: [.regularExpression, .caseInsensitive])
-        s = s.replacingOccurrences(of: "</div data-h5=\"[a-z]+\"", with: "</div", options: .regularExpression)
-        s = s.replacingOccurrences(of: "<(\\/?)(mark|time|picture|data|bdi|output)\\b", with: "<$1span", options: [.regularExpression, .caseInsensitive])
-        return s
+        let src = Array(html.utf8), n = src.count
+        var out = [UInt8]()
+        out.reserveCapacity(n)
+        var missing: [String: Int] = [:]   // a closing pattern absent after position p is absent after any later one
+        func lower(_ c: UInt8) -> UInt8 { c >= 65 && c <= 90 ? c + 32 : c }
+        func at(_ i: Int, _ pat: String) -> Bool {
+            var j = i
+            for c in pat.utf8 { guard j < n, lower(src[j]) == c else { return false }; j += 1 }
+            return true
+        }
+        func find(_ pat: String, from: Int, before limit: Int? = nil) -> Int? {
+            if let m = missing[pat], from >= m, limit == nil { return nil }
+            let first = pat.utf8.first!, end = min(limit ?? n, n)
+            var j = from
+            while j < end { if lower(src[j]) == first, at(j, pat) { return j }; j += 1 }
+            if limit == nil { missing[pat] = from }
+            return nil
+        }
+        func boundary(_ i: Int) -> Bool {   // the regex \b after a tag name
+            guard i < n else { return true }
+            let c = src[i]
+            return !(c == 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c >= 128)
+        }
+        func name(at i: Int, _ names: [String]) -> String? { names.first { at(i, $0) && boundary(i + $0.utf8.count) } }
+        let dropped = ["script", "style", "noscript", "svg", "template"]
+        let blocks = ["article", "main", "nav", "footer", "aside", "header", "section", "figure", "figcaption", "details", "summary",
+                      "hgroup", "address", "search", "dialog"]
+        let inline = ["mark", "time", "picture", "data", "bdi", "output"]
+        var i = 0
+        while i < n {
+            guard src[i] == 60 else { out.append(src[i]); i += 1; continue }   // "<"
+            if at(i, "<!--"), let e = find("-->", from: i + 4) { i = e + 3; continue }
+            if let t = name(at: i + 1, dropped), let e = find("</\(t)>", from: i + 1 + t.utf8.count) { i = e + t.utf8.count + 3; continue }
+            if at(i, "<math"), boundary(i + 5), let e = find("</math>", from: i + 5) {
+                // <math attrs>…<annotation encoding="application/x-tex">TeX</annotation>…</math> → <span data-tex="1" attrs>TeX</span>
+                if let gt = src[(i + 5)..<e].firstIndex(of: 62) {
+                    var a = gt
+                    while let s = find("<annotation", from: a, before: e), let close = src[s..<e].firstIndex(of: 62) {
+                        a = close + 1
+                        guard String(decoding: src[s..<close], as: UTF8.self).lowercased().contains("encoding=\"application/x-tex\"") else { continue }
+                        if let ae = find("</annotation>", from: a, before: e) {
+                            out += Array("<span data-tex=\"1\"".utf8); out += src[(i + 5)..<gt]; out.append(62)
+                            out += src[a..<ae]; out += Array("</span>".utf8)
+                        }
+                        break
+                    }
+                }
+                i = e + 7; continue
+            }
+            let closing = i + 1 < n && src[i + 1] == 47, j = closing ? i + 2 : i + 1
+            if let b = name(at: j, blocks) { out += Array((closing ? "</div" : "<div data-h5=\"\(b)\"").utf8); i = j + b.utf8.count; continue }
+            if let t = name(at: j, inline) { out += Array((closing ? "</span" : "<span").utf8); i = j + t.utf8.count; continue }
+            out.append(src[i]); i += 1
+        }
+        return String(decoding: out, as: UTF8.self)
     }
 
     static func convert(html: String, baseURL: URL?) -> Result {

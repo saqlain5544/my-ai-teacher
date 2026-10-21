@@ -78,6 +78,51 @@ final class CoreTests: XCTestCase {
         XCTAssertLessThanOrEqual(r.markdown.count, HTMLToMarkdown.maxOutput + 1000)
     }
 
+    /// The one-pass preprocessor does what the eight regex passes did (comments, scripts/styles/SVG/templates and plain
+    /// MathML out; TeX lifted from annotations; HTML5 blocks to divs, inline tags to spans), case-insensitively.
+    func testHTMLPreprocessMatchesTheRegexPasses() {
+        func regexes(_ html: String) -> String {
+            var s = html.replacingOccurrences(of: "<!--[\\s\\S]*?-->", with: "", options: .regularExpression)
+            s = s.replacingOccurrences(of: "<(script|style|noscript|svg|template)\\b[\\s\\S]*?</\\1>", with: "", options: [.regularExpression, .caseInsensitive])
+            s = s.replacingOccurrences(of: "<math\\b([^>]*)>(?:(?!</math>)[\\s\\S])*?<annotation[^>]*encoding=\"application/x-tex\"[^>]*>([\\s\\S]*?)</annotation>(?:(?!</math>)[\\s\\S])*?</math>",
+                                       with: "<span data-tex=\"1\"$1>$2</span>", options: [.regularExpression, .caseInsensitive])
+            s = s.replacingOccurrences(of: "<math\\b[\\s\\S]*?</math>", with: "", options: [.regularExpression, .caseInsensitive])
+            let blocks = "article|main|nav|footer|aside|header|section|figure|figcaption|details|summary|hgroup|address|search|dialog"
+            s = s.replacingOccurrences(of: "<(\\/?)(\(blocks))\\b", with: "<$1div data-h5=\"$2\"", options: [.regularExpression, .caseInsensitive])
+            s = s.replacingOccurrences(of: "</div data-h5=\"[a-z]+\"", with: "</div", options: .regularExpression)
+            return s.replacingOccurrences(of: "<(\\/?)(mark|time|picture|data|bdi|output)\\b", with: "<$1span", options: [.regularExpression, .caseInsensitive])
+        }
+        let pages = [
+            "<html><head><title>T</title><style>p{}</style><script>var a = 1 < 2;</script></head><body><!-- note --><nav><a href='/'>home</a></nav>",
+            "<main><article class=\"x\"><header><h1>Hi</h1></header><section><p>Text <mark>marked</mark> at <time datetime=\"2026\">now</time>.</p></section></article></main>",
+            "<p>Inline <math display=\"block\"><semantics><mrow><mi>E</mi></mrow><annotation encoding=\"application/x-tex\">E = mc^2</annotation></semantics></math> and plain <math><mi>x</mi></math>.</p>",
+            "<figure><picture><img src=\"a.png\"></picture><figcaption>Cap</figcaption></figure><details><summary>More</summary><p>hidden</p></details>",
+            "<SCRIPT type=\"text/javascript\">x()</SCRIPT><Svg><path/></Svg><template><p>t</p></template><noscript>js off</noscript><mainly>not a tag we map</mainly>",
+            "<data value=\"7\">seven</data> <output>out</output> <bdi>ب</bdi> <timeline>kept</timeline> <dialog open>d</dialog> <search>s</search> <hgroup><h2>h</h2></hgroup> <address>a</address> <aside>x</aside> <footer>f</footer>",
+            "<p>unterminated <!-- comment and <script> without an end",
+            "<p>é ü 漢字 😀 <mark>ü</mark></p>",
+        ]
+        for p in pages + [pages.joined()] { XCTAssertEqual(HTMLToMarkdown.preprocess(p), regexes(p), p) }
+    }
+
+    /// A 3 MB page: the regex passes grew the footprint by ~65 MB (kept by the allocator); one pass stays near the page's size.
+    func testHTMLPreprocessMemoryStaysNearThePageSize() {
+        func footprintMB() -> Double {
+            var info = task_vm_info_data_t(), count = mach_msg_type_number_t(MemoryLayout<task_vm_info_data_t>.size / MemoryLayout<natural_t>.size)
+            _ = withUnsafeMutablePointer(to: &info) { $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) { task_info(mach_task_self_, task_flavor_t(TASK_VM_INFO), $0, &count) } }
+            return Double(info.phys_footprint) / 1_048_576
+        }
+        let unit = "<section><h2>S</h2><p>Light-dependent reactions make <b>ATP</b> and <mark>NADPH</mark>.</p><!-- c --><script>x++</script>" +
+            "<math><semantics><mi>E</mi><annotation encoding=\"application/x-tex\">E = h\\nu</annotation></semantics></math></section>"
+        let html = "<html><body><main>" + String(repeating: unit, count: 3_000_000 / unit.utf8.count) + "</main></body></html>"
+        let before = footprintMB()
+        let out = autoreleasepool { HTMLToMarkdown.preprocess(html) }
+        let grew = footprintMB() - before
+        print(String(format: "PREPROCESS 3 MB: footprint +%.1f MB", grew))
+        XCTAssertTrue(out.contains("<div data-h5=\"section\">") && out.contains("<span data-tex=\"1\">E = h\\nu</span>") && !out.contains("x++"))
+        XCTAssertLessThan(grew, 30)
+    }
+
     /// The fetch tool's deadline cancels the task; the converter must notice instead of burning CPU after the tool gave up.
     func testHTMLToMarkdownStopsWhenCancelled() async {
         let html = "<html><body>" + String(repeating: "<p>" + String(repeating: "word ", count: 50) + "</p>", count: 20_000) + "</body></html>"
