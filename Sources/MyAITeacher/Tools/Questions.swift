@@ -48,7 +48,21 @@ enum Questions {
                        "cloze": "fill_blanks", "order": "ordering", "match": "matching", "likert": "scale", "rating": "scale"]
             if let t = o["type"]?.string, let m = map[t] { o["type"] = .string(m) }
             if o["type"] == nil { o["type"] = o["options"] != nil ? "single_choice" : "short_text" }
+            if let p = o["pattern"]?.string, !Self.isFormatPattern(p, answers: o["answer"]) { o["pattern"] = nil }
             return .object(o)
+        }
+    }
+
+    /// `pattern` checks an answer's shape ("[A-Z]{2}\\d{4}"). Models also put the answer itself there ("Largest"): that shows
+    /// it to the page and refuses every other answer, so a learner who is wrong can't even submit. A pattern stays only if it
+    /// is regex syntax, compiles, and every expected answer passes it.
+    static func isFormatPattern(_ p: String, answers: JSON?) -> Bool {
+        guard p.range(of: #"[\\^$.|?*+()\[\]{}]"#, options: .regularExpression) != nil,
+              let re = try? NSRegularExpression(pattern: "^(?:\(p))$") else { return false }
+        let expected = answers?.array?.compactMap(\.string) ?? answers?.string.map { [$0] } ?? []
+        return expected.allSatisfy { a in
+            let t = a.trimmingCharacters(in: .whitespaces)
+            return re.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
         }
     }
 

@@ -150,3 +150,21 @@ final class ClaudeHistoryTests: XCTestCase {
         XCTAssertTrue(c.betas(r).contains("context-management-2025-06-27"))
     }
 }
+
+/// A quiz's `pattern` checks the answer's shape; it must never be the answer (the live quiz-mode run got stuck on it).
+final class QuizPatternTests: XCTestCase {
+    private func pattern(_ p: String, _ answer: JSON?) -> String? {
+        var q: [String: JSON] = ["type": "short_text", "prompt": "x", "pattern": .string(p)]
+        if let answer { q["answer"] = answer }
+        return Questions.normalize([.object(q)])[0]["pattern"]?.string
+    }
+    func testAnAnswerIsNotAFormat() {
+        XCTAssertNil(pattern("Largest", "Largest"), "MiniMax-M3 put the answer there: wrong answers couldn't be submitted")
+        XCTAssertNil(pattern("Paris", nil), "a plain word is no format either")
+        XCTAssertEqual(pattern("[A-Z]{2}\\d{4}", "AB1234"), "[A-Z]{2}\\d{4}", "a real format stays")
+        XCTAssertEqual(pattern("\\d+(\\.\\d+)?", nil), "\\d+(\\.\\d+)?")
+        XCTAssertNil(pattern("[0-9]+", "twelve"), "a format the expected answer fails is wrong")
+        XCTAssertNil(pattern("(unclosed", nil), "doesn't compile")
+        XCTAssertEqual(pattern("[a-z]+", .array(["cat", "dog"])), "[a-z]+", "every accepted answer passes")
+    }
+}
