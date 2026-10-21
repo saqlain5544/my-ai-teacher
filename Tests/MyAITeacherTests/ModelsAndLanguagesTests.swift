@@ -168,3 +168,33 @@ final class QuizPatternTests: XCTestCase {
         XCTAssertEqual(pattern("[a-z]+", .array(["cat", "dog"])), "[a-z]+", "every accepted answer passes")
     }
 }
+
+/// The model picker's own lists: the wiring around Fuzzy (provider order, model order, what's left out).
+final class ModelPickerTests: XCTestCase {
+    @MainActor func testPickerListsMatchTheQueryInAnyOrderWithTypos() {
+        let byID = Dictionary(uniqueKeysWithValues: ProviderCatalog.presets.map { ($0.id, $0) })
+        let providers = ["nvidia", "deepseek", "openrouter", "minimax"].compactMap { byID[$0] }
+        let lists = ["nvidia": ["meta/llama-3.3-70b-instruct", "deepseek-ai/deepseek-v4.1-flash", "qwen/qwen3-coder-480b-a35b-instruct", "deepseek-ai/deepseek-r1"],
+                     "deepseek": ["deepseek-flash", "deepseek-v4-pro"],
+                     "openrouter": ["deepseek/deepseek-v4-pro", "anthropic/claude-sonnet-5.5", "openai/gpt-5.4"],
+                     "minimax": ["MiniMax-M3", "MiniMax-M3.1-Flash"]]
+        let pick = { (q: String) in ModelPickerPopover.sections(q, providers: providers, models: { lists[$0.id] ?? [] }, names: { _, _ in nil }) }
+        for q in ["nvidia deepseek", "deepseek nvidia", "nvdia deepsek", "deepsek nvidai"] {
+            let s = pick(q)
+            XCTAssertEqual(s.map(\.provider.id), ["nvidia"], q)
+            XCTAssertEqual(Set(s[0].models), ["deepseek-ai/deepseek-v4.1-flash", "deepseek-ai/deepseek-r1"], q)
+        }
+        let ds = pick("deepseek")
+        XCTAssertEqual(ds.first?.provider.id, "deepseek", "the provider named exactly comes first")
+        XCTAssertFalse(ds.contains { $0.provider.id == "minimax" }, "providers without a match are left out")
+        XCTAssertEqual(pick("deepseek pro").map(\.provider.id).sorted(), ["deepseek", "openrouter"])
+        XCTAssertEqual(pick("").count, providers.count, "no query: every provider")
+        // Found on the live catalogues: the exact version before its neighbours, and the provider the query names first.
+        let sonnet = ModelPickerPopover.sections("sonet 5.5", providers: providers,
+            models: { $0.id == "openrouter" ? ["anthropic/claude-sonnet-5", "anthropic/claude-sonnet-4.5", "anthropic/claude-sonnet-5.5"] : [] }, names: { _, _ in nil })
+        XCTAssertEqual(sonnet.first?.models.first, "anthropic/claude-sonnet-5.5")
+        let mm = ModelPickerPopover.sections("minimax m3", providers: providers + [byID["ollama-cloud"]!],
+            models: { $0.id == "ollama-cloud" ? ["minimax-m3"] : lists[$0.id] ?? [] }, names: { p, m in p == "minimax" ? m : nil })
+        XCTAssertEqual(mm.first?.provider.id, "minimax", "MiniMax itself, not a host of its model")
+    }
+}

@@ -46,6 +46,10 @@ enum DebugHooks {
                     AppLog.write("models \(p.id): \(list.count) [\(list.prefix(8).joined(separator: ", "))]\(app.modelErrors[p.id].map { " error: \($0.prefix(160))" } ?? "")")
                 }
             }
+        case "pickerSearch":   // what the model picker lists for a query, from this app's live catalogues
+            let q = cmd["query"]?.string ?? ""
+            let out = ModelPickerPopover.sections(q, providers: app.availableProviders, models: app.modelList, names: { p, m in app.modelMeta[p]?[m]?.name })
+            AppLog.write("picker \"\(q)\": " + out.prefix(4).map { "\($0.provider.id)[\($0.models.prefix(3).joined(separator: ", "))]" }.joined(separator: " · "))
         case "shed":   // what memory pressure does: every rebuildable cache goes (the log says how much was freed)
             MemoryGovernor.shared.shed(critical: cmd["critical"]?.bool == true, reason: "debug")
         case "send":

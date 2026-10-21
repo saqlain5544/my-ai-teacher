@@ -151,14 +151,21 @@ struct ModelPickerPopover: View {
     /// Every provider with its models; while searching, only matches (fuzzy: any word order, typos, partial words),
     /// best first, and the providers with the best match on top.
     private func sections() -> [(provider: ProviderConfig, models: [String])] {
-        let providers = app.settings.providers
-        guard !search.trimmingCharacters(in: .whitespaces).isEmpty else { return providers.map { ($0, app.modelList($0)) } }
-        return providers.compactMap { p -> (ProviderConfig, [String], Double)? in
-            let meta = app.modelMeta[p.id]
-            let hits = app.modelList(p).compactMap { m in Fuzzy.score(search, [p.name, p.id, m, meta?[m]?.name ?? ""]).map { (m, $0) } }
+        Self.sections(search, providers: app.settings.providers, models: app.modelList, names: { p, m in app.modelMeta[p]?[m]?.name })
+    }
+
+    /// The picker's lists for `query` (the debug hooks run the same function on the live app's catalogues).
+    static func sections(_ query: String, providers: [ProviderConfig], models: (ProviderConfig) -> [String],
+                         names: (String, String) -> String?) -> [(provider: ProviderConfig, models: [String])] {
+        guard !query.trimmingCharacters(in: .whitespaces).isEmpty else { return providers.map { ($0, models($0)) } }
+        let asked = Set(Fuzzy.words(query))
+        return providers.enumerated().compactMap { i, p -> (Int, ProviderConfig, [String], Double)? in
+            // A query word that names the provider ("minimax m3") puts that provider first among equal matches.
+            let named = asked.isDisjoint(with: Fuzzy.words(p.name + " " + p.id)) ? 0 : 0.01
+            let hits = models(p).compactMap { m in Fuzzy.score(query, [p.name, p.id, m, names(p.id, m) ?? ""], lengthOf: m).map { (m, $0 + named) } }
                 .sorted { $0.1 > $1.1 }
-            return hits.first.map { (p, hits.map(\.0), $0.1) }
-        }.sorted { $0.2 > $1.2 }.map { ($0.0, $0.1) }
+            return hits.first.map { (i, p, hits.map(\.0), $0.1) }
+        }.sorted { $0.3 != $1.3 ? $0.3 > $1.3 : $0.0 < $1.0 }.map { ($0.1, $0.2) }
     }
 
     @ViewBuilder private func providerSection(_ p: ProviderConfig, _ filtered: [String]) -> some View {

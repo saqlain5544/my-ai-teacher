@@ -11,7 +11,8 @@ enum Fuzzy {
     }
 
     /// 0…1 relevance of `fields` (e.g. provider name, model id) to `query`; nil when some query word matches nothing.
-    static func score(_ query: String, _ fields: [String]) -> Double? {
+    /// `lengthOf`: what the shorter-is-better nudge measures (the model id, not the provider's name repeated).
+    static func score(_ query: String, _ fields: [String], lengthOf: String? = nil) -> Double? {
         let q = words(query)
         guard !q.isEmpty else { return 1 }
         let cw = fields.flatMap(words), compact = cw.joined()
@@ -20,8 +21,13 @@ enum Fuzzy {
             guard let s = best(t, cw, compact) else { return nil }
             total += s
         }
+        // Query words that sit side by side in the name, too: "sonnet 5.5" is claude-sonnet-5.5 before sonnet-5 or 4.5.
+        var together = 0
+        for (a, b) in zip(q, q.dropFirst()) where cw.indices.dropLast().contains(where: { cw[$0].hasPrefix(a) && cw[$0 + 1].hasPrefix(b) }) { together += 1 }
+        let adjacency = q.count > 1 ? 0.05 * Double(together) / Double(q.count - 1) : 0
         // Mean word quality, nudged toward shorter names (the plain model before its variants).
-        return total / Double(q.count) - Double(compact.count) / 10_000
+        let length = lengthOf.map { words($0).joined().count } ?? compact.count
+        return total / Double(q.count) + adjacency - Double(length) / 10_000
     }
 
     private static func best(_ t: String, _ cw: [String], _ compact: String) -> Double? {
