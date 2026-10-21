@@ -94,10 +94,10 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
         want = scenario.get("pick")
         js("""(() => { const c = document.querySelector('%s'); const opts = Array.from(c.querySelectorAll('[data-act="ask-opt"]'));
           const o = opts.find(b => b.textContent.trim().toLowerCase().includes(%s)) || opts[0];
-          if (o) { o.click(); return; }
+          if (o) { o.click(); const s = document.querySelector('%s .btn-row [data-act="ask-submit"]:not([disabled])'); if (s) s.click(); return; }
           const ta = c.querySelector('[data-ask-text]'); ta.value = %s; ta.dispatchEvent(new Event('input', {bubbles:true}));
           c.querySelectorAll('[data-act="ask-submit"]')[c.querySelectorAll('[data-act="ask-submit"]').length - 1].click(); })()"""
-           % (sel, json.dumps((want or "").lower()), json.dumps(scenario.get("reply", "I'm not sure, please explain."))))
+           % (sel, json.dumps((want or "").lower()), sel, json.dumps(scenario.get("reply", "I'm not sure, please explain."))))
     else:  # quiz / structured questions: first option, true, or a short typed answer
         # Each click re-renders the card, so find it again before every question (as a learner's next click would).
         js("""(() => { const card = () => document.querySelector('%s'); const fire = el => el.dispatchEvent(new Event('input', {bubbles:true}));
@@ -344,6 +344,7 @@ SCENARIOS = [
     # The screenshot path: an image in a tool result reaches the model and shows in the card (from the blob store).
     dict(name="browser-shot", same_lesson=True, expect=["browser"], followup_contains="sign up",
          prompt="Now go back to {site}/form.html, take a browser screenshot and tell me what the button at the bottom of the form says.",
+         page_prep="document.querySelectorAll('.tool-wrap .tool:not(.open) > .head').forEach(h => { if (/browser|screenshot/i.test(h.textContent)) h.click(); })",
          page_js="JSON.stringify([...document.querySelectorAll('.tool-shot')].map(i => i.naturalWidth))", page_ok=lambda v: bool(v) and v not in ("[]", "[0]")),
     dict(name="visual", quick=True, prompt="Show me an interactive ```visual: a slider from 1 to 10 that sets a circle's radius and shows its area. Keep it small.",
          require=["visuals"]),
@@ -427,6 +428,7 @@ def main():
                 more_p, more_n = sc["verify"](r); problems += more_p; notes += more_n
             if sc.get("cleanup"): sc["cleanup"]()
             if sc.get("page_js"):
+                if sc.get("page_prep"): js(sc["page_prep"]); time.sleep(1.5)   # e.g. open cards (bodies render on open)
                 v = js_value(sc["page_js"])
                 if not sc["page_ok"](v): problems.append("page check failed: %s" % v)
             if sc.get("followup_contains"):
