@@ -28,6 +28,7 @@ final class AppModel: ObservableObject {
     @Published var accessPrompt: Workspace?
     @Published var models: [String: [String]] = [:]
     @Published var modelErrors: [String: String] = [:]
+    private var modelAttempts: [String: Date] = [:]
     /// Provider metadata per model (context window, max output, reasoning, vision, pricing), from the provider's /models.
     @Published var modelMeta: [String: [String: ModelInfo]] = [:]
     // Right-side inspector (files + in-app page viewer).
@@ -286,12 +287,15 @@ final class AppModel: ObservableObject {
     func hasKey(_ p: ProviderConfig) -> Bool { p.keyOptional || KeyStore.shared.key(for: p) != nil }
     var availableProviders: [ProviderConfig] { settings.providers.filter { hasKey($0) } }
 
-    /// Loads a provider's model list: disk cache (24 h) first, network otherwise. One request per provider per day.
+    /// Loads a provider's model list: disk cache (24 h) first, network otherwise. One request per provider per day; a
+    /// failed one is retried (at most every 30 s) instead of leaving the built-in fallback list in place all session.
     func loadModels(_ p: ProviderConfig, force: Bool = false) {
-        if !force, models[p.id] != nil { return }
+        let failedLongAgo = modelErrors[p.id] != nil && Date().timeIntervalSince(modelAttempts[p.id] ?? .distantPast) > 30
+        if !force, models[p.id] != nil, !failedLongAgo { return }
         if !force, let cached = ModelCache.load(p.id) { apply(p, cached); return }
         guard hasKey(p) else { return }
         let key = KeyStore.shared.key(for: p)
+        modelAttempts[p.id] = Date()
         Task {
             do {
                 let list = try await ProviderCatalog.fetchModels(p, apiKey: key)

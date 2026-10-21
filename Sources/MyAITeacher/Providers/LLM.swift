@@ -66,6 +66,10 @@ struct ProviderConfig: Codable, Sendable, Identifiable, Hashable {
     var suggestedModels: [String] = []
     var quirks: [Quirk] = []
     var note: String?
+    /// Model ids the provider retired → what now serves them (a saved lesson on an old id keeps working).
+    var retired: [String: String]?
+
+    func currentModel(_ id: String) -> String { retired?[id] ?? id }
 
     /// The provider's client behind the stream guard (text-embedded tool calls, reasoning tags, end tokens, duplicates).
     func client(apiKey: String?) -> LLMClient {

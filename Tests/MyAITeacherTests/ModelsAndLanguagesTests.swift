@@ -1,0 +1,116 @@
+import XCTest
+@testable import MyAITeacher
+
+/// Model search: any word order, typos, partial words, separators ignored; numbers exact.
+final class FuzzyTests: XCTestCase {
+    private let catalogue: [(provider: String, id: String, model: String)] = [
+        ("NVIDIA NIM", "nvidia", "deepseek-ai/deepseek-v4.1-flash"),
+        ("NVIDIA NIM", "nvidia", "nvidia/llama-3.1-nemotron-ultra-253b-v1"),
+        ("NVIDIA NIM", "nvidia", "qwen/qwen3-coder-480b-a35b-instruct"),
+        ("DeepSeek", "deepseek", "deepseek-flash"),
+        ("DeepSeek", "deepseek", "deepseek-v4-pro"),
+        ("OpenRouter", "openrouter", "deepseek/deepseek-v4-pro"),
+        ("OpenRouter", "openrouter", "anthropic/claude-sonnet-5.5"),
+        ("OpenRouter", "openrouter", "openai/gpt-5.4"),
+        ("MiniMax", "minimax", "MiniMax-M3"),
+        ("MiniMax", "minimax", "MiniMax-M3.1-Flash"),
+    ]
+
+    private func search(_ q: String) -> [String] {
+        catalogue.compactMap { c in Fuzzy.score(q, [c.provider, c.id, c.model]).map { ("\(c.id):\(c.model)", $0) } }
+            .sorted { $0.1 > $1.1 }.map(\.0)
+    }
+
+    func testWordsInAnyOrderAndWithTypos() {
+        let nim = ["nvidia:deepseek-ai/deepseek-v4.1-flash"]
+        for q in ["nvidia deepseek", "deepseek nvidia", "nvdia deepsek", "deepsek nvidai", "NVIDIA  DeepSeek", "deeps nvid", "nvidia-deepseek"] {
+            XCTAssertEqual(search(q), nim, q)
+        }
+    }
+
+    func testPartialWordsSeparatorsAndRanking() {
+        XCTAssertEqual(Set(search("deepseek pro")), ["deepseek:deepseek-v4-pro", "openrouter:deepseek/deepseek-v4-pro"])
+        XCTAssertEqual(Set(search("v4pro")), ["deepseek:deepseek-v4-pro", "openrouter:deepseek/deepseek-v4-pro"])
+        XCTAssertEqual(search("deepseek flash").first, "deepseek:deepseek-flash", "the plainest exact match ranks first")
+        XCTAssertEqual(search("sonet 5.5"), ["openrouter:anthropic/claude-sonnet-5.5"])
+        XCTAssertEqual(search("gpt5"), ["openrouter:openai/gpt-5.4"])
+        XCTAssertEqual(search("minimax m3").first, "minimax:MiniMax-M3")
+        XCTAssertEqual(search("nemotorn ultra"), ["nvidia:nvidia/llama-3.1-nemotron-ultra-253b-v1"])
+        XCTAssertEqual(search("qwen coder"), ["nvidia:qwen/qwen3-coder-480b-a35b-instruct"])
+    }
+
+    func testNumbersMustMatchAndNonsenseMatchesNothing() {
+        XCTAssertTrue(search("deepseek v3").isEmpty, "a version is never 'close enough'")
+        XCTAssertTrue(search("m4").isEmpty)
+        XCTAssertTrue(search("zebra").isEmpty)
+        XCTAssertEqual(search("").count, catalogue.count, "an empty query keeps everything")
+    }
+
+    func testDistance() {
+        XCTAssertEqual(Fuzzy.distance("nvdia", "nvidia", limit: 2), 1)
+        XCTAssertEqual(Fuzzy.distance("nvidai", "nvidia", limit: 2), 1, "swapped neighbours are one edit")
+        XCTAssertEqual(Fuzzy.distance("deepsek", "deepseek", limit: 2), 1)
+        XCTAssertEqual(Fuzzy.distance("abc", "xyz", limit: 1), 2, "cut off above the limit")
+    }
+}
+
+/// DeepSeek V4: thinking is on unless disabled, retired ids still work, reasoning goes back on every turn.
+final class DeepSeekTests: XCTestCase {
+    private let ds = ProviderCatalog.presets.first { $0.id == "deepseek" }!
+
+    func testThinkingOffIsExplicitAndOnCarriesEffort() {
+        let c = OpenAIClient(config: ds, apiKey: nil)
+        var r = LLMRequest(model: "deepseek-chat", system: "", messages: [ChatMessage(role: .user, blocks: [.text("hi")])])
+        var b = c.buildBody(r)
+        XCTAssertEqual(b["thinking"]?["type"]?.string, "disabled", "off must be said: DeepSeek thinks by default")
+        XCTAssertNil(b["reasoning_effort"])
+        XCTAssertEqual(b["model"]?.string, "deepseek-flash", "a retired id goes to what serves it now")
+        r.thinking = .low; r.model = "deepseek-v4-pro"
+        b = c.buildBody(r)
+        XCTAssertEqual(b["thinking"]?["type"]?.string, "enabled"); XCTAssertEqual(b["reasoning_effort"]?.string, "low")
+        XCTAssertEqual(b["model"]?.string, "deepseek-v4-pro")
+        XCTAssertEqual(ds.defaultModel, "deepseek-flash")
+    }
+
+    func testReasoningIsReplayedOnEveryAssistantTurn() {
+        let c = OpenAIClient(config: ds, apiKey: nil)
+        let msgs = [ChatMessage(role: .user, blocks: [.text("q1")]),
+                    ChatMessage(role: .assistant, blocks: [.thinking("plain turn reasoning"), .text("a1")]),
+                    ChatMessage(role: .user, blocks: [.text("q2")]),
+                    ChatMessage(role: .assistant, blocks: [.thinking("tool turn reasoning"), .toolUse(id: "t1", name: "math", input: ["x": 1])]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "t1", name: "math", content: "2")])]
+        let out = c.convert(LLMRequest(model: "deepseek-v4-pro", system: "", messages: msgs, thinking: .high))
+        let assistants = out.filter { $0["role"]?.string == "assistant" }
+        XCTAssertEqual(assistants.map { $0["reasoning_content"]?.string }, ["plain turn reasoning", "tool turn reasoning"])
+    }
+
+    func testModelListMetadata() {
+        let entry = JSON.parse(#"{"id":"deepseek-v4-pro","object":"model","owned_by":"deepseek","name":"DeepSeek-V4-Pro","context_window":1000000,"max_output_tokens":384000,"input_modalities":["text"],"effort":{"supported_levels":["low","high","max"],"default_level":"high"}}"#)!
+        let i = ModelInfo.parse(id: "deepseek-v4-pro", entry, provider: ds)
+        XCTAssertEqual(i.contextWindow, 1_000_000); XCTAssertEqual(i.maxOutput, 384_000)
+        XCTAssertEqual(i.efforts, ["low", "high", "max"]); XCTAssertEqual(i.reasoning, true); XCTAssertEqual(i.vision, false)
+    }
+}
+
+/// Zig snippets run like the other compiled languages: built in scratch, run in the lesson's folder, nothing left behind.
+final class ZigRunTests: XCTestCase {
+    func testZigRunsAndLeavesTheFolderClean() async throws {
+        try XCTSkipIf(ProcessRunner.which("zig") == nil, "zig not installed")
+        let lesson = FileManager.default.temporaryDirectory.appendingPathComponent("zig-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: lesson, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lesson) }
+        try "from the lesson".write(to: lesson.appendingPathComponent("note.txt"), atomically: true, encoding: .utf8)
+        // Printing only: Zig's file APIs move between releases (0.17 dropped std.fs.cwd()).
+        let code = """
+        const std = @import("std");
+        pub fn main() void {
+            const n: u8 = 2 + 3;
+            std.debug.print("sum={d}\\n", .{n});
+        }
+        """
+        let r = try await RunCodeTool.execute(language: "zig", code: code, stdin: nil, timeout: 120, workingDirectory: lesson)
+        XCTAssertFalse(r.failed, r.text)
+        XCTAssertTrue(r.text.contains("sum=5"), r.text)
+        XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: lesson.path), ["note.txt"], "no .zig-cache or binary in the lesson's folder")
+    }
+}

@@ -7,6 +7,7 @@ enum Quirk: String, Codable, Sendable {
     case openrouterReasoning      // send `reasoning: {effort}`
     case reasoningContentBack     // replay `reasoning_content` on assistant tool-call turns (DeepSeek, Kimi)
     case chatTemplateThinking     // vLLM/NIM hosts: "off" goes in `chat_template_kwargs` (thinking / enable_thinking)
+    case deepseekThinking         // DeepSeek V4: `thinking: {type: enabled|disabled}` (on by default) + `reasoning_effort`
     case noStreamOptions          // server rejects `stream_options`
 }
 
@@ -168,7 +169,7 @@ struct OpenAIClient: LLMClient {
     func buildBody(_ r: LLMRequest) -> JSON {
         let q = Set(config.quirks)
         var body: [String: JSON] = [
-            "model": .string(r.model),
+            "model": .string(config.currentModel(r.model)),
             "stream": true,
             "messages": .array(convert(r)),
         ]
@@ -188,8 +189,10 @@ struct OpenAIClient: LLMClient {
         if r.thinking == .off, q.contains(.chatTemplateThinking), let key = Self.templateThinkingKey(r.model) {
             body["chat_template_kwargs"] = .object([key: false])
         }
+        // DeepSeek thinks unless told not to (default effort high); it maps medium/xhigh to its own low/high/max.
+        if q.contains(.deepseekThinking) { body["thinking"] = ["type": r.thinking == .off ? "disabled" : "enabled"] }
         if r.thinking != .off {
-            if q.contains(.reasoningEffort) { body["reasoning_effort"] = .string(r.thinking.rawValue) }
+            if q.contains(.reasoningEffort) || q.contains(.deepseekThinking) { body["reasoning_effort"] = .string(r.thinking.rawValue) }
             if q.contains(.openrouterReasoning) { body["reasoning"] = ["effort": .string(r.thinking.rawValue)] }
         } else if let t = r.temperature {
             body["temperature"] = .number(t)
@@ -249,8 +252,9 @@ struct OpenAIClient: LLMClient {
                         if let sig = c.signature { call["extra_content"] = ["google": ["thought_signature": .string(sig)]] }
                         return .object(call)
                     })
-                    if replayReasoning, !thinking.isEmpty { o["reasoning_content"] = .string(thinking) }
                 }
+                // With tools, DeepSeek V4 needs every earlier turn's reasoning back (400 otherwise), not only tool-call turns.
+                if replayReasoning, !thinking.isEmpty { o["reasoning_content"] = .string(thinking) }
                 if text.isEmpty && calls.isEmpty { continue }
                 out.append(.object(o))
             }

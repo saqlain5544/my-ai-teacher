@@ -37,6 +37,14 @@ enum DebugHooks {
             transcript?.evaluateJavaScript(cmd["js"]?.string ?? "") { r, e in
                 AppLog.write("eval → \(e.map { "error: \($0.localizedDescription)" } ?? String(describing: r ?? "nil").prefix(4000))")
             }
+        case "models":   // reload every keyed provider's live list, then log what each returned (listing models is free)
+            for p in app.availableProviders { app.loadModels(p, force: true) }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 10) {
+                for p in app.availableProviders {
+                    let list = app.modelList(p)
+                    AppLog.write("models \(p.id): \(list.count) [\(list.prefix(8).joined(separator: ", "))]\(app.modelErrors[p.id].map { " error: \($0.prefix(160))" } ?? "")")
+                }
+            }
         case "shed":   // what memory pressure does: every rebuildable cache goes (the log says how much was freed)
             MemoryGovernor.shared.shed(critical: cmd["critical"]?.bool == true, reason: "debug")
         case "send":

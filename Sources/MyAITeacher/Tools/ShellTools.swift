@@ -52,7 +52,7 @@ struct RunCodeTool: Tool {
     func timeout(_ input: JSON) -> Double? { Double(min(300, input["timeout"]?.int ?? 30)) + 60 }   // + compile time
     let name = "run_code"
     let description = """
-    Execute a code snippet and return stdout/stderr. Languages: python, javascript, typescript, swift, c, cpp, go, rust, ruby, bash, java. \
+    Execute a code snippet and return stdout/stderr. Languages: python, javascript, typescript, swift, c, cpp, go, rust, zig, ruby, bash, java. \
     Use it to verify answers, demonstrate concepts, check the learner's code, or compute results exactly. Optional `stdin`. \
     The program runs in the lesson's folder, so relative paths refer to the learner's files.
     """
@@ -90,7 +90,7 @@ struct RunCodeTool: Tool {
         }
     }
 
-    static let runnable: Set<String> = ["python", "javascript", "typescript", "swift", "c", "cpp", "go", "rust", "ruby", "bash", "java"]
+    static let runnable: Set<String> = ["python", "javascript", "typescript", "swift", "c", "cpp", "go", "rust", "ruby", "bash", "java", "zig"]
 
     /// Sources/binaries live in a scratch dir; the program runs in `workingDirectory` (the lesson's folder)
     /// so relative paths like open("notes.txt") work.
@@ -127,6 +127,9 @@ struct RunCodeTool: Tool {
             let src = try write("main.rs")
             steps = [(try need("rustc"), ["--edition", "2021", "-O", src, "-o", dir.appendingPathComponent("main").path]), (dir.appendingPathComponent("main").path, [])]
         case "ruby": steps = [(try need("ruby"), [try write("main.rb")])]
+        case "zig":   // built in the scratch dir (its .zig-cache stays there), run in the lesson's folder
+            let src = try write("main.zig"), bin = dir.appendingPathComponent("main").path
+            steps = [(try need("zig"), ["build-exe", src, "-femit-bin=" + bin]), (bin, [])]
         case "bash": steps = [("/bin/zsh", [try write("main.sh")])]
         case "java":
             let cls = code.range(of: #"public\s+class\s+(\w+)"#, options: .regularExpression)

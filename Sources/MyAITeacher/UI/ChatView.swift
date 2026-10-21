@@ -138,8 +138,8 @@ struct ModelPickerPopover: View {
             Divider()
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 2, pinnedViews: [.sectionHeaders]) {
-                    ForEach(app.settings.providers) { p in
-                        providerSection(p)
+                    ForEach(sections(), id: \.provider.id) { s in
+                        providerSection(s.provider, s.models)
                     }
                 }.padding(.vertical, 6)
             }
@@ -148,10 +148,21 @@ struct ModelPickerPopover: View {
         .onAppear { for p in app.availableProviders { app.loadModels(p) } }
     }
 
-    @ViewBuilder private func providerSection(_ p: ProviderConfig) -> some View {
+    /// Every provider with its models; while searching, only matches (fuzzy: any word order, typos, partial words),
+    /// best first, and the providers with the best match on top.
+    private func sections() -> [(provider: ProviderConfig, models: [String])] {
+        let providers = app.settings.providers
+        guard !search.trimmingCharacters(in: .whitespaces).isEmpty else { return providers.map { ($0, app.modelList($0)) } }
+        return providers.compactMap { p -> (ProviderConfig, [String], Double)? in
+            let meta = app.modelMeta[p.id]
+            let hits = app.modelList(p).compactMap { m in Fuzzy.score(search, [p.name, p.id, m, meta?[m]?.name ?? ""]).map { (m, $0) } }
+                .sorted { $0.1 > $1.1 }
+            return hits.first.map { (p, hits.map(\.0), $0.1) }
+        }.sorted { $0.2 > $1.2 }.map { ($0.0, $0.1) }
+    }
+
+    @ViewBuilder private func providerSection(_ p: ProviderConfig, _ filtered: [String]) -> some View {
         let hasKey = app.hasKey(p)
-        let all = app.modelList(p)
-        let filtered = search.isEmpty ? all : all.filter { $0.localizedCaseInsensitiveContains(search) || p.name.localizedCaseInsensitiveContains(search) }
         if !filtered.isEmpty || (search.isEmpty) {
             Section {
                 if !hasKey {
@@ -188,7 +199,16 @@ struct ModelPickerPopover: View {
                     Text(p.name).font(.caption.bold()).foregroundStyle(.secondary)
                     if let n = p.note { Text(n).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
                     Spacer()
-                    if hasKey { Circle().fill(.green).frame(width: 6, height: 6) }
+                    // A failed live list shows the built-in fallback: say so, and offer a retry, rather than look hard-coded.
+                    if hasKey, let err = app.modelErrors[p.id] {
+                        Image(systemName: "exclamationmark.triangle.fill").font(.caption2).foregroundStyle(.orange)
+                            .help("Couldn't load \(p.name)'s live model list (\(err.prefix(120))). Showing the built-in list.")
+                    }
+                    if hasKey {
+                        Button { app.loadModels(p, force: true) } label: { Image(systemName: "arrow.clockwise").font(.caption2) }
+                            .buttonStyle(.borderless).help("Reload \(p.name)'s models")
+                        Circle().fill(.green).frame(width: 6, height: 6)
+                    }
                 }
                 .padding(.horizontal, 12).padding(.vertical, 4)
                 .background(.regularMaterial)

@@ -165,7 +165,7 @@ struct AnthropicClient: LLMClient {
     func buildBody(_ r: LLMRequest) -> JSON {
         let adaptive = Self.isAdaptiveClaude(r.model)
         var body: [String: JSON] = [
-            "model": .string(r.model),
+            "model": .string(config.currentModel(r.model)),
             "max_tokens": .number(Double(r.maxTokens)),
             "stream": true,
         ]

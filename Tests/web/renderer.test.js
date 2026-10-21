@@ -389,6 +389,31 @@
     ok($('.katex', el) && $('.code-block', el), 'math and code render after a drop'); noErrors(el, 'after drop');
   });
 
+  test('zig is fully highlighted (keywords, builtins, sized ints, strings, labels, errors)', async () => {
+    const el = show('```zig\nconst std = @import("std");\n\n/// Adds two numbers.\npub fn add(a: u8, b: i32) !u64 {\n    const x: u7 = 0x1F_FF;\n    const s = "hi\\n";\n    const blk_val = blk: {\n        break :blk 1;\n    };\n    if (a == 0) return error.OutOfMemory;\n    std.debug.print(\\\\multi line\n    , .{});\n    return @intCast(a + b + blk_val + x);\n}\n```');
+    const code = await until(() => { const c = $('.code-block code', el); return c && c.querySelector('.hljs-keyword') && c; }, 'zig highlighted', 4000);
+    const txt = sel => $$(sel, code).map(n => n.textContent);
+    ok(txt('.hljs-keyword').includes('const') && txt('.hljs-keyword').includes('pub') && txt('.hljs-keyword').includes('fn'), 'keywords');
+    ok(txt('.hljs-built_in').includes('@import') && txt('.hljs-built_in').includes('@intCast'), 'builtins');
+    ok(['u8', 'i32', 'u64', 'u7'].every(t => txt('.hljs-type').includes(t)), 'sized ints are types: ' + txt('.hljs-type'));
+    ok(txt('.hljs-title.function_').includes('add'), 'function name');
+    ok(txt('.hljs-string').some(t => t.includes('"std"')) && txt('.hljs-string').some(t => t.startsWith('\\\\')), 'strings, multiline too');
+    ok(txt('.hljs-comment').some(t => t.includes('Adds two')), 'doc comment');
+    ok(txt('.hljs-symbol').includes('OutOfMemory') && txt('.hljs-symbol').includes(':blk'), 'error value and label: ' + txt('.hljs-symbol'));
+    ok(txt('.hljs-number').includes('0x1F_FF'), 'hex with underscores');
+    ok(!txt('.hljs-title.function_.invoke__').includes('if'), 'if ( is not a call');
+  });
+
+  test('other major languages highlight: our grammars and aliases', async () => {
+    const samples = { solidity: 'contract Token { mapping(address => uint256) balances; }', hcl: 'resource "aws_instance" "web" {\n  ami = "ami-1"\n}',
+      gleam: 'pub fn main() { io.println("hi") }', odin: 'main :: proc() { fmt.println("hi") }', cobol: 'IDENTIFICATION DIVISION.\nPROGRAM-ID. HELLO.',
+      toml: '[package]\nname = "x"', terraform: 'variable "region" {\n  default = "eu"\n}', pascal: 'begin writeln(1) end.', cuda: '__global__ void k(int *a) { return; }' };
+    for (const [lang, src] of Object.entries(samples)) {
+      const el = show('```' + lang + '\n' + src + '\n```');
+      await until(() => { const c = $('.code-block code', el); return c && c.querySelector('[class^="hljs-"]'); }, lang + ' highlighted', 4000);
+    }
+  });
+
   test('invalid component JSON shows an inline error, not a crash', () => {
     const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');

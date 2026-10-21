@@ -16,9 +16,11 @@ enum ProviderCatalog {
                        envKeys: ["MINIMAX_API_KEY"], defaultModel: "MiniMax-M3",
                        suggestedModels: ["MiniMax-M3", "MiniMax-M3.1-Flash", "MiniMax-M2.7"],
                        note: "Anthropic-compatible endpoint (token plan)."),
+        // V4 (api-docs.deepseek.com, 2026-10): deepseek-flash (V4.1 Flash) and deepseek-v4-pro; the live /models list wins.
         ProviderConfig(id: "deepseek", name: "DeepSeek", api: .openai, baseURL: "https://api.deepseek.com/v1",
-                       envKeys: ["DEEPSEEK_API_KEY"], defaultModel: "deepseek-chat", supportsVision: false,
-                       suggestedModels: ["deepseek-chat", "deepseek-reasoner"], quirks: [.reasoningContentBack]),
+                       envKeys: ["DEEPSEEK_API_KEY"], defaultModel: "deepseek-flash", supportsVision: false,
+                       suggestedModels: ["deepseek-flash", "deepseek-v4-pro"], quirks: [.reasoningContentBack, .deepseekThinking],
+                       retired: ["deepseek-chat": "deepseek-flash", "deepseek-reasoner": "deepseek-flash", "deepseek-v4-flash": "deepseek-flash"]),
         ProviderConfig(id: "openrouter", name: "OpenRouter", api: .openai, baseURL: "https://openrouter.ai/api/v1",
                        envKeys: ["OPENROUTER_API_KEY"], defaultModel: "openrouter/auto",
                        headers: ["HTTP-Referer": "https://github.com/my-ai-teacher", "X-Title": "My AI Teacher"],
@@ -115,7 +117,7 @@ struct ModelInfo: Codable, Sendable, Hashable {
         i.contextWindow = m["context_length"]?.int ?? m["context_window"]?.int ?? m["inputTokenLimit"]?.int ?? m["max_input_tokens"]?.int
             ?? m["max_context_length"]?.int ?? m["top_provider"]?["context_length"]?.int
         i.maxOutput = m["top_provider"]?["max_completion_tokens"]?.int ?? m["max_completion_tokens"]?.int ?? m["outputTokenLimit"]?.int
-            ?? m["max_tokens"]?.int ?? m["max_output_length"]?.int
+            ?? m["max_tokens"]?.int ?? m["max_output_length"]?.int ?? m["max_output_tokens"]?.int
         let params = (m["supported_parameters"]?.array ?? m["supported_features"]?.array ?? []).compactMap(\.string)
         if !params.isEmpty {
             i.reasoning = params.contains("reasoning") || params.contains("include_reasoning") || params.contains("reasoning_effort")
@@ -133,8 +135,10 @@ struct ModelInfo: Codable, Sendable, Hashable {
             i.free = pr == 0 && co == 0
         }
         if id.hasSuffix(":free") { i.free = true }
+        // DeepSeek lists the effort levels a model takes: {"effort": {"supported_levels": [...], "default_level": …}}.
+        if let levels = m["effort"]?["supported_levels"]?.array?.compactMap(\.string), !levels.isEmpty { i.reasoning = true; i.efforts = levels }
         if AnthropicClient.isAdaptiveClaude(id) { i.reasoning = true; i.efforts = ["low", "medium", "high", "xhigh", "max"] }
-        else if i.reasoning == true { i.efforts = ["low", "medium", "high"] }
+        else if i.reasoning == true, i.efforts == nil { i.efforts = ["low", "medium", "high"] }
         return i
     }
 }

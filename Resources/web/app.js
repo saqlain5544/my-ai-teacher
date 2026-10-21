@@ -147,8 +147,13 @@
   }
 
   // ───────────────────────── Fences ─────────────────────────
-  const RUNNABLE = new Set(['python', 'py', 'python3', 'javascript', 'js', 'node', 'typescript', 'ts', 'swift', 'c', 'cpp', 'c++', 'go', 'golang', 'rust', 'rs', 'ruby', 'rb', 'bash', 'sh', 'zsh', 'shell', 'java']);
-  const ALIAS = { js: 'javascript', ts: 'typescript', py: 'python', python3: 'python', rb: 'ruby', sh: 'bash', zsh: 'bash', shell: 'bash', console: 'bash', 'c++': 'cpp', cs: 'csharp', 'c#': 'csharp', kt: 'kotlin', rs: 'rust', golang: 'go', yml: 'yaml', md: 'markdown', html: 'xml', svg: 'xml', tex: 'latex', ps1: 'powershell', objc: 'objectivec', hs: 'haskell', ex: 'elixir', exs: 'elixir', erl: 'erlang', ml: 'ocaml', fs: 'fsharp', jl: 'julia', asm: 'x86asm', docker: 'dockerfile', make: 'makefile', proto: 'protobuf', vb: 'vbnet', clj: 'clojure', scm: 'scheme', el: 'lisp', tsx: 'typescript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', h: 'c', hpp: 'cpp', m: 'objectivec', pl: 'perl', text: 'plaintext', txt: 'plaintext' };
+  const RUNNABLE = new Set(['python', 'py', 'python3', 'javascript', 'js', 'node', 'typescript', 'ts', 'swift', 'c', 'cpp', 'c++', 'go', 'golang', 'rust', 'rs', 'ruby', 'rb', 'bash', 'sh', 'zsh', 'shell', 'java', 'zig']);
+  const ALIAS = { js: 'javascript', ts: 'typescript', py: 'python', python3: 'python', rb: 'ruby', sh: 'bash', zsh: 'bash', shell: 'bash', console: 'bash', 'c++': 'cpp', cs: 'csharp', 'c#': 'csharp', kt: 'kotlin', rs: 'rust', golang: 'go', yml: 'yaml', md: 'markdown', html: 'xml', svg: 'xml', tex: 'latex', ps1: 'powershell', objc: 'objectivec', hs: 'haskell', ex: 'elixir', exs: 'elixir', erl: 'erlang', ml: 'ocaml', fs: 'fsharp', jl: 'julia', asm: 'x86asm', docker: 'dockerfile', make: 'makefile', proto: 'protobuf', vb: 'vbnet', clj: 'clojure', scm: 'scheme', el: 'lisp', tsx: 'typescript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript', h: 'c', hpp: 'cpp', m: 'objectivec', pl: 'perl', text: 'plaintext', txt: 'plaintext',
+    // Languages highlight.js lacks: grammars of ours in langs/ (zig, solidity, hcl, gleam, odin, cobol), the rest by kinship.
+    zon: 'zig', sol: 'solidity', terraform: 'hcl', tf: 'hcl', tfvars: 'hcl', opentofu: 'hcl', cob: 'cobol', cbl: 'cobol',
+    toml: 'ini', pascal: 'delphi', pas: 'delphi', racket: 'scheme', rkt: 'scheme', cuda: 'cpp', cu: 'cpp', hlsl: 'cpp',
+    metal: 'cpp', svelte: 'xml', vue: 'xml', mojo: 'python', fish: 'bash', ksh: 'bash', 'objective-c': 'objectivec' };
+  const OWN_LANGS = ['zig', 'solidity', 'hcl', 'gleam', 'odin', 'cobol'];
   const hlCache = new Cache(2000, 4e6);
   const loadingLangs = new Set();
   const codeSources = new Cache(1500, 4e6);
@@ -161,7 +166,7 @@
     const name = ALIAS[lang] || lang;
     if (name && name !== 'plaintext') {
       if (hljs.getLanguage(name)) { try { out = hljs.highlight(code, { language: name, ignoreIllegals: true }).value; } catch (_) {} }
-      else if (window.HLJS_LANGS && window.HLJS_LANGS.includes(name)) loadLang(name);
+      else if (OWN_LANGS.includes(name) || (window.HLJS_LANGS && window.HLJS_LANGS.includes(name))) loadLang(name);
     }
     if (out === null) return esc(code);
     hlCache.set(key, out);
@@ -171,7 +176,7 @@
     if (loadingLangs.has(name)) return;
     loadingLangs.add(name);
     const s = document.createElement('script');
-    s.src = 'vendor/hljs/languages/' + name + '.min.js';
+    s.src = OWN_LANGS.includes(name) ? 'langs/' + name + '.js' : 'vendor/hljs/languages/' + name + '.min.js';
     s.onload = () => document.querySelectorAll('.code-block[data-lang]').forEach(el => {
       const l = el.getAttribute('data-lang'); if ((ALIAS[l] || l) !== name) return;
       const c = el.querySelector('code'); const src = codeSources.get(el.getAttribute('data-key'));
