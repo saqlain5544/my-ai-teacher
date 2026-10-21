@@ -34,7 +34,7 @@ struct WorkspaceRef: Codable, Hashable, Identifiable, Sendable {
     var path: String
     var lastOpened: Date
     var id: String { path }
-    var name: String { (path as NSString).lastPathComponent }
+    var name: String { path == AppPaths.quickFolder.path ? "Quick questions" : (path as NSString).lastPathComponent }
 }
 
 /// A folder the teacher works in. Its state (lessons, folder memory, outputs) lives in `<folder>/.teacher/`.
@@ -49,7 +49,7 @@ final class Workspace: @unchecked Sendable, Identifiable {
     let memory: MemoryStore
 
     var id: String { url.path }
-    var name: String { url.lastPathComponent }
+    var name: String { url.path == AppPaths.quickFolder.path ? "Quick questions" : url.lastPathComponent }
     var outputsDir: URL { stateDir.appendingPathComponent("outputs", isDirectory: true) }
     var attachmentsDir: URL { stateDir.appendingPathComponent("attachments", isDirectory: true) }
 

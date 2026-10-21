@@ -16,6 +16,12 @@ enum AppPaths {
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
     }()
+    /// Lessons that don't belong to a folder ("Quick questions"). Full access by default.
+    static let quickFolder: URL = {
+        let url = FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".teacher/no-dir-conversations", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }()
     static var webResources: URL {
         if let r = Bundle.main.resourceURL?.appendingPathComponent("web"),
            FileManager.default.fileExists(atPath: r.appendingPathComponent("index.html").path) { return r }

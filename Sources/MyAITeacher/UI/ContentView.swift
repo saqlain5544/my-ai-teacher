@@ -171,6 +171,9 @@ struct FolderSwitcher: View {
             if ws.url != app.settings.defaultFolder {
                 Button("Default Folder") { app.openFolder(app.settings.defaultFolder) }
             }
+            if !app.isQuick(ws) {
+                Button("Quick Questions (no folder)") { app.openFolder(AppPaths.quickFolder) }
+            }
             Divider()
             Button("Show Files") { app.reveal(ws.url) }
         } label: {

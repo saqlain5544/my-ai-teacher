@@ -150,6 +150,14 @@ final class TeachingContextExtension: AgentExtension {
         // Folder context.
         let ws = s.workspace
         let access = app.access(for: ws)
+        if app.isQuick(ws) {
+            out.append("""
+            # Quick question
+            This lesson isn't tied to a project folder. Answer directly and concisely; scratch files may go in \(ws.url.path) \
+            (full access). You can still read files anywhere on this Mac.
+            """)
+            return out
+        }
         var f = """
         # Folder
         You are working in the learner's folder “\(ws.name)” (\(ws.url.path)). Relative paths resolve here.

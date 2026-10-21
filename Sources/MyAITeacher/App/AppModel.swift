@@ -95,10 +95,19 @@ final class AppModel: ObservableObject {
 
     // MARK: Folders
 
-    func access(for ws: Workspace) -> FolderAccess { settings.value.folderAccess[ws.url.path] ?? .read }
+    func access(for ws: Workspace) -> FolderAccess {
+        settings.value.folderAccess[ws.url.path] ?? (isQuick(ws) ? .full : .read)
+    }
+    func isQuick(_ ws: Workspace) -> Bool { ws.url.standardizedFileURL.path == AppPaths.quickFolder.standardizedFileURL.path }
+
+    /// A quick question outside any folder: switch to the quick-questions space and start a fresh lesson.
+    func quickQuestion() {
+        if !isQuick(workspace) { openFolder(AppPaths.quickFolder) }
+        newLesson()
+    }
 
     func setAccess(_ level: FolderAccess, for ws: Workspace) {
-        if level == .read { settings.value.folderAccess.removeValue(forKey: ws.url.path) }
+        if level == .read && !isQuick(ws) { settings.value.folderAccess.removeValue(forKey: ws.url.path) }
         else { settings.value.folderAccess[ws.url.path] = level }
         objectWillChange.send()
     }
@@ -135,7 +144,7 @@ final class AppModel: ObservableObject {
         refreshCounts()
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         EventBus.publish(.workspaceChanged(path: ws.url.path))
-        if settings.value.folderAccess[ws.url.path] == nil && ws.url != settings.defaultFolder { accessPrompt = ws }
+        if settings.value.folderAccess[ws.url.path] == nil && ws.url != settings.defaultFolder && !isQuick(ws) { accessPrompt = ws }
     }
 
     private func touchRecent(_ ws: Workspace) {
