@@ -53,6 +53,7 @@ enum DebugHooks {
             case "memory": app.selection = .memory
             case "progress": app.selection = .progress
             case "flashcards": app.selection = .flashcards
+            case "insights": app.selection = .insights
             default: if let id = app.conversations.first?.id { app.selection = .lesson(id) }
             }
         case "newLesson": app.newLesson(mode: cmd["mode"]?.string.flatMap(TeachingMode.init(rawValue:)) ?? .tutor)

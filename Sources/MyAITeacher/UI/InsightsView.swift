@@ -233,6 +233,12 @@ struct InsightsView: View {
         }
     }
 
+    /// Short model name for chart axes (the table below has the full provider · model).
+    private func shortModel(_ m: String) -> String {
+        let last = m.split(separator: "/").last.map(String.init) ?? m
+        return last.count > 26 ? String(last.prefix(25)) + "…" : last
+    }
+
     @ViewBuilder private var cacheChart: some View {
         let pts = data.byDay.compactMap { d in d.row.cacheHitRate.map { (date(d.day), $0) } }
         if pts.isEmpty { empty("No prompt tokens yet.") } else {
@@ -254,13 +260,14 @@ struct InsightsView: View {
             VStack(alignment: .leading, spacing: 12) {
                 Chart {
                     ForEach(data.ttft.prefix(8)) { q in
-                        if let p50 = q.p50 { BarMark(x: .value("ms", p50 / 1000), y: .value("Model", label(q.provider, q.model))).foregroundStyle(by: .value("Stat", "TTFT p50")).position(by: .value("Stat", "p50")) }
-                        if let p95 = q.p95 { BarMark(x: .value("ms", p95 / 1000), y: .value("Model", label(q.provider, q.model))).foregroundStyle(by: .value("Stat", "TTFT p95")).position(by: .value("Stat", "p95")) }
+                        if let p50 = q.p50 { BarMark(x: .value("ms", p50 / 1000), y: .value("Model", shortModel(q.model))).foregroundStyle(by: .value("Stat", "TTFT p50")).position(by: .value("Stat", "p50")) }
+                        if let p95 = q.p95 { BarMark(x: .value("ms", p95 / 1000), y: .value("Model", shortModel(q.model))).foregroundStyle(by: .value("Stat", "TTFT p95")).position(by: .value("Stat", "p95")) }
                     }
                 }
                 .chartForegroundStyleScale(["TTFT p50": Color.blue, "TTFT p95": Color.blue.opacity(0.45)])
                 .chartXAxisLabel("seconds to first token")
-                .frame(height: CGFloat(max(1, min(8, data.ttft.count))) * 44 + 30)
+                .chartYAxis { AxisMarks(position: .leading) { _ in AxisValueLabel().font(.caption) } }
+                .frame(height: CGFloat(max(1, min(8, data.ttft.count))) * 56 + 44)
                 Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 5) {
                     GridRow {
                         ForEach(["Model", "Calls", "TTFT p50", "TTFT p95", "Decode p50", "Decode p95", "Call p50", "Call p95", "Cache hit", "Errors"], id: \.self) { Text($0).bold() }
