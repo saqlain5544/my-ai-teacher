@@ -77,7 +77,6 @@ struct SubAgentWebView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let c = context.coordinator
         let config = WKWebViewConfiguration()
-        config.processPool = TranscriptView.Coordinator.pool
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
@@ -139,7 +138,7 @@ struct SubAgentWebView: NSViewRepresentable {
             exec("T.status(\(JSON.string(status ?? "").compact), \(running))")
         }
 
-        nonisolated func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+        func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any] else { return }
             let j = JSON(any: body)
             MainActor.assumeIsolated {

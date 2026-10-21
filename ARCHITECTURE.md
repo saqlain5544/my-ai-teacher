@@ -121,6 +121,11 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 * Every tool has `timeout(_:)` (nil only for tools that wait for the learner); `runBounded` enforces it with
   `withDeadline`, which returns on time even if the work ignores cancellation (it is abandoned, never awaited).
   web_search 30 s, web_fetch 40 s, bash/run_code their own limit + margin, sub-agent budget + report.
+* Abandoned work still costs CPU and memory, so in-process work checks `Task.isCancelled` itself: the HTML
+  converter every 256 nodes, the glob walk every 512 entries; subprocesses are terminated on cancel.
+* The HTML converter is bounded: nesting past 40 levels is read as plain text with an explicit stack (no
+  recursion, so no stack overflow), output stops at 400k characters, element text comes from an iterative capped
+  walk (`XMLNode.stringValue` is O(text × depth)), and each child renders in its own autorelease pool.
 * A model stream that goes silent for 120 s fails (providers send keep-alives while thinking).
 
 ## Provider stream guard

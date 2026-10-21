@@ -11,7 +11,10 @@
   function safe(name, fn) {
     return (code, ctx, env) => {
       if (env && env.open) return '<div class="comp"><div class="diagram-pending">Building ' + name + '…</div></div>';
-      try { return fn(parse(code), ctx, code); } catch (e) { return err(ctx, name, e, code); }
+      let spec;
+      // Prose instead of a JSON spec (the model wrote the content itself): show it as written, not an error.
+      try { spec = parse(code); } catch (e) { return /^\s*[\[{]/.test(code) ? err(ctx, name, e, code) : box('md', 'tx' + ctx.hash(code), ctx.md(code)); }
+      try { return fn(spec, ctx, code); } catch (e) { return err(ctx, name, e, code); }
     };
   }
 
@@ -168,8 +171,24 @@
 
   R.registerFence(['compare', 'comparison'], (code, ctx, env) => {
     if (/^\s*\|.*\|\s*\n\s*\|[\s:|-]+\|/.test(code) && !(env && env.open)) return box('compare md', 'cp' + ctx.hash(code), ctx.md(code));   // a markdown table
+    const rows = !(env && env.open) && !/^\s*[\[{]/.test(code) && labelled(code);
+    if (rows) return box('compare md', 'cp' + ctx.hash(code), '<table class="compare-table"><tbody>' + rows.map(([k, v]) =>
+      '<tr><th>' + ctx.inline(k) + '</th><td>' + (v.includes('\n') ? ctx.md(v) : ctx.inline(v)) + '</td></tr>').join('') + '</tbody></table>');
     return compareJSON(code, ctx, env);
   });
+  // "Before: …" / "After: …" lines (continuation lines join the label above): one row per label, at least two.
+  function labelled(code) {
+    const rows = [];
+    for (let l of code.split('\n')) {
+      l = l.trim().replace(/^[-*]\s+/, '').replace(/^\*\*([^*]+?):\*\*/, '$1:').replace(/^\*\*([^*]+?)\*\*\s*:/, '$1:');
+      if (!l) continue;
+      const m = /^([^:]{1,40}?)\s*:\s*(.*)$/.exec(l);
+      if (m && !/^https?$/i.test(m[1])) rows.push([m[1], m[2]]);
+      else if (rows.length) rows[rows.length - 1][1] += '\n' + l;
+      else return null;
+    }
+    return rows.length >= 2 ? rows : null;
+  }
   const compareJSON = safe('comparison', (spec, ctx, code) => {
     let cols = spec.columns || spec.headers || [];
     // Rows may be objects keyed by column name.

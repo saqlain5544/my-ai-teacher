@@ -142,19 +142,19 @@ enum SubAgent {
     /// Starts (or, with `resume`, continues) a sub-agent. Blocking: returns its report. Background: returns at once; the
     /// report reaches the lesson when it finishes (SubAgentCenter.onReport), unless the teacher waits for it first.
     static func run(brief: String, title: String, model: String?, background: Bool, resume: String?, ctx: ToolContext) async -> ToolOutput {
-        let center = SubAgentCenter.shared
+        let center = await SubAgentCenter.shared
         var history: [ChatMessage] = []
         let run: SubAgentRun
         if let key = resume {
-            guard let r = await center.run(key), await r.conversationID == ctx.conversationID else {
+            guard let r = await center.run(key), r.conversationID == ctx.conversationID else {
                 return .error("No sub-agent `\(key)` in this lesson. `agents` with action list shows them.")
             }
-            if await r.isRunning { return .error("\(await r.handle) is still running: wait for it (agents wait) or stop it first.") }
+            if await r.isRunning { return .error("\(r.handle) is still running: wait for it (agents wait) or stop it first.") }
             await r.reopen(model: model, background: background)
             history = await r.messages
             run = r
         } else {
-            let running = await center.runs(in: ctx.conversationID).filter(\.isRunning).count
+            let running = await MainActor.run { center.runs(in: ctx.conversationID).filter(\.isRunning).count }   // run state lives on the main actor
             if running >= maxConcurrent { return .error("\(running) sub-agents are already running; wait for one or stop one first.") }
             run = await center.start(id: ctx.toolCallID, conversationID: ctx.conversationID, title: title, model: model ?? ctx.model)
             await MainActor.run { run.background = background }
@@ -162,7 +162,7 @@ enum SubAgent {
         let useModel = await run.model
         let loop = Task { await Self.loop(brief: brief, model: useModel, history: history, run: run, ctx: ctx) }
         await MainActor.run { run.task = loop }
-        let handle = await run.handle
+        let handle = run.handle
         guard background else {
             var out = await withTaskCancellationHandler { await loop.value } onCancel: { loop.cancel() }
             await MainActor.run { run.reportConsumed = true }

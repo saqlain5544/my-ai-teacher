@@ -11,7 +11,6 @@ struct TranscriptView: NSViewRepresentable {
     func makeNSView(context: Context) -> WKWebView {
         let c = context.coordinator
         let config = WKWebViewConfiguration()
-        config.processPool = Coordinator.pool
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
@@ -57,7 +56,6 @@ struct TranscriptView: NSViewRepresentable {
 
     @MainActor
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, TranscriptSink {
-        static let pool = WKProcessPool()
         weak var web: WKWebView?
         var watchdog: WebWatchdog?
         /// After paging in earlier messages, keep the view on the message the learner was looking at.
@@ -191,7 +189,7 @@ struct TranscriptView: NSViewRepresentable {
             webView.loadFileURL(dir.appendingPathComponent("index.html"), allowingReadAccessTo: dir)
         }
 
-        nonisolated func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+        func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
             guard let body = message.body as? [String: Any] else { return }
             let j = JSON(any: body)
             MainActor.assumeIsolated { self.handle(j) }

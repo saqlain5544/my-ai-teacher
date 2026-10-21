@@ -80,8 +80,12 @@ struct TaskTool: Tool {
         return ToolSpec(name: t.name, description: t.description, schema: .object(obj))
     }
 
+    /// Models also put the brief under other names (MiniMax-M3 sent {"agent_id": "researcher", "action": "Find three…"}).
+    static let briefKeys = ["prompt", "task", "action", "instructions", "brief", "query", "goal", "request", "message"]
+
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let prompt = try input.req("prompt")
+        guard let prompt = Self.briefKeys.lazy.compactMap({ input[$0]?.string }).first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+        else { throw ToolError("Missing required parameter `prompt`.") }
         var model: String?
         if let m = input["model"]?.string?.trimmingCharacters(in: .whitespaces), !m.isEmpty {
             guard m == ctx.model || ctx.subAgentModels.isEmpty || ctx.subAgentModels.contains(m) else {
@@ -90,7 +94,8 @@ struct TaskTool: Tool {
             model = m
         }
         let resume = input["resume"]?.string.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }
-        return await SubAgent.run(brief: prompt, title: input["description"]?.string ?? "Sub-agent", model: model,
+        let title = input["description"]?.string ?? input["title"]?.string ?? input["role"]?.string ?? "Sub-agent"
+        return await SubAgent.run(brief: prompt, title: title, model: model,
                                   background: input["background"]?.bool == true, resume: resume, ctx: ctx)
     }
 }
@@ -112,26 +117,26 @@ struct AgentsTool: Tool {
     func timeout(_ input: JSON) -> Double? { 140 }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let center = SubAgentCenter.shared
+        let center = await SubAgentCenter.shared
         let action = input["action"]?.string ?? "list"
         if action == "list" {
-            let lines = await center.runs(in: ctx.conversationID).map(\.summaryLine)
+            let lines = await MainActor.run { center.runs(in: ctx.conversationID).map(\.summaryLine) }
             return ToolOutput(text: lines.isEmpty ? "No sub-agents in this lesson yet." : lines.joined(separator: "\n"))
         }
-        guard let key = input["id"]?.string, let run = await center.run(key), await run.conversationID == ctx.conversationID else {
+        guard let key = input["id"]?.string, let run = await center.run(key), run.conversationID == ctx.conversationID else {
             return .error("Unknown sub-agent. `agents` with action list shows the handles.")
         }
         switch action {
         case "stop":
             await run.stop()
-            return ToolOutput(text: "Stopping \(await run.handle). Its partial findings arrive like any report.")
+            return ToolOutput(text: "Stopping \(run.handle). Its partial findings arrive like any report.")
         case "wait":
             let limit = Double(min(120, max(1, input["seconds"]?.int ?? 60)))
             let t0 = Date()
             while await run.isRunning, Date().timeIntervalSince(t0) < limit {
                 try await Task.sleep(nanoseconds: 400_000_000)
             }
-            if await run.isRunning { return ToolOutput(text: "\(await run.handle) is still working after \(Int(limit)) s (\(await run.status ?? "running")).") }
+            if await run.isRunning { return ToolOutput(text: "\(run.handle) is still working after \(Int(limit)) s (\(await run.status ?? "running")).") }
             // Waiting for a background agent hands its report over here (it won't be delivered again).
             for _ in 0..<20 where await run.report == nil { try await Task.sleep(nanoseconds: 100_000_000) }
             await MainActor.run { run.reportConsumed = true }

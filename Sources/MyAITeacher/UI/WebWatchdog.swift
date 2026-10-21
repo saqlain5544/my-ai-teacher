@@ -11,9 +11,9 @@ final class WebWatchdog {
     private var timer: Timer?
     private var outstanding: Date?
     private let onHang: () -> Void
-    private let isVisible: (WKWebView) -> Bool
+    private let isVisible: @MainActor (WKWebView) -> Bool
 
-    init(web: WKWebView, isVisible: @escaping (WKWebView) -> Bool = { $0.window?.occlusionState.contains(.visible) == true },
+    init(web: WKWebView, isVisible: @escaping @MainActor (WKWebView) -> Bool = { $0.window?.occlusionState.contains(.visible) == true },
          onHang: @escaping () -> Void) {
         self.web = web
         self.isVisible = isVisible

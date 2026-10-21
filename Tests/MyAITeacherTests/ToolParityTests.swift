@@ -50,6 +50,19 @@ final class ToolParityTests: XCTestCase {
         XCTAssertFalse(ProjectMemory.read(dir).contains("Xcode"))
     }
 
+    /// The brief under another name (MiniMax-M3 sent `action` + `role`) still starts the sub-agent; no brief at all is an error.
+    func testSubAgentBriefAliases() async throws {
+        var c = ctx!
+        c = ToolContext(conversationID: "alias-lesson", workspace: c.workspace, services: c.services, interactions: c.interactions, toolCallID: "al-1",
+                        client: c.client, model: "m", progress: { _ in })
+        let o = try await TaskTool().run(["agent_id": "researcher", "action": "find three facts", "role": "Researcher", "background": true], c)
+        let handle = try XCTUnwrap(o.meta?["handle"]?.string, o.text)
+        let title = await SubAgentCenter.shared.run(handle)?.title
+        XCTAssertEqual(title, "Researcher")
+        do { _ = try await TaskTool().run(["description": "x", "background": true], c); XCTFail("no brief must fail") }
+        catch { XCTAssertTrue("\(error)".contains("prompt"), "\(error)") }
+    }
+
     func testBackgroundSubAgentReportsLaterAndCanBeManaged() async throws {
         let got = expectation(description: "report delivered")
         await MainActor.run { SubAgentCenter.shared.onReport = { run, out in if run.title == "BG" { got.fulfill() } } }

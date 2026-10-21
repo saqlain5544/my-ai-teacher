@@ -62,7 +62,7 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         web.loadFileURL(dir.appendingPathComponent("index.html"), allowingReadAccessTo: dir)
     }
 
-    nonisolated func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
         guard let body = message.body as? [String: Any] else { return }
         let j = JSON(any: body)
         MainActor.assumeIsolated { self.handle(j) }

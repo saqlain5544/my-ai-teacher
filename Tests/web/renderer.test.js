@@ -223,6 +223,10 @@
     subgraphTitle: 'flowchart TD\n  subgraph one [Group (1)]\n    A --> B\n  end',
     endNode: 'flowchart TD\n  start --> end',
     headerless: 'A --> B\n  B --> C',
+    // A label that starts with "(" but isn't a cylinder (MiniMax-M3, live run), next to a real cylinder that must stay one.
+    labelStartsWithParen: 'flowchart TD\n    A[Start: right triangle with legs a, b, hypotenuse c] --> B[Area of large square = (a + b)²]\n' +
+      '    D --> E[Way 1: Four triangles + inner square of side c<br/>Area = 4·(ab/2) + c²]\n    B --> F[(a + b)² = a² + 2ab + b²]\n' +
+      '    E --> J[4·(ab/2) + c² = a² + 2ab + b²]\n    J --> DB[(Database)]\n    DB --> S[[Subroutine (x)]]\n    S --> P[/Input (y)/]',
   };
   for (const [kind, src] of Object.entries(MERMAID)) {
     test('mermaid ' + kind + ' renders', async () => {
@@ -347,6 +351,16 @@
     el = show('```compare\n{"columns":["Feature","Python","JS"],"rows":[{"Feature":"Typing","Python":"dynamic","JS":"dynamic"}]}\n```');
     noErrors(el, 'compare object rows');
     eq($$('tbody td', el).map(td => td.textContent), ['dynamic', 'dynamic'], 'object row cells');
+  });
+
+  test('a comparison written as labelled lines is a comparison table, not a JSON error (MiniMax-M3, live run)', () => {
+    let el = show('```comparison\nBefore: range(1, 10)   → 1,2,3,4,5,6,7,8,9      → sum = 45  ❌\nAfter:  range(1, 11)   → 1,2,3,4,5,6,7,8,9,10   → sum = 55  ✅\n```');
+    noErrors(el, 'labelled comparison');
+    eq($$('.compare-table th', el).map(th => th.textContent), ['Before', 'After'], 'row labels');
+    ok($$('.compare-table td', el)[1].textContent.includes('sum = 55'), 'row text');
+    // Prose that isn't a spec at all is shown as written.
+    el = show('```chart\nSales rose from 10 to 30 over the year.\n```');
+    noErrors(el, 'prose in a chart fence'); ok(el.textContent.includes('Sales rose from 10 to 30'), 'prose shown');
   });
 
   test('invalid component JSON shows an inline error, not a crash', () => {

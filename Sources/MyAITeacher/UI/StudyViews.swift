@@ -13,7 +13,6 @@ struct CardFaceView: NSViewRepresentable {
 
     func makeNSView(context: Context) -> WKWebView {
         let config = WKWebViewConfiguration()
-        config.processPool = TranscriptView.Coordinator.pool
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(context.coordinator), name: "bridge")
         let web = ClickThroughWebView(frame: .zero, configuration: config)

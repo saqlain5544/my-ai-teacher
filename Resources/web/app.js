@@ -281,6 +281,15 @@
     if (!/^\s*(flowchart|graph)\b/i.test(src)) return src;
     const unsafe = /[()"':;#&|<>]/;
     const q = (inner) => /^\s*".*"\s*$/.test(inner) || !unsafe.test(inner) ? inner : '"' + inner.replace(/"/g, '#quot;') + '"';
+    // Inside [ ]: the shapes [(cylinder)] [[subroutine]] [/parallelogram/] [\trapezoid/] keep their delimiters outside the
+    // quotes, but only when the label really ends with the closing one: F[(a + b)² = c²] is a box whose text starts with "(".
+    const balanced = (t) => { let d = 0; for (const ch of t) { if (ch === '(') d++; else if (ch === ')' && --d < 0) return false; } return d === 0; };
+    const shaped = (inner) => {
+      const m = /^([(\[\/\\])([^]*)([)\]\/\\])$/.exec(inner.trim());
+      if (m && ((m[1] === '(' && m[3] === ')' && balanced(m[2])) || (m[1] === '[' && m[3] === ']') || ('/\\'.includes(m[1]) && '/\\'.includes(m[3]))))
+        return m[1] + q(m[2]) + m[3];
+      return q(inner);
+    };
     return src.split('\n').map(line => {
       if (/^\s*subgraph\b/.test(line)) return line.replace(/^(\s*subgraph\s+\S+\s*\[)([^\]]*)(\])\s*$/, (m, a, inner, c) => a + q(inner) + c)
         .replace(/^(\s*subgraph\s+)([^\[\n]*[()][^\[\n]*)$/, (m, a, t) => a + '"' + t.trim().replace(/"/g, '#quot;') + '"');
@@ -288,7 +297,7 @@
         // Edge labels: -->|f(x) = 2x| B
         .replace(/\|([^|\n]+)\|/g, (m, inner) => '|' + q(inner) + '|')
         // [text], {text}, and (text) whose text itself has parentheses — greedy to the last bracket before an arrow.
-        .replace(/(\b[\w-]+)\[(?![\[(\/\\"])([^\n]*?)\](?=\s*(?:$|;|-|=|\.|&|:::))/g, (m, id, inner) => id + '[' + q(inner) + ']')
+        .replace(/(\b[\w-]+)\[(?!")([^\n]*?)\](?=\s*(?:$|;|-|=|\.|&|:::))/g, (m, id, inner) => id + '[' + shaped(inner) + ']')
         .replace(/(\b[\w-]+)\{(?![{"])([^}\n]*)\}/g, (m, id, inner) => id + '{' + q(inner) + '}')
         .replace(/(\b[\w-]+)\((?![(\["])([^\n]*\))\)(?=\s*(?:$|;|-|=|\.|&))/g, (m, id, inner) => id + '(' + q(inner) + ')')
         // A node called "end" breaks Mermaid's parser.

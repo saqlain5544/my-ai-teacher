@@ -50,10 +50,28 @@ def js(code):
 def log_lines():
     return LOG.read_text(errors="replace").splitlines() if LOG.exists() else []
 
+def js_value(code, timeout=5):
+    """A value computed in the page (eval results are logged as "eval → …")."""
+    marker = "JSV%d:" % int(time.time() * 1000)
+    n = len(log_lines())
+    js("'%s' + (%s)" % (marker, code))
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        for l in log_lines()[n:]:
+            if marker in l: return l.split(marker, 1)[1]
+        time.sleep(0.1)
+    return None
+
+# What an open card says under its fields (a validation message keeps it open until the learner fixes the answer).
+OPEN_CARD_MESSAGES = """JSON.stringify(Array.from(document.querySelectorAll('[data-tool-id]'))
+  .filter(c => c.querySelector('[data-act="q-submit"], [data-act="ask-submit"], [data-act="approve"]'))
+  .map(c => Array.from(c.querySelectorAll('[data-err], .q-empty')).map(e => e.textContent.trim()).filter(Boolean).join('; '))
+  .filter(Boolean))"""
+
 # ───────────── Answering cards like a learner (clicks in the page) ─────────────
 MAX_ANSWERS = 3   # a learner who always answers keeps a tutor quizzing forever; after this many, skip like a learner
 
-def answer_pending(p, scenario, n_answered=0):
+def answer_pending(p, scenario, n_answered=0, retry=False):
     pid, kind = p["id"], p["kind"]
     sel = '[data-tool-id="%s"]' % pid
     if kind != "permission" and n_answered >= MAX_ANSWERS:
@@ -72,34 +90,51 @@ def answer_pending(p, scenario, n_answered=0):
     else:  # quiz / structured questions: first option, true, or a short typed answer
         # Each click re-renders the card, so find it again before every question (as a learner's next click would).
         js("""(() => { const card = () => document.querySelector('%s'); const fire = el => el.dispatchEvent(new Event('input', {bubbles:true}));
-          const n = card().querySelectorAll('.quiz-q').length;
+          const n = %s ? 0 : card().querySelectorAll('.quiz-q').length;   // a retry keeps the choices already made
           for (let i = 0; i < n; i++) {
             const q = card().querySelectorAll('.quiz-q')[i];
             const pick = q.querySelector('[data-act="q-pick"], [data-act="q-toggle"], [data-act="q-tf"][data-v="true"], [data-act="q-scale"]');
             if (pick) pick.click();
           }
-          card().querySelectorAll('[data-q-input], [data-q-blank], textarea').forEach(t => { if (!t.value) { t.value = %s; fire(t); } });
+          // A value the field accepts, as a learner would type after reading its hint: whole numbers, ranges, minimum lengths.
+          card().querySelectorAll('[data-q-input], [data-q-blank], textarea').forEach(t => {
+            if (t.value && t.getAttribute('aria-invalid') !== 'true') return;
+            const k = t.getAttribute('data-numeric'), lo = t.getAttribute('data-min'), hi = t.getAttribute('data-max');
+            let v = %s;
+            if (k) {
+              v = k === 'int' ? (lo != null ? lo : '2') : (/^[0-9 .,\/+-]+$/.test(v) ? v : '0.5');
+              if (lo != null && !(eval(v.replace(',', '.')) >= +lo)) v = lo;
+              if (hi != null && !(eval(v.replace(',', '.')) <= +hi)) v = hi;
+            } else { const min = +t.getAttribute('data-minlen') || 0; while (v.length < min) v += ' ' + v; }
+            t.value = v; t._touched = true; fire(t);
+          });
           const s = card().querySelector('[data-act="q-submit"]'); if (s) s.click(); })()"""
-           % (sel, json.dumps(scenario.get("reply", "1/2"))))
+           % (sel, "true" if retry else "false", json.dumps(scenario.get("reply", "1/2"))))
     return kind
 
 def run_turn(text, scenario, timeout=240):
     if scenario.get("click"): js(scenario["click"])   # a learner action in the page (chip, regenerate, edit…)
     else: post({"action": "send", "text": text})
     time.sleep(1.5)
-    t0, answered, seen_running = time.time(), [], False
+    t0, answered, seen_running, tries = time.time(), [], False, {}
     while time.time() - t0 < timeout:
         r = report()
         seen_running |= r["running"]
         for p in r["pending"]:
-            if p["id"] not in [a[0] for a in answered]:
+            if p["id"] not in tries:
                 time.sleep(0.6)   # let the card render, as a learner would see it
                 answered.append((p["id"], answer_pending(p, scenario, len([a for a in answered if a[1] != "permission"]))))
+                tries[p["id"]] = (time.time(), 1)
+            elif p["kind"] != "permission" and time.time() - tries[p["id"]][0] > 8 and tries[p["id"]][1] < 3:
+                # Still open after an answer: read what it says (a learner would) and answer again.
+                answer_pending(p, scenario, len([a for a in answered if a[1] != "permission"]) - 1, retry=True)
+                tries[p["id"]] = (time.time(), tries[p["id"]][1] + 1)
         if not r["running"] and not r["pending"] and (seen_running or time.time() - t0 > 6):
             time.sleep(1.2)   # reflection/footer settle
             return report(), answered
         time.sleep(1.0)
-    return report(), answered + [("TIMEOUT", "timeout")]
+    held = js_value(OPEN_CARD_MESSAGES)
+    return report(), answered + [("TIMEOUT", "timeout" + (" (open card says %s)" % held if held and held != "[]" else ""))]
 
 # ───────────── Checks ─────────────
 def turn_messages(r, start):
@@ -110,7 +145,8 @@ def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forb
     msgs = turn_messages(r, start)
     used = [b["name"] for m in msgs for b in m["blocks"] if b["kind"] == "toolUse"]
     results = {b["id"]: b for m in msgs for b in m["blocks"] if b["kind"] == "toolResult"}
-    if any(a[0] == "TIMEOUT" for a in answered): problems.append("turn did not finish in time")
+    for a in answered:
+        if a[0] == "TIMEOUT": problems.append("turn did not finish in time" + a[1][len("timeout"):])
     if r.get("error"): problems.append("session error: " + r["error"])
     for m in msgs:
         if m.get("error") and m["error"] != "Stopped.": problems.append("message error: " + m["error"])   # a stop is the learner's choice
@@ -143,7 +179,10 @@ def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forb
 
 # ───────────── Profile & launch ─────────────
 def fresh_profile():
-    if HOME.exists(): shutil.rmtree(HOME)
+    # The previous run is kept next to the new one, so a failure can still be read after the next run starts.
+    prev = HOME.with_name(HOME.name + ".prev")
+    if prev.exists(): shutil.rmtree(prev)
+    if HOME.exists(): HOME.rename(prev)
     (HOME / "support").mkdir(parents=True)
     (HOME / "support/settings.json").write_text(json.dumps({
         "providerID": args.provider, "model": args.model, "thinking": "off", "autoMemory": True,
