@@ -44,7 +44,7 @@ final class PermissionExtension: AgentExtension {
             }
         }
         switch tool.risk {
-        case .readOnly, .network, .interactive:
+        case .readOnly, .network, .interactive, .control:   // .control: sites and apps are gated by ComputerUseExtension
             return .allow
         case .write:
             guard let p = input["path"]?.string else { return .allow }

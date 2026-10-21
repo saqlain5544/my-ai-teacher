@@ -80,6 +80,7 @@ final class AppModel: ObservableObject {
     /// Built-in features are extensions; add new ones here without touching the agent loop.
     private func registerExtensions() {
         extensions.register(PermissionExtension(app: self))
+        extensions.register(ComputerUseExtension(app: self))
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
         extensions.register(LanguageExtension())

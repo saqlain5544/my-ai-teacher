@@ -10,6 +10,8 @@ Sources/MyAITeacher/
   Agent/       ChatSession (the agent loop), Hooks (extensions + EventBus), Metrics, SystemPrompt, ToolRegistry
   Extensions/  Features built on hooks: permissions, memory, language, activity, teaching context
   Tools/       Tool protocol + tools (files, shell, code, web, math, questions, study, memory)
+  Browser/     The code agent's in-app browser (tabs, injected helper, `browser` tool)
+  ComputerUse/ Native Mac control: capture/input/AX backends, tiers and grants, `computer` + `mac` tools, approvals
   Memory/      Learner model: MemoryStore (indexed memories), ConceptGraph (subjects/concepts/prereqs + BKT mastery),
                MemoryHub (core block, lean recall), Reflection (mem0-style ops + consolidation) — see docs/memory-design.md
   Study/       FSRS-5 flashcards, BKT mastery, plans, quizzes, activity
@@ -174,6 +176,34 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 ## Code agent
 * Mode `agent` ("Code agent", ⇧⌘K): a software-engineer prompt, the whole coding toolset up front, and project memory
   in `.teacher/code-memory.md` (plus CLAUDE.md / AGENTS.md) instead of the learner model; `project_memory` tool.
+
+## Browser and computer use (code agent)
+* **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
+  (non-persistent in test profiles), separate from the transcript and the page viewer. Off-panel tabs live in an
+  offscreen panel so they keep rendering and can be screenshotted. A helper injected into an isolated content world of
+  every frame builds the snapshot (roles, names, values, states; open shadow roots, same-origin iframes; cross-origin
+  frames introduce themselves and are read on their own, refs `f2.ref_3`) and acts by ref with real event sequences
+  (pointer/mouse/click, key/beforeinput/input, native value setter for framework-controlled inputs). Refs are stable
+  per element. Console and fetch/XHR are captured in the page world; screenshots map back through their scale.
+* **Mac** (`mac` for apps and the AX tree, `computer` for pixels): ScreenCaptureKit screenshots that show only granted
+  apps, sized ≤1568 px / 1.15 MP with an exact per-axis mapping to screen points (zoom keeps that mapping); CGEvent input
+  marked as the agent's own; the frontmost app and the window under the pointer are checked against grants and tiers
+  before every event (browsers view only, terminals/IDEs click only, password managers and this app never). A floating
+  "Agent is controlling your Mac" panel has Stop; Esc twice (global monitor, the agent's own keys ignored) stops too.
+  Capture, input and desktop state are protocols, so tests run on fakes and never touch the real Mac.
+* **Approvals** (`ComputerUseExtension`, the usual cards): sites once per lesson or always (localhost, LAN and file://
+  per lesson only; pages can't navigate there unapproved), every download, JavaScript evaluation, and the apps named in
+  `request_access`. "Always" grants live in settings (Settings → Tools lists and removes them), never in a folder.
+  Passwords, payment details and ID numbers are refused by field and by content; uploads are always refused. Page and
+  app content returns inside an `untrusted_*_content` envelope that starts with a reminder and can't be closed early.
+* **Providers**: one generic schema for every model; non-vision models get the AX tree where a screenshot would go.
+  Claude on api.anthropic.com gets Anthropic's computer toolset (or `computer_20251124` on older Claude 4 models); its
+  member calls map onto `computer` and replay with `toolset_name`. A failed action skips the rest of its batch. Requests
+  carry only the latest two screenshots.
+* **macOS permissions**: Screen Recording and Accessibility are checked (`CGPreflightScreenCaptureAccess`,
+  `AXIsProcessTrustedWithOptions` without prompting); `mac permissions` shows the learner a card that opens Settings or
+  asks macOS. The app is ad-hoc signed, so a rebuild drops both grants; the app remembers the last build that had them
+  and says so.
 
 ## Learning model
 * Mastery fades since the last practice (never below 40%), with a half-life that grows with each correct recall.

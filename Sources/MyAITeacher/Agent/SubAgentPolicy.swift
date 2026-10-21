@@ -48,6 +48,7 @@ enum SubAgentPolicy {
         switch tool.risk {
         case .readOnly, .network: return .allow
         case .interactive: return .deny("Sub-agents can't wait for the learner.")
+        case .control: return .deny("Sub-agents don't drive the browser or the Mac: their sites and apps need the learner's approval, and sub-agents can't ask.")
         case .write:
             if scope.readOnly { return .deny("\(who.capitalizedFirst) is read-only: it can't change files.") }
             guard let p = input["path"]?.string else { return .allow }   // the tool reports the missing path itself

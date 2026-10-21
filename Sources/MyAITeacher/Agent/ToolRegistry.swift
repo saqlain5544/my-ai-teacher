@@ -10,12 +10,13 @@ enum ToolRegistry {
     static let deferred: [Tool] = [
         GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(),
     ]
-    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool()]
+    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
 
     /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
     static let agentTools: [Tool] = [
         ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), TodoWriteTool(),
         TaskTool(), AgentsTool(), WebSearchTool(), WebFetchTool(), ProjectMemoryTool(), AskLearnerTool(),
+        BrowserTool(), MacTool(), ComputerTool(),
     ]
 
     /// Core and deferred sets for a lesson, after its experiment arms (stable for the lesson's lifetime).

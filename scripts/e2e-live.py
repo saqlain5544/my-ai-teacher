@@ -87,8 +87,9 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
     if kind != "permission" and n_answered >= MAX_ANSWERS:
         js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
         return "skip"
-    if kind == "permission":
-        js("document.querySelector('%s [data-act=\"approve\"][data-v=\"once\"]').click()" % sel)
+    if kind == "permission":   # the scenario's choice (e.g. "lesson" for a browser site) when the card offers it, else once
+        js("(() => { const c = document.querySelector('%s'); (c.querySelector('[data-act=\"approve\"][data-v=\"%s\"]') || c.querySelector('[data-act=\"approve\"][data-v=\"once\"]')).click(); })()"
+           % (sel, scenario.get("approve", "once")))
     elif kind in ("ask", "ask_learner") and not (p.get("payload") or {}).get("questions"):
         want = scenario.get("pick")
         js("""(() => { const c = document.querySelector('%s'); const opts = Array.from(c.querySelectorAll('[data-act="ask-opt"]'));
@@ -207,6 +208,37 @@ def fresh_profile():
         subprocess.run(["git", "-C", str(LAB)] + cmd, check=True)
 
 APP = ROOT / "build/My AI Teacher.app"
+SITE = HOME / "site"
+
+def serve_site():
+    """A sign-up form on localhost (python's http.server; its access log is the check), for the browser scenario."""
+    import socket
+    SITE.mkdir(exist_ok=True)
+    (SITE / "form.html").write_text("""<!doctype html><title>Join the club</title><h1>Join the club</h1>
+<form action="/thanks.html" method="get">
+  <p><label>Full name <input name="name" required></label></p>
+  <p><label>Email <input name="email" type="email" required></label></p>
+  <p><label>Plan <select name="plan"><option value="free">Free</option><option value="pro">Pro</option><option value="team">Team</option></select></label></p>
+  <p><label><input type="checkbox" name="agree" required> I agree to the terms</label></p>
+  <p><button type="submit">Sign up</button></p>
+</form>""")
+    (SITE / "thanks.html").write_text("""<!doctype html><title>Welcome</title><h1 id="msg"></h1>
+<script>const q = new URLSearchParams(location.search); document.getElementById('msg').textContent = 'Welcome aboard, ' + q.get('name') + '! Your ' + q.get('plan') + ' plan is active.';</script>""")
+    with socket.socket() as so:
+        so.bind(("127.0.0.1", 0)); port = so.getsockname()[1]
+    log = open(HOME / "site.log", "w")
+    proc = subprocess.Popen([sys.executable, "-m", "http.server", str(port), "--bind", "127.0.0.1", "--directory", str(SITE)], stdout=log, stderr=log)
+    time.sleep(0.8)
+    return proc, "http://127.0.0.1:%d" % port
+
+def site_submitted():
+    """Problems, if the form never reached the server with the values asked for."""
+    from urllib.parse import parse_qs
+    hits = [l.split("GET /thanks.html?", 1)[1].split(" ", 1)[0] for l in (HOME / "site.log").read_text().splitlines() if "GET /thanks.html?" in l]
+    if not hits: return ["the form was never submitted"]
+    q = {k: v[0] for k, v in parse_qs(hits[-1]).items()}
+    want = {"name": "Ada Lovelace", "email": "ada@example.com", "plan": "pro", "agree": "on"}
+    return ["submitted %s=%r, wanted %r" % (k, q.get(k), v) for k, v in want.items() if q.get(k, "").lower() != v.lower()]
 
 class TestInstance:
     """A second instance of the real app bundle on the test profile; stopped by its own pid, never the learner's."""
@@ -304,6 +336,15 @@ SCENARIOS = [
     dict(name="code-agent", folder=True, mode_after_open="agent", expect=["edit", "bash"], any=["project_memory"],
          prompt="buggy.py should print 55 (the sum of 1..10) but doesn't. Fix it, run it to verify, and save how to run it to project memory.",
          after=lambda: (LAB / "buggy.py").read_text() + "\n#MEM " + ((LAB / ".teacher/code-memory.md").read_text() if (LAB / ".teacher/code-memory.md").exists() else "(none)")),
+    # Browser use: the code agent fills and submits a form on a local page (localhost needs the learner's approval).
+    dict(name="browser-form", folder=True, mode_after_open="agent", approve="lesson", expect=["browser"], followup_contains="welcome aboard",
+         prompt="Use the browser tool to open {site}/form.html and sign up with the name Ada Lovelace, the email ada@example.com, "
+                "the Pro plan and the terms box ticked, then submit the form. Tell me exactly what the confirmation page says.",
+         after_check=site_submitted),
+    # The screenshot path: an image in a tool result reaches the model and shows in the card (from the blob store).
+    dict(name="browser-shot", same_lesson=True, expect=["browser"], followup_contains="sign up",
+         prompt="Now go back to {site}/form.html, take a browser screenshot and tell me what the button at the bottom of the form says.",
+         page_js="JSON.stringify([...document.querySelectorAll('.tool-shot')].map(i => i.naturalWidth))", page_ok=lambda v: bool(v) and v not in ("[]", "[0]")),
     dict(name="visual", quick=True, prompt="Show me an interactive ```visual: a slider from 1 to 10 that sets a circle's radius and shows its area. Keep it small.",
          require=["visuals"]),
     dict(name="memory-save", quick=True, prompt="Please remember for future lessons: I learn best from worked examples with real-world analogies. Save that to memory.",
@@ -344,6 +385,7 @@ def main():
     fresh_profile()
     shutil.copy2(BIN, POSTER)
     proc = launch()
+    site_proc, site = serve_site()
     results, start_log = [], 0
     try:
         for sc in SCENARIOS:
@@ -359,6 +401,7 @@ def main():
             if sc.get("before"): sc["before"](); time.sleep(0.5)
             r0 = report(); start = len(r0["messages"]); start_log = len(log_lines())
             t0 = time.time()
+            sc["prompt"] = sc["prompt"].replace("{site}", site)
             if sc.get("stop_after"):
                 post({"action": "send", "text": sc["prompt"]}); time.sleep(sc["stop_after"]); post({"action": "stop"}); time.sleep(2)
                 r, answered = report(), []
@@ -392,6 +435,7 @@ def main():
             if sc.get("expect_input"):
                 inputs = " ".join(b["input"] or "" for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolUse")
                 if sc["expect_input"] not in inputs: notes.append("no tool call used %r" % sc["expect_input"])
+            if sc.get("after_check"): problems += sc["after_check"]()
             if sc.get("after"):
                 out = sc["after"]()
                 if "range(1, 11)" not in out and "range(11)" not in out and "+ 1)" not in out: notes.append("buggy.py not fixed: " + out.replace("\n", " | "))
@@ -414,6 +458,7 @@ def main():
         print("\n%d scenarios, %d failed. Profile, log and snapshots: %s" % (len(results) + 1, len(failed), HOME))
         return 1 if failed else 0
     finally:
+        site_proc.terminate()
         if not args.keep: proc.terminate()
 
 sys.exit(main())

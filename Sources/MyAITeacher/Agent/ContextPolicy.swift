@@ -62,7 +62,25 @@ enum ContextPolicy {
                 msgs[i].blocks = msgs[i].blocks.map(trim)
             }
         }
+        dropOldCaptures(&msgs)
         return mergeConsecutiveUserTurns(msgs)
+    }
+
+    /// Screenshots of the browser and the Mac go stale at once: requests carry only the latest `capturesKept` (a long
+    /// computer-use turn would otherwise resend every image it took). Older ones keep their text, minus the pixels.
+    static let capturesKept = 2
+    static let captureTools: Set<String> = ["browser", "computer", "mac"]
+    static func dropOldCaptures(_ msgs: inout [ChatMessage]) {
+        var seen = 0
+        for i in msgs.indices.reversed() where msgs[i].role == .user {
+            for j in msgs[i].blocks.indices.reversed() where msgs[i].blocks[j].kind == .toolResult && msgs[i].blocks[j].hasPayload
+                && captureTools.contains(msgs[i].blocks[j].name ?? "") {
+                seen += 1
+                guard seen > capturesKept else { continue }
+                msgs[i].blocks[j].data = nil; msgs[i].blocks[j].blob = nil; msgs[i].blocks[j].mime = nil
+                msgs[i].blocks[j].text = (msgs[i].blocks[j].text ?? "") + "\n[image dropped: only the latest \(capturesKept) screenshots are sent]"
+            }
+        }
     }
 
     /// Messages split into runs of at most `maxChars` (a message is never split).

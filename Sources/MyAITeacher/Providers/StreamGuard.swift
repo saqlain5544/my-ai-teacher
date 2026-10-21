@@ -17,7 +17,8 @@ struct GuardedClient: LLMClient {
                 var seen = Set<String>()
                 var parsedCall = false, flushed = false
                 func call(_ b: Block) {
-                    let key = (b.name ?? "") + "\u{0}" + (b.input?.compact ?? "")
+                    // Native computer-toolset calls repeat on purpose (two identical clicks); they have their own ids.
+                    let key = (b.meta?["toolset"] != nil ? b.id ?? "" : "") + (b.name ?? "") + "\u{0}" + (b.input?.compact ?? "")
                     guard seen.insert(key).inserted else { return }   // engines sometimes repeat a call verbatim
                     cont.yield(.toolCall(b))
                 }

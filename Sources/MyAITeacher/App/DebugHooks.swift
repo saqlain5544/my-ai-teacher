@@ -102,6 +102,11 @@ enum DebugHooks {
             AppLog.write("inspector shown=\(app.inspectorShown) tab=\(app.inspectorTab.rawValue)")
         case "report":   // {"action":"report","path":"/tmp/r.json"}: lesson state + rendered-page health, for scripts/e2e-live.py
             report(session, to: cmd["path"]?.string ?? "/tmp/myaiteacher-report.json")
+        case "browser":   // {"action":"browser","js":"document.title"}: evaluated in the agent browser's active tab (page world)
+            guard let tab = AgentBrowser.shared.active else { AppLog.write("browser → no tab"); return }
+            tab.web.evaluateJavaScript(cmd["js"]?.string ?? "location.href") { r, e in
+                AppLog.write("browser → \(e.map { "error: \($0.localizedDescription)" } ?? String(describing: r ?? "nil").prefix(4000))")
+            }
         case "status":
             AppLog.write("status running=\(session?.isRunning ?? false) msgs=\(session?.messages.count ?? -1) status=\(session?.status ?? "-") error=\(session?.errorMessage ?? "-")")
         case "resize":
@@ -141,6 +146,7 @@ enum DebugHooks {
             "lesson": clip(session?.id, 60), "folder": .string(app.workspace.url.path), "messages": .array(msgs),
             "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload]) }),
             "agents": .array(SubAgentCenter.shared.runs(in: session?.id).map(\.debugJSON)), "runtime": Runtime.metrics.json,
+            "browser": .array(AgentBrowser.shared.tabs.map { .object(["id": .number(Double($0.id)), "url": .string($0.url?.absoluteString ?? ""), "title": .string($0.title)]) }),
         ]
         let write = {
             if let d = try? JSONEncoder().encode(JSON.object(out)) { try? d.write(to: URL(fileURLWithPath: path), options: .atomic) }

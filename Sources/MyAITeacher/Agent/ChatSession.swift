@@ -520,8 +520,9 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         EventBus.publish(.toolStarted(conversationID: id, tool: name, callID: callID))
         let progress = ProgressThrottle { [weak self] text in self?.sink?.toolProgress(callID, text: text) }
-        let ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
+        var ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
+        ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         let t0 = Date()
         var result: Block
         do {

@@ -47,13 +47,14 @@ struct AnthropicClient: LLMClient {
             headers["x-api-key"] = apiKey
             if !isFirstParty { headers["Authorization"] = "Bearer \(apiKey)" }
         }
-        if isFirstParty, Self.supportsFallback(request.model) {
-            headers["anthropic-beta"] = "server-side-fallback-2026-07-01"
-        }
+        var betas = isFirstParty ? request.tools.compactMap(\.nativeBeta) : []
+        if isFirstParty, Self.supportsFallback(request.model) { betas.append("server-side-fallback-2026-07-01") }
+        if !betas.isEmpty { headers["anthropic-beta"] = betas.joined(separator: ",") }
         let req = URLRequest.json(config.baseURL.joinedURL("/messages"), body: body, headers: headers)
         return AsyncThrowingStream { continuation in
             let task = Task {
                 var tools: [Int: PartialToolCall] = [:]
+                var members: [Int: String] = [:]   // computer-toolset calls: the member (left_click…) is the block's name
                 var thinkingSig: [Int: String] = [:]
                 var usage = Usage()
                 do {
@@ -72,7 +73,8 @@ struct AnthropicClient: LLMClient {
                             switch cb?["type"]?.string {
                             case "tool_use", "server_tool_use":
                                 let id = cb?["id"]?.string ?? UUID().uuidString
-                                let name = cb?["name"]?.string ?? "tool"
+                                var name = cb?["name"]?.string ?? "tool"
+                                if let set = cb?["toolset_name"]?.string { members[idx] = name; name = set }
                                 tools[idx] = PartialToolCall(id: id, name: name)
                                 continuation.yield(.toolCallStarted(id: id, name: name))
                             case "thinking":
@@ -101,7 +103,7 @@ struct AnthropicClient: LLMClient {
                         case "content_block_stop":
                             let idx = j["index"]?.int ?? 0
                             if let sig = thinkingSig.removeValue(forKey: idx) { continuation.yield(.thinkingSignature(sig)) }
-                            if let t = tools.removeValue(forKey: idx) { continuation.yield(.toolCall(t.finish())) }
+                            if let t = tools.removeValue(forKey: idx) { continuation.yield(.toolCall(NativeComputerTool.call(t.finish(), member: members.removeValue(forKey: idx)))) }
                         case "message_delta":
                             if let u = j["usage"] { usage = Self.usage(u, base: usage) }
                             if let r = j["delta"]?["stop_reason"]?.string {
@@ -118,7 +120,7 @@ struct AnthropicClient: LLMClient {
                         default: break
                         }
                     }
-                    for (_, t) in tools { continuation.yield(.toolCall(t.finish())) }
+                    for (i, t) in tools { continuation.yield(.toolCall(NativeComputerTool.call(t.finish(), member: members[i]))) }
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)
@@ -151,8 +153,9 @@ struct AnthropicClient: LLMClient {
                 c.yield(.thinking(b["thinking"]?.string ?? ""))
                 if let s = b["signature"]?.string { c.yield(.thinkingSignature(s)) }
             case "tool_use":
-                c.yield(.toolCall(.toolUse(id: b["id"]?.string ?? UUID().uuidString, name: b["name"]?.string ?? "",
-                                           input: b["input"] ?? .object([:]))))
+                let set = b["toolset_name"]?.string
+                let call = Block.toolUse(id: b["id"]?.string ?? UUID().uuidString, name: set ?? b["name"]?.string ?? "", input: b["input"] ?? .object([:]))
+                c.yield(.toolCall(NativeComputerTool.call(call, member: set == nil ? nil : b["name"]?.string)))
             default: break
             }
         }
@@ -177,6 +180,7 @@ struct AnthropicClient: LLMClient {
         }
         if !r.tools.isEmpty {
             var tools: [JSON] = r.tools.map { t in
+                if isFirstParty, let native = t.native { return native }
                 var o: [String: JSON] = ["name": .string(t.name), "description": .string(t.description), "input_schema": t.schema]
                 if isFirstParty { o["eager_input_streaming"] = true }
                 return .object(o)
@@ -219,6 +223,7 @@ struct AnthropicClient: LLMClient {
 
     static func convert(_ messages: [ChatMessage], model: String) -> [JSON] {
         var out: [(role: String, content: [JSON])] = []
+        var toolsetCalls = Set<String>()   // their results must echo toolset_name
         for m in messages {
             var content: [JSON] = []
             for b in m.blocks {
@@ -238,6 +243,7 @@ struct AnthropicClient: LLMClient {
                 case .file:
                     content.append(["type": "text", "text": .string("<file name=\"\(b.name ?? "file")\">\n\(b.text ?? "")\n</file>")])
                 case .toolUse:
+                    if let native = NativeComputerTool.wire(b) { toolsetCalls.insert(b.id ?? ""); content.append(native); continue }
                     content.append(["type": "tool_use", "id": .string(b.id ?? ""), "name": .string(b.name ?? ""), "input": b.input ?? .object([:])])
                 case .toolResult:
                     var parts: [JSON] = [["type": "text", "text": .string((b.text?.isEmpty ?? true) ? "(no output)" : b.text!)]]
@@ -246,6 +252,7 @@ struct AnthropicClient: LLMClient {
                     }
                     var o: [String: JSON] = ["type": "tool_result", "tool_use_id": .string(b.id ?? ""), "content": .array(parts)]
                     if b.isError == true { o["is_error"] = true }
+                    if toolsetCalls.contains(b.id ?? "") { o["toolset_name"] = "computer" }
                     content.append(.object(o))
                 }
             }

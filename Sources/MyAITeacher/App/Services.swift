@@ -26,6 +26,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
     var experiments = true              // local A/B experiments (see Experiments)
     var agents = SubAgentSettings()     // sub-agent limits, defaults and app-level agent types
+    /// Sites the agent's browser may always use, and Mac apps (bundle ids) it may always control. Per-lesson grants live in
+    /// InteractionCenter; localhost and file:// are never stored here (they're approved per lesson).
+    var browserSites: [String] = []
+    var computerApps: [String] = []
+    /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
+    var computerPermissionBuild: String?
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -56,6 +62,9 @@ struct AppSettings: Codable, Sendable, Equatable {
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
         experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments
         agents = (try? c.decode(SubAgentSettings.self, forKey: .agents)) ?? d.agents
+        browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
+        computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
+        computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
     }
 }
 

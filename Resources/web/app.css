@@ -176,6 +176,7 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .tool > .body { border-top: 1px solid var(--border); padding: 9px 12px; display: none; }
 .tool.open > .body { display: block; }
 .tool .body pre { margin: 0; white-space: pre-wrap; word-break: break-word; font-family: var(--mono); font-size: 0.86em; max-height: 360px; overflow: auto; }
+.tool .body .tool-shot { display: block; max-width: 100%; max-height: 420px; margin: 0 0 8px; border-radius: 8px; border: 1px solid var(--border); }
 .tool .body .label { font-size: 0.78em; text-transform: uppercase; letter-spacing: .04em; color: var(--faint); margin: 8px 0 3px; }
 .tool .body .label:first-child { margin-top: 0; }
 .tool.compact { background: transparent; border: 0; }

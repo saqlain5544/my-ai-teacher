@@ -185,6 +185,7 @@ struct ToolsSettings: View {
                     }
                 }
             }
+            ComputerUseSettings()
             Section("Default folder") {
                 HStack {
                     Text(settings.value.workspacePath).lineLimit(1).truncationMode(.middle).textSelection(.enabled)
@@ -213,6 +214,48 @@ struct ToolsSettings: View {
             }
         }
         .formStyle(.grouped)
+    }
+}
+
+/// What the code agent may use beyond the folder: macOS permissions (checked, never requested from here without a
+/// click), and the sites and apps approved with "Always" (stored here, never in a project folder).
+struct ComputerUseSettings: View {
+    @EnvironmentObject var settings: SettingsStore
+    @State private var status = ComputerPermissions.status()
+
+    var body: some View {
+        Section("Browser and Mac apps (code agent)") {
+            permission("Screen Recording", on: status.screen, url: ComputerPermissions.screenSettings)
+            permission("Accessibility", on: status.accessibility, url: ComputerPermissions.accessibilitySettings)
+            if !status.screen || !status.accessibility {
+                Text("Needed for screenshots and control of other apps. If a switch is already on there, the app was rebuilt (it is ad-hoc signed): remove it, add it again and reopen the app.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            granted("Always-allowed sites", settings.value.browserSites) { s in settings.value.browserSites.removeAll { $0 == s } }
+            granted("Always-allowed apps", settings.value.computerApps) { s in settings.value.computerApps.removeAll { $0 == s } }
+            Button("Clear the agent browser's cookies and data", role: .destructive) {
+                AgentBrowser.shared.clearData()
+            }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in status = ComputerPermissions.status() }
+    }
+
+    private func permission(_ name: String, on: Bool, url: URL) -> some View {
+        HStack {
+            Image(systemName: on ? "checkmark.circle.fill" : "exclamationmark.circle").foregroundStyle(on ? .green : .orange)
+            Text(name)
+            Spacer()
+            if !on { Button("Open Settings…") { NSWorkspace.shared.open(url) } }
+        }
+    }
+
+    private func granted(_ title: String, _ items: [String], remove: @escaping (String) -> Void) -> some View {
+        DisclosureGroup("\(title) (\(items.count))") {
+            if items.isEmpty { Text("None — each is asked once per lesson.").font(.caption).foregroundStyle(.secondary) }
+            ForEach(items, id: \.self) { s in
+                HStack { Text(s).font(.callout.monospaced()); Spacer(); Button("Remove") { remove(s) }.controlSize(.small) }
+            }
+        }
     }
 }
 

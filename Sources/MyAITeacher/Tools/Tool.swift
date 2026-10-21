@@ -6,6 +6,7 @@ enum ToolRisk: String, Sendable {
     case write         // modifies files
     case execute       // runs programs
     case interactive   // waits for the learner (quiz, questions)
+    case control       // drives the browser or the Mac; gated per site / app by ComputerUseExtension, never parallel
 }
 
 struct ToolOutput: Sendable {
@@ -44,6 +45,8 @@ struct ToolContext: Sendable {
     var agentProvider: String? = nil
     /// The shell session `bash` keeps its working directory in (each sub-agent has its own); nil = the lesson's.
     var shellID: String? = nil
+    /// Whether the lesson's model accepts images (screenshots are replaced by text trees when it doesn't).
+    var vision = true
 }
 
 protocol Tool: Sendable {
@@ -65,7 +68,7 @@ extension Tool {
         switch risk {
         case .interactive: nil
         case .readOnly, .network: 60
-        case .write: 120
+        case .write, .control: 120
         case .execute: 330      // processes carry their own (shorter) timeouts; this is the backstop
         }
     }

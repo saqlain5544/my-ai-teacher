@@ -22,6 +22,9 @@ struct ToolSpec: Sendable {
     let name: String
     let description: String
     let schema: JSON
+    /// A provider-native definition sent instead (Anthropic's computer-use tool), with the beta header it needs.
+    var native: JSON? = nil
+    var nativeBeta: String? = nil
 }
 
 struct LLMRequest: Sendable {

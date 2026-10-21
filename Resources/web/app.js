@@ -638,10 +638,7 @@
     const text = visibleText(m);
     let html = '';
     if (imgs.length || files.length) {
-      // Large images live on disk (Swift's blob store) and load by reference; small ones may still be inline.
-      const src = b => /^[0-9a-f]{64}$/.test(b.blob || '') ? 'teacher-blob://img/' + b.blob
-        : b.data && /^[A-Za-z0-9+/=\s]*$/.test(b.data) ? 'data:' + (/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + b.data : '';
-      html += '<div class="attachments">' + imgs.map(src).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
+      html += '<div class="attachments">' + imgs.map(imageSrc).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
         files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
@@ -755,6 +752,10 @@
     }
   }
 
+  // Large images live on disk (Swift's blob store) and load by reference; small ones may still be inline.
+  const imageSrc = b => /^[0-9a-f]{64}$/.test(b.blob || '') ? 'teacher-blob://img/' + b.blob
+    : b.data && /^[A-Za-z0-9+/=\s]*$/.test(b.data) ? 'data:' + (/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + b.data : '';
+
   // ───────────────────────── Tool cards ─────────────────────────
   const TOOL_META = {
     bash: ['⌘', 'Terminal'], read: ['📄', 'Read'], write: ['✏️', 'Write'], edit: ['✏️', 'Edit'], ls: ['📁', 'List'],
@@ -763,6 +764,7 @@
     flashcards: ['🗂', 'Flashcards'], mastery: ['📈', 'Mastery'], lesson_plan: ['🗺', 'Learning plan'], memory_search: ['🧠', 'Recall'],
     memory_save: ['🧠', 'Remember'], memory_update: ['🧠', 'Update memory'], memory_forget: ['🧠', 'Forget'], memory: ['🧠', 'Memory'],
     load_tools: ['🧰', 'Load tools'], agents: ['🧭', 'Sub-agents'], project_memory: ['📒', 'Project memory'],
+    browser: ['🌐', 'Browser'], computer: ['🖥', 'Computer'], mac: ['🖥', 'Mac apps'],
   };
   const MEMORY_TITLES = { search: 'Recall', save: 'Remember', update: 'Update memory', forget: 'Forget' };
   function summaryOf(b) {
@@ -784,6 +786,9 @@
       case 'memory': return i.action === 'search' ? (i.query || '') : i.action === 'save' ? (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '')
         : '#' + (i.id || '') + (i.content ? ' ' + i.content : '');
       case 'load_tools': return (i.names || []).join(', ');
+      case 'browser': return (i.action || '') + ' ' + (i.url || i.ref || i.text || i.key || i.selector || (i.fields ? i.fields.length + ' fields' : ''));
+      case 'computer': return (i.action || '') + (i.coordinate ? ' (' + i.coordinate.join(', ') + ')' : '') + (i.text ? ' ' + i.text : '');
+      case 'mac': return (i.action || '') + ' ' + ((i.apps || []).join(', ') || i.app || i.ref || i.query || '');
       case 'flashcards': return (i.action || '') + ' ' + (i.deck || '') + (i.cards ? ' · ' + i.cards.length + ' cards' : '');
       case 'mastery': return (i.action || '') + ' ' + (i.concept || i.subject || '');
       case 'lesson_plan': return (i.action || '') + ' ' + (i.title || i.id || '');
@@ -850,6 +855,12 @@
       case 'flashcards':
         if (i.action === 'add' && i.cards) return '<div class="md">' + i.cards.slice(0, 30).map(c => '<p><b>Q:</b> ' + inline(c.front) + '<br><b>A:</b> ' + inline(c.back) + '</p>').join('') + '</div>' + (out ? pre(out) : '');
         return out ? pre(out) : '';
+      case 'browser': case 'computer': case 'mac': {
+        // What the agent did and saw: the screenshot, and the result without the untrusted-content envelope.
+        const shot = r ? imageSrc(r) : '';
+        const shown = out.replace(/^Everything until <\/untrusted_\w+> comes from[^\n]*\n/gm, '').replace(/<\/?untrusted_\w+_content[^>]*>\n?/g, '');
+        return (shot ? '<img class="tool-shot" src="' + esc(shot) + '" alt="">' : '') + (shown ? pre(shown, 8000) : '');
+      }
       case 'lesson_plan': return out ? '<div class="md plan">' + markdown(out.replace(/^# /, '#### '), false) + '</div>' : '';
       case 'task': return '<div class="label">Brief</div><div class="md">' + markdown(i.prompt || '', false) + '</div>' + (out ? '<div class="label">Report</div><div class="md">' + markdown(out, false) + '</div>' : (S.progress.get(b.id) ? pre(S.progress.get(b.id)) : ''));
       default: return (Object.keys(i).length ? '<div class="label">Input</div>' + pre(JSON.stringify(i, null, 2)) : '') + (out ? '<div class="label">Result</div>' + pre(out) : '');
