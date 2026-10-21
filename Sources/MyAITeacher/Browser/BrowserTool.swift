@@ -59,15 +59,22 @@ struct BrowserTool: Tool {
         }
     }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        try await AgentBrowser.shared.perform(input, vision: ctx.vision, downloads: ctx.workspace.appendingPathComponent("Downloads"))
+        try await AgentBrowser.shared.perform(input, conv: ctx.conversationID, vision: ctx.vision, downloads: ctx.workspace.appendingPathComponent("Downloads"))
     }
 }
 
 extension BrowserTab {
-    /// Calls the helper in the main frame, or in the cross-origin frame a ref points into (f2.ref_3).
+    static let staleRef = "That ref belongs to an earlier version of the page (it changed since the snapshot): take a new snapshot."
+
+    /// Calls the helper in the main frame, or in the cross-origin frame a ref points into (f2.ref_3). A call with a ref
+    /// carries the token of the document that ref came from; a different document refuses it.
     func call(_ fn: String, _ args: [String: JSON] = [:], frame index: Int? = nil) async throws -> JSON {
         var a = args
         a["prefix"] = .string(index.map { "f\($0)." } ?? "")
+        if let ref = a["ref"]?.string {
+            guard let tok = issued["\(index ?? 0):\(ref)"] else { throw ToolError(Self.staleRef) }
+            a["token"] = .string(tok)
+        }
         let info = index.flatMap { frame($0) }
         if index != nil && info == nil { throw ToolError("That frame is gone: take a new snapshot.") }
         let body = "if (!window.__ta) return '{\"error\":\"nohelper\"}'; return JSON.stringify(await window.__ta[fn](args));"
@@ -76,59 +83,87 @@ extension BrowserTab {
             let r = try await web.callAsyncJavaScript(body, arguments: ["fn": fn, "args": JSON.object(a).any], in: info, contentWorld: world)
             return (r as? String).flatMap { JSON.parse($0) } ?? .null
         }
+        var j: JSON
         do {
-            var j = try await once()
+            j = try await once()
             if j["error"]?.string == "nohelper" {   // a document WebKit made before user scripts ran (the first about:blank)
                 _ = try await web.callAsyncJavaScript(BrowserScripts.helper + "\nreturn true;", arguments: [:], in: info, contentWorld: world)
                 j = try await once()
             }
-            return j
         } catch {
             if let index { dropFrame(index) }
             throw ToolError("The page didn't answer (\(error.localizedDescription)). It may still be loading: wait, then snapshot again.")
         }
+        if j["error"]?.string == "stale" { throw ToolError(Self.staleRef) }
+        if let tok = j["token"]?.string { record(j, token: tok, frame: index ?? 0) }
+        return j
+    }
+}
+
+extension BrowserTab {
+    /// Remembers which document every ref in a helper answer came from (snapshots, finds, and the refs actions name).
+    func record(_ answer: JSON, token: String, frame: Int) {
+        let text = answer.compact
+        var range = text.startIndex..<text.endIndex
+        while let r = text.range(of: #"ref_\d+"#, options: .regularExpression, range: range) {
+            issued["\(frame):\(text[r])"] = token
+            range = r.upperBound..<text.endIndex
+        }
+        if issued.count > 20_000 { issued.removeAll() }   // bounded: a page with endless refs just asks for a new snapshot
     }
 }
 
 extension AgentBrowser {
-    /// "ref_12", "12", "[ref_12]", "f2.ref_3" → (frame, ref).
-    static func parseRef(_ raw: String?) -> (frame: Int?, ref: String)? {
-        guard let raw, let r = raw.range(of: #"(f\d+\.)?ref_\d+|^\d+$"#, options: .regularExpression) else { return nil }
+    /// "ref_12", "12", "[ref_12]", "f2.ref_3" → (frame, ref); "f2" alone names a frame (to snapshot it).
+    static func parseRef(_ raw: String?) -> (frame: Int?, ref: String?)? {
+        guard let raw, let r = raw.range(of: #"(f\d+\.)?ref_\d+|^f\d+$|^\d+$"#, options: .regularExpression) else { return nil }
         let s = String(raw[r])
         if s.allSatisfy(\.isNumber) { return (nil, "ref_" + s) }
-        guard s.hasPrefix("f"), let dot = s.firstIndex(of: ".") else { return (nil, s) }
-        return (Int(s.dropFirst().prefix { $0 != "." }), String(s[s.index(after: dot)...]))
+        guard s.hasPrefix("f") else { return (nil, s) }
+        let frame = Int(s.dropFirst().prefix { $0 != "." })
+        guard let dot = s.firstIndex(of: ".") else { return (frame, nil) }
+        return (frame, String(s[s.index(after: dot)...]))
     }
 
-    /// Accepts what models type: bare hosts get https, localhost gets http, absolute paths are files.
+    /// Accepts what models type: bare hosts get https, local names get http, absolute paths are files.
     static func parseURL(_ raw: String?) -> URL? {
         guard var s = raw?.trimmingCharacters(in: .whitespacesAndNewlines), !s.isEmpty else { return nil }
         if s.hasPrefix("/") || s.hasPrefix("~") { return URL(fileURLWithPath: (s as NSString).expandingTildeInPath) }
-        if !s.contains("://") && !s.hasPrefix("about:") && !s.hasPrefix("data:") {
+        if !s.contains("://") && !s.hasPrefix("about:") && !s.hasPrefix("data:") && !s.hasPrefix("blob:") {
             let host = s.split(separator: "/").first.map(String.init) ?? s
-            s = (SiteKey.isLocalHost(host.split(separator: ":").first.map(String.init) ?? host) ? "http://" : "https://") + s
+            s = (LocalNetwork.isLocal(host.split(separator: ":").first.map(String.init) ?? host) ? "http://" : "https://") + s
         }
         guard let u = URL(string: s), u.scheme != nil else { return nil }
         return u
     }
 
-    /// Runs one `browser` call. Everything that comes from the page goes back inside the untrusted envelope.
-    func perform(_ input: JSON, vision: Bool, downloads: URL) async throws -> ToolOutput {
+    /// What the agent hears instead of a page its lesson hasn't approved.
+    static func withheld(_ t: BrowserTab, _ site: SiteKey) -> String {
+        "t\(t.id) is on \(site.label), which the learner hasn't approved for this lesson, so its content is withheld. Call snapshot to ask them for it."
+    }
+
+    /// Runs one `browser` call for lesson `conv`. Everything that comes from the page goes back inside the untrusted
+    /// envelope, and only from sites that lesson approved.
+    func perform(_ input: JSON, conv: String, vision: Bool, downloads: URL) async throws -> ToolOutput {
         let action = input["action"]?.string ?? ""
         if learnerControl && action != "tabs" {
             return .error("The learner has taken over the browser. Wait until they hand it back (ask them with ask_learner), or carry on without it.")
         }
         activity = [action.replacingOccurrences(of: "_", with: " "), input["ref"]?.string ?? input["url"]?.string ?? ""].joined(separator: " ")
-        lastGesture = Date()
-        defer { activity = nil; lastGesture = Date() }
+        beginAction(conv, popups: ["click", "key", "type"].contains(action) ? 1 : 0)
+        defer { activity = nil; endAction() }
         switch action {
         case "tabs":
             if tabs.isEmpty { return ToolOutput(text: "No tabs open. navigate opens one.") }
-            return ToolOutput(text: Untrusted.wrap(tabs.map { t in "t\(t.id)\(t.id == active?.id ? " [active]" : ""): \(t.title.isEmpty ? "(untitled)" : t.title) — \(t.url?.absoluteString ?? "about:blank")" }
-                                                    .joined(separator: "\n"), source: "tab list"))
+            return ToolOutput(text: Untrusted.wrap(tabs.map { t in
+                let what = approved(t.site) ? "\(t.title.isEmpty ? "(untitled)" : t.title) — \(t.url?.absoluteString ?? "about:blank")" : "\(t.site?.label ?? "?") (not approved)"
+                return "t\(t.id)\(t.id == active?.id ? " [active]" : ""): \(what)"
+            }.joined(separator: "\n"), source: "tab list"))
         case "new_tab":
             let url = Self.parseURL(input["url"]?.string)
             if input["url"] != nil && url == nil { return .error("That isn't a URL.") }
+            guard tabs.count < Self.tabLimit else { return .error("\(Self.tabLimit) tabs are open: close one first (close_tab).") }
+            if let url, !Self.openable(url) { return .error("Only web pages, files and about:blank open here.") }
             let t = newTab(url)
             Self.onShow?()
             if url != nil { await settle(t, loading: 30) }
@@ -138,25 +173,31 @@ extension AgentBrowser {
             if action == "close_tab" { close(t); return ToolOutput(text: "Closed t\(id).\(active.map { " Active: t\($0.id)." } ?? " No tabs left.")") }
             activeID = id
             return await page(t, head: "Switched to t\(id).", snapshot: true)
-        default: break
-        }
-        if action == "navigate" {
+        case "navigate":
             guard let url = Self.parseURL(input["url"]?.string) else { return .error("`url` is required (https://…, localhost:3000 or a file path).") }
-            guard ["http", "https", "file", "about", "data"].contains(url.scheme?.lowercased() ?? "") else { return .error("Only web pages and files open here.") }
+            guard Self.openable(url) else { return .error("Only web pages, files and about:blank open here.") }
             let t = tab(input["tab"]?.int) ?? newTab()
             Self.onShow?()
             t.load(url)
             await settle(t, loading: 30)
             return await page(t, head: t.lastError.map { "Couldn't load it: \($0)" } ?? "Loaded t\(t.id)\(t.lastStatus.map { " (HTTP \($0))" } ?? "").", snapshot: t.lastError == nil)
+        default: break
         }
         guard let t = tab(input["tab"]?.int) else { return .error("No tab is open: navigate first.") }
         let target = Self.parseRef(input["ref"]?.string)
         if input["ref"]?.string != nil && target == nil { return .error("`ref` must look like ref_12 (from snapshot).") }
         let frame = target?.frame
-        var args: [String: JSON] = target.map { ["ref": .string($0.ref)] } ?? [:]
+        // The page may have moved on since the approval (a redirect while idle): only approved sites, frames included.
+        if action != "dialog" && action != "download" {
+            if let site = t.site, !approved(site) { return .error(Self.withheld(t, site)) }
+            if let f = frame, let site = t.frameSite(f), !approved(site) {
+                return .error("Frame f\(f) is \(site.label), which the learner hasn't approved for this lesson: snapshot with ref f\(f) asks them.")
+            }
+        }
+        var args: [String: JSON] = target?.ref.map { ["ref": .string($0)] } ?? [:]
         func css(_ raw: JSON?) throws -> (Double, Double)? {
             guard let raw else { return nil }
-            guard let a = raw.array?.compactMap(\.double), a.count == 2 else { throw ToolError("`coordinate` must be [x, y] in screenshot pixels.") }
+            guard let a = raw.array?.compactMap(\.double), a.count == 2, a.allSatisfy(\.isFinite) else { throw ToolError("`coordinate` must be [x, y] in screenshot pixels.") }
             return (a[0] * t.shotScale, a[1] * t.shotScale)
         }
         switch action {
@@ -167,8 +208,8 @@ extension AgentBrowser {
             await settle(t, loading: 30)
             return await page(t, head: "\(action.capitalized): t\(t.id).", snapshot: true)
         case "snapshot":
-            return ToolOutput(text: "Snapshot of t\(t.id) (refs stay valid until the element goes away):\n" + Untrusted.wrap(try await snapshotText(t, filter: input["filter"]?.string,
-                              ref: target?.ref, frame: frame, max: input["max_chars"]?.int ?? 20000), source: t.url?.absoluteString ?? ""), meta: meta(t))
+            let text = try await snapshotText(t, filter: input["filter"]?.string, ref: target?.ref, frame: frame, max: min(100_000, max(500, input["max_chars"]?.int ?? 20000)))
+            return ToolOutput(text: "Snapshot of t\(t.id) (refs stay valid until the element goes away or the page changes):\n" + Untrusted.wrap(text, source: t.url?.absoluteString ?? ""), meta: meta(t))
         case "screenshot":
             guard vision else { return .error("This model can't see images: use snapshot (the page's accessibility tree) instead.") }
             let (img, note) = try await screenshot(t)
@@ -177,18 +218,20 @@ extension AgentBrowser {
             let html = try await t.call("html").string ?? ""
             let base = t.url
             let md = await Task.detached { HTMLToMarkdown.convert(html: html, baseURL: base) }.value
-            let limit = min(100_000, input["max_chars"]?.int ?? 20000)
+            let limit = min(100_000, max(500, input["max_chars"]?.int ?? 20000))
             let body = (md.title.map { "# \($0)\n\n" } ?? "") + md.markdown
             return ToolOutput(text: Untrusted.wrap(body.count > limit ? String(body.prefix(limit)) + "\n… (\(body.count - limit) more characters: raise max_chars)" : body,
                                                    source: base?.absoluteString ?? ""), meta: meta(t))
         case "find":
             guard let q = input["text"]?.string ?? input["query"]?.string, !q.isEmpty else { return .error("`text` is what to find.") }
             var lines = (try await t.call("find", ["query": .string(q)]))["matches"]?.array?.compactMap(\.string) ?? []
-            for i in t.frameIndices { lines += (try? await t.call("find", ["query": .string(q)], frame: i))?["matches"]?.array?.compactMap(\.string) ?? [] }
+            for i in t.frameIndices where t.frameSite(i).map(approved) ?? false {
+                lines += (try? await t.call("find", ["query": .string(q)], frame: i))?["matches"]?.array?.compactMap(\.string) ?? []
+            }
             return ToolOutput(text: Untrusted.wrap(lines.isEmpty ? "No visible text matches “\(q)”." : lines.joined(separator: "\n"), source: t.url?.absoluteString ?? ""))
         case "click", "hover":
-            if let p = try css(input["coordinate"]), target == nil { args["x"] = .number(p.0); args["y"] = .number(p.1) }
-            else if target == nil { return .error("Give a `ref` (from snapshot) or a `coordinate`.") }
+            if let p = try css(input["coordinate"]), target?.ref == nil { args["x"] = .number(p.0); args["y"] = .number(p.1) }
+            else if target?.ref == nil { return .error("Give a `ref` (from snapshot) or a `coordinate`.") }
             if action == "click" {
                 args["button"] = .string(input["button"]?.string ?? "left")
                 if input["double"]?.bool == true { args["clicks"] = 2 }
@@ -209,12 +252,13 @@ extension AgentBrowser {
             if pairs.isEmpty { pairs = [(input["ref"], input["value"]?.string ?? input["text"]?.string ?? input["value"].map { $0.compact } ?? "")] }
             var done: [String] = []
             for (raw, value) in pairs {
-                guard let r = Self.parseRef(raw?.string) else { return .error("Each field needs a `ref` from snapshot.") }
-                let a: [String: JSON] = ["ref": .string(r.ref), "value": .string(value)]
+                guard let r = Self.parseRef(raw?.string), let ref = r.ref else { return .error("Each field needs a `ref` from snapshot.") }
+                if let f = r.frame, let site = t.frameSite(f), !approved(site) { return .error("Frame f\(f) is \(site.label), which the learner hasn't approved for this lesson.") }
+                let a: [String: JSON] = ["ref": .string(ref), "value": .string(value)]
                 try await refuseSensitive(t, text: value, args: a, frame: r.frame)
                 let j = try await t.call("fill", a, frame: r.frame)
                 if let e = j["error"]?.string { return .error(Untrusted.wrap((done + [e]).joined(separator: "\n"), source: t.url?.absoluteString ?? "")) }
-                done.append(j["did"]?.string ?? "Filled \(r.ref)")
+                done.append(j["did"]?.string ?? "Filled \(ref)")
             }
             return await result(t, done.joined(separator: "\n"))
         case "select":
@@ -226,11 +270,13 @@ extension AgentBrowser {
             return try await act(t, action, args, frame: frame)
         case "key":
             guard let k = input["key"]?.string ?? input["text"]?.string, !k.isEmpty else { return .error("`key` is required (Enter, Tab, cmd+a…).") }
+            // A key that types a character or pastes is typing: never into a password, payment or ID field.
+            if KeyCombo.parse(k).map({ $0.typesText || $0.isPaste }) ?? (k.count == 1) { try await refuseSensitive(t, text: "", args: args, frame: frame) }
             args["key"] = .string(k)
             return try await act(t, action, args, frame: frame)
         case "scroll":
             if let p = try css(input["coordinate"]) { args["x"] = .number(p.0); args["y"] = .number(p.1) }
-            if let d = input["direction"]?.string { args["direction"] = .string(d) } else if target == nil { args["direction"] = "down" }
+            if let d = input["direction"]?.string { args["direction"] = .string(d) } else if target?.ref == nil { args["direction"] = "down" }
             args["amount"] = .number(Double(min(50, max(1, input["amount"]?.int ?? 5))))
             return try await act(t, action, args, frame: frame)
         case "wait": return try await wait(t, input)
@@ -262,7 +308,8 @@ extension AgentBrowser {
             case .success(let file):
                 let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) }
                 t.blockedDownload = nil
-                return ToolOutput(text: "Saved \(file.lastPathComponent) (\(BrowserTab.sizeText(size))) to \(file.path).")
+                // The file name is the page's choice: it stays inside the envelope.
+                return ToolOutput(text: "Download finished.\n" + Untrusted.wrap("Saved \(file.lastPathComponent) (\(BrowserTab.sizeText(size))) to \(file.path).", source: url.absoluteString))
             case .failure(let e): return .error("The download failed: \(e.localizedDescription)")
             }
         case "dialog":
@@ -273,6 +320,9 @@ extension AgentBrowser {
         }
     }
 
+    /// The agent opens web pages, files and blank pages; never data: or blob: documents it would write itself.
+    static func openable(_ u: URL) -> Bool { ["http", "https", "file"].contains(u.scheme?.lowercased() ?? "") || u.absoluteString == "about:blank" }
+
     private func meta(_ t: BrowserTab) -> JSON { ["tab": .number(Double(t.id)), "url": .string(t.url?.absoluteString ?? "")] }
 
     /// Waits for a navigation the action may have started to finish.
@@ -282,7 +332,8 @@ extension AgentBrowser {
         while t.web.isLoading && Date().timeIntervalSince(t0) < limit { try? await Task.sleep(nanoseconds: 100_000_000) }
     }
 
-    /// Main frame plus each cross-origin frame (listed after it, its refs prefixed f2.).
+    /// The main frame (or one frame), then each cross-origin frame its lesson approved, its refs prefixed f2.; frames of
+    /// sites not approved are named, not read.
     func snapshotText(_ t: BrowserTab, filter: String?, ref: String?, frame: Int?, max: Int) async throws -> String {
         let args: [String: JSON] = ["filter": .string(filter ?? "interactive"), "max": .number(Double(max))].merging(ref.map { ["ref": .string($0)] } ?? [:]) { a, _ in a }
         let main = try await t.call("snapshot", args, frame: frame)
@@ -291,6 +342,10 @@ extension AgentBrowser {
         guard ref == nil, frame == nil else { return out }
         var seen = Set([main["token"]?.string ?? ""])
         for i in t.frameIndices {
+            if let site = t.frameSite(i), !approved(site) {
+                out += "\n\nFrame f\(i) (\(site.label)): not approved for this lesson, so not read. snapshot with ref f\(i) asks the learner."
+                continue
+            }
             guard let f = try? await t.call("snapshot", args, frame: i), let tok = f["token"]?.string, seen.insert(tok).inserted else { continue }
             out += "\n\nFrame f\(i) (\(f["url"]?.string ?? "")):\n" + (f["text"]?.string ?? "")
         }
@@ -300,7 +355,7 @@ extension AgentBrowser {
 
     private func screenshot(_ t: BrowserTab) async throws -> (ModelImage, String) {
         let w = t.web.bounds.width, h = t.web.bounds.height
-        guard w > 10, t.web.window != nil else { throw ToolError("The tab isn't laid out yet: try again in a moment.") }
+        guard w > 10, h > 10, t.web.window != nil else { throw ToolError("The tab isn't laid out yet: try again in a moment.") }
         let cfg = WKSnapshotConfiguration()
         cfg.snapshotWidth = NSNumber(value: Double(min(w, 1280)))
         let image: NSImage = try await withCheckedThrowingContinuation { c in
@@ -311,7 +366,7 @@ extension AgentBrowser {
         // One image pixel per CSS pixel (Retina's 2× would double the tokens and add nothing the model can click on).
         guard let m = ImageUtil.loadForModel(image: image, maxPixelSize: Int(min(1280, max(w, h)))) else { throw ToolError("Couldn't encode the screenshot.") }
         t.shotScale = Double(w) / Double(m.width)
-        return (m, "Screenshot of t\(t.id): \(m.width)×\(m.height) px of the visible page (\(Int(w))×\(Int(h)) CSS px). `coordinate` values are pixels of this image; refs from snapshot are more reliable.")
+        return (m, "Screenshot of t\(t.id): \(m.width)×\(m.height) px of the visible page (\(pixelText(w))×\(pixelText(h)) CSS px). `coordinate` values are pixels of this image; refs from snapshot are more reliable.")
     }
 
     private func refuseSensitive(_ t: BrowserTab, text: String, args: [String: JSON], frame: Int?) async throws {
@@ -326,8 +381,9 @@ extension AgentBrowser {
         if let e = j["error"]?.string { return .error(Untrusted.wrap(e, source: t.url?.absoluteString ?? "")) }
         await settle(t)
         var did = j["did"]?.string ?? "Done."
-        // A new page: its controls come with the result (the next step would ask for them anyway).
+        // A new page: its controls come with the result (the next step would ask for them anyway), if its site is approved.
         if t.web.url != before {
+            if let site = t.site, !approved(site) { return await result(t, did + "\nThe page changed. " + Self.withheld(t, site)) }
             did += "\nThe page changed:\n" + ((try? await snapshotText(t, filter: "interactive", ref: nil, frame: nil, max: 6000)) ?? "\(t.title) — \(t.web.url?.absoluteString ?? "")")
         }
         return await result(t, did)
@@ -339,11 +395,16 @@ extension AgentBrowser {
         return ToolOutput(text: "On t\(t.id):\n" + Untrusted.wrap(text, source: t.url?.absoluteString ?? ""), meta: meta(t))
     }
 
-    /// After loading: where we are, what happened, and the page's controls (saves the model a snapshot call).
+    /// After loading: where we are, what happened, and the page's controls (saves the model a snapshot call) — or, on a
+    /// site the lesson hasn't approved, only that.
     private func page(_ t: BrowserTab, head: String, snapshot: Bool) async -> ToolOutput {
+        let notes = t.drainNotices()
+        if let site = t.site, !approved(site) {
+            let ours = notes.filter { $0.hasPrefix("Blocked") }   // the page's own messages (alerts…) stay out too
+            return ToolOutput(text: head + "\n" + Self.withheld(t, site) + (ours.isEmpty ? "" : "\n" + ours.joined(separator: "\n")), meta: meta(t))
+        }
         var body = "Page: \(t.title) — \(t.web.url?.absoluteString ?? "about:blank")"
         if snapshot, let s = try? await snapshotText(t, filter: "interactive", ref: nil, frame: nil, max: 8000) { body = s }
-        let notes = t.drainNotices()
         if !notes.isEmpty { body += "\n\nNotices:\n" + notes.joined(separator: "\n") }
         return ToolOutput(text: head + "\n" + Untrusted.wrap(body, source: t.url?.absoluteString ?? ""), isError: t.lastError != nil, meta: meta(t))
     }
@@ -371,3 +432,4 @@ extension AgentBrowser {
         return .error("Still waiting after \(limit) s\(text.map { ": “\($0)” hasn't appeared" } ?? selector.map { ": \($0) isn't visible" } ?? ": requests are still running (\(t.inflight))").")
     }
 }
+

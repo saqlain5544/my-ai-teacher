@@ -1,5 +1,6 @@
 import XCTest
 import WebKit
+import Network
 @testable import MyAITeacher
 
 /// The agent browser, headless: a real WKWebView (non-persistent store, offscreen panel) on a local file page.
@@ -45,16 +46,19 @@ final class BrowserTests: XCTestCase {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         try Self.page.write(to: dir.appendingPathComponent("form.html"), atomically: true, encoding: .utf8)
         browser = AgentBrowser(store: .nonPersistent())
-        browser.allowedLocal.insert(SiteKey.of(dir.appendingPathComponent("form.html"))!.id)   // what the approval card grants
+        // What the approval cards granted lesson "L": the page's folder and its data: frame.
+        approved = [SiteKey.of(dir.appendingPathComponent("form.html"))!.id, "data:"]
+        browser.siteAllowed = { [unowned self] site, conv in conv == "L" && self.approved.contains(site.id) }
     }
     override func tearDown() async throws {
         for t in browser.tabs { browser.close(t) }
         try? FileManager.default.removeItem(at: dir)
     }
+    var approved: Set<String> = []
 
     @discardableResult
-    func act(_ input: JSON, vision: Bool = true) async throws -> ToolOutput {
-        try await browser.perform(input, vision: vision, downloads: dir.appendingPathComponent("Downloads"))
+    func act(_ input: JSON, vision: Bool = true, conv: String = "L") async throws -> ToolOutput {
+        try await browser.perform(input, conv: conv, vision: vision, downloads: dir.appendingPathComponent("Downloads"))
     }
     func js(_ s: String) async throws -> String { String(describing: try await browser.active!.web.evaluateJavaScript(s) ?? "") }
     /// The ref the snapshot gives an element with this text, e.g. `button "Create account" ref_12`.
@@ -173,4 +177,161 @@ final class BrowserTests: XCTestCase {
         let v13 = try await act(["action": "snapshot"]).text.contains("taken over")
         XCTAssertTrue(v13)
     }
+
+    // MARK: Approval holds across redirects, frames, tabs and documents
+
+    /// Pages on 127.0.0.1 (approved) linking, redirecting and scripting their way to localhost (another origin, not approved).
+    func server() throws -> (TinyHTTPServer, String) {
+        let s = try TinyHTTPServer { path, port in
+            let other = "http://localhost:\(port)"
+            switch path {
+            case "/a": return .init(body: """
+                <title>A</title><h1>Page A</h1><a href="\(other)/b">Other origin</a>
+                <button onclick="location='\(other)/b'">Script redirect</button>
+                <form action="\(other)/b" method="post"><button>Post elsewhere</button></form>
+                <button onclick="for (let i = 0; i < 3; i++) window.open('/a2?' + i)">Popups</button><a href="/a2">Same origin</a>
+                """)
+            case "/a2": return .init(body: "<title>A2</title><button>Fresh</button>")
+            case "/b": return .init(body: "<title>B secret</title><p>secret content of B</p>")
+            case "/r": return .init(status: 302, headers: ["Location": "\(other)/b"])
+            case "/m": return .init(body: "<meta http-equiv=\"refresh\" content=\"0;url=\(other)/b\"><title>M</title>")
+            case "/idle": return .init(body: "<title>Idle</title><script>setTimeout(() => location = '\(other)/b', 300)</script>")
+            case "/slow": return .init(headers: ["Content-Type": "application/octet-stream", "Content-Disposition": "attachment; filename=big.bin"], hang: true)
+            default: return .init(status: 404, body: "nope")
+            }
+        }
+        approved = ["127.0.0.1:\(s.port)"]
+        return (s, "http://127.0.0.1:\(s.port)")
+    }
+
+    func testThePageCantTakeTheAgentToSitesItsLessonHasntApproved() async throws {
+        let (s, base) = try server()
+        let a = try await act(["action": "navigate", "url": .string(base + "/a")])
+        XCTAssertFalse(a.isError, a.text)
+        let snap = try await act(["action": "snapshot"]).text
+        for label in ["Other origin", "Script redirect", "Post elsewhere"] {
+            let r = try await act(["action": "click", "ref": .string(try ref(snap, label))])
+            XCTAssertTrue(r.text.contains("Blocked a navigation to http://localhost:\(s.port)/b"), "\(label): \(r.text)")
+            XCTAssertFalse(r.text.contains("secret"), r.text)
+            XCTAssertEqual(browser.active?.url?.absoluteString, base + "/a", label)
+        }
+        for path in ["/r", "/m"] {   // a server redirect, a meta refresh
+            let r = try await act(["action": "navigate", "url": .string(base + path)])
+            XCTAssertFalse(r.text.contains("secret"), "\(path): \(r.text)")
+            XCTAssertNotEqual(browser.active?.url?.host(), "localhost", path)
+        }
+        // Between actions (nobody acting) the page still can't reach this Mac's other origins.
+        _ = try await act(["action": "navigate", "url": .string(base + "/idle")])
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        XCTAssertEqual(browser.active?.url?.absoluteString, base + "/idle")
+        // A tab on a site the lesson hasn't approved (the learner opened it): switching to it shows nothing of it.
+        browser.learnerSites.insert("localhost:\(s.port)")
+        let theirs = browser.newTab(URL(string: "http://localhost:\(s.port)/b"))
+        while theirs.loading || theirs.url == nil { try await Task.sleep(nanoseconds: 50_000_000) }
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let sw = try await act(["action": "switch_tab", "tab": .number(Double(theirs.id))])
+        XCTAssertTrue(sw.text.contains("hasn't approved") && !sw.text.contains("secret"), sw.text)
+        let list = try await act(["action": "tabs"]).text
+        XCTAssertTrue(list.contains("not approved") && !list.contains("B secret"), list)
+        let read = try await act(["action": "snapshot"])
+        XCTAssertTrue(read.isError && !read.text.contains("secret"), read.text)
+        // Another lesson with no grants sees nothing either.
+        browser.activeID = 1
+        let other = try await act(["action": "snapshot"], conv: "M")
+        XCTAssertTrue(other.isError && other.text.contains("hasn't approved"), other.text)
+        _ = s
+    }
+
+    func testRefsFromAnEarlierPageAndPopupFloods() async throws {
+        let (s, base) = try server()
+        _ = try await act(["action": "navigate", "url": .string(base + "/a")])
+        let snap = try await act(["action": "snapshot"]).text
+        let old = try ref(snap, "Same origin")
+        _ = try await act(["action": "navigate", "url": .string(base + "/a2")])
+        let stale = try? await act(["action": "click", "ref": .string(old)])
+        XCTAssertNil(stale, "a ref from /a must not land on whatever /a2 numbered the same")
+        do { _ = try await act(["action": "click", "ref": .string(old)]) } catch { XCTAssertTrue("\(error.localizedDescription)".contains("earlier version"), "\(error)") }
+
+        _ = try await act(["action": "navigate", "url": .string(base + "/a")])
+        let fresh = try await act(["action": "snapshot"]).text
+        _ = try await act(["action": "click", "ref": .string(try ref(fresh, "Popups"))])
+        XCTAssertEqual(browser.tabs.count, 2, "one popup per click, not three")
+        _ = s
+    }
+
+    func testDownloadsRunOneAtATimeAndStopWithTheirCall() async throws {
+        let (s, base) = try server()
+        _ = try await act(["action": "navigate", "url": .string(base + "/a")])
+        let first = Task { try await self.act(["action": "download", "url": .string(base + "/slow")]) }
+        try await Task.sleep(nanoseconds: 500_000_000)
+        let second = try await act(["action": "download", "url": .string(base + "/slow")])
+        XCTAssertTrue(second.isError && second.text.contains("Another download"), second.text)
+        first.cancel()   // what the tool's deadline does
+        let out = try await first.value
+        XCTAssertTrue(out.isError && out.text.contains("cancelled"), out.text)
+        let leftovers = (try? FileManager.default.contentsOfDirectory(atPath: dir.appendingPathComponent("Downloads").path)) ?? []
+        XCTAssertTrue(leftovers.isEmpty, "\(leftovers)")
+        _ = s
+    }
+
+    func testFramesOfOtherSitesNeedTheirOwnApproval() async throws {
+        approved.remove("data:")
+        _ = try await act(["action": "navigate", "url": .string(dir.appendingPathComponent("form.html").path)])
+        try await Task.sleep(nanoseconds: 300_000_000)
+        let snap = try await act(["action": "snapshot"]).text
+        XCTAssertTrue(snap.contains("pages made from data: URLs): not approved") && !snap.contains("Inner cross-origin"), snap)
+        let frame = try XCTUnwrap(browser.active?.frameIndices.first)
+        let refused = try await act(["action": "click", "ref": .string("f\(frame).ref_1")])
+        XCTAssertTrue(refused.isError && refused.text.contains("hasn't approved"), refused.text)
+        // The approval card for a frame ref asks for the frame's site after the page's.
+        let gate = ComputerUseGate(store: .init(lessonGranted: { k, _ in k == "site:" + self.approved.first! }, grantLesson: { _, _ in },
+                                                alwaysSites: { [] }, addAlwaysSite: { _ in }, alwaysApps: { [] }, addAlwaysApp: { _ in }),
+                                   browser: browser, computer: ComputerController())
+        let card = gate.decide(tool: "browser", input: ["action": "click", "ref": .string("f\(frame).ref_1")], conv: "L", folder: dir).asking
+        XCTAssertTrue(card?.title.contains("data: URL") == true, card?.title ?? "no card")
+    }
+
+    func testPublicPagesCantReachTheLocalNetwork() async throws {
+        let store = try XCTUnwrap(WKContentRuleListStore(url: dir.appendingPathComponent("rules")))
+        let list = try await AgentBrowser.localNetworkRules(store)
+        XCTAssertNotNil(list, "the content rules compile")
+    }
+}
+
+/// A local HTTP server for the browser tests: `route(path, port)` answers each request; `hang` sends headers and stalls.
+final class TinyHTTPServer: @unchecked Sendable {
+    struct Reply {
+        var status = 200
+        var headers = ["Content-Type": "text/html; charset=utf-8"]
+        var body = ""
+        var hang = false
+    }
+    let listener: NWListener
+    var port: UInt16 { listener.port!.rawValue }
+    private var open: [NWConnection] = []
+    private let lock = NSLock()
+
+    init(_ route: @escaping @Sendable (String, UInt16) -> Reply) throws {
+        listener = try NWListener(using: .tcp, on: .any)
+        listener.newConnectionHandler = { [weak self] conn in
+            self?.lock.withLock { self?.open.append(conn) }
+            conn.start(queue: .global())
+            conn.receive(minimumIncompleteLength: 1, maximumLength: 1 << 16) { data, _, _, _ in
+                let req = String(decoding: data ?? Data(), as: UTF8.self)
+                let path = req.split(separator: " ").dropFirst().first.map { String($0.split(separator: "?").first ?? $0) } ?? "/"
+                let port = req.components(separatedBy: "\r\n").first { $0.lowercased().hasPrefix("host:") }
+                    .flatMap { UInt16($0.split(separator: ":").last?.trimmingCharacters(in: .whitespaces) ?? "") } ?? 0
+                let r = route(path, port)
+                var head = "HTTP/1.1 \(r.status) X\r\n" + r.headers.map { "\($0): \($1)\r\n" }.joined()
+                if r.hang { conn.send(content: Data((head + "Content-Length: 100000000\r\n\r\npartial").utf8), completion: .contentProcessed { _ in }); return }
+                head += "Content-Length: \(r.body.utf8.count)\r\nConnection: close\r\n\r\n"
+                conn.send(content: Data((head + r.body).utf8), completion: .contentProcessed { _ in conn.cancel() })
+            }
+        }
+        let ready = DispatchSemaphore(value: 0)
+        listener.stateUpdateHandler = { if case .ready = $0 { ready.signal() } }
+        listener.start(queue: .global())
+        _ = ready.wait(timeout: .now() + 5)
+    }
+    deinit { listener.cancel(); open.forEach { $0.cancel() } }
 }

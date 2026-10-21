@@ -136,37 +136,40 @@ extension ComputerController {
             guard let raw = input["app"]?.string, let f = AppResolver.resolve(raw) else { return .error("App `\(input["app"]?.string ?? "")` not found (list_apps shows what's running).") }
             guard AppTier.of(f.bundleID) != .never else { return .error("\(f.name) is never controlled by the agent.") }
             guard isGranted(f.bundleID, conv) else { return .error("No access to \(f.name): call request_access first.") }
-            begin(conv)
+            try begin(conv)
             return ToolOutput(text: try await bringForward(f))
         case "ax_tree", "ax_find":
             guard permissions().accessibility else { return .error(permissionText(permissions())) }
             let app = try target(input["app"]?.string, conv)
             if action == "ax_find" {
                 guard let q = input["query"]?.string, !q.isEmpty else { return .error("`query` is required.") }
-                return ToolOutput(text: Untrusted.wrap(ax.find(pid: app.pid, query: q, mapping: mapping), source: app.name, kind: "app"))
+                return ToolOutput(text: Untrusted.wrap(await ax.find(pid: app.pid, query: q, mapping: mapping), source: app.name, kind: "app"))
             }
-            let tree = ax.render(pid: app.pid, interactiveOnly: input["filter"]?.string != "all", mapping: mapping)
+            let tree = await ax.render(pid: app.pid, interactiveOnly: input["filter"]?.string != "all", mapping: mapping)
             return ToolOutput(text: "Accessibility tree of \(app.name) (refs stay valid while the element exists; positions are screenshot pixels when one was taken):\n"
                               + Untrusted.wrap(tree, source: app.name, kind: "app"))
         case "ax_press", "ax_set_value", "ax_perform":
             guard permissions().accessibility else { return .error(permissionText(permissions())) }
-            guard let ref = input["ref"]?.string, let (pid, _) = ax.element(ref) else { return .error("Unknown `ref`: read the tree first (ax_tree).") }
-            guard let app = desktop.apps().first(where: { $0.pid == pid }) else { return .error("That app has quit.") }
+            guard let ref = input["ref"]?.string, let (el, role) = ax.element(ref) else { return .error("Unknown `ref`: read the tree first (ax_tree).") }
+            guard let app = desktop.apps().first(where: { $0.pid == el.pid }) else { return .error("That app has quit.") }
             if aborted { return .error(Self.stoppedMessage) }
-            let need: AppTier = action == "ax_press" || ["AXRaise", "AXIncrement", "AXDecrement", "AXPick"].contains(input["ax_action"]?.string ?? "") ? .click : .full
+            let axAction = action == "ax_press" ? "AXPress" : action == "ax_set_value" ? "AXSetValue" : input["ax_action"]?.string ?? ""
             let tier = AppTier.of(app.bundleID)
-            guard pid != ownPID, tier != .never, isGranted(app.bundleID, conv) else { return .error("No access to \(app.name): request_access first.") }
-            guard tier >= need else { return .error("\(app.name) is \(tier.title): \(action) isn't allowed there.") }
-            begin(conv)
+            guard el.pid != ownPID, tier != .never, isGranted(app.bundleID, conv) else { return .error("No access to \(app.name): request_access first.") }
+            guard tier >= AXSession.need(action: axAction, role: role) else {
+                return .error("\(app.name) is \(tier.title): \(action) on a \(role.replacingOccurrences(of: "AX", with: "").lowercased()) isn't allowed there"
+                              + (tier == .click ? " (menus and values reach Paste, Save and Run: use bash and the file tools)." : "."))
+            }
+            try begin(conv)
             switch action {
-            case "ax_press": try ax.perform(ref, action: "AXPress"); return ToolOutput(text: "Pressed \(ref) in \(app.name).")
+            case "ax_press": try await ax.perform(ref, action: "AXPress"); return ToolOutput(text: "Pressed \(ref) in \(app.name).")
             case "ax_set_value":
                 let value = input["value"]?.string ?? ""
-                if let why = SensitiveInput.refusal(text: value, field: ax.field(ref)) { return .error(why) }
-                try ax.setValue(ref, value); return ToolOutput(text: "Set \(ref) in \(app.name).")
+                if let why = SensitiveInput.refusal(text: value, field: await ax.field(ref)) { return .error(why) }
+                try await ax.setValue(ref, value); return ToolOutput(text: "Set \(ref) in \(app.name).")
             default:
-                guard let a = input["ax_action"]?.string, a.hasPrefix("AX") else { return .error("`ax_action` is required (AXShowMenu, AXIncrement…).") }
-                try ax.perform(ref, action: a); return ToolOutput(text: "\(a) on \(ref) in \(app.name).")
+                guard axAction.hasPrefix("AX") else { return .error("`ax_action` is required (AXShowMenu, AXIncrement…).") }
+                try await ax.perform(ref, action: axAction); return ToolOutput(text: "\(axAction) on \(ref) in \(app.name).")
             }
         default: return .error("Unknown action `\(action)`.")
         }
@@ -244,20 +247,27 @@ extension ComputerController {
     }
 }
 
-/// Anthropic's own computer-use tool for Claude on api.anthropic.com: the computer toolset where the model has it, the
-/// 2025-11-24 tool on older Claude 4 models. Calls come back mapped onto the generic `computer` tool (member → action).
+/// Anthropic's own computer-use tool for Claude on api.anthropic.com, only for models the docs list: the computer toolset
+/// (Opus 5.5, Sonnet 5.5, Haiku 5.5 take only it; Opus 5 takes both), the 2025-11-24 tool on the models documented with
+/// it. Any other model keeps the generic schema. Calls come back mapped onto the generic `computer` tool (member → action).
 enum NativeComputerTool {
+    static let toolsetModels: Set<String> = ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5", "claude-opus-5"]
+    static let v20251124Models: Set<String> = ["claude-opus-4-5", "claude-opus-4-6", "claude-opus-4-7", "claude-sonnet-4-6", "claude-sonnet-5",
+                                               "claude-fable-5", "claude-fable-5-1"]
+
     static func spec(model: String, display: CGSize) -> (json: JSON, beta: String?)? {
-        let m = model.lowercased()
-        if ["fable-5", "mythos-5", "opus-5", "sonnet-5", "haiku-5", "opus-4-8"].contains(where: m.contains) {
-            return (["type": "computer_toolset_20260801"], nil)
-        }
-        if ["opus-4-7", "opus-4-6", "sonnet-4-6", "opus-4-5"].contains(where: m.contains) {
+        let base = model.lowercased().replacingOccurrences(of: #"-\d{8}$"#, with: "", options: .regularExpression)
+        if toolsetModels.contains(base) { return (["type": "computer_toolset_20260801"], nil) }
+        if v20251124Models.contains(base) {
             return (["type": "computer_20251124", "name": "computer", "display_width_px": .number(display.width),
                      "display_height_px": .number(display.height), "enable_zoom": true], "computer-use-2025-11-24")
         }
         return nil
     }
+
+    /// Whether a request declares the toolset (its calls replay as members only then; otherwise as plain `computer` calls,
+    /// so a lesson that switched model, host or tool settings never sends blocks the API would reject).
+    static func declared(in tools: [ToolSpec]) -> Bool { tools.contains { $0.native?["type"]?.string == "computer_toolset_20260801" } }
 
     /// A streamed toolset call (`name` = member, `toolset_name` = computer) as a `computer` call with that action.
     static func call(_ b: Block, member: String?) -> Block {

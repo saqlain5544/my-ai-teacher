@@ -65,6 +65,8 @@ struct SiteKey: Hashable, Sendable {
     let id: String
     let isLocal: Bool
 
+    /// The site a URL belongs to. blob: URLs belong to the origin inside them; data: documents form one local "site";
+    /// about: pages have none of their own (a tab attributes them to the page that opened them).
     static func of(_ url: URL) -> SiteKey? {
         switch url.scheme?.lowercased() {
         case "file": return SiteKey(id: "file:" + url.deletingLastPathComponent().path, isLocal: true)
@@ -72,22 +74,80 @@ struct SiteKey: Hashable, Sendable {
             guard var host = url.host()?.lowercased(), !host.isEmpty else { return nil }
             host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
             if host.hasPrefix("www.") { host.removeFirst(4) }
-            let local = isLocalHost(host)
+            let local = LocalNetwork.isLocal(host)
             return SiteKey(id: local ? "\(host):\(url.port ?? (url.scheme == "https" ? 443 : 80))" : host, isLocal: local)
-        default: return nil   // about:, data:, blob: need no approval
+        case "blob": return URL(string: String(url.absoluteString.dropFirst(5))).flatMap(of)
+        case "data": return SiteKey(id: "data:", isLocal: true)
+        default: return nil
         }
     }
 
-    /// This Mac or the local network: the learner's own servers and devices, never reached without asking.
-    static func isLocalHost(_ h: String) -> Bool {
-        if h == "localhost" || h.hasSuffix(".localhost") || h.hasSuffix(".local") || h.hasSuffix(".internal") || h == "::1" || h == "0.0.0.0" { return true }
-        if !h.contains(".") && !h.contains(":") { return true }   // single-label intranet names
-        let p = h.split(separator: ".").compactMap { Int($0) }
-        guard p.count == 4 else { return h.hasPrefix("fc") || h.hasPrefix("fd") || h.hasPrefix("fe80") }
-        return p[0] == 127 || p[0] == 10 || (p[0] == 192 && p[1] == 168) || (p[0] == 172 && (16...31).contains(p[1])) || (p[0] == 169 && p[1] == 254)
+    var label: String { id == "data:" ? "pages made from data: URLs" : id.hasPrefix("file:") ? "files in " + String(id.dropFirst(5)) : id }
+}
+
+/// This Mac and the local network: the learner's own servers and devices, never reached without asking. Addresses are
+/// parsed as addresses (IPv4, IPv6, IPv4-mapped, unspecified), names by their reserved suffixes, and names that turned
+/// out to resolve to such an address (localtest.me, nip.io…) are remembered once a navigation resolved them.
+enum LocalNetwork {
+    private static let lock = NSLock()
+    nonisolated(unsafe) private static var resolved: [String: Bool] = [:]
+
+    static func isLocal(_ rawHost: String) -> Bool {
+        let h = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
+        if let local = addressIsLocal(h) { return local }
+        if h == "localhost" || [".localhost", ".local", ".internal", ".home.arpa", ".lan", ".intranet"].contains(where: h.hasSuffix) { return true }
+        if !h.contains(".") { return true }   // single-label intranet names
+        return lock.withLock { resolved[h] } ?? false
     }
 
-    var label: String { id.hasPrefix("file:") ? "files in " + String(id.dropFirst(5)) : id }
+    /// nil when `h` isn't an IP address.
+    static func addressIsLocal(_ h: String) -> Bool? {
+        var v4 = in_addr(), v6 = in6_addr()
+        if inet_pton(AF_INET, h, &v4) == 1 { return v4Local(UInt32(bigEndian: v4.s_addr)) }
+        guard inet_pton(AF_INET6, h, &v6) == 1 else { return nil }
+        let b = withUnsafeBytes(of: v6) { Array($0) }
+        if b.allSatisfy({ $0 == 0 }) || (b[0..<15].allSatisfy { $0 == 0 } && b[15] == 1) { return true }        // :: and ::1
+        if b[0..<10].allSatisfy({ $0 == 0 }) && b[10] == 0xff && b[11] == 0xff {                                    // ::ffff:a.b.c.d
+            return v4Local(UInt32(b[12]) << 24 | UInt32(b[13]) << 16 | UInt32(b[14]) << 8 | UInt32(b[15]))
+        }
+        return b[0] & 0xfe == 0xfc || (b[0] == 0xfe && b[1] & 0xc0 == 0x80)                                          // fc00::/7, fe80::/10
+    }
+
+    private static func v4Local(_ a: UInt32) -> Bool {
+        let o = (a >> 24, (a >> 16) & 0xff)
+        return o.0 == 0 || o.0 == 127 || o.0 == 10 || (o.0 == 172 && (16...31).contains(o.1)) || (o.0 == 192 && o.1 == 168)
+            || (o.0 == 169 && o.1 == 254) || (o.0 == 100 && (64...127).contains(o.1))   // 0/8, loopback, private, link-local, CGNAT
+    }
+
+    /// Whether a name resolves to a local address (DNS, off the main thread, at most `timeout`); remembered per name.
+    static func resolvesLocal(_ host: String, timeout: Double = 1.5) async -> Bool {
+        let h = host.lowercased()
+        if let known = lock.withLock({ resolved[h] }) { return known }
+        let lookup = Task.detached { () -> Bool in
+            var hints = addrinfo(), res: UnsafeMutablePointer<addrinfo>?
+            hints.ai_socktype = SOCK_STREAM
+            guard getaddrinfo(h, nil, &hints, &res) == 0, let first = res else { return false }
+            defer { freeaddrinfo(first) }
+            var local = false, p: UnsafeMutablePointer<addrinfo>? = first
+            while let ai = p {
+                var buf = [CChar](repeating: 0, count: Int(NI_MAXHOST))
+                if getnameinfo(ai.pointee.ai_addr, ai.pointee.ai_addrlen, &buf, socklen_t(buf.count), nil, 0, NI_NUMERICHOST) == 0,
+                   addressIsLocal(String(cString: buf).components(separatedBy: "%")[0]) == true { local = true }
+                p = ai.pointee.ai_next
+            }
+            return local
+        }
+        let local = await withTaskGroup(of: Bool?.self) { g in
+            g.addTask { await lookup.value }
+            g.addTask { try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9)); return nil }
+            let first = await g.next() ?? nil
+            g.cancelAll()
+            return first
+        }
+        guard let local else { return false }   // too slow to tell: the navigation goes ahead as a public site
+        lock.withLock { resolved[h] = local }
+        return local
+    }
 }
 
 /// How much the agent may do in a native app, like Claude's computer use: browsers are view-only (the agent has its own

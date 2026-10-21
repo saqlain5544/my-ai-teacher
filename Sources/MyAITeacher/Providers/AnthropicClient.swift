@@ -49,6 +49,7 @@ struct AnthropicClient: LLMClient {
         }
         var betas = isFirstParty ? request.tools.compactMap(\.nativeBeta) : []
         if isFirstParty, Self.supportsFallback(request.model) { betas.append("server-side-fallback-2026-07-01") }
+        if isFirstParty, Self.clearsToolUsesServerSide(request) { betas.append("context-management-2025-06-27") }
         if !betas.isEmpty { headers["anthropic-beta"] = betas.joined(separator: ",") }
         let req = URLRequest.json(config.baseURL.joinedURL("/messages"), body: body, headers: headers)
         return AsyncThrowingStream { continuation in
@@ -217,11 +218,23 @@ struct AnthropicClient: LLMClient {
                 body["temperature"] = .number(t)
             }
         }
-        body["messages"] = .array(Self.convert(r.messages, model: r.model))
+        if isFirstParty, Self.clearsToolUsesServerSide(r) {
+            body["context_management"] = ["edits": [["type": "clear_tool_uses_20250919", "trigger": ["type": "input_tokens", "value": 30000],
+                                                    "keep": ["type": "tool_uses", "value": 6], "clear_at_least": ["type": "input_tokens", "value": 6000]]]]
+        }
+        body["messages"] = .array(Self.convert(r.messages, model: r.model, toolset: isFirstParty && NativeComputerTool.declared(in: r.tools)))
         return .object(body)
     }
 
-    static func convert(_ messages: [ChatMessage], model: String) -> [JSON] {
+    /// Claude with replayed thinking can't have its history edited (old screenshots dropped): the API would reject the
+    /// later thinking blocks. Old screenshots and tool results are cleared server-side instead, which keeps them valid.
+    static func clearsToolUsesServerSide(_ r: LLMRequest) -> Bool {
+        isAdaptiveClaude(r.model) && r.tools.contains { ContextPolicy.captureTools.contains($0.name) }
+    }
+
+    /// `toolset`: the request declares Anthropic's computer toolset, so its calls replay as members (left_click…) with
+    /// `toolset_name`; otherwise they go back as ordinary `computer` calls.
+    static func convert(_ messages: [ChatMessage], model: String, toolset: Bool = false) -> [JSON] {
         var out: [(role: String, content: [JSON])] = []
         var toolsetCalls = Set<String>()   // their results must echo toolset_name
         for m in messages {
@@ -243,7 +256,7 @@ struct AnthropicClient: LLMClient {
                 case .file:
                     content.append(["type": "text", "text": .string("<file name=\"\(b.name ?? "file")\">\n\(b.text ?? "")\n</file>")])
                 case .toolUse:
-                    if let native = NativeComputerTool.wire(b) { toolsetCalls.insert(b.id ?? ""); content.append(native); continue }
+                    if toolset, let native = NativeComputerTool.wire(b) { toolsetCalls.insert(b.id ?? ""); content.append(native); continue }
                     content.append(["type": "tool_use", "id": .string(b.id ?? ""), "name": .string(b.name ?? ""), "input": b.input ?? .object([:])])
                 case .toolResult:
                     var parts: [JSON] = [["type": "text", "text": .string((b.text?.isEmpty ?? true) ? "(no output)" : b.text!)]]

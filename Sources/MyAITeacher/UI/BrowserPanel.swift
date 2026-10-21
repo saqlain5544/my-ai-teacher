@@ -29,7 +29,7 @@ struct BrowserPanel: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(browser.tabs) { t in TabChip(tab: t, active: t.id == browser.active?.id) { browser.activeID = t.id } close: { browser.close(t) } }
-                Button { browser.lastGesture = Date(); browser.newTab() } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New tab")
+                Button { browser.newTab() } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New tab")
             }.padding(.horizontal, 8).padding(.vertical, 5)
         }
     }
@@ -50,8 +50,7 @@ struct BrowserPanel: View {
     /// What the learner opens is theirs: local addresses they type are allowed for this run (they chose them).
     private func learnerOpen(_ raw: String) {
         guard let u = AgentBrowser.parseURL(raw) else { return }
-        if let key = SiteKey.of(u), key.isLocal { browser.allowedLocal.insert(key.id) }
-        browser.lastGesture = Date()
+        if let key = SiteKey.of(u), key.isLocal { browser.learnerSites.insert(key.id) }
         (browser.active ?? browser.newTab()).load(u)
     }
 }

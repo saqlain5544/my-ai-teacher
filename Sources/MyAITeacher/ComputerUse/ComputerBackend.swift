@@ -48,10 +48,20 @@ protocol InputPoster: Sendable {
     func cursor() -> CGPoint
 }
 
+/// What a pointer event would land on: the app owning the topmost window there, and whether it is a menu (the menu bar,
+/// an open menu or a status item), which click-only apps may not use.
+struct PointOwner: Sendable, Equatable {
+    let app: RunningApp
+    var menu = false
+}
+
 protocol DesktopInspector: Sendable {
     func frontmost() -> RunningApp?
-    /// The app whose window is topmost at `p` (global points). The menu bar counts as the frontmost app's.
-    func owner(at p: CGPoint) -> RunningApp?
+    /// The app that receives keystrokes. Usually the frontmost one, but a non-activating panel (Spotlight, a password
+    /// manager's quick access, a launcher) takes keys without becoming frontmost.
+    func focusedApp() -> RunningApp?
+    /// What is topmost at `p` (global points). The menu bar counts as the frontmost app's.
+    func owner(at p: CGPoint) -> PointOwner?
     func apps() -> [RunningApp]
     func frontWindow(of pid: pid_t) -> CGRect?
 }
@@ -117,6 +127,8 @@ struct CGInputPoster: InputPoster {
             ev?.flags = CGEventFlags(rawValue: f)
             events = [ev]
         case .text(let s):
+            // An empty string would leave key code 0 to type itself: an "a".
+            guard !s.isEmpty else { return }
             let units = Array(s.utf16)
             events = [true, false].map { down in
                 let ev = CGEvent(keyboardEventSource: src, virtualKey: 0, keyDown: down)
@@ -145,15 +157,25 @@ struct NSDesktopInspector: DesktopInspector {
         NSWorkspace.shared.runningApplications.filter { $0.activationPolicy == .regular }.compactMap(Self.app)
     }
 
-    func owner(at p: CGPoint) -> RunningApp? {
+    func focusedApp() -> RunningApp? {
+        let system = AXUIElementCreateSystemWide()
+        AXUIElementSetMessagingTimeout(system, 0.5)
+        var v: AnyObject?, pid: pid_t = 0
+        guard AXUIElementCopyAttributeValue(system, kAXFocusedApplicationAttribute as CFString, &v) == .success, let v,
+              CFGetTypeID(v) == AXUIElementGetTypeID(), AXUIElementGetPid(v as! AXUIElement, &pid) == .success else { return frontmost() }
+        return NSRunningApplication(processIdentifier: pid).flatMap(Self.app) ?? RunningApp(pid: pid, bundleID: "", name: "an unknown process")
+    }
+
+    func owner(at p: CGPoint) -> PointOwner? {
         guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] else { return nil }
+        let menus = Int(CGWindowLevelForKey(.mainMenuWindow))...Int(CGWindowLevelForKey(.popUpMenuWindow))
         for w in list {   // front to back
             guard let b = w[kCGWindowBounds as String] as? NSDictionary, let r = CGRect(dictionaryRepresentation: b), r.contains(p),
                   (w[kCGWindowAlpha as String] as? Double ?? 1) > 0.01, let pid = w[kCGWindowOwnerPID as String] as? pid_t else { continue }
             let layer = w[kCGWindowLayer as String] as? Int ?? 0
-            if layer >= Int(CGWindowLevelForKey(.mainMenuWindow)) && (w[kCGWindowOwnerName as String] as? String) == "Window Server" { return frontmost() }
-            if let app = NSRunningApplication(processIdentifier: pid).flatMap(Self.app) { return app }
-            return RunningApp(pid: pid, bundleID: "", name: w[kCGWindowOwnerName as String] as? String ?? "?")
+            if menus.contains(layer) && (w[kCGWindowOwnerName as String] as? String) == "Window Server" { return frontmost().map { PointOwner(app: $0, menu: true) } }
+            let app = NSRunningApplication(processIdentifier: pid).flatMap(Self.app) ?? RunningApp(pid: pid, bundleID: "", name: w[kCGWindowOwnerName as String] as? String ?? "?")
+            return PointOwner(app: app, menu: menus.contains(layer))
         }
         return nil
     }

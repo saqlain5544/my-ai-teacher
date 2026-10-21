@@ -62,12 +62,14 @@ enum ContextPolicy {
                 msgs[i].blocks = msgs[i].blocks.map(trim)
             }
         }
-        dropOldCaptures(&msgs)
+        if !keepThinking { dropOldCaptures(&msgs) }
         return mergeConsecutiveUserTurns(msgs)
     }
 
     /// Screenshots of the browser and the Mac go stale at once: requests carry only the latest `capturesKept` (a long
     /// computer-use turn would otherwise resend every image it took). Older ones keep their text, minus the pixels.
+    /// Not for Claude with replayed thinking: editing an earlier tool result invalidates every later thinking block (a
+    /// 400), so there the API clears old tool results itself (`AnthropicClient.clearsToolUsesServerSide`).
     static let capturesKept = 2
     static let captureTools: Set<String> = ["browser", "computer", "mac"]
     static func dropOldCaptures(_ msgs: inout [ChatMessage]) {

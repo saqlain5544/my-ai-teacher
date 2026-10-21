@@ -184,22 +184,36 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   every frame builds the snapshot (roles, names, values, states; open shadow roots, same-origin iframes; cross-origin
   frames introduce themselves and are read on their own, refs `f2.ref_3`) and acts by ref with real event sequences
   (pointer/mouse/click, key/beforeinput/input, native value setter for framework-controlled inputs). Refs are stable
-  per element. Console and fetch/XHR are captured in the page world; screenshots map back through their scale.
+  per element and bound to their document (each answer carries the helper's token; a ref from an earlier page is
+  refused). Console and fetch/XHR are captured in the page world; screenshots map back through their scale.
+* **Sites are the lesson's**: while the agent acts, every main-frame navigation (links, scripts, form posts, server and
+  meta redirects, back/forward) must go to a site its lesson approved, or it is cancelled with a notice; what it reads
+  (snapshots, text, logs, switching tabs, the page after an action, cross-origin frames) only ever comes from approved
+  sites. Between actions the learner may browse anywhere public. This Mac and the LAN (parsed addresses, reserved
+  names, names that resolve there) open only with an approval or the learner's typing, and a content rule list stops
+  public pages loading anything from them. One popup per click; downloads one at a time, cancelled with their call.
 * **Mac** (`mac` for apps and the AX tree, `computer` for pixels): ScreenCaptureKit screenshots that show only granted
   apps, sized ≤1568 px / 1.15 MP with an exact per-axis mapping to screen points (zoom keeps that mapping); CGEvent input
-  marked as the agent's own; the frontmost app and the window under the pointer are checked against grants and tiers
-  before every event (browsers view only, terminals/IDEs click only, password managers and this app never). A floating
-  "Agent is controlling your Mac" panel has Stop; Esc twice (global monitor, the agent's own keys ignored) stops too.
+  marked as the agent's own. Before every event: the frontmost app, the app receiving keys (AX focused application — a
+  panel such as Spotlight takes keys without being frontmost) and the window under the pointer are checked against
+  grants and tiers (browsers view only, terminals/IDEs click only and never their menus, password managers and this app
+  never). Keys and buttons held are tracked and released without checks on Stop, errors, timeouts and at turn end.
+  One lesson controls the Mac at a time. A floating "Agent is controlling your Mac" panel has Stop; Esc twice (global
+  monitor, the agent's own keys ignored) stops too. AX calls run off the main actor under a global messaging timeout.
   Capture, input and desktop state are protocols, so tests run on fakes and never touch the real Mac.
-* **Approvals** (`ComputerUseExtension`, the usual cards): sites once per lesson or always (localhost, LAN and file://
-  per lesson only; pages can't navigate there unapproved), every download, JavaScript evaluation, and the apps named in
+* **Approvals** (`ComputerUseGate` behind `ComputerUseExtension`, the usual cards): sites for this task, this lesson or
+  always (localhost, LAN, files and data: pages never always); a frame of another origin asks for its own site after
+  the page's; every download (the page's file name only in the details); JavaScript evaluation; the apps named in
   `request_access`. "Always" grants live in settings (Settings → Tools lists and removes them), never in a folder.
-  Passwords, payment details and ID numbers are refused by field and by content; uploads are always refused. Page and
-  app content returns inside an `untrusted_*_content` envelope that starts with a reminder and can't be closed early.
+  Passwords, payment details and ID numbers are refused by field (asked again before each typed piece, since Tab and
+  Return move focus), by content, and for character keys and paste in such a field; uploads are always refused. Page
+  and app content returns inside an `untrusted_*_content` envelope that starts with a reminder and can't be closed early.
 * **Providers**: one generic schema for every model; non-vision models get the AX tree where a screenshot would go.
-  Claude on api.anthropic.com gets Anthropic's computer toolset (or `computer_20251124` on older Claude 4 models); its
-  member calls map onto `computer` and replay with `toolset_name`. A failed action skips the rest of its batch. Requests
-  carry only the latest two screenshots.
+  Claude on api.anthropic.com gets Anthropic's native tool only for documented models (the computer toolset for Opus 5
+  and the 5.5 models, `computer_20251124` for those documented with it); member calls map onto `computer` and replay
+  with `toolset_name` only while the request declares the toolset. A failed action skips the rest of its batch.
+  Requests carry only the latest two screenshots, except for Claude with replayed thinking: there history is never
+  edited (it would invalidate later thinking blocks) and the API clears old tool results (`clear_tool_uses_20250919`).
 * **macOS permissions**: Screen Recording and Accessibility are checked (`CGPreflightScreenCaptureAccess`,
   `AXIsProcessTrustedWithOptions` without prompting); `mac permissions` shows the learner a card that opens Settings or
   asks macOS. The app is ad-hoc signed, so a rebuild drops both grants; the app remembers the last build that had them

@@ -50,7 +50,8 @@ enum JSON: Codable, Sendable, Equatable, Hashable {
         default: return nil
         }
     }
-    var int: Int? { double.map { Int($0) } }
+    /// nil for NaN, infinity and values beyond Int (a plain `Int(_:)` would trap on what a model sent).
+    var int: Int? { double.flatMap { $0.isFinite && abs($0) < 9e15 ? Int($0) : nil } }
     var bool: Bool? {
         switch self {
         case .bool(let b): return b

@@ -87,9 +87,9 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
     if kind != "permission" and n_answered >= MAX_ANSWERS:
         js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
         return "skip"
-    if kind == "permission":   # the scenario's choice (e.g. "lesson" for a browser site) when the card offers it, else once
-        js("(() => { const c = document.querySelector('%s'); (c.querySelector('[data-act=\"approve\"][data-v=\"%s\"]') || c.querySelector('[data-act=\"approve\"][data-v=\"once\"]')).click(); })()"
-           % (sel, scenario.get("approve", "once")))
+    if kind == "permission":   # the scenario's choice (e.g. "lesson" for a browser site) when the card offers it, else once, else the first
+        js("(() => { const c = document.querySelector('%s'), b = v => c.querySelector('[data-act=\"approve\"]' + (v ? '[data-v=\"' + v + '\"]' : ''));"
+           " (b('%s') || b('once') || b('')).click(); })()" % (sel, scenario.get("approve", "once")))
     elif kind in ("ask", "ask_learner") and not (p.get("payload") or {}).get("questions"):
         want = scenario.get("pick")
         js("""(() => { const c = document.querySelector('%s'); const opts = Array.from(c.querySelectorAll('[data-act="ask-opt"]'));

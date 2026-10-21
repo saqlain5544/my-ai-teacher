@@ -7,6 +7,8 @@ import Foundation
 /// drops end-of-turn tokens and duplicate calls — so a lesson sees what the model meant, whichever host served it.
 struct GuardedClient: LLMClient {
     let inner: LLMClient
+    /// Tools whose identical calls in one reply are meant (two clicks, two key presses).
+    static let repeatable: Set<String> = ["computer", "browser"]
 
     func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
         let source = inner.stream(request)
@@ -16,9 +18,11 @@ struct GuardedClient: LLMClient {
                 var parser = TextProtocolParser(tools: schemas)
                 var seen = Set<String>()
                 var parsedCall = false, flushed = false
-                func call(_ b: Block) {
-                    // Native computer-toolset calls repeat on purpose (two identical clicks); they have their own ids.
-                    let key = (b.meta?["toolset"] != nil ? b.id ?? "" : "") + (b.name ?? "") + "\u{0}" + (b.input?.compact ?? "")
+                func call(_ b: Block, structured: Bool = false) {
+                    // Pressing Down twice or clicking the same spot twice is meant: a real tool call that drives the browser
+                    // or the Mac keeps its own id. Calls parsed out of text are still deduplicated.
+                    let repeatable = structured && GuardedClient.repeatable.contains(b.name ?? "")
+                    let key = (repeatable ? b.id ?? "" : "") + (b.name ?? "") + "\u{0}" + (b.input?.compact ?? "")
                     guard seen.insert(key).inserted else { return }   // engines sometimes repeat a call verbatim
                     cont.yield(.toolCall(b))
                 }
@@ -36,7 +40,7 @@ struct GuardedClient: LLMClient {
                     for try await ev in source {
                         switch ev {
                         case .text(let t): route(parser.feed(t))
-                        case .toolCall(let b): call(b)
+                        case .toolCall(let b): call(b, structured: true)
                         case .usage, .stop:
                             if !flushed { flushed = true; route(parser.flush()) }
                             if case .stop(let r) = ev { cont.yield(.stop(parsedCall && r != "tool_use" ? "tool_use" : r)) } else { cont.yield(ev) }

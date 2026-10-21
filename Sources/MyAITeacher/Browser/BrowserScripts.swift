@@ -414,7 +414,7 @@ enum BrowserScripts {
           }
         };
         walk(document.body || document.documentElement);
-        return { matches: out };
+        return { matches: out, token };
       }
       function field(el) {
         return { type: el.getAttribute('type') || el.tagName.toLowerCase(), autocomplete: el.getAttribute('autocomplete') || '',
@@ -422,8 +422,16 @@ enum BrowserScripts {
                  label: [name(el, role(el)), el.getAttribute('placeholder')].filter(Boolean).join(' ') };
       }
       function need(o) { const el = byRef(o.ref); if (!el) throw new Error('Unknown ref ' + o.ref + ': take a new snapshot (refs belong to the page they came from).'); return el; }
-      // Every call says which frame prefix its refs carry (f2. in a frame of another origin), so results name them right.
-      const guard = f => o => { prefix = (o && o.prefix) || ''; try { return f(o); } catch (e) { return { error: String(e.message || e) }; } };
+      // Every call says which frame prefix its refs carry (f2. in a frame of another origin), so results name them right,
+      // and which document its refs came from: every document numbers from ref_1, so a ref from the previous page must
+      // never land on whatever has that number now.
+      const guard = f => o => {
+        prefix = (o && o.prefix) || '';
+        if (o && o.ref && o.token !== token) return { error: 'stale' };
+        let r; try { r = f(o); } catch (e) { r = { error: String(e.message || e) }; }
+        if (r && typeof r === 'object' && !Array.isArray(r)) r.token = token;   // the refs in an answer belong to this document
+        return r;
+      };
 
       window.__ta = {
         token,

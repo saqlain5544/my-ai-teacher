@@ -32,6 +32,11 @@ struct KeyCombo: Equatable {
         "n": 45, "m": 46, ".": 47, "`": 50, " ": 49,
     ]
 
+    /// Puts a character into the focused field (a letter, digit, punctuation or space, with no command or control key).
+    var typesText: Bool { flags & (Self.command | Self.control) == 0 && Self.chars.values.contains(code) }
+    /// Pastes: cmd/ctrl+V, or shift+Insert (the Help key on Mac keyboards).
+    var isPaste: Bool { (code == 9 && flags & (Self.command | Self.control) != 0) || (code == 114 && flags & Self.shift != 0) }
+
     static func parse(_ text: String) -> KeyCombo? {
         let t = text.trimmingCharacters(in: .whitespaces)
         guard !t.isEmpty else { return nil }
