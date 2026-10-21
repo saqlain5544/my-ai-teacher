@@ -437,6 +437,16 @@
 
   function renderUser(m, el) {
     if (el._editing) return;
+    // A background sub-agent's report: a compact notice (the teacher reads it; the learner can open it).
+    const rep = (m.blocks || []).find(b => b.meta && b.meta.agentReport);
+    if (rep) {
+      const r = rep.meta, body = (rep.text || '').replace(/^<background-agent[^>]*>\n?|\n?<\/background-agent>\s*$/g, '');
+      el.className = 'msg agent-note';
+      return setHTML(el, '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(r.handle || '') + '</b> · ' +
+        esc(r.title || '') + ' — ' + (r.state === 'done' ? 'finished' : esc(r.state || 'finished')) + '</span>' +
+        '<button class="btn mini" data-act="agent-open" data-agent="' + esc(r.agentReport) + '">Open</button></div>' +
+        '<details><summary>Report</summary><div class="md">' + markdown(body, false) + '</div></details></div>');
+    }
     const imgs = m.blocks.filter(b => b.kind === 'image'), files = m.blocks.filter(b => b.kind === 'file');
     const text = visibleText(m);
     let html = '';
@@ -558,7 +568,7 @@
     run_code: ['▶︎', 'Run code'], math: ['∑', 'Math'], todo_write: ['☑︎', 'Checklist'], task: ['🧭', 'Sub-agent'],
     flashcards: ['🗂', 'Flashcards'], mastery: ['📈', 'Mastery'], lesson_plan: ['🗺', 'Learning plan'], memory_search: ['🧠', 'Recall'],
     memory_save: ['🧠', 'Remember'], memory_update: ['🧠', 'Update memory'], memory_forget: ['🧠', 'Forget'], memory: ['🧠', 'Memory'],
-    load_tools: ['🧰', 'Load tools'],
+    load_tools: ['🧰', 'Load tools'], agents: ['🧭', 'Sub-agents'],
   };
   const MEMORY_TITLES = { search: 'Recall', save: 'Remember', update: 'Update memory', forget: 'Forget' };
   function summaryOf(b) {
@@ -571,7 +581,8 @@
       case 'web_fetch': return i.url || '';
       case 'run_code': return (i.language || '') + ' snippet';
       case 'math': return (i.operation || '') + ' ' + (i.expression || '');
-      case 'task': return (i.description || '') + (i.model ? ' · ' + i.model : '');
+      case 'task': return (i.resume ? '↻ ' + i.resume + ' · ' : '') + (i.description || '') + (i.model ? ' · ' + i.model : '');
+      case 'agents': return (i.action || '') + (i.id ? ' ' + i.id : '');
       case 'memory_save': return (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '');
       case 'memory_search': return i.query || '';
       case 'memory_update': case 'memory_forget': return '#' + (i.id || '');
@@ -606,8 +617,12 @@
     let html = '';
     if (pend && pend.kind === 'permission') html += renderApproval(b, pend);
     // Sub-agents: open the live transcript in the right-hand panel, or stop just this one.
-    const agentActs = b.name !== 'task' || pendingCall || (!running && !(r && r.meta && r.meta.subagent)) ? ''
-      : '<span class="tool-acts"><button class="btn mini" data-act="agent-open">Open</button>' + (running ? '<button class="btn mini danger" data-act="agent-stop">Stop</button>' : '') + '</span>';
+    const agentID = (r && r.meta && r.meta.agentID) || (b.input && b.input.resume) || b.id;
+    const bg = r && r.meta && r.meta.background;
+    const agentActs = b.name !== 'task' || pendingCall || (!running && !bg && !(r && r.meta && (r.meta.subagent || r.meta.agentID))) ? ''
+      : '<span class="tool-acts">' + (r && r.meta && r.meta.handle ? '<span class="agent-handle">' + esc(r.meta.handle) + (bg ? ' · background' : '') + '</span>' : '') +
+        '<button class="btn mini" data-act="agent-open" data-agent="' + esc(agentID) + '">Open</button>' +
+        (running ? '<button class="btn mini danger" data-act="agent-stop" data-agent="' + esc(agentID) + '">Stop</button>' : '') + '</span>';
     html += '<div class="tool' + (open ? ' open' : '') + (isErr ? ' error' : '') + (compact && !open ? ' compact' : '') + '">' +
       '<div class="head" data-act="toggle-tool"><span class="icon">' + icon + '</span><span class="name">' + esc(title) + '</span>' +
       '<span class="sum">' + esc(summaryOf(b)) + '</span>' + agentActs + '<span class="state">' + state + '</span></div>' +
@@ -714,8 +729,8 @@
       case 'edit-save': { const ta = msgEl.querySelector('textarea'); msgEl._editing = false; post({ type: 'edit', id: msgId, text: ta.value }); break; }
       case 'edit-cancel': { msgEl._editing = false; msgEl._html = null; renderMessage(S.byId.get(msgId).msg); break; }
       case 'approve': post({ type: 'answer', id: toolId, value: { decision: el.getAttribute('data-v') } }); break;
-      case 'agent-open': post({ type: 'agent', op: 'open', id: toolId }); break;
-      case 'agent-stop': post({ type: 'agent', op: 'stop', id: toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
+      case 'agent-open': post({ type: 'agent', op: 'open', id: el.getAttribute('data-agent') || toolId }); break;
+      case 'agent-stop': post({ type: 'agent', op: 'stop', id: el.getAttribute('data-agent') || toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
     }
   });
   const onInput = (e) => { for (const f of R.inputs) { try { f(e, ctx); } catch (err) { console.log(err); } } };

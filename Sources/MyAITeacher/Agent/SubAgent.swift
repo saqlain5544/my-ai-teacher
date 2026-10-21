@@ -14,10 +14,15 @@ protocol SubAgentSink: AnyObject {
 @MainActor
 final class SubAgentRun: ObservableObject, Identifiable {
     enum State: String { case running, done, stopped, failed }
-    let id: String                 // the `task` tool call id
+    let id: String                 // the `task` tool call id that started it
+    let handle: String             // what the teacher calls it: A1, A2…
     let conversationID: String
     let title: String
-    let model: String
+    private(set) var model: String
+    var background = false
+    /// The final report once finished; `reportConsumed` once the teacher has it (returned, waited for or delivered).
+    var report: String?
+    var reportConsumed = false
     let startedAt: Date
     @Published private(set) var messages: [ChatMessage]
     @Published private(set) var state: State
@@ -26,8 +31,8 @@ final class SubAgentRun: ObservableObject, Identifiable {
     var task: Task<ToolOutput, Never>?
     weak var sink: SubAgentSink?
 
-    init(id: String, conversationID: String, title: String, model: String, messages: [ChatMessage] = [], state: State = .running, startedAt: Date = Date()) {
-        self.id = id; self.conversationID = conversationID; self.title = title; self.model = model
+    init(id: String, handle: String, conversationID: String, title: String, model: String, messages: [ChatMessage] = [], state: State = .running, startedAt: Date = Date()) {
+        self.id = id; self.handle = handle; self.conversationID = conversationID; self.title = title; self.model = model
         self.messages = messages; self.state = state; self.startedAt = startedAt
         if state != .running { endedAt = startedAt }
     }
@@ -61,6 +66,20 @@ final class SubAgentRun: ObservableObject, Identifiable {
         state = s; endedAt = Date()
         setStatus(nil)
     }
+
+    /// Continue a finished run with a follow-up (its context is kept).
+    func reopen(model m: String?, background bg: Bool) {
+        if let m, !m.isEmpty { model = m }
+        background = bg; state = .running; endedAt = nil; report = nil; reportConsumed = false
+        setStatus("Thinking…")
+    }
+
+    /// One line for the teacher (`agents list`).
+    var summaryLine: String {
+        let secs = Int((endedAt ?? Date()).timeIntervalSince(startedAt))
+        let tools = messages.reduce(0) { $0 + $1.toolUses.count }
+        return "\(handle) · “\(title)” · \(state.rawValue)\(background ? " (background)" : "") · \(model) · \(secs) s · \(tools) tool calls"
+    }
 }
 
 /// All sub-agent runs of this app session (newest last), and which one the panel shows.
@@ -71,12 +90,18 @@ final class SubAgentCenter: ObservableObject {
     @Published var selectedID: String?
     /// Called when a run starts (the app shows it in the right-hand panel).
     var onStart: ((SubAgentRun) -> Void)?
+    /// Called when a background run finishes with a report the teacher hasn't read (the app delivers it to the lesson).
+    var onReport: ((SubAgentRun, ToolOutput) -> Void)?
+    private var nextHandle = 1
 
-    func run(_ id: String) -> SubAgentRun? { runs.first { $0.id == id } }
+    /// By tool-call id or by handle ("A2", case-insensitive).
+    func run(_ key: String) -> SubAgentRun? { runs.first { $0.id == key || $0.handle.caseInsensitiveCompare(key) == .orderedSame } }
     func runs(in conversationID: String?) -> [SubAgentRun] { runs.filter { $0.conversationID == conversationID } }
 
+    private func newHandle() -> String { defer { nextHandle += 1 }; return "A\(nextHandle)" }
+
     func start(id: String, conversationID: String, title: String, model: String) -> SubAgentRun {
-        let r = SubAgentRun(id: id, conversationID: conversationID, title: title, model: model)
+        let r = SubAgentRun(id: id, handle: newHandle(), conversationID: conversationID, title: title, model: model)
         add(r)
         selectedID = r.id
         onStart?(r)
@@ -93,7 +118,7 @@ final class SubAgentCenter: ObservableObject {
         }
         let state = saved["state"]?.string.flatMap(SubAgentRun.State.init(rawValue:)) ?? .done
         let model = msgs.last { $0.role == .assistant }?.model ?? ""
-        let r = SubAgentRun(id: id, conversationID: conversationID, title: title, model: model, messages: msgs, state: state == .running ? .stopped : state,
+        let r = SubAgentRun(id: id, handle: newHandle(), conversationID: conversationID, title: title, model: model, messages: msgs, state: state == .running ? .stopped : state,
                             startedAt: msgs.first?.createdAt ?? Date())
         add(r)
         return r
@@ -111,22 +136,73 @@ enum SubAgent {
     static let budget: TimeInterval = 120
     static let maxSteps = 10
 
-    static func run(brief: String, title: String, model: String, ctx: ToolContext) async -> ToolOutput {
-        let run = await SubAgentCenter.shared.start(id: ctx.toolCallID, conversationID: ctx.conversationID, title: title, model: model)
-        let loop = Task { await Self.loop(brief: brief, model: model, run: run, ctx: ctx) }
+    /// At most this many sub-agents run at once per lesson (each is a model loop of its own).
+    static let maxConcurrent = 4
+
+    /// Starts (or, with `resume`, continues) a sub-agent. Blocking: returns its report. Background: returns at once; the
+    /// report reaches the lesson when it finishes (SubAgentCenter.onReport), unless the teacher waits for it first.
+    static func run(brief: String, title: String, model: String?, background: Bool, resume: String?, ctx: ToolContext) async -> ToolOutput {
+        let center = SubAgentCenter.shared
+        var history: [ChatMessage] = []
+        let run: SubAgentRun
+        if let key = resume {
+            guard let r = await center.run(key), await r.conversationID == ctx.conversationID else {
+                return .error("No sub-agent `\(key)` in this lesson. `agents` with action list shows them.")
+            }
+            if await r.isRunning { return .error("\(await r.handle) is still running: wait for it (agents wait) or stop it first.") }
+            await r.reopen(model: model, background: background)
+            history = await r.messages
+            run = r
+        } else {
+            let running = await center.runs(in: ctx.conversationID).filter(\.isRunning).count
+            if running >= maxConcurrent { return .error("\(running) sub-agents are already running; wait for one or stop one first.") }
+            run = await center.start(id: ctx.toolCallID, conversationID: ctx.conversationID, title: title, model: model ?? ctx.model)
+            await MainActor.run { run.background = background }
+        }
+        let useModel = await run.model
+        let loop = Task { await Self.loop(brief: brief, model: useModel, history: history, run: run, ctx: ctx) }
         await MainActor.run { run.task = loop }
-        return await withTaskCancellationHandler { await loop.value } onCancel: { loop.cancel() }
+        let handle = await run.handle
+        guard background else {
+            var out = await withTaskCancellationHandler { await loop.value } onCancel: { loop.cancel() }
+            await MainActor.run { run.reportConsumed = true }
+            out.meta = Self.with(out.meta, ["agentID": .string(run.id), "handle": .string(handle)])
+            return out
+        }
+        // Background: deliver the report when done (unless the teacher already waited for it).
+        Task.detached {
+            let out = await loop.value
+            await MainActor.run {
+                run.report = out.text
+                if !run.reportConsumed { run.reportConsumed = true; SubAgentCenter.shared.onReport?(run, out) }
+            }
+        }
+        return ToolOutput(text: "Started background sub-agent \(handle) (“\(title)”, \(useModel)). Keep teaching: its report arrives as a " +
+                          "<background-agent> message when it finishes. `agents` can list, wait for or stop it; `task` with resume: \"\(handle)\" continues it later.",
+                          meta: ["agentID": .string(run.id), "handle": .string(handle), "background": true])
     }
 
-    private static func loop(brief: String, model: String, run: SubAgentRun, ctx: ToolContext) async -> ToolOutput {
+    static func with(_ meta: JSON?, _ extra: [String: JSON]) -> JSON {
+        .object((meta?.object ?? [:]).merging(extra) { $1 })
+    }
+
+    /// The message a finished background run leaves in the lesson.
+    @MainActor static func reportMessage(_ run: SubAgentRun, _ out: ToolOutput) -> ChatMessage {
+        let text = "<background-agent id=\"\(run.handle)\" title=\"\(run.title)\" state=\"\(run.state.rawValue)\">\n\(out.text)\n</background-agent>"
+        return ChatMessage(role: .user, blocks: [Block(kind: .text, text: text, meta: ["agentReport": .string(run.id), "handle": .string(run.handle),
+                                                                                       "title": .string(run.title), "state": .string(run.state.rawValue),
+                                                                                       "subagent": out.meta?["subagent"] ?? .null])])
+    }
+
+    private static func loop(brief: String, model: String, history: [ChatMessage], run: SubAgentRun, ctx: ToolContext) async -> ToolOutput {
         let system = """
         You are a meticulous research sub-agent working for a tutor. Complete the brief using your tools, then reply with a \
         concise, well-organised report (Markdown, LaTeX for math) that cites sources as markdown links. Don't ask questions; \
         make reasonable assumptions and note them. Today is \(Date().formatted(date: .complete, time: .omitted)).
         """
         let tools = ToolRegistry.subagentTools
-        var messages = [ChatMessage(role: .user, blocks: [.text(brief)])]
-        await run.upsert(messages[0])
+        var messages = history + [ChatMessage(role: .user, blocks: [.text(brief)])]
+        await run.upsert(messages[messages.count - 1])
         var turn = TurnMetrics()
         let deadline = Date().addingTimeInterval(budget)
         var wrapUp = false, stopped = false

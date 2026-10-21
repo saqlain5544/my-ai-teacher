@@ -103,6 +103,7 @@ enum SystemPrompt {
         - More tools (call `load_tools` with their names first):
         \(ToolRegistry.deferredIndex(lessonID))
         - Call independent tools in parallel. Don't narrate tool mechanics; just teach.
+        - A `<background-agent>` message is a background sub-agent's report, not the learner: use it, cite its sources, carry on.
 
         # Environment
         - Today is \(df.string(from: Date())). Model: \(model).

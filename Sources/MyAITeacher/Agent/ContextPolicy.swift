@@ -53,7 +53,21 @@ enum ContextPolicy {
                 msgs[i].blocks = msgs[i].blocks.map(trim)
             }
         }
-        return msgs
+        return mergeConsecutiveUserTurns(msgs)
+    }
+
+    /// Two learner-side messages in a row (a background agent's report after tool results, the summary before the next
+    /// prompt) become one — tool results first, then the rest: the shape every provider accepts.
+    static func mergeConsecutiveUserTurns(_ msgs: [ChatMessage]) -> [ChatMessage] {
+        var out: [ChatMessage] = []
+        out.reserveCapacity(msgs.count)
+        for m in msgs {
+            if m.role == .user, let last = out.last, last.role == .user {
+                let all = last.blocks + m.blocks
+                out[out.count - 1].blocks = all.filter { $0.kind == .toolResult } + all.filter { $0.kind != .toolResult }
+            } else { out.append(m) }
+        }
+        return out
     }
 
     static func trim(_ b: Block) -> Block {

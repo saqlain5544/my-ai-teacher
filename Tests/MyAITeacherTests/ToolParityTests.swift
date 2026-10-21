@@ -32,6 +32,35 @@ final class ToolParityTests: XCTestCase {
         }
     }
 
+    func testBackgroundSubAgentReportsLaterAndCanBeManaged() async throws {
+        let got = expectation(description: "report delivered")
+        await MainActor.run { SubAgentCenter.shared.onReport = { run, out in if run.title == "BG" { got.fulfill() } } }
+        var c = ctx!
+        c = ToolContext(conversationID: "bg-lesson", workspace: c.workspace, services: c.services, interactions: c.interactions, toolCallID: "bg-1",
+                        client: c.client, model: "m", progress: { _ in })
+        let t0 = Date()
+        let o = try await TaskTool().run(["description": "BG", "prompt": "find x", "background": true], c)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 1, "background returns at once")
+        XCTAssertTrue(o.text.contains("background") && o.meta?["handle"]?.string?.hasPrefix("A") == true, o.text)
+        let handle = o.meta!["handle"]!.string!
+        await fulfillment(of: [got], timeout: 5)   // the provider refuses at once, so it fails fast and reports
+        var a = try await AgentsTool().run(["action": "list"], c)
+        XCTAssertTrue(a.text.contains(handle) && a.text.contains("failed"), a.text)
+        a = try await AgentsTool().run(["action": "status", "id": .string(handle)], c)
+        XCTAssertTrue(a.text.contains("BG"), a.text)
+        // Resume continues the same run (same handle, its context kept); blocking this time.
+        let before = await SubAgentCenter.shared.run(handle)!.messages.count
+        let r = try await TaskTool().run(["description": "BG", "prompt": "try again", "resume": .string(handle)], c)
+        XCTAssertEqual(r.meta?["handle"]?.string, handle)
+        let after = await SubAgentCenter.shared.run(handle)!.messages.count
+        XCTAssertGreaterThan(after, before)
+        let other = ToolContext(conversationID: "other", workspace: c.workspace, services: c.services, interactions: c.interactions, toolCallID: "x",
+                                client: c.client, model: "m", progress: { _ in })
+        let foreign = try await AgentsTool().run(["action": "status", "id": .string(handle)], other)
+        XCTAssertTrue(foreign.isError, "another lesson can't see it")
+        await MainActor.run { SubAgentCenter.shared.onReport = nil }
+    }
+
     func testSubAgentModelChoiceIsListedAndChecked() async throws {
         let spec = TaskTool.spec(models: ["a:free", "b:free"], current: "a:free")
         XCTAssertTrue(spec.schema["properties"]?["model"]?["description"]?.string?.contains("b:free") == true)

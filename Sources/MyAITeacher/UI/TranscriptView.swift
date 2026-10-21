@@ -225,12 +225,16 @@ struct TranscriptView: NSViewRepresentable {
                 let center = SubAgentCenter.shared
                 if j["op"]?.string == "stop" { center.run(id)?.stop(); return }
                 if center.run(id) == nil {
-                    let use = s.messages.flatMap(\.blocks).first { $0.kind == .toolUse && $0.id == id }
-                    let result = s.messages.flatMap(\.blocks).first { $0.kind == .toolResult && $0.id == id }
-                    guard let saved = result?.meta?["subagent"] else { return }
-                    _ = center.restore(id: id, conversationID: s.id, title: use?.input?["description"]?.string ?? "Sub-agent", saved: saved)
+                    // Not in memory (the app restarted): rebuild it from the transcript kept in the lesson.
+                    let blocks = s.messages.flatMap(\.blocks)
+                    let use = blocks.first { $0.kind == .toolUse && $0.id == id }
+                    let saved = blocks.first { $0.kind == .toolResult && $0.id == id }?.meta?["subagent"]
+                        ?? blocks.first { $0.meta?["agentReport"]?.string == id }?.meta?["subagent"]
+                    guard let saved else { return }
+                    let title = use?.input?["description"]?.string ?? blocks.first { $0.meta?["agentReport"]?.string == id }?.meta?["title"]?.string ?? "Sub-agent"
+                    _ = center.restore(id: id, conversationID: s.id, title: title, saved: saved)
                 }
-                app.showSubAgent(id)
+                app.showSubAgent(center.run(id)?.id ?? id)
             case "answer":
                 if let id = j["id"]?.string { app.interactions.resolve(id, j["value"] ?? .null) }
             case "regenerate": session?.regenerate()

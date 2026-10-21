@@ -64,6 +64,9 @@ final class AppModel: ObservableObject {
         settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         // A sub-agent starting in the open lesson shows up in the right-hand panel, as it works.
+        SubAgentCenter.shared.onReport = { [weak self] run, out in
+            self?.session(for: run.conversationID)?.deliver(SubAgent.reportMessage(run, out))
+        }
         SubAgentCenter.shared.onStart = { [weak self] run in
             guard let self, case .lesson(let id) = self.selection, id == run.conversationID else { return }
             self.showSubAgent(run.id)

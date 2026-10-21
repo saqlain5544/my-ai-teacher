@@ -39,8 +39,10 @@ final class ContextTests: XCTestCase {
         var c = Conversation(providerID: "x", model: "x")
         c.compactedThrough = msgs[3].id; c.compactSummary = "Covered: X."
         let out = ContextPolicy.prepare(msgs, conversation: c, model: "x")
-        XCTAssertEqual(out.count, msgs.count - 4 + 1)
+        // The summary and the next learner message travel as one learner turn (providers want alternating roles).
+        XCTAssertEqual(out.count, msgs.count - 4)
         XCTAssertTrue(out[0].plainText.contains("Covered: X."))
+        XCTAssertEqual(out[0].blocks.count, 1 + msgs[4].blocks.count)
     }
 
     func testBudgetCapsAtHalfWindow() {
@@ -98,5 +100,15 @@ final class PolicyTests: XCTestCase {
         let arms = (0..<200).map { Experiments.arm(e, unit: "l\($0)") }
         let share = Double(arms.filter { $0 == "core" }.count) / 200
         XCTAssertGreaterThan(share, 0.35); XCTAssertLessThan(share, 0.65)
+    }
+
+    func testConsecutiveLearnerMessagesMergeForProviders() {
+        let msgs = [ChatMessage(role: .user, blocks: [.text("q")]),
+                    ChatMessage(role: .assistant, blocks: [.toolUse(id: "t", name: "task", input: [:])]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "t", name: "task", content: "started")]),
+                    ChatMessage(role: .user, blocks: [.text("<background-agent id=\"A1\">report</background-agent>")])]
+        let out = ContextPolicy.mergeConsecutiveUserTurns(msgs)
+        XCTAssertEqual(out.count, 3)
+        XCTAssertEqual(out[2].blocks.map(\.kind), [.toolResult, .text], "tool results stay first")
     }
 }

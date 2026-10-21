@@ -164,6 +164,26 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Loop
 
+    // MARK: Background sub-agents
+
+    /// Reports from background sub-agents not yet read by the teacher; folded in at the next step of a running turn.
+    private var inbox: [ChatMessage] = []
+
+    /// A background sub-agent finished: the teacher reads its report at the next step, or in a new turn if the lesson is idle.
+    func deliver(_ report: ChatMessage) {
+        if isRunning { inbox.append(report); return }
+        append(report)
+        save()
+        start()
+    }
+
+    private func drainInbox() {
+        guard !inbox.isEmpty else { return }
+        for m in inbox { append(m) }
+        inbox.removeAll()
+        save()
+    }
+
     private func start() {
         errorMessage = nil
         isRunning = true
@@ -278,8 +298,13 @@ final class ChatSession: ObservableObject, Identifiable {
             conversation.usage = Usage(input: step.usage.promptTotal, output: (conversation.usage?.output ?? 0) + step.usage.output)
             if assistant.error != nil { break }
             let calls = assistant.toolUses
-            if calls.isEmpty || Task.isCancelled { break }
+            if calls.isEmpty || Task.isCancelled {
+                // A background report arrived during this step: read it before ending the turn.
+                if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
+                break
+            }
             await runTools(calls, client: client)
+            drainInbox()
         }
     }
 
