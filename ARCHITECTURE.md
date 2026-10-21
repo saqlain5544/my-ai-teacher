@@ -261,6 +261,9 @@ The app's footprint must not grow with how much the learner has done: data lives
 * Lesson window: besides the 400-message cap, loaded messages have a 24 MB budget. When the learner sends, the oldest
   display-only messages (before the compaction point; whole turns) leave memory and the page (`T.trimBefore`); what the
   next request needs is never trimmed, and is itself bounded by compaction.
+* The page is a smaller window of that window: it renders the newest 300 messages (from a learner's turn) and says
+  how many are earlier; "Show earlier" reveals in-memory ones 200 at a time, then loads older ones from disk. A long
+  session drops the oldest from the page once it is a step past 300. Collapsed tool cards carry no body until opened.
 * Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
   segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
@@ -358,6 +361,14 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Renderer: reset 2,000 messages / page back 1,000 | 5.1–5.7 s / 1.6–1.8 s | **1.0 s / 0.7 s** |
 | Renderer: 60k-character stream, frame p50 / p95 / max | 18 / 29 / 34 ms | **17 / 19 / 26 ms** |
 | Recall over 10,000 memories (main thread) | p50 4–5 ms | same |
+
+| Second round (on main 91870a6) | Before | After |
+|---|---|---|
+| WebContent at lesson open, 1,000 / 4,000 / 10,000 messages | 236 / 559 / 661 MB | **150 / 150 / 131 MB** |
+| Open the lesson, same sizes | 650 / 2,052 / 2,592 ms | **215 / 215 / 219 ms** |
+| WebContent, 4,000-message workload: peak / at the end | 1,210 / 817 MB | **451 / 196 MB** |
+| One web_fetch, peak footprint (CLI): 300 KB / 1 MB / 3 MB page | 27 / 69 / 151 MB | **21 / 49 / 96 MB** |
+| App footprint after three 3 MB fetches / conversion time | 219 MB / 538 ms | **153 MB / 352 ms** |
 
 ## Tool parity with Claude Code
 | Claude Code tool | My AI Teacher | Notes |
