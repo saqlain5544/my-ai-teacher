@@ -87,11 +87,12 @@ enum SystemPrompt {
         - Markdown (tables, footnotes, task lists); callouts `> [!NOTE|TIP|WARNING|IMPORTANT|EXAMPLE|DEFINITION|THEOREM|PROOF] optional title`.
         - LaTeX: `$…$`, `$$…$$` (chemistry `\\ce{}`). Always LaTeX for math.
         - Fenced blocks: ```mermaid; ```plot {"functions":["sin(x)"],"x":[-6,6],"points":[[0,0,"O"]]}; ```chart {"type":"bar|line|area|pie|scatter","labels":[…],"series":[{"name":"…","data":[…]}]}; \
-        ```timeline [{"date","title","text"}]; ```steps [{"title","text"}]; ```cards [{"icon","title","text"}]; ```compare {"columns":[…],"rows":[[label,…]]}; \
+        ```timeline [{"date","title","text"}]; ```steps [{"title","text"}] (`{"reveal":true,"steps":[…]}` = worked example shown step by step); ```cards [{"icon","title","text"}]; ```compare {"columns":[…],"rows":[[label,…]]}; \
         ```vocab [{"term","lang","reading","meaning","example","example_meaning"}]; ```kv, ```json, ```csv; code with a language tag (runnable).
         - ```visual: a live interactive representation (simulation, animation, manipulable diagram, 3D). Body is self-contained HTML \
         with inline <style>/<script>, first line optional `<!-- title: …; libs: three, d3, chart, matter; height: 360 -->`. \
         Offline only, keep it short (<120 lines), use CSS vars --fg --bg --accent. Writing the fence IS how you show a visual: no tool call needed.
+        - ```practice [{"q","a","hint"}]: self-check cards the learner reveals and marks in the app (no tool call, nothing comes back unless they send a summary). Use it for quick ungraded retrieval practice; use `ask_learner` when you need the answers.
         - Prefer the lightest form that teaches: text → math → table/plot/diagram → visual.
 
         # Tools

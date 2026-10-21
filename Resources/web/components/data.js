@@ -137,13 +137,16 @@
       '<div class="tl-body"><div class="tl-title">' + ctx.inline(it.title || '') + '</div>' + (it.text || it.description ? '<div class="md">' + ctx.md(it.text || it.description) + '</div>' : '') + '</div></div>').join(''));
   }));
 
-  R.registerFence('steps', safe('steps', (items, ctx, code) => {
-    items = Array.isArray(items) ? items : items.steps || [];
-    return box('steps', 'st' + ctx.hash(code), items.map((it, i) => {
+  R.registerFence('steps', safe('steps', (spec, ctx, code) => {
+    const reveal = !Array.isArray(spec) && !!spec.reveal;   // worked example, one step at a time (practice.js)
+    const items = Array.isArray(spec) ? spec : spec.steps || [];
+    const body = items.map((it, i) => {
       const o = typeof it === 'string' ? { text: it } : it;
       return '<div class="step"><div class="step-n">' + (i + 1) + '</div><div class="step-body">' + (o.title ? '<div class="step-title">' + ctx.inline(o.title) + '</div>' : '') +
         (o.text ? '<div class="md">' + ctx.md(o.text) + '</div>' : '') + '</div></div>';
-    }).join(''));
+    }).join('');
+    return box('steps' + (reveal ? ' reveal' : ''), 'st' + ctx.hash(code), body +
+      (reveal && items.length > 1 ? '<div class="steps-more btn-row"><button class="btn primary" data-act="steps-next">Next step</button><button class="btn link" data-act="steps-all">Show all</button></div>' : ''));
   }));
 
   R.registerFence('cards', safe('cards', (items, ctx, code) => {
