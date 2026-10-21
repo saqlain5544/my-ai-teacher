@@ -67,6 +67,15 @@ final class CoreTests: XCTestCase {
     }
 
     /// A page of unclosed, deeply nested lists once took 90 s of CPU and 14 GB in the converter; it must stay fast and bounded.
+    /// The one-pass preprocessor's deliberate differences from the old regexes: uppercase HTML5 tags are recognised, and
+    /// the leftmost construct wins (a script containing "<!--" no longer swallows the page after it).
+    func testPreprocessorReadsUppercaseTagsAndTheLeftmostConstruct() {
+        let page = "<html><body><NAV>menu</NAV><MAIN><h2>Title</h2><script>s='<!--'</script><p>kept text that is long enough to be the content of this page, surely more than two hundred characters in total so the main region wins over the body as the article root when the converter looks for it in this document</p><!-- x --></MAIN></body></html>"
+        let md = HTMLToMarkdown.convert(html: page, baseURL: nil).markdown
+        XCTAssertTrue(md.contains("kept text"), md)
+        XCTAssertFalse(md.contains("menu"), "uppercase NAV is chrome: \(md)")
+    }
+
     func testHTMLToMarkdownSurvivesPathologicalNesting() {
         let item = String(repeating: "word ", count: 400)
         let html = "<html><body>" + String(repeating: "<ul><li><b>\(item)</b><a href=\"/x\">\(item)</a>", count: 600) + "</body></html>"
@@ -263,6 +272,32 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(start, 700, "the newest 300, already at a question")
         let odd = C.pageStart(msgs, keep: 301)
         XCTAssertTrue(msgs[odd].role == .user && !msgs[odd].isToolResultOnly && odd >= 1000 - 301 && odd < 1000 - 301 + 4, "\(odd)")
+    }
+
+    /// "Show earlier" always moves back, even past an agent turn longer than a step (it stalled there), and the page never
+    /// starts on a tool result when one turn is longer than the window.
+    @MainActor
+    func testShowEarlierAlwaysProgressesAndLongTurnsStartOnTheirQuestion() {
+        typealias C = TranscriptView.Coordinator
+        let q = ChatMessage(role: .user, blocks: [.text("q")])
+        func step(_ i: Int) -> [ChatMessage] {
+            [ChatMessage(role: .assistant, blocks: [.toolUse(id: "t\(i)", name: "bash", input: [:])]),
+             ChatMessage(role: .user, blocks: [.toolResult(id: "t\(i)", name: "bash", content: "ok")])]
+        }
+        let longTurn = [q] + (0..<120).flatMap(step) + [ChatMessage(role: .assistant, blocks: [.text("done")])]   // 242 messages
+        let normal = (0..<150).flatMap { _ in [ChatMessage(role: .user, blocks: [.text("q")]), ChatMessage(role: .assistant, blocks: [.text("a")])] }
+        let msgs = longTurn + normal
+        var first = C.pageStart(msgs, keep: C.pageWindow), steps = 0
+        while let k = C.revealStart(msgs, first: first, step: C.pageStep) {
+            XCTAssertLessThan(k, first, "each reveal shows more")
+            XCTAssertTrue(C.learner(msgs[k]) || k == 0, "starts on a question")
+            first = C.pageStart(msgs, keep: msgs.count - k)
+            XCTAssertEqual(first, k)
+            steps += 1; if steps > 10 { break }
+        }
+        XCTAssertEqual(first, 0, "reaches the start, then disk"); XCTAssertNil(C.revealStart(msgs, first: 0, step: C.pageStep))
+        let start = C.pageStart(longTurn, keep: 100)
+        XCTAssertEqual(start, 0, "a turn longer than the window starts at its own question, not on a tool result")
     }
 
     /// The transcript gets each message as JSON text in one pass; it must say exactly what the JSON-tree route said.

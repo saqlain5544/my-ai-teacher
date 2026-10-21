@@ -90,10 +90,22 @@ struct TranscriptView: NSViewRepresentable {
         /// The page's first message: where "Show earlier" continues from.
         private var pageFirst: String?
 
-        /// Where the newest `keep` messages start, moved to a learner's message so no tool result arrives without its card.
+        static func learner(_ m: ChatMessage) -> Bool { m.role == .user && !m.isToolResultOnly }
+        /// Where the newest `keep` messages start, moved to a learner's message so no tool result arrives without its card
+        /// (forward, or back when one turn is longer than `keep`).
         static func pageStart(_ m: [ChatMessage], keep: Int) -> Int {
             guard m.count > keep else { return 0 }
-            return m[(m.count - keep)...].firstIndex { $0.role == .user && !$0.isToolResultOnly } ?? m.count - keep
+            let cut = m.count - keep
+            return m[cut...].firstIndex(where: learner) ?? m[..<cut].lastIndex(where: learner) ?? 0
+        }
+        /// Where "Show earlier" moves the page's start from `first`: a step back, on a learner's message (the nearest after
+        /// the step, else before it: an agent turn can be longer than a step), else the very start. nil: nothing earlier
+        /// in memory, so it comes from disk.
+        static func revealStart(_ m: [ChatMessage], first: Int, step: Int) -> Int? {
+            guard first > 0 else { return nil }
+            let from = max(0, first - step)
+            let k = m[from..<first].firstIndex(where: learner) ?? m[..<from].lastIndex(where: learner) ?? 0
+            return k < first ? k : nil
         }
 
         private func pageIndex(_ s: ChatSession) -> Int? { pageFirst.flatMap { id in s.messages.firstIndex { $0.id == id } } }
@@ -112,7 +124,7 @@ struct TranscriptView: NSViewRepresentable {
         func reset(_ messages: [ChatMessage], conversation: Conversation) {
             pendingDeltas.removeAll()
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
-            if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
+            if messages.isEmpty && (session?.base ?? 0) == 0 { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }
             let start = Self.pageStart(messages, keep: shown), earlier = (session?.base ?? 0) + start
@@ -139,9 +151,11 @@ struct TranscriptView: NSViewRepresentable {
         func upsert(_ message: ChatMessage) {
             flushDeltas()
             run("T.upsert(\(Self.script(message)))")
+            guard let s = session else { return }
+            if pageFirst == nil { pageFirst = s.messages.first?.id }   // a lesson that started empty: its page starts here
             // A long session keeps adding to the page: when a turn starts with more than a step past the window rendered,
             // the oldest leave the page (still in memory, behind "Show earlier").
-            guard message.role == .user, !message.isToolResultOnly, let s = session, let first = pageIndex(s),
+            guard message.role == .user, !message.isToolResultOnly, let first = pageIndex(s),
                   s.messages.count - first > Self.pageWindow + Self.pageStep else { return }
             shown = Self.pageWindow
             let start = Self.pageStart(s.messages, keep: shown)
@@ -256,8 +270,10 @@ struct TranscriptView: NSViewRepresentable {
                 AppLog.write("transcript ready")
                 ready = true
                 run("T.setFontSize(\(fontSize))")
+                // The fresh reset below supersedes a reset queued before the page was ready (it rendered the lesson twice).
+                var q = queue; queue.removeAll()
+                if let i = q.lastIndex(where: { $0.hasPrefix("T.reset(") }) { q.removeSubrange(...i) }
                 if let s = session { reset(s.messages, conversation: s.conversation) }
-                let q = queue; queue.removeAll()
                 q.forEach { run($0) }
                 if hungNotice {
                     hungNotice = false
@@ -277,10 +293,16 @@ struct TranscriptView: NSViewRepresentable {
                 app.selection = .memory
             case "older":
                 guard let s = session else { return }
-                pendingAnchor = pageFirst
-                if let first = pageIndex(s), first > 0 {   // in memory, not rendered yet: reveal a step
-                    let from = max(0, first - Self.pageStep)
-                    shown = s.messages.count - (s.messages[from..<first].firstIndex { $0.role == .user && !$0.isToolResultOnly } ?? from)
+                let first = pageIndex(s) ?? 0
+                // A reset mid-reply would wipe the text streamed so far (it lives in the loop until the step ends).
+                if s.isRunning {
+                    run("T.earlier(\(s.base + first)); T.notice('Earlier messages can be shown once this reply finishes.')")
+                    return
+                }
+                // Keep the view on the first message the learner was looking at (a tool result renders no element).
+                pendingAnchor = s.messages[first...].first(where: Self.learner)?.id ?? pageFirst
+                if let k = Self.revealStart(s.messages, first: first, step: Self.pageStep) {   // in memory: reveal a step
+                    shown = s.messages.count - k
                     reset(s.messages, conversation: s.conversation)
                 } else {
                     shown = s.messages.count + Self.pageStep

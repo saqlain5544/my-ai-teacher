@@ -462,6 +462,15 @@
     ok(seen('$$\\begin{equation} E=mc^2 \\label{eq:e} \\end{equation}$$').includes('E=mc2') && !seen('$$\\begin{equation} E=mc^2 \\label{eq:e} \\end{equation}$$').includes('eq:e'), 'label vanishes');
   });
 
+  test('the earlier button: restored after a refused click, and shown (not the welcome) when only older messages remain', () => {
+    T.reset([U('one'), A('two')], { earlier: 40 });
+    const b = $('.earlier button'); click(b); ok(b.disabled, 'disabled while loading');
+    T.earlier(40); ok(!$('.earlier button').disabled && $('.earlier button').textContent.includes('40'), 'restored with its count');
+    T.reset([], { earlier: 12 });
+    ok($('.earlier button') && !$('.welcome'), 'emptied window: the way back, not the welcome');
+    T.earlier(0); ok(!$('.earlier'), 'nothing earlier: no button');
+  });
+
   test('invalid component JSON shows an inline error, not a crash', () => {
     const el = show('```timeline\n[{"date": 1905, "title": "oops}]\n```\n\nAfter.');   // unterminated string
     ok($('.comp-error', el), 'error box'); ok(el.textContent.includes('After.'), 'rest of message renders');

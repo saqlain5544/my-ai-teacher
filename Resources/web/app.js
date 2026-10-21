@@ -1017,6 +1017,8 @@
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;
       thread.innerHTML = '';
+      // Empty with older messages on disk (the first loaded message was edited away): the way back, not the welcome.
+      if (!messages.length && opts && opts.earlier > 0) { T.earlier(opts.earlier); return; }
       if (!messages.length) { stick = false; renderWelcome(); window.scrollTo(0, 0); return; }
       for (const m of messages) { S.messages.push(m); S.byId.set(m.id, { msg: m, el: null }); if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.set(b.id, b)); }
       // A long lesson arrives as a window: older messages load on request.
@@ -1091,12 +1093,17 @@
       for (const m of S.messages.splice(0, i)) {
         const el = document.getElementById('m-' + m.id); if (el) el.remove();
         S.byId.delete(m.id);
-        (m.blocks || []).forEach(b => S.cards.delete(b.id));
+        (m.blocks || []).forEach(b => { S.cards.delete(b.id); S.progress.delete(b.id); });
         if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.delete(b.id));
       }
+      T.earlier(earlier);
+    },
+    /** The "Show earlier" button, for `n` messages before the page (also restores it after a refused click). */
+    earlier(n) {
       let more = thread.querySelector('.earlier');
+      if (!n) { if (more) more.remove(); return; }
       if (!more) { more = document.createElement('div'); more.className = 'earlier'; thread.prepend(more); }
-      more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(earlier).toLocaleString() + ' more)</button>';
+      more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(n).toLocaleString() + ' more)</button>';
     },
     setFontSize(px) { document.documentElement.style.setProperty('--font-size', px + 'px'); },
     card(front, back, show) {
