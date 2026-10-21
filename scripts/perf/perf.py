@@ -253,6 +253,10 @@ class Run:
         ru = rusage(self.app.pid)
         return round(ru.footprint / 2**20, 1) if ru else None
 
+    def web_mb(self):
+        """The app's WebContent processes (the lesson's page, and a sub-agent's when one is open)."""
+        return round(sum(ru.footprint for p, k in webkit_children(self.app.pid).items() if k == "WebContent" and (ru := rusage(p))) / 2**20, 1)
+
     def workload(self, name, fn):
         print(f"▸ {name}", flush=True)
         n = len(self.app.lines())
@@ -287,14 +291,14 @@ class Run:
         m["open_ms"] = round((time.time() - t) * 1000)
         m["messages_in_window"] = int(re.search(r"(\d+) messages →", line).group(1))
         m["rendered"] = int(re.search(r"→ (\d+) rendered", line).group(1))
-        time.sleep(4); m["app_open_mb"] = self.footprint_mb()
+        time.sleep(4); m["app_open_mb"], m["web_open_mb"] = self.footprint_mb(), self.web_mb()
         older = []
         for _ in range(3):   # the learner scrolls back: earlier messages page in
             n = len(self.app.lines()); t = time.time()
             if self.app.js("(() => { const b = document.querySelector('[data-act=\"older\"]'); if (b) b.click(); return !!b; })()") != "true": break
             self.app.wait_log(r"reset Perf lesson", n, 120); older.append(round((time.time() - t) * 1000))
         if older: m["older_ms_max"] = max(older)
-        time.sleep(3); m["app_scrolled_mb"] = self.footprint_mb()
+        time.sleep(3); m["app_scrolled_mb"], m["web_scrolled_mb"] = self.footprint_mb(), self.web_mb()
         n = len(self.app.lines())
         self.app.post({"action": "newLesson"}); self.app.wait_log(r"reset ", n, 30)
         time.sleep(5); m["app_left_mb"] = self.footprint_mb()
