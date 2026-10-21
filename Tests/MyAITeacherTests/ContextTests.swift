@@ -73,3 +73,30 @@ final class ContextTests: XCTestCase {
         XCTAssertEqual(ToolRegistry.active(s, loaded: ["grep", "nope"]).map(\.name), base + ["grep"])
     }
 }
+
+final class PolicyTests: XCTestCase {
+    func testPackageInstallsAreBlocked() {
+        let bash = BashTool(), code = RunCodeTool()
+        for c in ["pip install numpy", "python3 -m pip install x", "uv pip install y", "conda install z", "brew install wget", "npm i -g serve"] {
+            XCTAssertNotNil(PermissionExtension.packageInstall(tool: bash, input: ["command": .string(c)]), c)
+        }
+        XCTAssertNotNil(PermissionExtension.packageInstall(tool: code, input: ["language": "python", "code": "import subprocess; subprocess.run('pip install x', shell=True)"]))
+        for c in ["ls -la", "python3 script.py", "pip list", "echo 'install guide'"] {
+            XCTAssertNil(PermissionExtension.packageInstall(tool: bash, input: ["command": .string(c)]), c)
+        }
+    }
+
+    func testPythonDetection() {
+        XCTAssertTrue(PermissionExtension.isPython(MathTool(), ["expression": "x"]))
+        XCTAssertTrue(PermissionExtension.isPython(RunCodeTool(), ["language": "Python", "code": "1"]))
+        XCTAssertFalse(PermissionExtension.isPython(RunCodeTool(), ["language": "javascript", "code": "1"]))
+    }
+
+    func testExperimentArmsAreStableAndSplit() {
+        let e = Experiments.visualTool
+        XCTAssertEqual(Experiments.arm(e, unit: "lesson-1"), Experiments.arm(e, unit: "lesson-1"))
+        let arms = (0..<200).map { Experiments.arm(e, unit: "l\($0)") }
+        let share = Double(arms.filter { $0 == "core" }.count) / 200
+        XCTAssertGreaterThan(share, 0.35); XCTAssertLessThan(share, 0.65)
+    }
+}

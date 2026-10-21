@@ -59,7 +59,7 @@ enum CLI {
                 total += n
                 print(String(format: "  %-16@ %6d chars ≈ %5d tok", t.name as NSString, n, n / 4))
             }
-            let sent = ToolRegistry.core.reduce(0) { $0 + $1.description.count + $1.schema.compact.count + $1.name.count }
+            let sent = ToolRegistry.active(AppSettings(), loaded: [], lessonID: "cli").reduce(0) { $0 + $1.description.count + $1.schema.compact.count + $1.name.count }
             print("tools sent per request (core): \(sent) chars ≈ \(sent / 4) tokens; all registered: \(total / 4) tokens")
             print("fixed prefix per request ≈ \((sys.count + sent) / 4) tokens")
             return 0
@@ -67,11 +67,15 @@ enum CLI {
         if provider.id == "openrouter", !model.hasSuffix(":free"), !args.contains("--allow-paid") {
             print("Refusing a paid OpenRouter model (\(model)); pass a :free model or --allow-paid."); return 2
         }
-        let valued: Set<String> = ["--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
+        for (i, a) in args.enumerated() where a == "--exp" && i + 1 < args.count {
+            let kv = args[i + 1].split(separator: "=", maxSplits: 1).map(String.init)
+            if kv.count == 2 { Experiments.forced[kv[0]] = kv[1] }
+        }
+        let valued: Set<String> = ["--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
         let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()
-        let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model)
-        let tools = args.contains("--no-tools") ? [] : ToolRegistry.active(settings, loaded: []).map(\.spec)
+        let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model, lessonID: "cli")
+        let tools = args.contains("--no-tools") ? [] : ToolRegistry.active(settings, loaded: [], lessonID: "cli").map(\.spec)
         let thinking = opt("--thinking").flatMap(ThinkingLevel.init(rawValue:)) ?? .low
         let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text(prompt)])],
                              tools: tools, maxTokens: 8000, thinking: thinking)

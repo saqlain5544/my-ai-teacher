@@ -23,6 +23,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     var speechRate: Double = 0.5
     var compactAtTokens = 48_000   // context budget (tokens)
     var showThinking = true
+    var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
+    var experiments = true              // local A/B experiments (see Experiments)
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -50,6 +52,21 @@ struct AppSettings: Codable, Sendable, Equatable {
         let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
         compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(savedBudget, 400_000)   // migrate the old default
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
+        python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
+        experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments
+    }
+}
+
+/// Whether the teacher may run Python (code and SymPy math). Package installs are never allowed.
+enum PythonPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
+    case allow, ask, off
+    var id: String { rawValue }
+    var title: String {
+        switch self {
+        case .allow: "Run without asking"
+        case .ask: "Ask before each run"
+        case .off: "Off"
+        }
     }
 }
 

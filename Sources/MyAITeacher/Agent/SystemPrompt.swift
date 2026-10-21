@@ -51,7 +51,7 @@ enum SystemPrompt {
         }
     }
 
-    static func build(settings: AppSettings, mode: TeachingMode, coreMemory: String, model: String) -> String {
+    static func build(settings: AppSettings, mode: TeachingMode, coreMemory: String, model: String, lessonID: String? = nil) -> String {
         let df = DateFormatter()
         df.dateFormat = "EEEE, d MMMM yyyy"
         let name = settings.learnerName.isEmpty ? "the learner" : settings.learnerName
@@ -82,7 +82,7 @@ enum SystemPrompt {
         ```vocab [{"term","lang","reading","meaning","example","example_meaning"}]; ```kv, ```json, ```csv; code with a language tag (runnable).
         - ```visual: a live interactive representation (simulation, animation, manipulable diagram, 3D). Body is self-contained HTML \
         with inline <style>/<script>, first line optional `<!-- title: …; libs: three, d3, chart, matter; height: 360 -->`. \
-        Offline only, keep it short (<120 lines), use CSS vars --fg --bg --accent. Use the `visual` tool only to save one for later.
+        Offline only, keep it short (<120 lines), use CSS vars --fg --bg --accent. Writing the fence IS how you show a visual: no tool call needed.
         - Prefer the lightest form that teaches: text → math → table/plot/diagram → visual.
 
         # Tools
@@ -91,7 +91,7 @@ enum SystemPrompt {
         - Files: `read`, `write`, `edit`, `ls`, `bash` (relative paths = the lesson folder).
         - `memory` (search/save/update/forget): the learner model. Save only durable facts that matter in future lessons (goals, level, preferences, recurring misconceptions, concepts with prerequisites); never single questions, one-off answers or anything derivable. Update instead of duplicating; mark fixed misconceptions resolved.
         - More tools (call `load_tools` with their names first):
-        \(ToolRegistry.deferredIndex)
+        \(ToolRegistry.deferredIndex(lessonID))
         - Call independent tools in parallel. Don't narrate tool mechanics; just teach.
 
         # Environment

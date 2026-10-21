@@ -16,6 +16,33 @@ final class PermissionExtension: AgentExtension {
         let access = app.access(for: ws)
         let input = call.input ?? .object([:])
         let conv = session.id
+        if let installing = Self.packageInstall(tool: tool, input: input) {
+            return .deny("Installing packages isn't allowed (\(installing)). Use the standard library or what's already installed.")
+        }
+        // Python follows the learner's Python setting, independent of folder access.
+        if Self.isPython(tool, input) {
+            switch app.settings.value.python {
+            case .allow: return .allow
+            case .off: return .deny("The learner has turned Python off. Explain or calculate without running code.")
+            case .ask:
+                if app.interactions.isGranted("python", conversationID: conv) { return .allow }
+                let detail = tool.name == "math" ? "\(input["operation"]?.string ?? "evaluate"): \(input["expression"]?.string ?? "")" : (input["code"]?.string ?? "")
+                return .ask(ApprovalRequest(
+                    title: tool.name == "math" ? "Allow Teacher to calculate with Python (SymPy)?" : "Allow Teacher to run this Python code?",
+                    detail: String(detail.prefix(4000)),
+                    options: [ApprovalOption(id: "once", label: "Allow once", style: .primary),
+                              ApprovalOption(id: "lesson", label: "Allow Python for this lesson"),
+                              ApprovalOption(id: "always", label: "Always allow Python"),
+                              ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
+                    switch choice {
+                    case "once": return .allow
+                    case "lesson": self?.app.interactions.grant("python", conversationID: conv); return .allow
+                    case "always": self?.app.settings.value.python = .allow; return .allow
+                    default: return .deny("The learner declined running Python.")
+                    }
+                }
+            }
+        }
         switch tool.risk {
         case .readOnly, .network, .interactive:
             return .allow
@@ -68,5 +95,20 @@ final class PermissionExtension: AgentExtension {
                 }
             }
         }
+    }
+
+    nonisolated static func isPython(_ tool: Tool, _ input: JSON) -> Bool {
+        if tool.name == "math" { return true }
+        guard tool.name == "run_code" else { return false }
+        return ["python", "python3", "py"].contains((input["language"]?.string ?? "").lowercased())
+    }
+
+    /// Package installs in shell commands or code (pip, uv, conda, poetry, npm -g…). Returns what matched.
+    nonisolated static func packageInstall(tool: Tool, input: JSON) -> String? {
+        guard tool.name == "bash" || tool.name == "run_code" else { return nil }
+        let text = (input["command"]?.string ?? "") + "\n" + (input["code"]?.string ?? "")
+        let pattern = #"\b(pip3?|pipx|uv\s+pip|uv\s+add|conda|mamba|micromamba|poetry\s+add|easy_install)\s+install\b|\bpython3?\s+-m\s+(pip|ensurepip)\b|\bensurepip\b|\bbrew\s+install\b|\bnpm\s+(i|install)\s+(-g|--global)\b"#
+        guard let r = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) else { return nil }
+        return String(text[r])
     }
 }

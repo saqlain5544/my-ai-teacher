@@ -209,7 +209,7 @@ final class ChatSession: ObservableObject, Identifiable {
             steps += 1
             await compactIfNeeded(client: client)
             setStatus(steps == 1 ? "Thinking…" : "Continuing…")
-            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [])
+            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: requestMessages(), tools: tools.map(\.spec),
@@ -376,11 +376,15 @@ final class ChatSession: ObservableObject, Identifiable {
         func record(_ ok: Bool) {
             turn.tools.append(ToolMetric(name: name, duration: Date().timeIntervalSince(started), ok: ok, waitedForLearner: waited > 0 ? waited : nil))
         }
-        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? []).contains { $0.name == name } || name == "quiz"
+        // A direct call to a deferred tool loads it (saves the load_tools round trip); its schema is sent from the next step.
+        let layout = ToolRegistry.layout(conversation.id)
+        if layout.deferred.contains(where: { $0.name == name }), !(conversation.loadedTools ?? []).contains(name), !settings.disabledTools.contains(name) {
+            conversation.loadedTools = (conversation.loadedTools ?? []) + [name]
+        }
+        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id).contains { $0.name == name } || name == "quiz"
         guard callable, let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
             record(false)
-            let hint = ToolRegistry.deferred.contains { $0.name == name } ? " It is a deferred tool: call load_tools first." : ""
-            return .toolResult(id: callID, name: name, content: "Tool `\(name)` is not available.\(hint)", isError: true)
+            return .toolResult(id: callID, name: name, content: "Tool `\(name)` is not available.", isError: true)
         }
         if input["_raw"] != nil {
             record(false)
@@ -442,7 +446,7 @@ final class ChatSession: ObservableObject, Identifiable {
     // MARK: Context
 
     private func buildSystemPrompt(model: String) -> String {
-        var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model)
+        var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
         return s
     }

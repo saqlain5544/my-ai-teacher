@@ -9,10 +9,9 @@ struct VisualTool: Tool {
 
     let name = "visual"
     let description = """
-    Render an interactive visual in the lesson: simulations, animations, manipulable diagrams, 3D scenes, explorable graphs. \
-    Give a SHORT self-contained HTML body (inline <style>/<script>, no external URLs). Optional `libs` from: three (THREE), \
-    d3, chart (Chart), matter (Matter physics), katex. Size to the container width; use CSS vars --fg --bg --accent --muted. \
-    `persist: true` saves it to the folder's visual library for later lessons.
+    Save an interactive visual to this folder's library for reuse in later lessons (to just show one, write a ```visual \
+    fence in your reply instead: no tool call). Same HTML rules as the fence; optional `libs`: three (THREE), d3, chart \
+    (Chart), matter (Matter), katex.
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {

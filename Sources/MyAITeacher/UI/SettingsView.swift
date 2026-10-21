@@ -29,6 +29,11 @@ struct GeneralSettings: View {
                     ForEach(ThinkingLevel.allCases) { Text($0.rawValue.capitalized).tag($0) }
                 }
                 Toggle("Show the model's thinking", isOn: $settings.value.showThinking)
+                Picker("Python (code and math)", selection: $settings.value.python) {
+                    ForEach(PythonPolicy.allCases) { Text($0.title).tag($0) }
+                }
+                Text("The teacher can never install packages.").font(.caption).foregroundStyle(.secondary)
+                Toggle("Run local A/B experiments to tune the teacher (results stay on this Mac)", isOn: $settings.value.experiments)
                 Stepper("Text size: \(Int(settings.value.fontSize)) pt", value: $settings.value.fontSize, in: 11...24)
                 Stepper("Max tool steps per turn: \(settings.value.maxToolTurns)", value: $settings.value.maxToolTurns, in: 5...200, step: 5)
                 Stepper("Context budget: \(settings.value.compactAtTokens / 1000)k tokens (trims, then summarises)", value: $settings.value.compactAtTokens, in: 20_000...900_000, step: 10_000)

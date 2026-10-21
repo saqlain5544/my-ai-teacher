@@ -60,6 +60,8 @@ final class AppModel: ObservableObject {
             .sink { [weak self] e in self?.handle(e) }
             .store(in: &bag)
         settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
+        Experiments.enabled = s.value.experiments
+        settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         touchRecent(ws)
         DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up") }
@@ -75,6 +77,7 @@ final class AppModel: ObservableObject {
         extensions.register(ActivityExtension())
         Telemetry.shared.start(db: global.db)
         extensions.register(TelemetryExtension())
+        extensions.register(ExperimentExtension())
     }
 
     private func handle(_ e: AppEvent) {
