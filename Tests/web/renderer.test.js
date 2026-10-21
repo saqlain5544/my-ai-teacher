@@ -267,6 +267,16 @@
     ok(svg1 && labels(svg1).includes('Glucose'), 'drawn while streaming');
   });
 
+  test('a wide diagram scrolls at 90% of its size, set without measuring the page', async () => {
+    const wide = 'flowchart LR\n' + Array.from({ length: 14 }, (_, i) => '  N' + i + '[Step number ' + i + ' of the process] --> N' + (i + 1) + '[Step number ' + (i + 1) + ' of the process]').join('\n');
+    const el = show('```mermaid\n' + wide + '\n```');
+    const blk = await until(() => { const b = $('.mermaid-block', el); return b && !b.hasAttribute('data-pending') && b; }, 'wide diagram', 8000);
+    const svg = $('svg', blk), natural = svg.viewBox.baseVal.width;
+    eq(svg.style.minWidth, Math.round(natural * 0.9) + 'px', 'min-width is 90% of the natural width');
+    ok(natural * 0.9 > blk.clientWidth, 'wider than the column (natural ' + Math.round(natural) + ')');
+    ok(blk.scrollWidth > blk.clientWidth, 'the block scrolls instead of shrinking the text');
+  });
+
   test('mermaid syntax error shows a readable error and leaves no stray nodes', async () => {
     expectedErrors.push('Syntax error', 'Parse error');
     const el = show('```mermaid\nflowchart TD\n  A --> \n  ((((\n```');
@@ -592,6 +602,35 @@
     eq(streamed, $$('.blocks > .md > *', freshEl).map(n => n.className + '|' + n.tagName));
   });
 
+  test('a long streaming reply re-parses only its tail: finished blocks keep their nodes, the end matches a fresh render', async () => {
+    const base = KITCHEN.replace(/```visual[\s\S]*?```/, '') + '\n\n';
+    let doc = ''; while (doc.length < 9000) doc += base + 'Paragraph ' + doc.length + ' with $x^2$ and **bold** text.\n\n';
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('…', true); T.upsert(a);
+    // Count the HTML each frame parses (morph's template): past the first segments it must stay near the tail's size.
+    const desc = Object.getOwnPropertyDescriptor(Element.prototype, 'innerHTML');
+    let parsed = 0;
+    Object.defineProperty(HTMLTemplateElement.prototype, 'innerHTML', { configurable: true, get() { return desc.get.call(this); }, set(v) { parsed += v.length; desc.set.call(this, v); } });
+    let first = null, kept = true, lastFrame = 0;
+    try {
+      for (let i = 0; i < doc.length; i += 200) {
+        parsed = 0;
+        T.delta(a.id, 0, 'text', doc.slice(i, i + 200)); await frame();
+        lastFrame = parsed;
+        const h = $('#m-' + a.id + ' .md > h1');
+        if (i > 4000) { if (!first) first = h; else kept = kept && h === first; }
+      }
+    } finally { delete HTMLTemplateElement.prototype.innerHTML; }
+    ok(first && kept, 'the first heading is the same node in every frame past 3,000 characters');
+    const whole = $('#m-' + a.id + ' .md').innerHTML.length;
+    ok(lastFrame < whole / 4, 'the last frame parsed ' + lastFrame + ' of ' + whole + ' characters of HTML');
+    T.status('', false); await sleep(200);
+    const streamed = $$('#m-' + a.id + ' .blocks > .md > *').map(n => n.tagName + '|' + n.className);
+    const fresh = A(doc); T.reset([U('q'), fresh], {});
+    eq(streamed, $$('#m-' + fresh.id + ' .blocks > .md > *').map(n => n.tagName + '|' + n.className), 'same blocks as a fresh render');
+  });
+
   test('an unclosed math block mid-stream shows a placeholder, then renders', async () => {
     let sawPending = false;
     const msg = await stream('Before\n\n$$\n\\frac{1}{2}\n$$\n\nafter', 3, m => { if ($('.math-display .diagram-pending', m)) sawPending = true; });
@@ -899,6 +938,19 @@
     const t0 = performance.now(); T.status('', false); T.reset(msgs, {}); const ms = performance.now() - t0;
     log('200 messages in ' + ms.toFixed(0) + ' ms');
     eq($$('.msg').length, 200); ok(ms < 2500, 'took ' + ms.toFixed(0) + ' ms');
+  });
+
+  test('performance: a lesson with 400 tool calls shows every result on its card', () => {
+    const msgs = [U('q')];
+    for (let i = 0; i < 400; i++) {
+      msgs.push(A([{ kind: 'toolUse', id: 'lt' + i, name: 'read', input: { path: '/tmp/f' + i } }]));
+      msgs.push(R('lt' + i, 'read', 'line ' + i));
+    }
+    msgs.push(A('Done.'));
+    const t0 = performance.now(); T.status('', false); T.reset(msgs, {}); const ms = performance.now() - t0;
+    log('400 tool calls in ' + ms.toFixed(0) + ' ms');
+    eq($$('[data-tool-id] .spinner').length, 0, 'no card left waiting for its result');
+    ok(ms < 4000, 'took ' + ms.toFixed(0) + ' ms');
   });
 
   test('performance: streaming 20k characters stays responsive', async () => {

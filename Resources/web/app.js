@@ -28,7 +28,7 @@
 
   // ───────────────────────── State ─────────────────────────
   const S = {
-    messages: [], byId: new Map(), results: new Map(), pending: new Map(), progress: new Map(),
+    messages: [], byId: new Map(), results: new Map(), pending: new Map(), progress: new Map(), cards: new Map(),
     openTools: new Set(), codeOutputs: new Map(), dirty: new Set(), streamingId: null, welcome: null,
     running: false, showThinking: true,
   };
@@ -445,11 +445,12 @@
       try { return await renderOnce(fixed); } catch (_) { throw e; }
     }
   }
-  // Wide diagrams scroll at a readable size instead of shrinking their text below 90%.
+  // Wide diagrams scroll at a readable size instead of shrinking their text below 90%. A min-width does it in CSS: reading
+  // the block's width instead forced a layout of the whole lesson per diagram (most of the CPU of opening a long one).
   function fitDiagram(el) {
     const svg = el.querySelector('svg'); if (!svg || !svg.viewBox || !svg.viewBox.baseVal) return;
-    const natural = svg.viewBox.baseVal.width, room = el.clientWidth - 24;
-    if (natural && room > 0 && natural * 0.9 > room) { svg.style.maxWidth = 'none'; svg.style.width = Math.round(natural * 0.9) + 'px'; }
+    const natural = svg.viewBox.baseVal.width;
+    if (natural) svg.style.minWidth = Math.round(natural * 0.9) + 'px';
   }
   let fillSeq = 0;
   function fillMermaid(el, key) {
@@ -518,41 +519,49 @@
     segs.push(cur.join('\n'));
     return segs;
   }
+  /** The reply's HTML as a list of segments (see `morph`): finished ones come from the cache as the same strings. */
   function markdownLive(text) {
-    if (text.length < 3000 || /\[\^|^\s{0,3}\[[^\]]+\]:/m.test(text)) return markdown(text, true);
-    const segs = segments(text);
-    let html = '';
+    if (text.length < 3000 || /\[\^|^\s{0,3}\[[^\]]+\]:/m.test(text)) return [markdown(text, true)];
+    const segs = segments(text), html = [];
     for (let i = 0; i < segs.length - 1; i++) {
       let h = segCache.get(segs[i]);
       if (h === undefined) { h = markdown(segs[i], false); segCache.set(segs[i], h); }
-      html += h;
+      html.push(h);
     }
-    return html + markdown(segs[segs.length - 1], true);
+    html.push(markdown(segs[segs.length - 1], true));
+    return html;
   }
-  /** Keeps a Map to its newest `n` entries (Maps iterate in insertion order). */
-
   /** Run component processors (language, tables, canvases…) on freshly inserted DOM. */
   function processNode(node) {
     if (node.nodeType !== 1) return;
     for (const p of R.processors) { try { p(node, ctx); } catch (e) { console.log('processor', e); } }
     processMermaid(node);
   }
-  /** Replace children of `el` with new HTML, keeping unchanged top-level nodes so diagrams, selection and processed DOM survive streaming. */
+  /** Replace children of `el` with new HTML, keeping unchanged top-level nodes so diagrams, selection and processed DOM survive streaming.
+   *  `html` may be a list of segments (a streaming reply): segments unchanged since the last frame keep their nodes without being
+   *  parsed and serialised again, so a frame costs O(the tail) instead of O(the reply). */
   function morph(el, html) {
-    const tpl = document.createElement('template');
-    tpl.innerHTML = html;
-    const next = Array.from(tpl.content.childNodes);
-    const cur = Array.from(el.childNodes);
-    let i = 0;
-    for (; i < next.length; i++) {
-      const n = next[i], c = cur[i];
-      const src = n.nodeType === 1 ? n.outerHTML : n.nodeValue;
-      if (c && c._src === src) continue;
-      n._src = src;
-      if (c) el.replaceChild(n, c); else el.appendChild(n);
-      processNode(n);
+    const parts = Array.isArray(html) ? html : [html], prev = (Array.isArray(html) && el._segs) || [];
+    const cur = Array.from(el.childNodes), segs = [];
+    let s = 0, i = 0;
+    for (; s < parts.length - 1 && s < prev.length && prev[s].html === parts[s] && prev[s].nodes.every((n, j) => cur[i + j] === n); s++) {
+      i += prev[s].nodes.length; segs.push(prev[s]);
+    }
+    for (; s < parts.length; s++) {
+      const tpl = document.createElement('template');
+      tpl.innerHTML = parts[s];
+      const nodes = [];
+      for (const n of Array.from(tpl.content.childNodes)) {
+        const c = cur[i++], src = n.nodeType === 1 ? n.outerHTML : n.nodeValue;
+        if (c && c._src === src) { nodes.push(c); continue; }
+        n._src = src;
+        if (c) el.replaceChild(n, c); else el.appendChild(n);
+        processNode(n); nodes.push(n);
+      }
+      segs.push({ html: parts[s], nodes });
     }
     for (let j = cur.length - 1; j >= i; j--) if (cur[j].parentNode === el) el.removeChild(cur[j]);
+    el._segs = Array.isArray(html) ? segs : null;
   }
   // Re-rendering a card must never steal the learner's caret: remember the focused field (by its data-* key), restore
   // it after, and while an IME composition is in progress (Arabic, Japanese…) defer the update until it ends.
@@ -612,8 +621,8 @@
     if (isToolResultOnly(m)) {
       for (const b of m.blocks) {
         S.results.set(b.id, b);
-        const card = document.querySelector('[data-tool-id="' + CSS.escape(b.id) + '"]');
-        if (card) renderToolCard(card, card._block);
+        const card = S.cards.get(b.id);
+        if (card && card.isConnected) renderToolCard(card, card._block);
       }
       return;
     }
@@ -687,7 +696,7 @@
       } else if (b.kind === 'toolUse') {
         node.className = 'tool-wrap';
         node._block = b;
-        node.setAttribute('data-tool-id', b.id);
+        node.setAttribute('data-tool-id', b.id); S.cards.set(b.id, node);
         renderToolCard(node, b);
       }
       vi++;
@@ -1004,7 +1013,7 @@
     reset(messages, opts) {
       if (R.pauseVisuals) R.pauseVisuals(opts && opts.pauseVisuals);
       document.body.classList.toggle('agent-mode', !!(opts && opts.agent));   // a coding session: no teaching chips
-      S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear();
+      S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear(); S.cards.clear();
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;
       thread.innerHTML = '';
@@ -1082,6 +1091,7 @@
       for (const m of S.messages.splice(0, i)) {
         const el = document.getElementById('m-' + m.id); if (el) el.remove();
         S.byId.delete(m.id);
+        (m.blocks || []).forEach(b => S.cards.delete(b.id));
         if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.delete(b.id));
       }
       let more = thread.querySelector('.earlier');
