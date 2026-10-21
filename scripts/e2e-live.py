@@ -185,8 +185,14 @@ def check(name, r, start, answered, expect_tools=(), any_tools=(), page=(), forb
     if not last_text.strip() and not allow_empty: problems.append("no final text from the teacher")
     for key in page:
         if not pg.get(key): notes.append("page has no " + key)
+    # A required element the reply contains but the page doesn't show is the app's failure; a reply that never wrote one
+    # (it described a visual and left it out) is the model's, so only a note.
+    sent = "".join(b.get("text") or "" for m in msgs if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
+    made = {"visuals": "```visual" in sent.lower() or "visual" in used, "diagrams": "```mermaid" in sent.lower(), "katex": "$" in sent}
     for key in require:
-        if not pg.get(key): problems.append("page has no " + key + " (the point of this scenario)")
+        if pg.get(key): continue
+        if made.get(key, True): problems.append("page has no " + key + " (the point of this scenario)")
+        else: notes.append("the reply contains no " + key.rstrip("s") + " (the model left it out)")
     errs = [l for l in log_lines()[log_from:] if (" JS error" in l or "[error]" in l.lower() or " error:" in l.lower()) and "eval →" not in l]
     if errs: problems.append("log errors: %s" % [e[20:220] for e in errs[:4]])
     return problems, notes, used
