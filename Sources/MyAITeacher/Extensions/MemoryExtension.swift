@@ -6,7 +6,6 @@ import Foundation
 final class MemoryExtension: AgentExtension {
     let id = "memory"
     unowned let app: AppModel
-    private var reflecting: Set<String> = []
     init(app: AppModel) { self.app = app }
 
     func willSend(_ message: inout ChatMessage, session: ChatSession) {
@@ -41,7 +40,9 @@ final class MemoryExtension: AgentExtension {
 
     func reflect(_ session: ChatSession, minNew: Int) {
         let s = app.settings.value
-        guard s.autoMemory, !session.conversation.mode.isAgent, !reflecting.contains(session.id), !session.isRunning else { return }
+        // One reflection per lesson at a time (the runtime keeps one job per name).
+        let job = "memory.reflect:\(session.id)"
+        guard s.autoMemory, !session.conversation.mode.isAgent, Runtime.registry.whereis(job) == nil, !session.isRunning else { return }
         let done = session.conversation.reflectedCount ?? 0   // absolute message count already reflected on
         let messages = session.messages, base = session.base
         guard session.totalCount - done >= minNew else { return }
@@ -56,13 +57,12 @@ final class MemoryExtension: AgentExtension {
         let services = session.services
         let convID = session.id
         let client = provider.client(apiKey: key)
-        reflecting.insert(convID)
         let box = WeakBox(session), me = WeakBox(self)
-        Task.detached(priority: .utility) {
+        // Supervised: a reflection that hangs (a stalled provider) is ended by its watchdog and tried once more.
+        Task { await Runtime.job(job, limit: Intensity(maxRestarts: 1, period: 600), watchdog: 300) { _ in
             let outcome = await Reflection.run(messages: slice, conversationID: convID, client: client, model: model,
                                                services: services, needsTitle: needsTitle)
             await MainActor.run {
-                me.value?.reflecting.remove(convID)
                 box.value?.applyReflection(outcome, messageCount: count)
                 if Reflection.consolidationDue(services) { me.value?.consolidate(services: services, client: client, model: model) }
                 if outcome.applied > 0 {
@@ -75,7 +75,7 @@ final class MemoryExtension: AgentExtension {
                     EventBus.publish(.notice(conversationID: convID, text: "🧠 Memory updated — " + parts.joined(separator: ", ")))
                 }
             }
-        }
+        } }
     }
 }
 
@@ -87,14 +87,14 @@ final class WeakBox<T: AnyObject>: @unchecked Sendable {
 extension MemoryExtension {
     /// Runs a consolidation pass in the background and announces the result.
     func consolidate(services: Services, client: LLMClient, model: String) {
-        Task.detached(priority: .utility) {
+        Task { await Runtime.job("memory.consolidate", limit: Intensity(maxRestarts: 1, period: 600), watchdog: 600) { _ in
             let o = await Reflection.consolidate(client: client, model: model, services: services)
             AppLog.write("memory consolidation: \(o.updated) updated, \(o.deleted) removed")
             if o.applied > 0 {
                 EventBus.publish(.memoryChanged(MemoryChange(kind: .reflected, summary: "consolidated")))
                 EventBus.publish(.notice(conversationID: nil, text: "🧠 Memory tidied — \(o.updated) refined, \(o.deleted) removed"))
             }
-        }
+        } }
     }
 
     /// Manual trigger (Memory screen) using the memory model or the default lesson model.

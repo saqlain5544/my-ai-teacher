@@ -39,7 +39,6 @@ final class Telemetry: @unchecked Sendable {
     private var enabledFlag: Bool
     private(set) var store: TelemetryStore?
     private let queue = DispatchQueue(label: "app.teacher.telemetry", qos: .utility)
-    private var timer: DispatchSourceTimer?
     private var lastPrune: Double = 0
     private var defaultsObserver: NSObjectProtocol?
     private var quitObserver: NSObjectProtocol?
@@ -57,7 +56,7 @@ final class Telemetry: @unchecked Sendable {
 
     var enabled: Bool { lock.withLock { enabledFlag } }
 
-    /// Opens the store and starts the flush timer + resource sampler. Call once at app start.
+    /// Opens the store and starts the flush service + resource sampler. Call once at app start.
     func start(db: Database) {
         let s = TelemetryStore(db: db)
         lock.withLock { store = s }
@@ -67,11 +66,13 @@ final class Telemetry: @unchecked Sendable {
         quitObserver = NotificationCenter.default.addObserver(forName: NSApplication.willTerminateNotification, object: nil, queue: nil) { [weak self] _ in
             self?.flushSync()
         }
-        let t = DispatchSource.makeTimerSource(queue: queue)
-        t.schedule(deadline: .now() + flushInterval, repeating: flushInterval, leeway: .seconds(1))
-        t.setEventHandler { [weak self] in self?.tick() }
-        t.resume()
-        timer = t
+        // A supervised service (Runtime › services): a flush that hangs (a locked database) is ended by the watchdog and
+        // the service restarts with backoff. The work itself stays on the telemetry queue (serial, utility QoS).
+        Task { [weak self, queue, flushInterval] in
+            await Runtime.every("telemetry.flush", seconds: flushInterval, watchdog: 60) {
+                await withCheckedContinuation { c in queue.async { self?.tick(); c.resume() } }
+            }
+        }
         queue.async { [weak self] in self?.pruneIfDue(force: true) }
     }
 

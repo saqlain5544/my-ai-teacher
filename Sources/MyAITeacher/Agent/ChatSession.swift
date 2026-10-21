@@ -619,12 +619,14 @@ final class ChatSession: ObservableObject, Identifiable {
             \(excerpt)
             </transcript>
             """
-            var text = ""
-            do {
-                let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
-                                     messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
-                for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
-            } catch { text = "" }
+            let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
+                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
+            // A supervised job (Runtime › jobs): a failed or hung summary call is retried with backoff, then the digest below.
+            var text = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 180) {
+                var t = ""
+                for try await ev in client.stream(req) { if case .text(let s) = ev { t += s } }
+                return t
+            }) ?? ""
             if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
             // A failed summary must not leave the request oversized: fall back to a deterministic digest.
             summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines) : ContextPolicy.digest(chunk, previous: summary)

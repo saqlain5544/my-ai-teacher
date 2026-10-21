@@ -5,7 +5,7 @@ no Node/Electron runtime. Build: `scripts/build-app.sh` → `build/My AI Teacher
 
 ```
 Sources/MyAITeacher/
-  Core/        JSON, SSE client, SQLite wrapper, env/keys, images, speech, logging
+  Core/        JSON, SSE client, SQLite wrapper, env/keys, images, speech, logging, Runtime/ (supervised processes)
   Providers/   LLMClient protocol + Anthropic / OpenAI-compatible / Gemini adapters, provider catalog
   Agent/       ChatSession (the agent loop), Hooks (extensions + EventBus), Metrics, SystemPrompt, ToolRegistry
   Extensions/  Features built on hooks: permissions, memory, language, activity, teaching context
@@ -93,6 +93,8 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 | Add a provider | Add a `ProviderConfig` preset (Anthropic/OpenAI/Gemini wire format + quirks) to `ProviderCatalog`, or add a custom provider in Settings | none |
 | Add a wire protocol | Implement `LLMClient` (emit `StreamEvent`s) and a case in `APIKind` | 1 switch |
 | Run an A/B test | Add an `Experiment` to `Experiments.all` and branch on `Experiments.arm(e, unit: lessonID)` | none |
+| Run background work | `Runtime.job(name) { … }` (one per name, watchdog, restart on a crash), `Runtime.call` (returns a value), `Runtime.every` (periodic service) — not `Task.detached` | none |
+| Add a sub-agent type | Settings → Agents, or a `.teacher/agents/<name>.md` in the folder (or `AgentCatalog.builtIns`) | none |
 | Render a new fenced block (```xyz) | `TeacherUI.registerFence('xyz', (code, ctx, env) => html)` in `Resources/web/components/` and add the script to `index.html` | none |
 | Add a question type | `TeacherUI.registerQuestionType('type', {render})` + grading case in `Questions.grade` | none |
 | Custom tool card | `TeacherUI.registerToolCard('tool_name', (block, result, pending, ctx) => html)` | none |
@@ -108,14 +110,45 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 * `ConversationStats` per lesson; `usage_log` per day × provider × model (Progress → Model usage).
 
 ## Sub-agents
-* `task` runs `SubAgent`: its own context and loop (stream → bounded tools in parallel → repeat), recorded as a
-  `SubAgentRun` transcript. The right-hand panel's **Agents** tab renders it live with the lesson renderer (read-only);
-  it opens when a sub-agent starts, and the card in the lesson has **Open** and **Stop**.
-* The teacher may pick the sub-agent's model (`model`): the choices are the provider's fetched list (tool-capable),
-  free-only when the lesson's model is free, listed in the tool spec per lesson. Unknown ids are refused with the list.
-* Budget: 10 model calls or 120 s, then it is told to write its report from what it has; if it still won't, the
-  sources it read come back instead of nothing. Stop (its own, or the lesson's) ends it at once; the lesson gets the
-  partial findings. The trimmed transcript is kept in the tool result so a finished run can be reopened later.
+* `task` runs `SubAgent`: its own context and loop (stream → tools → repeat), recorded as a `SubAgentRun` transcript.
+  The right-hand panel's **Agents** tab renders it live with the lesson renderer (read-only) with its type, provider,
+  model, effort and budget use (steps, seconds, tokens, cost) as it works, a note box to steer it, and Stop.
+* The teacher chooses per call; defaults and limits come from **Settings → Agents** (`AppSettings.agents`):
+  * `type`: built-in `explore` (default; read-only research), `general`, `coder`, `reviewer` (read-only), `tester`
+    (no edits); app-level types from Settings; project types from `<folder>/.teacher/agents/*.md` (frontmatter: name,
+    description, tools, deny, read_only, provider, model, effort, max_steps/max_seconds/max_tokens, isolation; the body
+    is the system prompt — user-authored project files, the app never writes them). Built-in names can't be redefined.
+  * `provider`/`model`: the lesson provider's fetched list, or any other provider with a key (Settings can limit that,
+    and paid models there are off by default; a free lesson only ever delegates to free models). Retired ids map to their
+    successor; loose names resolve through `Fuzzy` when one candidate clearly fits ("using deepseek-v4-pro for 'deepseek
+    v4 pro'"), otherwise the error suggests the closest three.
+  * `effort` off/low/medium/high (default off), sent as `LLMRequest.thinking` through the same clients as the lesson, so
+    every provider's mapping applies (NIM `chat_template_kwargs`, MiniMax disabled/adaptive, OpenRouter `reasoning`,
+    DeepSeek `thinking`); a model whose metadata says it doesn't reason gets off.
+  * Budget `max_steps` / `max_seconds` / `max_tokens` (input + output over the run), clamped to the limits; past it the
+    agent is told to report from what it has. `unbounded` needs the setting, always runs in the background, stays stoppable.
+  * `tools` / `deny_tools` narrow the type's tools; `output_schema` (JSON Schema, `JSONSchemaCheck`) is checked after
+    the report with one repair turn; the teacher gets the JSON (and `meta.structured`).
+  * `isolation: "worktree"` (coder types, code mode, a git repo, write access): it works on a `git worktree` in the
+    app's support folder, removed if nothing changed, otherwise reported with its path, branch and diff stat.
+* Permissions are a ceiling, never a prompt (`SubAgentPolicy`): a sub-agent may do what the lesson may do without
+  asking (folder access, approvals the learner gave in this lesson, the Python setting, disabled tools) and nothing more;
+  writes must land inside its folder (or worktree), never `.teacher/`; installs are refused. Read-only types never get
+  write tools, and their `bash` runs only `ReadOnlyShell` commands (git diff/log/show/status, ls, cat, grep, rg, find…,
+  no redirection, chaining or writing flags). Nested sub-agents (up to Settings' depth) can't exceed their parent.
+* `agents`: list/status (type, model, effort, budget use, tokens, time, cost), `send` (a note it reads before its next
+  step), `wait` (the teacher then has the report; it isn't delivered again), `stop`, `resume`. At most N at once per lesson.
+* Each run is a supervised process (Runtime › agents): a provider error that may pass (429/5xx, timeouts, lost
+  connections) crashes it, the supervisor restarts it after 1 s → 2 s → 4 s, and the new incarnation resumes from the
+  transcript (the failed reply is dropped, unfinished tool calls are answered as interrupted); after 3 restarts in 60 s it
+  reports from what it has. A watchdog ends a run that goes 300 s without a stream event or a tool finishing (a provider
+  that only sends keep-alives). Stop goes through the supervisor, so a stopped run is never restarted. Writes from a
+  replaced incarnation are dropped (`RunWriter`).
+* Memory: images in sub-agent transcripts spill to the lesson's `BlobStore`; requests send only the newest 2 images. A
+  finished run keeps its transcript in memory only while it is among the newest 4 (or on screen): older ones park it on
+  disk (a per-launch temporary folder) and keep their summary and report; it comes back when shown or resumed.
+  `MemoryGovernor`'s shed parks every finished transcript but the one on screen. The trimmed transcript (no images) is
+  also kept in the tool result, so a run from an earlier launch reopens from there.
 
 ## Timeouts
 * Every tool has `timeout(_:)` (nil only for tools that wait for the learner); `runBounded` enforces it with
@@ -173,6 +206,28 @@ The app's footprint must not grow with how much the learner has done: data lives
   `{"action":"shed"}` triggers it in a test instance; the log records the footprint before and after.
 * In-process work that a deadline abandons checks cancellation itself (see Timeouts), so abandoned work stops using memory.
 
+## Runtime (supervised lightweight processes)
+`Core/Runtime/`: Erlang/OTP-style processes on Swift concurrency — tasks in this process, not OS processes.
+* `Proc` (an actor): a body task, an `AsyncStream` mailbox (FIFO per sender, depth counted; timed `receive` and
+  non-blocking `drain` work with markers queued behind the messages, so a waiting `next()` is never cancelled), links
+  (an abnormal exit signals the other side; trapping turns it into a callback) and monitors. A body that throws, or goes
+  past its watchdog without a heartbeat (receiving, or `heartbeat()`), ends as a crash. `stop` cancels it and abandons it
+  after a grace (`.killed`) — like `withDeadline`, an uncooperative body is never awaited.
+* `Supervisor`: children by `ChildSpec` (permanent / transient / temporary), one-for-one or rest-for-one, restart
+  intensity (more than N restarts in T s: it stops every child and crashes itself, for its parent to decide), per-child
+  limits (one flaky job gives up alone), exponential backoff. Supervisors nest; children are linked to their supervisor.
+* `Registry`: processes by pid and name, supervisors by name, restart counts; `Runtime.metrics` (process count, mailbox
+  depth, restarts) shows in the Agents panel's footer and `{"action":"runtime"}`; the debug report carries it too.
+* The tree, started on first use: root → `services` (permanent: `telemetry.flush`, which replaced a GCD timer; a hung
+  flush is ended by its watchdog and restarted), `jobs` (one per name: `memory.reflect:<lesson>`, `memory.consolidate`,
+  `embeddings.warmup`, `lesson.compact#n` via `Runtime.call`, which retries a failed summary call with backoff before the
+  digest fallback), `agents` (sub-agent runs). Root never gives up; it restarts a supervisor that did, with backoff.
+* What it can't do: catch a Swift trap (force unwrap, out-of-range index, overflow) or a crash in a framework. Those end
+  the app, so risky native work belongs behind a subprocess. Already out of process: shell and code (`bash`, `run_code`),
+  Python/SymPy (`math`), ripgrep, git, and WebKit's content process (`WebWatchdog`). Still in process, on untrusted
+  input: the HTML→Markdown converter (XMLDocument/libxml2, bounded but in-process), PDF text (PDFKit), image decoding
+  (ImageIO), NaturalLanguage embeddings and SQLite — none is behind a subprocess today.
+
 ## Frozen pages
 * Visuals run model-written JavaScript in sandboxed frames that share the transcript's process, so an endless loop
   would freeze the lesson. `WebWatchdog` pings each transcript (and sub-agent) page every 2 s while its window is
@@ -183,7 +238,10 @@ The app's footprint must not grow with how much the learner has done: data lives
 * `scripts/e2e.sh [--live]` — the whole loop: build, unit tests, renderer suite (light + dark), and with `--live`
   the scripted lessons. Run it after every change.
 * `swift test` — unit tests (SSE/think-tag parsing, FSRS, BKT, grader, math equivalence, HTML→Markdown, workspaces,
-  memory, deadlines, sub-agent model choice / failure / cancellation).
+  memory, deadlines, sub-agent model choice / failure / cancellation). `RuntimeTests`: mailbox order, both restart
+  strategies, intensity and per-child limits with backoff, restart policies, watchdog, stop without leaked tasks, links and
+  monitors. `SubAgentTests` (a scripted fake model): budgets, types, read-only and grant ceilings, structured output with
+  repair, steering, restart-and-resume, provider/model/effort choice (fuzzy, retired ids), nesting, memory bounds.
 * `MyAITeacher --webtest Tests/web/renderer.test.js [--dark] [--only name]` — loads the real transcript page in the
   app's WebKit (offscreen) and runs ~60 tests: every fence and component, streaming frame by frame, sanitising,
   tool cards, quiz answering, visuals, Mermaid re-render from cache, performance. Exits non-zero on any failure or
@@ -213,7 +271,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback) merged; news mode |
 | WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, pagination, 15-min cache |
 | TodoWrite | `todo_write` | rendered as a live checklist |
-| Task / Agent | `task` | sub-agent with its own context (read-only + web + math tools), parallelisable, model choosable, live in the Agents panel, stoppable |
+| Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app and `.teacher/agents/*.md`), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |

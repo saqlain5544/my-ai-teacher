@@ -73,7 +73,7 @@ final class AppModel: ObservableObject {
             self.showSubAgent(run.id)
         }
         touchRecent(ws)
-        DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up") }
+        Task { await Runtime.job("embeddings.warmup", restart: .temporary) { _ in _ = Embedder.shared.vector("warm up") } }   // loads the on-device model off the main thread
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
     }
 
