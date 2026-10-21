@@ -164,6 +164,7 @@ final class Embedder: @unchecked Sendable {
         if !rest.isEmpty { out.append(rest) }
         return out
     }
+
     /// The model's vector size: what stored vectors must have (a blob of any other size is no vector). nil without a model.
     var dimension: Int? {
         lock.lock(); defer { lock.unlock() }

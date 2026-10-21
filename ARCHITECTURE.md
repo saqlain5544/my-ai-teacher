@@ -279,10 +279,15 @@ The app's footprint must not grow with how much the learner has done: data lives
   `MemoryPlanTests` checks each statement's plan (nothing runs ANALYZE).
 * Older databases: vectors are int8 in a new `vec` column; `embedding` stays the older builds' Float32 column, which this
   version only clears, so a build from before still reads a valid vector or none. The one-time work runs in the
-  background after launch (`MemorySchema.upgrade`): a copy of the database as it was (`VACUUM INTO
-  <db>.pre-int8-<date>.sqlite`, from a read-only connection, renamed into place), this version's indexes, then the rows
-  in batches that each commit; a crash, a lock held past the busy timeout or a full disk stops it unmarked, and the next
-  launch carries on (`MemoryMigrationTests`). Until then older rows still decode.
+  background after launch (`MemorySchema.upgrade`): a backup of what it rewrites — `id, embedding, norm` of each row it
+  is about to change, in `<db>.pre-int8-<date>.sqlite` beside the database (SQLite transactions, so a crash or the CLI
+  doing the same at once is safe; never the whole database: a folder's lessons stay out of it) — then this version's
+  indexes, then the rows, 128 a transaction, each batch read and written inside it (an edit can't land in between).
+  A crash, a lock held past the busy timeout or a full disk stops it unmarked; the next launch carries on
+  (`MemoryMigrationTests`). Until then older rows still decode. Backups older than 30 days are deleted at launch.
+  To restore one (app quit; `sqlite3 <db>`): `ATTACH '<backup>' AS b; UPDATE memories SET embedding = x.embedding,
+  norm = x.norm, vec = NULL FROM b.memories AS x WHERE x.id = memories.id; DELETE FROM memory_meta WHERE key='vec_v1';`
+  (`testABackupRestores` runs exactly this).
 * Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
   segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
@@ -427,5 +432,6 @@ The app's footprint must not grow with how much the learner has done: data lives
   | 50k (disk path) | +124.6 MB → **+1.9 MB** | 12.6 → **8.2 ms** |
   | 500k (disk path) | +1,430 MB → **+1.8 MB** | 132 → **48 ms** |
 
-  Opening a 20k-memory database from an older build takes 28 ms; its one-time upgrade (copy 85 ms, conversion 3.4 s,
-  debug build) runs in the background.
+  Opening a 20k-memory database from an older build takes 18 ms; its one-time upgrade runs in the background (debug
+  build: backup 37 ms, 45 MB; conversion 14 s, stepping aside 10 ms between batches so writers wait at most 31 ms on the
+  store's connection, 125 ms on another process's).

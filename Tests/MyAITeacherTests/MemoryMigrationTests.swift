@@ -1,8 +1,8 @@
 import XCTest
 @testable import MyAITeacher
 
-/// Opening a database written by an older build: it is copied first, then upgraded in the background in batches that
-/// survive a crash or a busy database, and an older build can still open the result.
+/// Opening a database written by an older build: what changes is backed up first, then upgraded in the background in
+/// batches that survive a crash, a busy database and concurrent edits, and an older build can still open the result.
 final class MemoryMigrationTests: XCTestCase {
     private var dir: URL!
     private var path: String { dir.appendingPathComponent("teacher.sqlite").path }
@@ -66,11 +66,11 @@ final class MemoryMigrationTests: XCTestCase {
         let store = MemoryStore(db: db, scope: .learner)
         XCTAssertLessThan(Date().timeIntervalSince(t0), 0.1, "opening doesn't wait for the conversion (it runs in the background)")
         XCTAssertTrue(store.upgraded())
-        // The copy is the database as it was (with this version's new, empty columns; nothing else).
+        // The backup holds what the conversion rewrote, and only that: `id, embedding, norm` of each row it changed.
         XCTAssertEqual(backups().count, 1)
-        XCTAssertFalse(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasSuffix(".partial") })
         let copy = try Database(path: dir.appendingPathComponent(backups()[0]).path, readOnly: true)
-        XCTAssertEqual(try count(copy, "length(embedding) = \(dim * 4) AND norm IS NULL AND vec IS NULL"), 1500)
+        XCTAssertEqual(try copy.query("PRAGMA table_info(memories)").compactMap { $0.string("name") }, ["id", "embedding", "norm"])
+        XCTAssertEqual(try count(copy, "length(embedding) = \(dim * 4) AND norm IS NULL"), 1500)
         // Upgraded: int8 vectors in `vec`, norms filled in, nothing else changed.
         XCTAssertEqual(try count(db, "length(vec) = \(dim) AND embedding IS NULL AND norm IS NOT NULL"), 1500)
         XCTAssertEqual(try untouched(db), before)
@@ -85,7 +85,7 @@ final class MemoryMigrationTests: XCTestCase {
         for r in try db.query("SELECT embedding FROM memories") { XCTAssertNil(r.data("embedding")) }
         XCTAssertEqual(MemorySchema.meta(db, "sweep_learner"), Self.oldSweep)
         XCTAssertNotNil(MemorySchema.meta(db, "sweep2_learner"))
-        // The next launch: nothing to do, nothing written, no second copy.
+        // The next launch: nothing to do, nothing written, no second backup.
         let stamp = try FileManager.default.attributesOfItem(atPath: dir.appendingPathComponent(backups()[0]).path)[.modificationDate] as? Date
         let again = try Database(path: path)
         XCTAssertTrue(MemoryStore(db: again, scope: .learner).upgraded())
@@ -107,13 +107,14 @@ final class MemoryMigrationTests: XCTestCase {
         XCTAssertNil(MemorySchema.meta(db, MemorySchema.upgraded), "not marked done")
         XCTAssertEqual(store.count(), 1300)
         XCTAssertEqual(store.search("worked examples", limit: 1, minRelevance: 0.3).first?.content, Self.known, "mixed rows still read")
-        // The next launch carries on; the copy from before the first batch stays the only one.
+        // The next launch carries on; the backup from before the first batch stays the only one.
         let next = try Database(path: path)
         let resumed = MemoryStore(db: next, scope: .learner)
         XCTAssertTrue(resumed.upgraded())
         XCTAssertEqual(try count(next, "length(vec) = \(dim) AND embedding IS NULL AND norm IS NOT NULL"), 1300)
         XCTAssertEqual(backups().count, 1)
         XCTAssertEqual(try count(try Database(path: dir.appendingPathComponent(backups()[0]).path, readOnly: true), "length(embedding) = \(dim * 4)"), 1300)
+        XCTAssertFalse(((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).contains { $0.hasSuffix("-journal") }, "no half-written backup")
         XCTAssertEqual(resumed.search("worked examples", limit: 1, minRelevance: 0.3).first?.content, Self.known)
     }
 
@@ -135,6 +136,78 @@ final class MemoryMigrationTests: XCTestCase {
         XCTAssertTrue(MemorySchema.upgrade(db))
         XCTAssertEqual(try count(db, "vec IS NOT NULL"), 600)
         XCTAssertEqual(backups().count, 1)
+    }
+
+    /// The race the conversion must not lose: an edit landing between a batch's read and its write would get the vector
+    /// of the text it replaced, and never be redone. Two editors write what `update` writes (new text, its vector, no
+    /// Float32), as fast as they can, into the rows just ahead of the conversion: one on the store's connection (another
+    /// thread of the app), two on connections of their own (the CLI).
+    func testEditsDuringTheConversionKeepTheirOwnVectors() throws {
+        try writeOldDatabase(8000)
+        let texts = (0..<16).map { "Rewritten memory \($0) about \(["tides", "glass", "owls", "salt", "maps", "bells", "moss", "kilns"][$0 % 8])" }
+        let vecs = Dictionary(uniqueKeysWithValues: texts.map { ($0, Embedder.int8(Embedder.shared.vector($0)!)) })
+        let db = try Database(path: path)
+        let store = MemoryStore(db: db, scope: .learner)
+        let editors = DispatchGroup()
+        for (e, conn) in [db, try Database(path: path), try Database(path: path)].enumerated() {
+            DispatchQueue.global().async(group: editors) {
+                var k = 0
+                while k < 20_000, let next = (try? conn.query("SELECT min(id) AS m FROM memories WHERE embedding IS NOT NULL"))?.first?.int("m") {
+                    let text = texts[(k + e * 5) % texts.count]
+                    try? conn.execute("UPDATE memories SET content=?, norm=?, vec=?, embedding=NULL WHERE id=?",
+                                      text, MemoryText.norm(text), vecs[text], min(8000, next + (k * 7 + e) % 48))
+                    k += 1
+                }
+            }
+        }
+        XCTAssertTrue(store.upgraded())
+        editors.wait()
+        var edited = 0, stale = 0
+        for r in try db.query("SELECT content, vec, embedding FROM memories") {
+            guard let want = vecs[r.string("content") ?? ""] else { continue }
+            edited += 1
+            if r.data("embedding") != nil || r.data("vec") != want { stale += 1 }
+        }
+        XCTAssertGreaterThan(edited, 100)
+        XCTAssertEqual(stale, 0, "edited rows whose vector is not their current text's (of \(edited))")
+    }
+
+    /// Two processes backing up at once (the app and the CLI on the first launch after an update): one backup, complete,
+    /// both succeed. A temporary copy an earlier build left behind is removed; backups go after 30 days, recent ones stay.
+    func testBackupsAreSharedSafelyAndExpire() throws {
+        try writeOldDatabase(800)
+        MemorySchema.migrate(try Database(path: path))
+        let a = try Database(path: path), b = try Database(path: path)
+        let results = UnsafeMutableBufferPointer<Bool>.allocate(capacity: 2)
+        defer { results.deallocate() }
+        DispatchQueue.concurrentPerform(iterations: 2) { results[$0] = MemorySchema.backUp($0 == 0 ? a : b) }
+        XCTAssertEqual(Array(results), [true, true])
+        XCTAssertEqual(backups().count, 1)
+        XCTAssertEqual(try count(try Database(path: dir.appendingPathComponent(backups()[0]).path, readOnly: true), "1"), 800)
+        // Expiry and leftovers, at the next launch.
+        let fm = FileManager.default
+        let old = dir.appendingPathComponent("teacher.sqlite.pre-int8-2026-01-02.sqlite"), stray = dir.appendingPathComponent("teacher.sqlite.pre-int8-2026-01-02.sqlite.partial")
+        try Data().write(to: old); try Data().write(to: stray)
+        try fm.setAttributes([.modificationDate: Date().addingTimeInterval(-40 * 86_400)], ofItemAtPath: old.path)
+        XCTAssertTrue(MemoryStore(db: a, scope: .learner).upgraded())
+        XCTAssertFalse(fm.fileExists(atPath: old.path), "older than 30 days")
+        XCTAssertFalse(fm.fileExists(atPath: stray.path), "a leftover temporary copy")
+        XCTAssertEqual(backups().count, 1, "the recent backup stays")
+    }
+
+    /// The restore ARCHITECTURE describes gives an older build its Float32 vectors back.
+    func testABackupRestores() throws {
+        try writeOldDatabase(300)
+        let original = try Database(path: path).query("SELECT id, embedding FROM memories ORDER BY id").map { $0.data("embedding") }
+        let db = try Database(path: path)
+        XCTAssertTrue(MemoryStore(db: db, scope: .learner).upgraded())
+        try db.execute("ATTACH DATABASE ? AS b", dir.appendingPathComponent(backups()[0]).path)
+        try db.script("""
+            UPDATE memories SET embedding = x.embedding, norm = x.norm, vec = NULL FROM b.memories AS x WHERE x.id = memories.id;
+            DELETE FROM memory_meta WHERE key = 'vec_v1';
+            DETACH DATABASE b;
+            """)
+        XCTAssertEqual(try db.query("SELECT id, embedding FROM memories ORDER BY id").map { $0.data("embedding") }, original)
     }
 
     func testANewDatabaseNeedsNoBackup() throws {

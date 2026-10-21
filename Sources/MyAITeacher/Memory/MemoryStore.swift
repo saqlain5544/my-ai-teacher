@@ -39,14 +39,17 @@ enum MemorySchema {
     }
 
     /// Statements one by one, stopping at the first that fails (under a lock each would wait out the busy timeout) and
-    /// saying which: nothing is silently missing, and whoever called it knows not to count it as done.
+    /// saying which: nothing is silently missing, and whoever called it knows not to count it as done. After a statement
+    /// that held the write lock a while (a CREATE INDEX that built something), `pause` lets other connections' writers in.
     @discardableResult
-    private static func run(_ db: Database, _ statements: [String]) -> Bool {
+    private static func run(_ db: Database, _ statements: [String], pause: TimeInterval = 0) -> Bool {
         for s in statements {
+            let t = Date()
             do { try db.execute(s) } catch {
                 AppLog.write("memory: \(name(db)): \(error.localizedDescription) — in: \(s.prefix(90)); the next run retries")
                 return false
             }
+            if Date().timeIntervalSince(t) > 0.005 { Thread.sleep(forTimeInterval: pause) }
         }
         return true
     }
@@ -54,66 +57,95 @@ enum MemorySchema {
 
     private static let upgrading = NSLock()
 
-    /// This version's one-time work, in the background after launch: a copy of the database as it was, before anything of
-    /// this version rewrites it; this version's indexes; then the rows, in batches. Until it is done older rows still
-    /// decode. It can stop anywhere (a crash, a lock held past the busy timeout, a full disk) and the next run carries on;
-    /// only when every step succeeded is it marked done. True when done.
+    /// This version's one-time work, in the background after launch: a backup of what it is about to rewrite; this
+    /// version's indexes; then the rows, in batches. Until it is done older rows still decode. It can stop anywhere (a
+    /// crash, a lock held past the busy timeout, a full disk) and the next run carries on; only when every step succeeded
+    /// is it marked done. True when done.
     @discardableResult
     static func upgrade(_ db: Database) -> Bool {
         upgrading.lock(); defer { upgrading.unlock() }
-        // The copy and CREATE INDEX are long: they run on a connection of their own, so the store's stays free.
+        // The backup and CREATE INDEX are long: they run on a connection of their own, so the store's stays free.
         let side = db.path.isEmpty || db.path == ":memory:" ? db : (try? Database(path: db.path)) ?? db
+        prune(db)
         if meta(db, upgraded) == "1" { return run(side, indexes) }
         let pending = (try? db.query("SELECT 1 AS x FROM memories WHERE \(legacy) LIMIT 1"))?.isEmpty == false
-        guard !pending || backUp(db), run(side, indexes), convert(db) else { return false }
+        guard !pending || backUp(side), run(side, indexes, pause: 0.05), convert(db) else { return false }
         setMeta(db, upgraded, "1")
         return true
     }
 
-    /// The database as it was, copied once beside it (`<db>.pre-int8-<date>.sqlite`), from a read-only connection (a
-    /// snapshot; nothing waits for it). Written under a temporary name and renamed, so a crash mid-copy never passes for a
-    /// backup. False when it could not be made.
-    private static func backUp(_ db: Database) -> Bool {
+    /// Backups go after this long: by then the conversion they cover is long done.
+    static let backupDays = 30.0
+    private static func backups(of db: Database) -> [URL] {
+        let url = URL(fileURLWithPath: db.path), dir = url.deletingLastPathComponent(), prefix = url.lastPathComponent + ".pre-int8-"
+        return ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasPrefix(prefix) }.sorted().map { dir.appendingPathComponent($0) }
+    }
+    /// At launch: backups older than `backupDays` (with their journals), and temporary copies an earlier build left.
+    private static func prune(_ db: Database) {
+        guard !db.path.isEmpty, db.path != ":memory:" else { return }
+        let fm = FileManager.default, cutoff = Date().addingTimeInterval(-backupDays * 86_400)
+        for f in backups(of: db) {
+            let stamp = (try? fm.attributesOfItem(atPath: f.path))?[.modificationDate] as? Date ?? .distantFuture
+            guard f.pathExtension == "partial" || stamp < cutoff else { continue }
+            try? fm.removeItem(at: f)
+            AppLog.write("memory: removed \(f.lastPathComponent)")
+        }
+    }
+
+    /// Before this version rewrites a row: what it rewrites — `id, embedding, norm` of every row about to change — into a
+    /// small database beside it (`<db>.pre-int8-<date>.sqlite`, a table `memories`; ARCHITECTURE says how to restore it).
+    /// SQLite's own transactions and file locks make it safe to interrupt and to write from two processes at once (the
+    /// app and the CLI after an update): the table is created if missing and rows are added if missing, so a later run
+    /// also covers rows an older build wrote since. Only the main database is read, so nothing waits for it. False when it
+    /// could not be written.
+    static func backUp(_ db: Database) -> Bool {
         guard !db.path.isEmpty, db.path != ":memory:" else { return true }
-        let fm = FileManager.default, url = URL(fileURLWithPath: db.path), dir = url.deletingLastPathComponent()
-        let prefix = url.lastPathComponent + ".pre-int8-"
-        if ((try? fm.contentsOfDirectory(atPath: dir.path)) ?? []).contains(where: { $0.hasPrefix(prefix) && $0.hasSuffix(".sqlite") }) { return true }
         let day = DateFormatter()
         day.locale = Locale(identifier: "en_US_POSIX"); day.dateFormat = "yyyy-MM-dd"
-        let final = dir.appendingPathComponent(prefix + day.string(from: Date()) + ".sqlite"), partial = final.appendingPathExtension("partial")
-        try? fm.removeItem(at: partial)
+        let url = URL(fileURLWithPath: db.path)
+        let file = backups(of: db).last { $0.pathExtension == "sqlite" }
+            ?? url.deletingLastPathComponent().appendingPathComponent(url.lastPathComponent + ".pre-int8-" + day.string(from: Date()) + ".sqlite")
         let t0 = Date()
+        var added = 0
         do {
-            try Database(path: db.path, readOnly: true).execute("VACUUM INTO ?", partial.path)
-            try fm.moveItem(at: partial, to: final)
+            try db.execute("ATTACH DATABASE ? AS backup", file.path)
+            defer { _ = try? db.execute("DETACH DATABASE backup") }
+            try db.execute("PRAGMA backup.page_size=16384")   // a new file only: 2 KB rows would leave half of each 4 KB page empty
+            try db.execute("CREATE TABLE IF NOT EXISTS backup.memories(id INTEGER PRIMARY KEY, embedding BLOB, norm TEXT)")
+            added = try db.execute("INSERT OR IGNORE INTO backup.memories(id, embedding, norm) SELECT id, embedding, norm FROM main.memories WHERE \(legacy)")
         } catch {
-            try? fm.removeItem(at: partial)
             AppLog.write("memory: no backup of \(name(db)) (\(error.localizedDescription)); nothing converted, the next launch tries again")
             return false
         }
-        AppLog.write(String(format: "memory: backed up %@ to %@ (%.0f ms) before converting it", name(db), final.lastPathComponent, Date().timeIntervalSince(t0) * 1000))
+        AppLog.write(String(format: "memory: backed up %d rows of %@ to %@ (%.0f ms) before converting them", added, name(db), file.lastPathComponent,
+                            Date().timeIntervalSince(t0) * 1000))
         return true
     }
 
     /// A Float32 `embedding` of the model's size moves to `vec` (int8: a quarter of what the disk path scans) and missing
-    /// norms are filled in, 512 rows a transaction on the store's connection (it is free between batches; nothing else
-    /// sees a half-converted row). A crash leaves whole batches done and the rest as they were. True when every row is.
+    /// norms are filled in, 128 rows a transaction on the store's connection, read and written inside it: an edit from
+    /// another thread or process can't land between the two (it would be overwritten with the vector of the text it
+    /// replaced). After each batch it steps aside for 10 ms, so writers get in — this connection's, and other processes',
+    /// whose busy handlers poll: measured at 20k rows, the worst stall is 31 ms here and 125 ms there (918 ms without the
+    /// pause). On a utility thread the pause stretches (timer coalescing), so the upgrade takes ~3× longer; it is one-time
+    /// and in the background. A crash leaves whole batches done and the rest as they were. True when every row is.
     private static func convert(_ db: Database) -> Bool {
         let dim = Embedder.shared.dimension
-        var last = 0, done = 0
+        var last = 0, done = 0, more = true
         let t0 = Date()
         do {
-            while case let rows = try db.query("SELECT id, content, embedding FROM memories WHERE id > ? AND \(legacy) ORDER BY id LIMIT 512", last),
-                  let end = rows.last?.int("id") {
+            while more {
                 try db.transaction {
+                    let rows = try db.query("SELECT id, content, embedding FROM memories WHERE id > ? AND \(legacy) ORDER BY id LIMIT 128", last)
                     for r in rows {
                         // Any other blob (another model's size) is left as it is, for the build that wrote it.
                         let v = dim.flatMap { d in Embedder.decode(vec: nil, legacy: r.data("embedding"), dimension: d) }.map { Data($0.map { UInt8(bitPattern: $0) }) }
                         try db.execute("UPDATE memories SET vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END, norm=COALESCE(norm, ?) WHERE id=?",
                                        v, v, MemoryText.norm(r.string("content") ?? ""), r.int("id"))
                     }
+                    last = rows.last?.int("id") ?? last; done += rows.count; more = rows.count == 128
                 }
-                last = end; done += rows.count
+                if more { Thread.sleep(forTimeInterval: 0.01) }
             }
         } catch {
             AppLog.write("memory: converting \(name(db)) stopped after \(done) rows (\(error.localizedDescription)); the next launch carries on")
