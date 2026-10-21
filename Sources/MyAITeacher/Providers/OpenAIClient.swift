@@ -79,7 +79,20 @@ struct OpenAIClient: LLMClient {
                         default: break
                         }
                         for tc in d?["tool_calls"]?.array ?? [] {
-                            let idx = tc["index"]?.int ?? order.count
+                            let newID = tc["id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+                            var idx: Int
+                            if let i = tc["index"]?.int {
+                                idx = i
+                                // Some servers reuse index 0 for every call: a different id at a busy index is a new call.
+                                if let cur = calls[idx], let nid = newID, nid != cur.id, !cur.args.isEmpty {
+                                    idx = 10_000 + order.count
+                                }
+                            } else if let nid = newID {
+                                // No index: a new id starts a call; a known id continues its call.
+                                idx = order.first { calls[$0]?.id == nid } ?? (10_000 + order.count)
+                            } else {
+                                idx = order.last ?? 0   // a bare argument chunk continues the current call
+                            }
                             if calls[idx] == nil {
                                 let id = tc["id"]?.string.flatMap { $0.isEmpty ? nil : $0 } ?? "call_\(UUID().uuidString.prefix(12))"
                                 let name = tc["function"]?["name"]?.string ?? ""
@@ -91,7 +104,12 @@ struct OpenAIClient: LLMClient {
                                 continuation.yield(.toolCallStarted(id: calls[idx]!.id, name: n))
                             }
                             if let a = tc["function"]?["arguments"]?.string, !a.isEmpty {
-                                calls[idx]!.args += a
+                                // Arguments re-sent whole after streaming them: replace, don't double them.
+                                if a.hasPrefix("{"), !calls[idx]!.args.isEmpty, JSON.parse(calls[idx]!.args) != nil, JSON.parse(a) != nil {
+                                    calls[idx]!.args = a
+                                } else {
+                                    calls[idx]!.args += a
+                                }
                                 continuation.yield(.toolCallArgs(id: calls[idx]!.id, partial: a))
                             } else if let obj = tc["function"]?["arguments"], obj.object != nil {
                                 calls[idx]!.args = obj.compact

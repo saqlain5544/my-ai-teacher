@@ -43,11 +43,35 @@ final class ChatSession: ObservableObject, Identifiable {
         self.conversation = conversation
         self.app = app
         self.services = services
-        self.messages = services.conversations.messages(conversation.id)
+        // A long lesson is loaded as a window: everything from the compaction point (what requests need — older turns
+        // travel as the summary) or the last `window` messages, whichever reaches further back. Earlier messages page
+        // in only when the learner scrolls to them, so memory stays bounded however long the lesson grows.
+        let store = services.conversations
+        let total = store.messageCount(conversation.id)
+        let cut = conversation.compactedThrough.flatMap { store.seq(ofMessage: $0) }
+        let start = cut.map { max(0, min(total - Self.window, $0)) } ?? max(0, total - Self.hardCap)
+        self.base = start
+        self.messages = start == 0 ? store.messages(conversation.id) : store.messages(conversation.id, from: start)
         repairInterruptedToolCalls()
         if let t = messages.last(where: { $0.toolUses.contains { $0.name == "todo_write" } })?.toolUses.last(where: { $0.name == "todo_write" }) {
             todos = t.input?["todos"]?.array ?? []
         }
+    }
+
+    /// Absolute position (seq) of `messages[0]`; earlier messages stay on disk until asked for.
+    private(set) var base = 0
+    static let window = 400, hardCap = 5000
+    /// Messages in the whole lesson (loaded or not).
+    var totalCount: Int { base + messages.count }
+
+    /// Pages in up to `count` earlier messages (the learner scrolled back).
+    func loadEarlier(_ count: Int = 200) {
+        guard base > 0, !isRunning else { return }
+        let from = max(0, base - count)
+        let older = services.conversations.messages(id, from: from, to: base)
+        messages.insert(contentsOf: older, at: 0)
+        base = from
+        sink?.reset(messages, conversation: conversation)
     }
 
     var settings: AppSettings { app.settings.value }
@@ -122,7 +146,7 @@ final class ChatSession: ObservableObject, Identifiable {
         guard !isRunning else { return }
         if let last = messages.last, last.role == .assistant, last.error != nil || last.blocks.isEmpty {
             messages.removeLast()
-            services.conversations.deleteMessages(id, fromSeq: messages.count)
+            services.conversations.deleteMessages(id, fromSeq: base + messages.count)
             sink?.reset(messages, conversation: conversation)
         }
         start()
@@ -142,10 +166,10 @@ final class ChatSession: ObservableObject, Identifiable {
                     let results = missing.map { Block.toolResult(id: $0.id ?? "", name: $0.name ?? "", content: "Interrupted — the app closed before this finished.", isError: true) }
                     if let next, next.isToolResultOnly {
                         messages[i + 1].blocks += results
-                        services.conversations.upsert(messages[i + 1], conversationID: id, seq: i + 1)
+                        services.conversations.upsert(messages[i + 1], conversationID: id, seq: base + i + 1)
                     } else {
                         messages.insert(ChatMessage(role: .user, blocks: results), at: i + 1)
-                        for j in (i + 1)..<messages.count { services.conversations.upsert(messages[j], conversationID: id, seq: j) }
+                        for j in (i + 1)..<messages.count { services.conversations.upsert(messages[j], conversationID: id, seq: base + j) }
                     }
                 }
             }
@@ -513,7 +537,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func requestMessages() -> [ChatMessage] {
-        ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model)
+        ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
+                              budget: contextBudget - (conversation.systemPrompt?.count ?? 0) / 4)
     }
 
     private func estimateTokens() -> Int {
@@ -545,25 +570,32 @@ final class ChatSession: ObservableObject, Identifiable {
         guard cut > 1, cut < messages.count else { return }
         let startIdx = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }.map { $0 + 1 } ?? 0
         guard startIdx < cut else { return }
-        let excerpt = Reflection.transcriptExcerpt(Array(messages[startIdx..<cut]), maxChars: 60_000)
-        let prompt = """
-        Summarise this part of a tutoring session so the lesson can continue seamlessly. \
-        \(conversation.compactSummary.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
-        Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Exercises & results / \
-        Decisions & preferences / Files & artifacts / Next steps. Be specific (formulas, examples, scores).
+        // Rolling summary: the range is folded in chunk by chunk (previous summary + next chunk), so nothing is silently
+        // dropped however long the range is; usually it is one chunk, since compaction runs incrementally.
+        var summary = conversation.compactSummary
+        for chunk in ContextPolicy.chunks(Array(messages[startIdx..<cut]), maxChars: 60_000) {
+            let excerpt = Reflection.transcriptExcerpt(chunk, maxChars: 60_000)
+            let prompt = """
+            Summarise this part of a tutoring session so the lesson can continue seamlessly. \
+            \(summary.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
+            Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Exercises & results / \
+            Decisions & preferences / Files & artifacts / Next steps. Be specific (formulas, examples, scores).
 
-        <transcript>
-        \(excerpt)
-        </transcript>
-        """
-        var text = ""
-        do {
-            let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
-                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
-            for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
-        } catch { return }
-        if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
-        guard text.count > 100 else { return }
+            <transcript>
+            \(excerpt)
+            </transcript>
+            """
+            var text = ""
+            do {
+                let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
+                                     messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096)
+                for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
+            } catch { text = "" }
+            if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
+            // A failed summary must not leave the request oversized: fall back to a deterministic digest.
+            summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines) : ContextPolicy.digest(chunk, previous: summary)
+        }
+        let text = summary ?? ""
         conversation.compactSummary = text.trimmingCharacters(in: .whitespacesAndNewlines)
         conversation.compactedThrough = messages[cut - 1].id
         conversation.usage?.input = 0
@@ -581,7 +613,7 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func persist(_ idx: Int) {
-        services.conversations.upsert(messages[idx], conversationID: id, seq: idx)
+        services.conversations.upsert(messages[idx], conversationID: id, seq: base + idx)
         conversation.updatedAt = Date()
     }
 
@@ -589,7 +621,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let keep = max(0, idx + 1)
         guard keep < messages.count else { return }
         messages.removeSubrange(keep...)
-        services.conversations.deleteMessages(id, fromSeq: keep)
+        services.conversations.deleteMessages(id, fromSeq: base + keep)
         if let t = conversation.compactedThrough, !messages.contains(where: { $0.id == t }) {
             conversation.compactedThrough = nil; conversation.compactSummary = nil
         }

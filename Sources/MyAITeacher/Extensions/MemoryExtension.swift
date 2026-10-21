@@ -42,16 +42,16 @@ final class MemoryExtension: AgentExtension {
     func reflect(_ session: ChatSession, minNew: Int) {
         let s = app.settings.value
         guard s.autoMemory, !reflecting.contains(session.id), !session.isRunning else { return }
-        let done = session.conversation.reflectedCount ?? 0
-        let messages = session.messages
-        guard messages.count - done >= minNew else { return }
+        let done = session.conversation.reflectedCount ?? 0   // absolute message count already reflected on
+        let messages = session.messages, base = session.base
+        guard session.totalCount - done >= minNew else { return }
         let provider = s.memoryProviderID.flatMap { app.settings.provider($0) } ?? app.settings.provider(session.conversation.providerID)
         guard let provider else { return }
         let key = KeyStore.shared.key(for: provider)
         guard key != nil || provider.keyOptional else { return }
         let model = s.memoryProviderID != nil ? (s.memoryModel ?? provider.defaultModel) : session.conversation.model
-        let slice = Array(messages[min(done, messages.count)...])
-        let count = messages.count
+        let slice = Array(messages[min(max(0, done - base), messages.count)...])
+        let count = session.totalCount
         let needsTitle = done == 0
         let services = session.services
         let convID = session.id

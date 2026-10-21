@@ -794,6 +794,7 @@
       case 'edit-save': { const ta = msgEl.querySelector('textarea'); msgEl._editing = false; post({ type: 'edit', id: msgId, text: ta.value }); break; }
       case 'edit-cancel': { msgEl._editing = false; msgEl._html = null; renderMessage(S.byId.get(msgId).msg); break; }
       case 'approve': post({ type: 'answer', id: toolId, value: { decision: el.getAttribute('data-v') } }); break;
+      case 'older': el.disabled = true; el.textContent = 'Loading…'; post({ type: 'older' }); break;
       case 'agent-open': post({ type: 'agent', op: 'open', id: el.getAttribute('data-agent') || toolId }); break;
       case 'agent-stop': post({ type: 'agent', op: 'stop', id: el.getAttribute('data-agent') || toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
     }
@@ -867,8 +868,17 @@
       thread.innerHTML = '';
       if (!messages.length) { stick = false; renderWelcome(); window.scrollTo(0, 0); return; }
       for (const m of messages) { S.messages.push(m); S.byId.set(m.id, { msg: m, el: null }); if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.set(b.id, b)); }
+      // A long lesson arrives as a window: older messages load on request.
+      if (opts && opts.earlier > 0) {
+        const more = document.createElement('div');
+        more.className = 'earlier';
+        more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(opts.earlier).toLocaleString() + ' more)</button>';
+        thread.appendChild(more);
+      }
       for (const m of messages) renderMessage(m);
       markLast();
+      const anchor = opts && opts.anchor && document.getElementById('m-' + opts.anchor);
+      if (anchor) { stick = false; anchor.scrollIntoView({ block: 'start' }); return; }
       stick = true; scrollBottom(false);
       requestAnimationFrame(() => scrollBottom(false));
     },

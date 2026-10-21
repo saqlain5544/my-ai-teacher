@@ -280,4 +280,21 @@ final class ProviderStreamTests: XCTestCase {
         }
         XCTAssertEqual(calls, 1, "the same call twice is one call"); XCTAssertEqual(stop, "tool_use")
     }
+
+    func testSSEParsingIsLinearAndAcceptsEveryLineEnding() async {
+        // One 4 MB data line arriving in 2,000 chunks (was quadratic: seconds).
+        let big = "data: " + String(repeating: "x", count: 4_000_000) + "\n\n"
+        let bytes = Data(big.utf8)
+        let chunks = stride(from: 0, to: bytes.count, by: 2000).map { bytes[$0..<min($0 + 2000, bytes.count)] }.map { Data($0) }
+        let t0 = Date()
+        let ev = await SSEClient.parse(chunks)
+        XCTAssertEqual(ev.count, 1); XCTAssertEqual(ev.first?.data.count, 4_000_000)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.0, "linear in bytes")
+        let cr = await SSEClient.parse([Data("data: a\r\rdata: b\r\r".utf8)])
+        XCTAssertEqual(cr.map(\.data), ["a", "b"], "CR-only line endings")
+        let split = await SSEClient.parse([Data("data: a\r".utf8), Data("\n\r\ndata: b\n\n".utf8)])
+        XCTAssertEqual(split.map(\.data), ["a", "b"], "CRLF split across chunks is one line end")
+        let many = await SSEClient.parse([Data(String(repeating: "data: {}\n\n", count: 50_000).utf8)])
+        XCTAssertEqual(many.count, 50_000)
+    }
 }

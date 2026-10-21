@@ -111,4 +111,26 @@ final class PolicyTests: XCTestCase {
         XCTAssertEqual(out.count, 3)
         XCTAssertEqual(out[2].blocks.map(\.kind), [.toolResult, .text], "tool results stay first")
     }
+
+    func testSqueezeKeepsHugeTurnsUnderBudgetAndTheNewestMessageIntact() {
+        let huge = String(repeating: "log line\n", count: 40_000)   // ~360k chars ≈ 90k tokens
+        let msgs = [ChatMessage(role: .user, blocks: [.text("run it")]),
+                    ChatMessage(role: .assistant, blocks: [.toolUse(id: "b", name: "bash", input: ["command": "make"])]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "b", name: "bash", content: huge)]),
+                    ChatMessage(role: .user, blocks: [.text("what failed?")])]
+        let out = ContextPolicy.squeeze(msgs, budget: 8_000)
+        XCTAssertLessThanOrEqual(ContextPolicy.estimateTokens(out), 8_000)
+        XCTAssertTrue(out[2].blocks[0].text!.contains("trimmed to fit"))
+        XCTAssertEqual(out[3].plainText, "what failed?")
+        XCTAssertEqual(ContextPolicy.squeeze(msgs, budget: 1_000_000).map(\.plainText), msgs.map(\.plainText), "under budget: untouched")
+    }
+
+    func testRollingSummaryInputsCoverEverything() {
+        let msgs = (0..<300).map { ChatMessage(role: $0 % 2 == 0 ? .user : .assistant, blocks: [.text("message \($0) " + String(repeating: "x", count: 900))]) }
+        let parts = ContextPolicy.chunks(msgs, maxChars: 60_000)
+        XCTAssertEqual(parts.flatMap { $0 }.map(\.id), msgs.map(\.id), "every message in exactly one chunk, in order")
+        XCTAssertTrue(parts.allSatisfy { $0.reduce(0) { $0 + ($1.plainText.count) } <= 61_000 })
+        let d = ContextPolicy.digest(Array(msgs.prefix(6)), previous: "Earlier: fractions.")
+        XCTAssertTrue(d.hasPrefix("Earlier: fractions.") && d.contains("- Learner: message 0"))
+    }
 }

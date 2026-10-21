@@ -34,6 +34,18 @@ final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         self.continuation = continuation
     }
 
+    /// Parses chunks as if they had arrived from the network (tests, replaying captured streams).
+    static func parse(_ chunks: [Data]) async -> [SSEEvent] {
+        let (stream, cont) = AsyncThrowingStream<SSEEvent, Error>.makeStream()
+        let c = SSEClient(continuation: cont)
+        c.status = 200
+        for d in chunks { c.buffer.append(d); c.processLines() }
+        c.buffer.append(0x0A); c.processLines(final: true); c.flushEvent(); cont.finish()
+        var out: [SSEEvent] = []
+        do { for try await e in stream { out.append(e) } } catch {}
+        return out
+    }
+
     static func stream(_ request: URLRequest) -> AsyncThrowingStream<SSEEvent, Error> {
         AsyncThrowingStream { continuation in
             let client = SSEClient(continuation: continuation)
@@ -89,19 +101,38 @@ final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
             continuation.finish(); return
         }
         buffer.append(0x0A)
-        processLines()
+        processLines(final: true)
         flushEvent()
         continuation.finish()
     }
 
-    private func processLines() {
-        while let nl = buffer.firstIndex(of: 0x0A) {
-            var lineData = buffer[buffer.startIndex..<nl]
-            if lineData.last == 0x0D { lineData = lineData.dropLast() }
-            let line = String(decoding: lineData, as: UTF8.self)
-            buffer.removeSubrange(buffer.startIndex...nl)
-            handle(line: line)
+    /// Bytes of the unfinished last line already searched for a line end (so a long line isn't rescanned per chunk).
+    private var scanned = 0
+
+    /// Splits complete lines (LF, CRLF or CR) out of the buffer. Linear: each byte is looked at once and the buffer is
+    /// trimmed once per call, so one huge line or thousands of small events cost O(bytes).
+    private func processLines(final: Bool = false) {
+        var lines: [String] = []
+        var consumed = 0, resume = 0
+        buffer.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
+            let n = raw.count
+            var lineStart = 0, i = scanned
+            while i < n {
+                let b = raw[i]
+                if b == 0x0A || b == 0x0D {
+                    if b == 0x0D && i + 1 == n && !final { break }   // a CRLF may be split across chunks
+                    lines.append(String(decoding: UnsafeRawBufferPointer(rebasing: raw[lineStart..<i]), as: UTF8.self))
+                    i += (b == 0x0D && i + 1 < n && raw[i + 1] == 0x0A) ? 2 : 1
+                    lineStart = i
+                } else {
+                    i += 1
+                }
+            }
+            consumed = lineStart; resume = i - lineStart
         }
+        if consumed > 0 { buffer.removeSubrange(buffer.startIndex..<(buffer.startIndex + consumed)) }
+        scanned = resume
+        for l in lines { handle(line: l) }
     }
 
     private func handle(line: String) {

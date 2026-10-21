@@ -334,13 +334,29 @@ final class MemoryStore: @unchecked Sendable {
 
     // MARK: Core block & maintenance
 
+    /// The best `limit` items by `before`, in one pass with a small sorted buffer — no sort of every memory (this runs
+    /// at every lesson start; with 100k memories a full sort per call cost seconds).
+    private func best(_ limit: Int, where keep: (Memory) -> Bool, before: (Memory, Memory) -> Bool) -> [Memory] {
+        guard limit > 0 else { return [] }
+        lock.lock(); defer { lock.unlock() }
+        ensureLoaded()
+        var out: [Memory] = []
+        out.reserveCapacity(limit + 1)
+        for d in docs.values where keep(d.memory) {
+            let m = d.memory
+            if out.count == limit, let last = out.last, !before(m, last) { continue }
+            let i = out.firstIndex { before(m, $0) } ?? out.count
+            out.insert(m, at: i)
+            if out.count > limit { out.removeLast() }
+        }
+        return out
+    }
     func top(kinds: [MemoryKind], limit: Int) -> [Memory] {
-        all().filter { kinds.contains($0.kind) }.sorted {
-            $0.importance != $1.importance ? $0.importance > $1.importance : $0.updatedAt > $1.updatedAt
-        }.prefix(limit).map { $0 }
+        let ks = Set(kinds)
+        return best(limit, where: { ks.contains($0.kind) }) { $0.importance != $1.importance ? $0.importance > $1.importance : $0.updatedAt > $1.updatedAt }
     }
     func recentEpisodes(limit: Int) -> [Memory] {
-        all().filter { $0.kind == .episode }.sorted { $0.createdAt > $1.createdAt }.prefix(limit).map { $0 }
+        best(limit, where: { $0.kind == .episode }) { $0.createdAt > $1.createdAt }
     }
 
     struct MaintenanceReport { var decayed = 0, archived = 0, merged = 0 }

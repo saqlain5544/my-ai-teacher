@@ -79,6 +79,21 @@ final class ConversationStore: @unchecked Sendable {
         return rows.compactMap { r in r.data("data").flatMap { try? dec.decode(ChatMessage.self, from: $0) } }
     }
 
+    /// Messages with seq in [from, to) — a window of a long lesson (seq is the message's position).
+    func messages(_ conversationID: String, from: Int, to: Int = Int.max) -> [ChatMessage] {
+        let rows = (try? db.query("SELECT data FROM messages WHERE conversation_id=? AND seq>=? AND seq<? ORDER BY seq",
+                                  conversationID, from, min(to, Int(Int32.max)))) ?? []
+        return rows.compactMap { r in r.data("data").flatMap { try? dec.decode(ChatMessage.self, from: $0) } }
+    }
+
+    func messageCount(_ conversationID: String) -> Int {
+        (try? db.query("SELECT COUNT(*) AS n FROM messages WHERE conversation_id=?", conversationID))?.first?.int("n") ?? 0
+    }
+
+    func seq(ofMessage messageID: String) -> Int? {
+        (try? db.query("SELECT seq FROM messages WHERE id=?", messageID))?.first?.int("seq")
+    }
+
     func upsert(_ m: ChatMessage, conversationID: String, seq: Int) {
         guard let data = try? enc.encode(m) else { return }
         let text = m.blocks.compactMap { b -> String? in
@@ -100,8 +115,9 @@ final class ConversationStore: @unchecked Sendable {
         guard !query.isEmpty else { return [] }
         let rows = (try? db.query("""
             SELECT conversation_id, snippet(messages_fts, 0, '', '', '…', 12) AS snip FROM messages_fts
-            WHERE messages_fts MATCH ? ORDER BY rank LIMIT 50
-            """, query)) ?? []
+            WHERE messages_fts MATCH ? AND rowid IN (SELECT rowid FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT 2000)
+            ORDER BY rank LIMIT 50
+            """, query, query)) ?? []   // rank only the 2,000 newest matches: a common word over millions of rows stays fast
         var seen = Set<String>()
         return rows.compactMap { r in
             guard let id = r.string("conversation_id"), seen.insert(id).inserted else { return nil }

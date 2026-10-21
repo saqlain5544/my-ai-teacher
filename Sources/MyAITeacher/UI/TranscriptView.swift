@@ -60,6 +60,8 @@ struct TranscriptView: NSViewRepresentable {
         static let pool = WKProcessPool()
         weak var web: WKWebView?
         var watchdog: WebWatchdog?
+        /// After paging in earlier messages, keep the view on the message the learner was looking at.
+        private var pendingAnchor: String?
         /// Lessons whose page froze (a looping visual): their visuals wait for a click from then on.
         private var pausedVisuals: Set<String> = []
         private var hungNotice = false
@@ -93,6 +95,8 @@ struct TranscriptView: NSViewRepresentable {
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
             if messages.isEmpty { opts["welcome"] = AppModel.shared.welcomePayload() }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
+            if let s = session, s.base > 0 { opts["earlier"] = .number(Double(s.base)) }
+            if let anchor = pendingAnchor { opts["anchor"] = .string(anchor); pendingAnchor = nil }
             run("T.reset(\(payload.compact), \(JSON.object(opts).compact))", replaceQueue: true)
             if ready {
                 web?.evaluateJavaScript("document.querySelectorAll('.msg').length + ' rendered / ' + document.body.scrollHeight + 'px'") { r, _ in
@@ -220,6 +224,9 @@ struct TranscriptView: NSViewRepresentable {
                 else { app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier, rate: app.settings.value.speechRate) }
             case "memory":
                 app.selection = .memory
+            case "older":
+                pendingAnchor = session?.messages.first?.id
+                session?.loadEarlier()
             case "agent":   // a sub-agent card: open it in the right-hand panel, or stop it
                 guard let id = j["id"]?.string, let s = session else { return }
                 let center = SubAgentCenter.shared

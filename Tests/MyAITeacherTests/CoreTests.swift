@@ -133,4 +133,18 @@ final class CoreTests: XCTestCase {
         XCTAssertEqual(WebSearchTool().timeout(.object([:])), 30)
         XCTAssertGreaterThan(TaskTool().timeout(.object([:])) ?? 0, SubAgent.budget)
     }
+
+    func testLongLessonsLoadAsAWindow() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("win-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = Services(global: GlobalStore(), workspace: try Workspace(url: dir)).conversations
+        let msgs = (0..<1000).map { ChatMessage(role: $0 % 2 == 0 ? .user : .assistant, blocks: [.text("m\($0)")]) }
+        for (i, m) in msgs.enumerated() { store.upsert(m, conversationID: "L", seq: i) }
+        XCTAssertEqual(store.messageCount("L"), 1000)
+        let tail = store.messages("L", from: 600)
+        XCTAssertEqual(tail.count, 400); XCTAssertEqual(tail.first?.plainText, "m600")
+        XCTAssertEqual(store.messages("L", from: 400, to: 600).map(\.plainText).last, "m599")
+        XCTAssertEqual(store.seq(ofMessage: msgs[742].id), 742)
+    }
 }

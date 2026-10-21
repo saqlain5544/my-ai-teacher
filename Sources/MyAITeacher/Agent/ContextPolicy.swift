@@ -56,6 +56,52 @@ enum ContextPolicy {
         return mergeConsecutiveUserTurns(msgs)
     }
 
+    /// Messages split into runs of at most `maxChars` (a message is never split).
+    static func chunks(_ msgs: [ChatMessage], maxChars: Int) -> [[ChatMessage]] {
+        var out: [[ChatMessage]] = [], cur: [ChatMessage] = [], size = 0
+        for m in msgs {
+            let n = m.blocks.reduce(0) { $0 + ($1.text?.count ?? 0) + ($1.input?.compact.count ?? 0) }
+            if size + n > maxChars, !cur.isEmpty { out.append(cur); cur = []; size = 0 }
+            cur.append(m); size += n
+        }
+        if !cur.isEmpty { out.append(cur) }
+        return out
+    }
+
+    /// A summary made without a model (when the summary call fails): the learner's requests and the teacher's openings.
+    static func digest(_ msgs: [ChatMessage], previous: String?) -> String {
+        var lines: [String] = previous.map { [$0, ""] } ?? []
+        lines.append("Later in the lesson (condensed):")
+        for m in msgs where !m.isToolResultOnly {
+            let t = m.plainText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !t.isEmpty else { continue }
+            let first = t.split(separator: "\n", maxSplits: 1).first.map(String.init) ?? t
+            lines.append((m.role == .user ? "- Learner: " : "- Teacher: ") + MemoryText.clip(first, 160))
+        }
+        let s = lines.joined(separator: "\n")
+        return s.count > 8000 ? String(s.suffix(8000)) : s
+    }
+
+    /// Last resort when a request is still over budget (one huge turn, or a summary that couldn't help): the largest
+    /// tool outputs and long texts — never the newest learner message — are cut to head + tail in the request copy.
+    static func squeeze(_ msgs: [ChatMessage], budget: Int) -> [ChatMessage] {
+        var total = estimateTokens(msgs)
+        guard total > budget, budget > 0 else { return msgs }
+        let lastUser = msgs.lastIndex { $0.role == .user && !$0.isToolResultOnly } ?? -1
+        var big: [(Int, Int, Int)] = []
+        for (i, m) in msgs.enumerated() where i != lastUser {
+            for (j, b) in m.blocks.enumerated() where (b.kind == .toolResult || b.kind == .text) && (b.text?.count ?? 0) > 6000 { big.append((i, j, b.text!.count)) }
+        }
+        var out = msgs
+        for (i, j, n) in big.sorted(by: { $0.2 > $1.2 }) where total > budget {
+            let t = out[i].blocks[j].text!
+            let head = String(t.prefix(3000)), tail = String(t.suffix(1500))
+            out[i].blocks[j].text = head + "\n[… \(n - 4500) characters trimmed to fit the context …]\n" + tail
+            total -= (n - 4600) / 4
+        }
+        return out
+    }
+
     /// Two learner-side messages in a row (a background agent's report after tool results, the summary before the next
     /// prompt) become one — tool results first, then the rest: the shape every provider accepts.
     static func mergeConsecutiveUserTurns(_ msgs: [ChatMessage]) -> [ChatMessage] {
