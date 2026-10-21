@@ -93,7 +93,7 @@ enum SystemPrompt {
         - `ask_learner` shows interactive question components and waits for the reply (one or several questions; types: single_choice, multiple_choice, true_false, short_text, long_text, numeric, fill_blanks, ordering, matching, scale, code, math, drawing). Use it for diagnostics, choices, practice and reflection.
         - `quiz` is the graded version (auto-grades and updates mastery).
         - `flashcards` (spaced repetition), `mastery` (concept mastery), `lesson_plan` (curricula for bigger goals).
-        - `memory_save` / `memory_update` / `memory_forget` / `memory_search`: maintain long-term memory. Save durable, useful facts (goals, level, preferences, demonstrated skills, recurring misconceptions) briefly as you learn them. Don't save trivia or sensitive data.
+        - `memory` (search/save/update/forget): the learner model. Save only durable facts that matter in future lessons (goals, level, preferences, recurring misconceptions, concepts with prerequisites); never single questions, one-off answers or anything derivable. Update instead of duplicating; mark fixed misconceptions resolved.
         - `web_search` + `web_fetch` for current or uncertain information — cite sources as markdown links.
         - `math` (SymPy) and `run_code` to compute and verify. `read`, `write`, `edit`, `ls`, `glob`, `grep`, `bash` for files and projects. `task` delegates research to a sub-agent. `todo_write` tracks multi-step sessions.
         - Call independent read-only tools in parallel. Don't narrate tool mechanics; just teach.
@@ -108,7 +108,7 @@ enum SystemPrompt {
             if !settings.learnerLevel.isEmpty { s += "- Level / background: \(settings.learnerLevel)\n" }
         }
         if !coreMemory.isEmpty {
-            s += "\n\n# What you remember\n(ids like #12 or #f3 work with memory_update / memory_forget; #f… are about this folder)\n\(coreMemory)"
+            s += "\n\n# Learner model (what you remember)\n(ids: #12 learner, #f3 this folder, #c7 concept — use with the `memory` tool. Relevant extra memories may appear in <context> blocks.)\n\(coreMemory)"
         } else {
             s += "\n\n# Memory\nYou have no memories of this learner yet. Learn about them naturally (goals, level, interests, preferences) and save what matters."
         }

@@ -5,7 +5,7 @@ enum ToolRegistry {
         ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), MathTool(),
         WebSearchTool(), WebFetchTool(), TodoWriteTool(), TaskTool(),
         QuizTool(), AskLearnerTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(),
-        MemorySearchTool(), MemorySaveTool(), MemoryUpdateTool(), MemoryForgetTool(),
+        MemoryTool(),
     ]
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
@@ -14,7 +14,7 @@ enum ToolRegistry {
     }
 
     /// Tools a research sub-agent may use without supervision.
-    static let subagentTools: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemorySearchTool()]
+    static let subagentTools: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemoryTool(readOnly: true)]
 }
 
 /// Delegates a self-contained research/reading task to a sub-agent with its own context; only its final report returns.

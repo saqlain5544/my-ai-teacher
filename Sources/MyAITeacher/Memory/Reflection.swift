@@ -1,9 +1,15 @@
 import Foundation
 
-/// After lessons, a background pass distils the transcript into durable memories (mem0-style add/update/delete),
-/// writes an episode summary and proposes a better lesson title.
+/// After lessons, a background pass distils the transcript into the learner model (mem0-style
+/// ADD/UPDATE/DELETE/NOOP against retrieved neighbours, plus concept-graph operations), writes an episode summary
+/// and proposes a lesson title. The LLM only proposes; `apply` validates every operation deterministically.
 enum Reflection {
-    struct Outcome { var title: String?; var applied: Int; var added = 0; var updated = 0; var deleted = 0 }
+    struct Outcome {
+        var title: String?
+        var applied: Int
+        var added = 0, updated = 0, deleted = 0, rejected = 0, concepts = 0
+        var rejections: [String] = []
+    }
 
     static func transcriptExcerpt(_ messages: [ChatMessage], maxChars: Int = 14_000) -> String {
         var parts: [String] = []
@@ -12,7 +18,7 @@ enum Reflection {
                 switch b.kind {
                 case .text where b.meta?["hidden"]?.bool != true:
                     parts.append("[\(m.role == .user ? "Learner" : "Teacher")]: \(b.text ?? "")")
-                case .toolUse:
+                case .toolUse where !(b.name ?? "").hasPrefix("memory"):
                     let input = (b.input ?? .null).compact
                     parts.append("[Teacher used \(b.name ?? "tool")]: \(input.prefix(300))")
                 case .toolResult where ["quiz", "ask_learner"].contains(b.name ?? ""):
@@ -28,125 +34,175 @@ enum Reflection {
         return s
     }
 
+    static let extractionRules = """
+    You maintain the long-term LEARNER MODEL of a personal AI tutor. It is not a log: store only durable, non-derivable \
+    facts that change how to teach this learner in FUTURE lessons.
+    Memory kinds: profile (who they are: age/grade/job, languages, background) · preference (how they learn best) · \
+    goal (exams, projects, deadlines) · misconception (a specific, recurring error — say exactly what they confuse) · \
+    fact (other durable facts: tools, interests).
+    Concepts (skills/topics) are graph nodes, NOT memories: report each concept the lesson really worked on, with its \
+    subjects (one concept may belong to several subjects, e.g. "Arabic prosody" → ["arabic","poetry"]), its \
+    prerequisites (other concepts it builds on, possibly from other subjects) and a status: struggling | learning | solid. \
+    Optional "mastery" 0..1 only when the lesson gives clear evidence and no quiz measured it.
+    NEVER store: individual questions or answers ("asked for the derivative of sin(x²)"), one-off results or scores \
+    (quizzes are tracked automatically), things only true today, anything about the app/tools/errors/interruptions, \
+    secrets, health or financial details. Generalise: "makes sign errors when expanding brackets", not "got 3−(−2) wrong".
+    Prefer UPDATE of an existing memory (by id) over ADD; DELETE or RESOLVE memories that are now wrong or no longer \
+    true (a resolved misconception → resolve; an achieved goal → resolve). If nothing durable was learned, return no operations.
+    """
+
     static func run(messages: [ChatMessage], conversationID: String, client: LLMClient, model: String,
                     services: Services, needsTitle: Bool) async -> Outcome {
         let excerpt = transcriptExcerpt(messages)
         guard excerpt.count > 80 else { return Outcome(title: nil, applied: 0) }
-        let existing = services.memory.coreBlock(maxChars: 4000)
-        let related = services.memory.search(String(excerpt.suffix(3000)), limit: 20, minScore: 0.2)
+        let hub = services.memory
+        let existing = hub.coreBlock(maxChars: 4000)
+        let related = hub.search(String(excerpt.suffix(3000)), limit: 15, minScore: 0.25)
+            .filter { !existing.contains("[#\($0.id)]") }
             .map { "- [#\($0.id)] (\($0.kind.rawValue)\($0.scope == .folder ? ", folder" : "")) \($0.content)" }.joined(separator: "\n")
-        let system = """
-        You maintain the long-term memory of a personal AI tutor. From the lesson excerpt, extract durable facts that will help \
-        teach this learner better in future lessons. Kinds:
-        - profile: who they are (age/grade/occupation, languages, background)
-        - preference: how they like to learn (pace, examples, visuals, tone)
-        - goal: what they want to achieve (exams, projects, deadlines)
-        - knowledge: concepts they have clearly demonstrated understanding of
-        - misconception: specific recurring errors or confusions (be precise)
-        - fact: other useful facts (tools they use, interests)
-        Scope: "learner" (default) for facts about the learner that apply everywhere; "folder" for facts only about the current \
-        folder/project (what it contains, its purpose, project-specific decisions).
-        Only record facts about the learner (or the folder's subject matter). Never record anything about the app, tools, \
-        errors, interrupted or skipped questions, or how the conversation was run.
-        Rules: atomic third-person statements; skip trivia and anything already known (update instead of duplicating); \
-        never store secrets, passwords, health or financial details; update or delete memories that are now wrong \
-        (e.g. a misconception that was resolved → delete or rewrite it). Importance 0..1.
+        let concepts = hub.concepts(matching: excerpt, limit: 25).map { "- " + hub.conceptLine($0, detail: false) }.joined(separator: "\n")
+        let system = extractionRules + """
+
+        Scope: "learner" (default, applies everywhere) or "folder" (only about the current folder/project).
         Reply with ONLY a JSON object:
-        {"operations":[{"op":"add","kind":"goal","scope":"learner","subject":"calculus","content":"…","importance":0.8},{"op":"update","id":"12","content":"…","importance":0.6},{"op":"delete","id":"f7"}],
+        {"operations":[{"op":"add","kind":"misconception","scope":"learner","concept":"chain rule","content":"…","importance":0.7},
+          {"op":"update","id":"12","content":"…"},{"op":"resolve","id":"9"},{"op":"delete","id":"f7"}],
+         "concepts":[{"name":"chain rule","subjects":["calculus"],"prerequisites":["derivatives"],"status":"learning"}],
          "episode":"2-3 sentences: what was covered, how it went, what to do next time",
          "title":"short lesson title (≤ 6 words)"}
         """
         let user = """
-        # Existing memories
-        \(existing.isEmpty ? "(none)" : existing)
-        \(related.isEmpty ? "" : "\n# Possibly related\n" + related)
+        # Learner model (existing)
+        \(existing.isEmpty ? "(empty)" : existing)
+        \(related.isEmpty ? "" : "\n# Possibly related memories\n" + related)
+        \(concepts.isEmpty ? "" : "\n# Known concepts mentioned\n" + concepts)
 
         # Lesson excerpt
         \(excerpt)
         """
-        var text = ""
-        do {
-            let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text(user)])], maxTokens: 4096)
-            for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
-        } catch {
-            return Outcome(title: nil, applied: 0)
-        }
-        guard let json = extractJSON(text) else { return Outcome(title: nil, applied: 0) }
-        var out = Outcome(title: nil, applied: 0)
-        for op in json["operations"]?.array ?? [] {
-            let id = op["id"]?.string ?? op["id"]?.int.map(String.init)
-            switch op["op"]?.string {
-            case "add":
-                guard let c = op["content"]?.string, !c.isEmpty else { continue }
-                services.memory.add(kind: op["kind"]?.string.flatMap(MemoryKind.init(rawValue:)) ?? .fact, content: c,
-                                    subject: op["subject"]?.string, importance: op["importance"]?.double ?? 0.5,
-                                    origin: "reflection", source: conversationID,
-                                    scope: op["scope"]?.string.flatMap(MemoryScope.init(rawValue:)) ?? .learner)
-                out.added += 1
-            case "update":
-                guard let id, services.memory.get(id) != nil else { continue }
-                services.memory.update(id, content: op["content"]?.string, importance: op["importance"]?.double)
-                out.updated += 1
-            case "delete":
-                guard let id, services.memory.get(id) != nil else { continue }
-                services.memory.delete(id); out.deleted += 1
-            default: continue
-            }
-        }
-        if let ep = json["episode"]?.string, ep.count > 10 {
-            services.memory.add(kind: .episode, content: ep, importance: 0.4, origin: "reflection", source: conversationID, scope: .folder)
-        }
-        services.memory.maintenance()
-        out.applied = out.added + out.updated + out.deleted
+        guard let json = await complete(client: client, model: model, system: system, user: user) else { return Outcome(title: nil, applied: 0) }
+        var out = apply(json, hub: hub, conversationID: conversationID)
         out.title = needsTitle ? json["title"]?.string?.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \n")) : nil
         return out
     }
 
-    /// Periodic hygiene over ALL memories: merge duplicates, rewrite vague or stale facts, resolve contradictions,
-    /// and delete noise (anything about the app/tools rather than the learner). Keeps memory improving over time.
-    static func consolidate(client: LLMClient, model: String, services: Services) async -> Outcome {
-        let all = services.memory.all().filter { $0.kind != .episode }
-        guard all.count >= 2 else { return Outcome(title: nil, applied: 0) }
-        let listing = all.map { "- [#\($0.id)] (\($0.kind.rawValue)\($0.scope == .folder ? ", folder" : "")\($0.subject.map { ", \($0)" } ?? "")) \($0.content)" }.joined(separator: "\n")
-        let system = """
-        You curate a personal tutor's long-term memory about one learner. Improve the list:
-        - merge duplicates or near-duplicates into one precise memory (update one, delete the others);
-        - rewrite vague memories to be specific and atomic; fix contradictions (keep the newest/most specific);
-        - delete noise: anything about the app, tools, errors, interrupted or skipped questions, or conversation mechanics.
-          Example of noise to delete: "Teacher attempted a quiz but the call was interrupted before the learner answered."
-          (Keep any real learner fact inside it only if it is stated elsewhere or can be rewritten without the mechanics.)
-        - never invent new facts. Content must be plain text without the "[#id] (kind…)" labels. Keep ids exactly as given.
-        Reply with ONLY JSON: {"operations":[{"op":"update","id":"12","content":"…","importance":0.7},{"op":"delete","id":"f3"}]}
-        """
+    private static func complete(client: LLMClient, model: String, system: String, user: String) async -> JSON? {
         var text = ""
         do {
-            let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text("# Memories\n" + listing)])], maxTokens: 4096)
+            let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text(user)])], maxTokens: 4096, thinking: .off)
             for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
-        } catch { return Outcome(title: nil, applied: 0) }
-        guard let json = extractJSON(text) else { return Outcome(title: nil, applied: 0) }
+        } catch { return nil }
+        return extractJSON(text)
+    }
+
+    private static func strings(_ j: JSON?) -> [String] {
+        if let s = j?.string { return s.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty } }
+        return (j?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }
+    }
+
+    /// Validates and applies model-proposed operations. Deterministic (unit-tested without a model).
+    static func apply(_ json: JSON, hub: MemoryHub, conversationID: String?, origin: String = "reflection") -> Outcome {
         var out = Outcome(title: nil, applied: 0)
-        let known = Set(all.map(\.id))
+        // Concepts first, so memory adds can attach to them.
+        for c in json["concepts"]?.array ?? [] {
+            guard let name = c["name"]?.string, !name.isEmpty else { continue }
+            if hub.saveConcept(name: name, subjects: strings(c["subjects"]) + strings(c["subject"]),
+                               prerequisites: strings(c["prerequisites"]) + strings(c["prereqs"]), related: strings(c["related"]),
+                               partOf: strings(c["part_of"]), summary: c["summary"]?.string, status: c["status"]?.string,
+                               estimate: c["mastery"]?.double, origin: origin, source: conversationID) != nil { out.concepts += 1 }
+        }
+        for m in json["merge_concepts"]?.array ?? [] {
+            guard let into = m["into"]?.string, hub.concept(into) != nil else { continue }
+            hub.mergeConcepts(into: into, from: strings(m["from"])); out.updated += 1
+        }
+        for l in json["links"]?.array ?? [] {
+            guard let a = l["from"]?.string, let b = l["to"]?.string, let graph = hub.graph,
+                  let ca = hub.concept(a), let cb = hub.concept(b) else { continue }
+            graph.link(ca.rowid, cb.rowid, ConceptRelation(loose: l["rel"]?.string ?? "related") ?? .related); out.updated += 1
+        }
         for op in json["operations"]?.array ?? [] {
-            guard let id = op["id"]?.string ?? op["id"]?.int.map(String.init), known.contains(id) else { continue }
-            switch op["op"]?.string {
+            let id = op["id"]?.string ?? op["id"]?.int.map(String.init)
+            switch op["op"]?.string?.lowercased() {
+            case "add":
+                guard let c = op["content"]?.string, !c.isEmpty else { continue }
+                let kind = op["kind"]?.string.flatMap(MemoryKind.init(rawValue:)) ?? .fact
+                guard kind != .episode else { continue }
+                let r = hub.add(kind: kind, content: c, subject: op["subject"]?.string, importance: op["importance"]?.double ?? 0.5,
+                                origin: origin, source: conversationID,
+                                scope: op["scope"]?.string.flatMap(MemoryScope.init(rawValue:)) ?? .learner, concept: op["concept"]?.string)
+                switch r.status {
+                case .added: out.added += 1
+                case .merged: out.updated += 1
+                case .rejected: out.rejected += 1; out.rejections.append("\(c) — \(r.reason ?? "")")
+                }
             case "update":
-                services.memory.update(id, content: op["content"]?.string, importance: op["importance"]?.double); out.updated += 1
+                guard let id, hub.exists(id) else { continue }
+                hub.update(id, content: op["content"]?.string, importance: op["importance"]?.double,
+                           kind: op["kind"]?.string.flatMap(MemoryKind.init(rawValue:)), concept: op["concept"]?.string, source: conversationID)
+                out.updated += 1
+            case "resolve", "achieve", "archive":
+                guard let id, hub.get(id) != nil else { continue }
+                hub.resolveItem(id, source: conversationID); out.deleted += 1
             case "delete":
-                services.memory.delete(id); out.deleted += 1
-            default: break
+                guard let id, hub.exists(id) else { continue }
+                hub.delete(id); out.deleted += 1
+            default: continue
             }
         }
-        out.applied = out.updated + out.deleted
+        if let ep = json["episode"]?.string, ep.count > 10 {
+            hub.add(kind: .episode, content: ep, importance: 0.4, origin: origin, source: conversationID, scope: .folder)
+        }
+        hub.maintenance()
+        out.applied = out.added + out.updated + out.deleted + out.concepts
+        return out
+    }
+
+    /// Periodic hygiene ("sleep-time" consolidation): a deterministic local pass, then the model merges duplicates,
+    /// sharpens vague facts, resolves contradictions, links/merges concepts and may add cross-subject insights.
+    static func consolidate(client: LLMClient, model: String, services: Services) async -> Outcome {
+        let hub = services.memory
+        let local = hub.maintenance()
+        let all = hub.all().filter { $0.kind != .episode }.sorted { $0.importance > $1.importance }.prefix(150)
+        let concepts = (hub.graph?.all() ?? []).sorted { $0.updatedAt > $1.updatedAt }.prefix(120)
+        guard all.count + concepts.count >= 2 else { return Outcome(title: nil, applied: local.merged) }
+        let listing = all.map { "- [#\($0.id)] (\($0.kind.rawValue)\($0.scope == .folder ? ", folder" : "")\($0.subject.map { ", \($0)" } ?? "")) \($0.content)" }.joined(separator: "\n")
+        let conceptListing = concepts.map { "- " + hub.conceptLine($0, detail: true) }.joined(separator: "\n")
+        let system = """
+        You curate a personal tutor's learner model. Improve it without inventing facts:
+        - merge duplicate memories (update one, delete the others); rewrite vague ones to be specific and general;
+        - resolve contradictions (keep the newest/most specific; delete or update the other);
+        - delete noise and derivable trivia (single questions, one-off answers or scores, app/tool mechanics);
+        - merge duplicate concepts ("Chain Rule" / "chain rule for derivatives") and add missing prerequisite or related \
+          links between concepts — especially across subjects (e.g. physics kinematics needs calculus derivatives);
+        - optionally add at most 3 cross-subject insights (kind fact/preference/misconception) that are clearly supported \
+          by several memories (e.g. "makes sign errors in both algebra and physics problems").
+        Ids must be exactly as given. Content is plain text without "[#id]" labels.
+        Reply with ONLY JSON: {"operations":[{"op":"update","id":"12","content":"…"},{"op":"delete","id":"f3"},{"op":"add","kind":"fact","content":"…"}],
+         "merge_concepts":[{"into":"c3","from":["c9"]}],"links":[{"from":"c4","to":"c2","rel":"prereq"}],
+         "concepts":[{"name":"…","subjects":["…"]}]}
+        """
+        let user = "# Memories\n\(listing)\n\n# Concepts\n\(conceptListing.isEmpty ? "(none)" : conceptListing)"
+        guard let json = await complete(client: client, model: model, system: system, user: user) else { return Outcome(title: nil, applied: local.merged) }
+        // Only touch ids that were shown.
+        let known = Set(all.map(\.id) + concepts.map(\.id))
+        var filtered = json.object ?? [:]
+        filtered["operations"] = .array((json["operations"]?.array ?? []).filter { op in
+            op["op"]?.string == "add" || (op["id"]?.string ?? op["id"]?.int.map(String.init)).map(known.contains) == true
+        })
+        var out = apply(.object(filtered), hub: hub, conversationID: nil, origin: "consolidation")
+        out.updated += local.merged
+        out.applied += local.merged
         UserDefaults.standard.set(Date(), forKey: "memory.lastConsolidated")
-        UserDefaults.standard.set(services.memory.count(), forKey: "memory.countAtConsolidation")
+        UserDefaults.standard.set(hub.count(), forKey: "memory.countAtConsolidation")
         return out
     }
 
     /// Consolidate weekly, or whenever memory has grown by 10+ items since the last pass.
     static func consolidationDue(_ services: Services) -> Bool {
         let last = UserDefaults.standard.object(forKey: "memory.lastConsolidated") as? Date ?? .distantPast
-        let grown = services.memory.count() - UserDefaults.standard.integer(forKey: "memory.countAtConsolidation")
-        return services.memory.count() >= 4 && (grown >= 10 || Date().timeIntervalSince(last) > 7 * 86400)
+        let n = services.memory.count()
+        let grown = n - UserDefaults.standard.integer(forKey: "memory.countAtConsolidation")
+        return n >= 4 && (grown >= 10 || Date().timeIntervalSince(last) > 7 * 86400)
     }
 
     /// Pulls the first balanced {...} object out of model output (tolerates code fences and prose).

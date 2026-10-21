@@ -1,94 +1,121 @@
 import Foundation
 
-private func memoryID(_ input: JSON) -> String? {
-    input["id"]?.string ?? input["id"]?.int.map(String.init)
-}
-
-struct MemorySearchTool: Tool {
-    let name = "memory_search"
-    let description = "Search long-term memory (the learner's profile, goals, preferences, knowledge, misconceptions, past lessons, and facts about this folder). Use before re-teaching a topic or when the learner refers to the past."
+/// One compact tool over the learner model (≈200 schema tokens instead of four tools).
+/// Ids: "12" learner memory, "f3" folder memory, "c7" concept.
+struct MemoryTool: Tool {
+    let name = "memory"
+    /// Sub-agents get a search-only variant.
+    var readOnly = false
+    var description: String {
+        readOnly ? "Search the learner's long-term memory."
+        : "Learner model. save ONE durable fact (kind=concept: content=name); never one-off/derivable details. Ids: 12, f3 folder, c7 concept."
+    }
     let risk = ToolRisk.readOnly
     var schema: JSON {
-        Schema.object([
-            "query": Schema.string("What to look for."),
-            "kind": Schema.string("Optional kind filter.", enum: MemoryKind.allCases.map(\.rawValue)),
-            "limit": Schema.integer("Max results (default 8)."),
-        ], required: ["query"])
+        if readOnly { return Schema.object(["query": ["type": "string"]], required: ["query"]) }
+        let s = { (d: String) in JSON.object(["type": "string", "description": .string(d)]) }
+        let plain: JSON = ["type": "string"]
+        let oneOf = { (v: [String]) in JSON.object(["type": "string", "enum": .array(v.map { .string($0) })]) }
+        return Schema.object([
+            "action": oneOf(["search", "save", "update", "forget"]),
+            "query": plain,
+            "content": plain,
+            "kind": oneOf(["profile", "preference", "goal", "misconception", "fact", "concept"]),
+            "concept": s("concept it's about"),
+            "subjects": s("comma-separated"),
+            "needs": s("prerequisite concepts"),
+            "id": plain,
+            "resolved": ["type": "boolean"],
+            "scope": oneOf(["learner", "folder"]),
+            "explicit": ["type": "boolean", "description": "learner asked to remember"],
+        ], required: ["action"])
     }
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let q = try input.req("query")
-        let kinds = input["kind"]?.string.flatMap(MemoryKind.init(rawValue:)).map { [$0] }
-        let found = ctx.services.memory.search(q, limit: input["limit"]?.int ?? 8, kinds: kinds, minScore: 0.15)
-        ctx.services.memory.markUsed(found.map(\.id))
-        if found.isEmpty { return ToolOutput(text: "No matching memories.") }
-        return ToolOutput(text: found.map { "#\($0.id) [\($0.kind.rawValue)\($0.subject.map { "/\($0)" } ?? "")\($0.scope == .folder ? ", this folder" : ""), relevance \(Int($0.relevance * 100))%] \($0.content)" }.joined(separator: "\n"),
-                          meta: ["ids": .array(found.map { .string($0.id) })])
-    }
-}
 
-struct MemorySaveTool: Tool {
-    let name = "memory_save"
-    let description = """
-    Save a durable fact to long-term memory: who the learner is (profile), how they like to learn (preference), \
-    goals, concepts they have demonstrated (knowledge), recurring errors (misconception), or other useful facts. \
-    scope="learner" (default) follows the learner into every folder; scope="folder" is only about the current folder/project. \
-    One atomic fact per call, third person ("Learner prefers visual explanations"). Never store secrets or sensitive data. \
-    Near-duplicates merge automatically.
-    """
-    let risk = ToolRisk.readOnly
-    var schema: JSON {
-        Schema.object([
-            "content": Schema.string("The fact, concise and self-contained."),
-            "kind": Schema.string("Memory kind.", enum: MemoryKind.allCases.map(\.rawValue)),
-            "scope": Schema.string("learner (default) or folder.", enum: ["learner", "folder"]),
-            "subject": Schema.string("Subject area, e.g. calculus, python, arabic."),
-            "importance": Schema.number("0..1 (default 0.6). 0.9+ for core identity/goals."),
-            "explicit": Schema.boolean("True if the learner explicitly asked you to remember it."),
-        ], required: ["content", "kind"])
+    func summary(_ input: JSON) -> String {
+        switch action(input) {
+        case "search": return input["query"]?.string ?? ""
+        case "save": return input["content"]?.string ?? ""
+        default: return "#" + (Self.id(input) ?? "?")
+        }
     }
-    func summary(_ input: JSON) -> String { input["content"]?.string ?? "" }
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let content = try input.req("content")
-        let kind = input["kind"]?.string.flatMap(MemoryKind.init(rawValue:)) ?? .fact
-        let scope = input["scope"]?.string.flatMap(MemoryScope.init(rawValue:)) ?? .learner
-        let r = ctx.services.memory.add(kind: kind, content: content, subject: input["subject"]?.string,
-                                        importance: input["importance"]?.double ?? 0.6,
-                                        origin: input["explicit"]?.bool == true ? "explicit" : "inferred", source: ctx.conversationID, scope: scope)
-        return ToolOutput(text: r.merged ? "Merged into existing memory #\(r.id)." : "Saved memory #\(r.id).",
-                          meta: ["id": .string(r.id), "merged": .bool(r.merged), "write": true])
-    }
-}
 
-struct MemoryUpdateTool: Tool {
-    let name = "memory_update"
-    let description = "Update or correct a memory by id (ids appear as #12 or #f3 in memory listings). Use when facts change (a misconception is resolved, a goal is achieved)."
-    let risk = ToolRisk.readOnly
-    var schema: JSON {
-        Schema.object([
-            "id": Schema.string("Memory id, e.g. \"12\" or \"f3\"."),
-            "content": Schema.string("New content."),
-            "importance": Schema.number("New importance 0..1."),
-            "kind": Schema.string("New kind.", enum: MemoryKind.allCases.map(\.rawValue)),
-        ], required: ["id"])
+    private func action(_ input: JSON) -> String {
+        if readOnly { return "search" }
+        return input["action"]?.string ?? (input["query"] != nil ? "search" : input["content"] != nil && input["id"] == nil ? "save" : "update")
     }
-    func summary(_ input: JSON) -> String { "#\(memoryID(input) ?? "?")" }
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        guard let id = memoryID(input), ctx.services.memory.get(id) != nil else { return .error("No memory with that id.") }
-        ctx.services.memory.update(id, content: input["content"]?.string, importance: input["importance"]?.double,
-                                   kind: input["kind"]?.string.flatMap(MemoryKind.init(rawValue:)))
-        return ToolOutput(text: "Updated memory #\(id).", meta: ["id": .string(id), "write": true])
+    static func id(_ input: JSON) -> String? { input["id"]?.string ?? input["id"]?.int.map(String.init) }
+    private static func list(_ j: JSON?) -> [String] {
+        if let a = j?.array { return a.compactMap(\.string) }
+        return (j?.string ?? "").split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty }
     }
-}
 
-struct MemoryForgetTool: Tool {
-    let name = "memory_forget"
-    let description = "Delete a memory by id — when it is wrong, outdated, or the learner asks you to forget it."
-    let risk = ToolRisk.readOnly
-    var schema: JSON { Schema.object(["id": Schema.string("Memory id, e.g. \"12\" or \"f3\".")], required: ["id"]) }
-    func summary(_ input: JSON) -> String { "#\(memoryID(input) ?? "?")" }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        guard let id = memoryID(input), ctx.services.memory.get(id) != nil else { return .error("No memory with that id.") }
-        ctx.services.memory.delete(id)
-        return ToolOutput(text: "Forgot memory #\(id).", meta: ["id": .string(id), "write": true])
+        let hub = ctx.services.memory
+        switch action(input) {
+        case "search":
+            let q = input["query"]?.string ?? input["content"]?.string ?? ""
+            guard !q.isEmpty else { return .error("Missing `query`.") }
+            let found = hub.search(q, limit: 8)
+            let concepts = hub.concepts(matching: q, limit: 3)
+            hub.markUsed(found.map(\.id))
+            if found.isEmpty && concepts.isEmpty { return ToolOutput(text: "No matching memories.") }
+            var lines = found.map { m in
+                "#\(m.id) \(m.kind.rawValue)\(m.subject.map { " (\($0))" } ?? "")\(m.scope == .folder ? " [folder]" : ""): \(m.content)"
+            }
+            lines += concepts.map { "concept " + hub.conceptLine($0, detail: true) }
+            return ToolOutput(text: lines.joined(separator: "\n"), meta: ["ids": .array((found.map(\.id) + concepts.map(\.id)).map { .string($0) })])
+
+        case "save":
+            let content = try input.req("content")
+            let kindRaw = input["kind"]?.string ?? "fact"
+            let subjects = Self.list(input["subjects"])
+            if kindRaw == "concept" || kindRaw == "knowledge" {
+                guard let id = hub.saveConcept(name: input["concept"]?.string ?? content, subjects: subjects, prerequisites: Self.list(input["needs"]),
+                                               status: kindRaw == "knowledge" ? "solid" : nil, origin: "inferred", source: ctx.conversationID)
+                else { return .error("Concept names must be short (≤ 80 chars).") }
+                return ToolOutput(text: "Concept #c\(id) saved.", meta: ["id": .string("c\(id)"), "write": true])
+            }
+            let kind = MemoryKind(rawValue: kindRaw) ?? .fact
+            let scope = input["scope"]?.string.flatMap(MemoryScope.init(rawValue:)) ?? .learner
+            let r = hub.add(kind: kind, content: content, subject: subjects.first, importance: input["explicit"]?.bool == true ? 0.8 : 0.6,
+                            origin: input["explicit"]?.bool == true ? "explicit" : "inferred", source: ctx.conversationID,
+                            scope: scope, concept: input["concept"]?.string)
+            switch r.status {
+            case .rejected:
+                return ToolOutput(text: "Not saved: \(r.reason ?? "not durable"). Memory keeps only durable facts that matter in future lessons.",
+                                  meta: ["write": false])
+            case .merged:
+                return ToolOutput(text: "Already known — reinforced #\(r.id).", meta: ["id": .string(r.id), "merged": true, "write": true])
+            case .added:
+                var t = "Saved #\(r.id)."
+                let sim = r.similar.compactMap { hub.get($0) }
+                if !sim.isEmpty { t += " Similar: " + sim.map { "#\($0.id) “\(MemoryText.clip($0.content, 80))”" }.joined(separator: "; ") + " — if one is now outdated, update or forget it." }
+                return ToolOutput(text: t, meta: ["id": .string(r.id), "merged": false, "write": true])
+            }
+
+        case "update":
+            guard let id = Self.id(input), hub.exists(id) else { return .error("No memory with that id.") }
+            if input["resolved"]?.bool == true, hub.get(id) != nil {
+                hub.resolveItem(id, source: ctx.conversationID)
+                return ToolOutput(text: "Marked #\(id) resolved.", meta: ["id": .string(id), "write": true])
+            }
+            if let c = hub.concept(id) {
+                let subjects = Self.list(input["subjects"])
+                hub.saveConcept(name: c.name, subjects: subjects, prerequisites: Self.list(input["needs"]), source: ctx.conversationID)
+                if let n = input["content"]?.string, !n.isEmpty, n != c.name { hub.update(id, content: n) }
+                return ToolOutput(text: "Updated concept #\(id).", meta: ["id": .string(id), "write": true])
+            }
+            hub.update(id, content: input["content"]?.string, kind: input["kind"]?.string.flatMap(MemoryKind.init(rawValue:)),
+                       concept: input["concept"]?.string, source: ctx.conversationID)
+            return ToolOutput(text: "Updated #\(id).", meta: ["id": .string(id), "write": true])
+
+        case "forget":
+            guard let id = Self.id(input), hub.exists(id) else { return .error("No memory with that id.") }
+            hub.delete(id)
+            return ToolOutput(text: "Forgot #\(id).", meta: ["id": .string(id), "write": true])
+
+        default:
+            return .error("Unknown action.")
+        }
     }
 }
