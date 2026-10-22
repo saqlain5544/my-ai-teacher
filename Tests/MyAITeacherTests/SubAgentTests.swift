@@ -345,7 +345,7 @@ final class SubAgentTests: XCTestCase {
         XCTAssertTrue(o.text.contains("doesn't reason, so its effort is off"), o.text)
         XCTAssertEqual(lesson.requests.last?.thinking, .off)
         _ = try await task(["description": "O", "prompt": "x"], ctx(lesson, host: host))
-        XCTAssertEqual(lesson.requests.last?.thinking, .off, "off by default (Settings → Agents)")
+        XCTAssertEqual(lesson.requests.last?.thinking, .high, "high by default: sub-agents do their best work (Settings → Agents lowers it)")
         let spec = TaskTool.spec(models: ["m", "n"], current: "m", provider: "lesson", others: ["openrouter"])
         XCTAssertTrue(spec.schema["properties"]?["provider"]?["description"]?.string?.contains("openrouter") == true)
         XCTAssertNil(spec.schema["properties"]?["unbounded"], "not offered unless allowed")

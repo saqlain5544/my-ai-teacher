@@ -81,6 +81,8 @@ protocol AgentExtension: AnyObject {
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision
     /// Observe or rewrite a tool result.
     func didRun(_ call: Block, result: inout Block, session: ChatSession)
+    /// Rewrite a finished reply before it is stored and shown in its final form (e.g. withhold solution code).
+    func willStoreReply(_ message: inout ChatMessage, session: ChatSession)
     /// Called when a learner turn completes (no more tool calls), with its metrics.
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession)
     /// Called when a lesson goes idle or is closed.
@@ -93,6 +95,7 @@ extension AgentExtension {
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {}
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision { .allow }
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {}
+    func willStoreReply(_ message: inout ChatMessage, session: ChatSession) {}
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {}
     func sessionWillClose(_ session: ChatSession) {}
 }
@@ -137,6 +140,7 @@ final class ExtensionHost {
         }
     }
     func didRun(_ c: Block, _ r: inout Block, _ s: ChatSession) { for e in extensions { e.didRun(c, result: &r, session: s) } }
+    func willStoreReply(_ m: inout ChatMessage, _ s: ChatSession) { for e in extensions { e.willStoreReply(&m, session: s) } }
     func didFinishTurn(_ m: inout TurnMetrics, _ s: ChatSession) { for e in extensions { e.didFinishTurn(&m, session: s) } }
     func sessionWillClose(_ s: ChatSession) { for e in extensions { e.sessionWillClose(s) } }
 }

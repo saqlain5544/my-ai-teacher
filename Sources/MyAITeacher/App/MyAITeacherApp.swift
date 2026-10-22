@@ -58,6 +58,14 @@ struct MyAITeacherApp: App {
                 Button("Default Text Size") { app.settings.value.fontSize = 15 }.keyboardShortcut("0")
             }
         }
+        // The exercise editor at full size (the right panel's Exercise tab pops out here).
+        Window("Exercise", id: "exercise") {
+            ExerciseWindow()
+                .environmentObject(app)
+                .environmentObject(app.settings)
+                .frame(minWidth: 640, minHeight: 420)
+        }
+        .defaultSize(width: 1100, height: 760)
         Settings {
             SettingsView()
                 .environmentObject(app)

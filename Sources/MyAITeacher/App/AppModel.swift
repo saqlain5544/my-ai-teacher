@@ -34,6 +34,8 @@ final class AppModel: ObservableObject {
     // Right-side inspector (files + in-app page viewer).
     @Published var inspectorShown = false
     @Published var inspectorTab: InspectorTab = .files
+    /// The exercise open in the editor (the right panel's Exercise tab, or its own window).
+    @Published var exerciseID: String?
     @Published var webURL: URL?
     @Published var revealRequest: URL?
     @Published var dueCount = 0
@@ -55,6 +57,9 @@ final class AppModel: ObservableObject {
         services = Services(global: g, workspace: ws)
         if ws.url == s.defaultFolder { g.migrateLegacyConversations(into: ws) }
         registerExtensions()
+        NotificationCenter.default.addObserver(forName: .openExercise, object: nil, queue: .main) { [weak self] n in
+            MainActor.assumeIsolated { self?.showExercise(n.object as? String) }
+        }
         conversations = services.conversations.all()
         refreshCounts()
         EventBus.subject
@@ -82,6 +87,8 @@ final class AppModel: ObservableObject {
 
     /// Built-in features are extensions; add new ones here without touching the agent loop.
     private func registerExtensions() {
+        // First: its refusals (the teacher writing the learner's exercise code) must win over an approval prompt.
+        extensions.register(ExerciseExtension())
         extensions.register(PermissionExtension(app: self))
         extensions.register(ComputerUseExtension(app: self))
         extensions.register(MemoryExtension(app: self))
@@ -170,6 +177,13 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Lessons
+
+    /// Opens an exercise in the right panel's editor.
+    func showExercise(_ id: String?) {
+        exerciseID = id
+        inspectorTab = .exercise
+        inspectorShown = true
+    }
 
     func session(for id: String) -> ChatSession? {
         if let s = sessions[id] { return s }

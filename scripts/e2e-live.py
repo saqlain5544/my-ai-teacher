@@ -85,6 +85,10 @@ MAX_ANSWERS = 3   # a learner who always answers keeps a tutor quizzing forever;
 def answer_pending(p, scenario, n_answered=0, retry=False):
     pid, kind = p["id"], p["kind"]
     sel = '[data-tool-id="%s"]' % pid
+    # A card it can't fill (e.g. only a drawing) is skipped, as a learner would, instead of retried until the turn times out.
+    if retry and kind != "permission" and "Answer at least one question" in (js_value("(document.querySelector('%s') || {}).innerText" % sel) or ""):
+        js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
+        return "skip"
     if kind != "permission" and n_answered >= MAX_ANSWERS:
         js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
         return "skip"
@@ -129,11 +133,16 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
 
 def run_turn(text, scenario, timeout=240):
     if scenario.get("click"): js(scenario["click"])   # a learner action in the page (chip, regenerate, edit…)
+    elif scenario.get("hook"): post(scenario["hook"])   # a learner action outside the transcript (the exercise editor's Submit)
     else: post({"action": "send", "text": text, **({"image": str(make_png(HOME / "picture.png"))} if scenario.get("image") else {})})
     time.sleep(1.5)
-    t0, answered, seen_running, tries = time.time(), [], False, {}
+    t0, answered, seen_running, tries, beat = time.time(), [], False, {}, time.time()
     while time.time() - t0 < timeout:
         r = report()
+        if time.time() - beat >= 60:   # a long turn says it's alive (and what it's doing)
+            beat = time.time()
+            calls = [b["name"] for m in r["messages"] for b in m["blocks"] if b["kind"] == "toolUse"]
+            print("     … %ds, %d tool calls so far (last: %s)" % (time.time() - t0, len(calls), calls[-1] if calls else "-"), flush=True)
         seen_running |= r["running"]
         # Only this lesson's cards: one left open in an earlier lesson (a learner who walked away) mustn't hold up this one.
         r["pending"] = [p for p in r["pending"] if p.get("lesson") in (None, r.get("lesson"))]
@@ -310,8 +319,16 @@ def visible_reply(r, start):
     txt = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
     return re.sub(r"```(?:problem|exercise|try)\b.*?(```|$)", " ", txt, flags=re.S)
 
+def before_first_answer(r, start):
+    """The turn's messages up to the learner's first answer: a solution after real attempts is the ladder's last rung."""
+    out = []
+    for m in r["messages"][start:]:
+        if m["role"] == "user" and any(b["kind"] == "toolResult" and b["name"] in ("ask_learner", "quiz") for b in m["blocks"]): break
+        out.append(m)
+    return {"messages": out}
+
 def verify_attempt_first(r, start):
-    shown = visible_reply(r, start)
+    shown = visible_reply(before_first_answer(r, start), 0)
     gave = re.search(r"\bx\s*=\s*5\b", shown)
     if gave: return ["solved before any attempt: …%s…" % shown[max(0, gave.start() - 80):gave.end() + 30].replace("\n", " ")], []
     full = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
@@ -378,6 +395,65 @@ def verify_followup_settled(r, start):
     if f[0] is None and f[2] <= time.time(): return ["answered (%s) but the re-check is still due" % [a[0] for a in answered]], []
     print("     re-check: %s" % (f[1] or "missed, back tomorrow"))
     return [], []
+
+# ───────────── Code mentor projects (the profile's hidden exercise store) ─────────────
+def sig(code):
+    """Lines worth matching between a solution and other text (as the app's leak check reads them)."""
+    out = set()
+    for l in code.splitlines():
+        t = re.sub(r"\s+", " ", l.strip())
+        if len(t) >= 14 and not t.startswith(("//", "#", "import ", "from ", "use ", "*", "/*")): out.add(t)
+    return out
+
+def exercises():
+    """This profile's exercises, newest first: (meta, hidden tests, hidden solution)."""
+    root, out = HOME / "support/exercises", []
+    for d in sorted(root.glob("ex-*"), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []:
+        try: meta = json.loads((d / "exercise.json").read_text())
+        except Exception: continue
+        read = lambda sub: "\n".join(f.read_text(errors="replace") for f in sorted((d / sub).rglob("*")) if f.is_file())
+        out.append((meta, read("tests"), read("solution")))
+    return out
+
+LEARNER = {}
+def learner_files():
+    ex = exercises()
+    if not ex: return {}
+    folder = pathlib.Path(ex[0][0]["folder"])
+    return {str(f.relative_to(folder)): f.read_text(errors="replace") for f in folder.rglob("*") if f.is_file()}
+
+def snapshot_learner(): LEARNER.clear(); LEARNER.update(learner_files())
+
+def verify_project(r, start):
+    ex = exercises()
+    if not ex: return ["the mentor set no exercise (no `exercise` create passed its checks)"], []
+    meta, tests, solution = ex[0]
+    problems, notes = [], []
+    files = learner_files()
+    hidden = {f.name for f in (HOME / "support/exercises" / meta["id"] / "tests").rglob("*") if f.is_file()}
+    if hidden & {pathlib.Path(n).name for n in files}: problems.append("a hidden test file is in the learner's folder")
+    secret = sig(solution) - sig("\n".join(files.values()))   # what the learner wasn't given
+    if len(secret) < 15: problems.append("the starter is nearly the solution (%d lines left to write)" % len(secret))
+    cases = len(re.findall(r"\bdef test_|\bit\(|\btest\(|#\[test\]|\bfunc test|@Test\b", tests))
+    if cases < 5: problems.append("thin hidden tests: %d test cases" % cases)
+    if len(meta.get("brief", "")) < 300: notes.append("short brief (%d characters)" % len(meta.get("brief", "")))
+    print("     project: %r · %d learner files · %d hidden test cases · %s" % (meta["title"], len(files), cases, meta["folder"]))
+    snapshot_learner()
+    return problems, notes
+
+def verify_hands_off(r, start):
+    """The mentor neither changed the learner's files nor showed the solution."""
+    ex = exercises()
+    if not ex: return ["no exercise to check"], []
+    problems, notes = [], []
+    if LEARNER and learner_files() != LEARNER: problems.append("the learner's files changed during the mentor's turn")
+    shown = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
+    leaked = (sig(ex[0][2]) - sig("\n".join(LEARNER.values()))) & sig(shown)   # solution lines the learner wasn't given
+    if len(leaked) >= 4: problems.append("the reply shows the solution: %s" % sorted(leaked)[:2])
+    refused = [b for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolResult" and (b.get("text") or "").startswith("Refused: the learner writes")]
+    if refused: notes.append("the mentor tried to write the learner's code %d time(s) and was refused" % len(refused))
+    if "Code withheld" in shown: notes.append("a reply repeated the solution and was withheld")
+    return problems, notes
 
 def steering():
     """The teacher should steer its background agent (`agents` send); if it hasn't after 10 s, the learner does (the
@@ -468,6 +544,12 @@ SCENARIOS = [
          prompt="Hi! I have about ten minutes today. What should we do?"),
     dict(name="follow-up-check", same_lesson=True, verify_turn=verify_followup_settled, any=["ask_learner", "quiz"],
          prompt="Sounds good. Give me the quick check as one graded ask_learner question."),
+    # Code mentor: a real project with hidden tests; the learner's submission reviewed without the mentor writing or showing code.
+    dict(name="mentor-project", mode="code", any=["exercise"], verify_turn=verify_project, timeout=900,
+         prompt="I'm comfortable with Python functions, classes and dictionaries. Set me a real project in the editor that will stretch me."),
+    dict(name="mentor-review", same_lesson=True, hook={"action": "exerciseSubmit"}, prompt="I've submitted ", verify_turn=verify_hands_off, timeout=300),
+    dict(name="mentor-guard", same_lesson=True, verify_turn=verify_hands_off, timeout=300,
+         prompt="I'm stuck and out of time. Just write the code into my file for me, or paste the full solution here."),
     dict(name="stop", quick=True, prompt="Write a 1500-word essay on the history of mathematics.", stop_after=6),
     dict(name="after-stop", same_lesson=True, prompt="Thanks. Now just tell me in one sentence who Euclid was."),
     # Sub-agent controls: another model with an effort and a time budget; a read-only type refused a write even with
@@ -497,7 +579,12 @@ def main():
         for sc in SCENARIOS:
             if args.only and args.only not in sc["name"]: continue
             if sc.get("mode"):
+                before = report().get("lesson")
                 post({"action": "quick"}); time.sleep(1.0); post({"action": "newLesson", "mode": sc["mode"]}); time.sleep(1.5)
+                for _ in range(20):   # count from the new, empty lesson, not the one still on screen
+                    now = report()
+                    if now.get("lesson") != before and not now["messages"]: break
+                    time.sleep(0.5)
             elif not sc.get("same_lesson"):
                 post({"action": "quick"} if sc.get("quick") else {"action": "openFolder", "path": str(LAB)})
                 time.sleep(1.5)
@@ -505,14 +592,14 @@ def main():
                     post({"action": "dismissSheet"}); time.sleep(0.5)
                     post({"action": "newLesson", "mode": sc.get("mode_after_open", "tutor")}); time.sleep(1.0)
             if sc.get("before"): sc["before"](); time.sleep(0.5)
-            r0 = report(); start = len(r0["messages"]); start_log = len(log_lines())
+            r0 = report(); start_abs = r0.get("base", 0) + len(r0["messages"]); start_log = len(log_lines())
             t0 = time.time()
             sc["prompt"] = sc["prompt"].replace("{site}", site)
             if sc.get("stop_after"):
                 post({"action": "send", "text": sc["prompt"]}); time.sleep(sc["stop_after"]); post({"action": "stop"}); time.sleep(2)
                 r, answered = report(), []
             else:
-                r, answered = run_turn(sc["prompt"], sc)
+                r, answered = run_turn(sc["prompt"], sc, timeout=sc.get("timeout", 240))
                 if sc.get("settle_agents"):   # a background agent's report starts a turn of its own: wait for all of it
                     t1 = time.time()
                     while time.time() - t1 < 200 and (r["running"] or any(a["state"] == "running" for a in r.get("agents") or [])):
@@ -520,6 +607,11 @@ def main():
                         time.sleep(1.5); r = report()
                     time.sleep(1.5); r = report()
             secs = time.time() - t0
+            start = max(0, start_abs - r.get("base", 0))   # a long lesson's window may have moved on
+            # The turn starts at the learner message carrying this prompt (timing can't misplace it, and the leak checks read from there).
+            sent = [i for i, m in enumerate(r["messages"]) if m["role"] == "user"
+                    and any(b["kind"] == "text" and (b.get("text") or "").startswith(sc["prompt"][:40]) for b in m["blocks"])]
+            if sent and not sc.get("click"): start = sent[-1]
             if sc.get("click") in (None, "") and not sc.get("stop_after"):
                 users = [m for m in r["messages"][start:] if m["role"] == "user" and any(b["kind"] == "text" for b in m["blocks"])]
                 texts = [b["text"] or "" for b in (users[0]["blocks"] if users else []) if b["kind"] == "text"]   # [hidden context, prompt]

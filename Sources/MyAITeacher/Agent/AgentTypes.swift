@@ -70,8 +70,11 @@ enum AgentCatalog {
     static let general = research + ["write", "edit", "bash", "run_code", "task", "agents"]
 
     private static let reportRules = """
-    Don't ask questions: make reasonable assumptions and note them. End with a concise, well-organised report \
-    (Markdown, LaTeX for math) — it is all the caller sees of your work.
+    Work at full depth: plan first, go to primary sources and the actual code, cross-check claims, verify results with your \
+    tools, and look for edge cases and counterexamples before concluding. No superficial answers, placeholders or toy \
+    examples; be specific and quantitative, and say what you couldn't verify. Don't ask questions: make reasonable \
+    assumptions and note them. End with a concise, well-organised report (Markdown, LaTeX for math) — it is all the caller \
+    sees of your work.
     """
 
     static let builtIns: [AgentDefinition] = [
@@ -205,7 +208,7 @@ struct SubAgentSettings: Codable, Sendable, Equatable {
     var maxConcurrent = 4
     /// The teacher's sub-agents are depth 1, theirs 2…
     var maxDepth = 2
-    var effort: ThinkingLevel = .off
+    var effort: ThinkingLevel = .high
     /// Any configured provider with a key, not only the lesson's.
     var otherProviders = true
     /// On other providers, models not known to be free too (a free lesson always delegates to free models only).

@@ -303,6 +303,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let client = provider.client(apiKey: key)
         if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
         var steps = 0
+        var limitContinues = 0
         while !Task.isCancelled && steps < settings.maxToolTurns {
             steps += 1
             await compactIfNeeded(client: client)
@@ -353,7 +354,11 @@ final class ChatSession: ObservableObject, Identifiable {
             }
             if Task.isCancelled && assistant.blocks.isEmpty { assistant.error = "Stopped." }
             assistant.blocks.removeAll { $0.kind == .toolUse && $0.meta?["pending"]?.bool == true }
-            if step.finishReason == "max_tokens" { assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*")) }
+            // Cut off at the output limit without asking for a tool (often a long plan, or one huge tool call that never
+            // finished): carry on by itself, twice at most, before handing it to the learner.
+            let cutOff = step.finishReason == "max_tokens" && assistant.toolUses.isEmpty && !Task.isCancelled && assistant.error == nil
+            let carryOn = cutOff && limitContinues < 2
+            if step.finishReason == "max_tokens" && !carryOn { assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*")) }
             step.toolCalls = assistant.toolUses.count
             assistant.metrics = step
             assistant.usage = step.usage
@@ -361,12 +366,24 @@ final class ChatSession: ObservableObject, Identifiable {
             turn.usage = turn.usage + step.usage
             turn.generationSeconds += max(0, step.duration - (step.timeToFirstToken ?? 0))
             if turn.timeToFirstToken == nil, let t = step.timeToFirstToken { turn.timeToFirstToken = Date().timeIntervalSince(turn.startedAt) - step.duration + t }
+            host.willStoreReply(&assistant, self)
             messages[idx] = assistant
             persist(idx)
             sink?.upsert(assistant)
             conversation.usage = Usage(input: step.usage.promptTotal, output: (conversation.usage?.output ?? 0) + step.usage.output)
             if assistant.error != nil { break }
             let calls = assistant.toolUses
+            if calls.isEmpty, carryOn {
+                limitContinues += 1
+                append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: """
+                    <context>
+                    Your last reply hit the output limit before you finished. Continue from where you stopped, without repeating \
+                    yourself. Do large work in several smaller steps: think less before acting, and split big tool calls (one with \
+                    a whole project, say) into several calls.
+                    </context>
+                    """, meta: ["hidden": true])]))
+                continue
+            }
             if calls.isEmpty {
                 // A background report arrived during this step: read it before ending the turn.
                 if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
@@ -546,6 +563,10 @@ final class ChatSession: ObservableObject, Identifiable {
         var ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
+        if conversation.mode == .code {
+            ctx.scratch = FileManager.default.temporaryDirectory.appendingPathComponent("teacher-mentor-\(id.prefix(8))", isDirectory: true)
+            ctx.readOnly = [services.workspace.url, AppPaths.workspace] + ExerciseStore.list(conversationID: id).map(\.dir)
+        }
         let t0 = Date()
         var result: Block
         do {
@@ -717,7 +738,8 @@ final class ChatSession: ObservableObject, Identifiable {
             }
         }
         guard let m = info?.maxOutput, m > 0 else { return fallback }
-        return min(m, max(fallback, 16_384))
+        // Room for real work: a whole project (starter, tests, solution) or a long derivation in one reply.
+        return min(m, max(fallback, 32_768))
     }
 
     nonisolated static func isTransient(_ error: Error) -> Bool {

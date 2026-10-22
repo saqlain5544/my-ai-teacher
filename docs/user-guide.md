@@ -135,6 +135,33 @@ How help and certainty affect your record:
 * **Missed practice goes to the teacher.** On self-check practice cards, once you've marked them all and missed any,
   the result goes to the teacher without you pressing anything.
 
+## Code mentor projects
+
+In **Code mentor** mode, ask for a project ("I know Python classes; stretch me").
+
+* **Setting it up.** The mentor writes a brief, a starter project, hidden tests and a hidden reference solution. The app
+  only hands the project over once it has proved two things: the reference passes the tests, and the starter fails them.
+  A broken or trivial exercise goes back to the mentor.
+* **Your project** appears in `exercises/<name>/` in the lesson's folder (quick questions use `~/AI Teacher Workspace`).
+  It holds the starter files and `BRIEF.md`. The hidden tests and solution live in the app's own data, never in your
+  folder.
+* **The editor** opens in the right panel's **Exercise** tab; the pop-out button gives it its own window. You get a file
+  list (+ to add, double-click to rename, × to delete), and every edit is saved as you type.
+  * **Run** (⌘R) runs the program.
+  * **Test** (⌘↩) runs the hidden tests and shows only their output.
+  * **Submit** (⇧⌘↩) runs the tests and sends your files and the results to the mentor.
+* **The sandbox.** Your code runs on your Mac under macOS's sandbox: no network access, writes only inside a temporary
+  run folder (and your project when you Run), and no access to the app's data, SSH keys or other credential stores. API
+  keys are removed from its environment, and a run is stopped after a time limit.
+* **The review** is free-form, like a senior engineer's: correctness, design, edge cases, naming and complexity, pointing
+  at your lines.
+* **What the mentor can't do.**
+  * It can't change your files: its write, edit and shell-write calls on your project are refused.
+  * It never shows the solution: a reply whose code repeats the hidden solution is withheld before you see it.
+  * It teaches with questions, hints and concepts instead.
+* **Mastery.** Passing the tests counts as unaided practice on the project's concept. When you pass, the next project
+  is harder.
+
 ## Practice tools
 
 * **Quizzes and forms** come in 13 question types, graded instantly where possible:

@@ -659,12 +659,14 @@
     const imgs = m.blocks.filter(b => b.kind === 'image'), files = m.blocks.filter(b => b.kind === 'file');
     const text = visibleText(m);
     let html = '';
+    // Only hidden context (the app nudging the model on): nothing to show, not even an empty row with Edit and Copy.
+    el.hidden = !text && !imgs.length && !files.length;
     if (imgs.length || files.length) {
       html += '<div class="attachments">' + imgs.map(imageSrc).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
         files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
-    html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button></div>';
+    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button></div>';
     setHTML(el, html);
   }
 
@@ -748,6 +750,12 @@
     return !S.running;
   }
 
+  /** Thinking cut off inside a code block (an output limit) would render the rest as prose, its regex as broken math. */
+  function closedFences(text) {
+    text = text || '';
+    return (text.match(/^\s*```/gm) || []).length % 2 ? text + '\n```' : text;
+  }
+
   function renderThinking(node, b, live) {
     node.className = '';
     let d = node.querySelector('details');
@@ -758,7 +766,7 @@
         if (d._prog) { d._prog = false; return; }
         d._user = true;
         const body = d.querySelector('.thinking-body');
-        if (d.open && d._b && body._src !== d._b.text) { morph(body, markdown(d._b.text || '', false)); body._src = d._b.text; }
+        if (d.open && d._b && body._src !== d._b.text) { morph(body, markdown(closedFences(d._b.text), false)); body._src = d._b.text; }
       });
     }
     const setOpen = v => { if (d.open !== v) { d._prog = true; d.open = v; } };
@@ -769,7 +777,7 @@
     d.querySelector('summary').textContent = live ? 'Thinking…' : 'Thought process · ' + words + ' words';
     const body = d.querySelector('.thinking-body');
     if (body._src !== b.text && d.open) {
-      morph(body, markdown(b.text || '', live)); body._src = b.text;
+      morph(body, markdown(closedFences(b.text), live)); body._src = b.text;
       if (live) body.scrollTop = body.scrollHeight;
     }
   }

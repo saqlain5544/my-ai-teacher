@@ -50,6 +50,13 @@ enum DebugHooks {
             let q = cmd["query"]?.string ?? ""
             let out = ModelPickerPopover.sections(q, providers: app.availableProviders, models: app.modelList, names: { p, m in app.modelMeta[p]?[m]?.name })
             AppLog.write("picker \"\(q)\": " + out.prefix(4).map { "\($0.provider.id)[\($0.models.prefix(3).joined(separator: ", "))]" }.joined(separator: " · "))
+        case "exerciseSubmit":   // {"action":"exerciseSubmit","id":"ex-…"} (or the newest): what the editor's Submit does
+            let id = cmd["id"]?.string ?? ExerciseStore.list().first?.id
+            Task { @MainActor in
+                var r: Sandbox.Result?
+                if let id { r = await ExerciseActions.submit(id) }
+                AppLog.write("exercise submit \(id ?? "none"): \(r.map { $0.passed ? "pass" : "fail (exit \($0.exitCode))" } ?? "no exercise")")
+            }
         case "shed":   // what memory pressure does: every rebuildable cache goes (the log says how much was freed)
             MemoryGovernor.shared.shed(critical: cmd["critical"]?.bool == true, reason: "debug")
         case "send":
@@ -176,6 +183,7 @@ enum DebugHooks {
         var out: [String: JSON] = [
             "running": .bool(session?.isRunning ?? false), "status": clip(session?.status, 200), "error": clip(session?.errorMessage, 400),
             "lesson": clip(session?.id, 60), "folder": .string(app.workspace.url.path), "messages": .array(msgs),
+            "base": .number(Double(session?.base ?? 0)),   // messages before the in-memory window (long lessons trim it)
             "pending": .array(app.interactions.pending.values.map { .object(["id": .string($0.id), "kind": .string($0.kind), "payload": $0.payload,
                                                                                  "lesson": .string($0.conversationID)]) }),
             "agents": .array(SubAgentCenter.shared.runs(in: session?.id).map(\.debugJSON)), "runtime": Runtime.metrics.json,

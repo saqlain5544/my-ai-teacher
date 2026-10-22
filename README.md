@@ -38,6 +38,15 @@ The [user guide](docs/user-guide.md) covers everything in detail.
 
 ## What makes it different
 
+### No toy lessons
+Every mode follows one depth standard:
+* examples and problems come from real practice (real systems, data, papers and failure modes), never "Alice has 3
+  apples" or hello-world;
+* teaching is pitched at the frontier of what you can do, and gets harder as you succeed;
+* models plan, solve and verify with tools before they answer.
+
+Reasoning effort defaults to high for lessons and sub-agents.
+
 ### Teaching that makes you think
 AI tutors that hand out answers raise practice scores and lower exam scores ([Bastani et al., PNAS 2025](https://www.pnas.org/doi/10.1073/pnas.2422633122)).
 Tutors that make students attempt and explain show large gains. So My AI Teacher is **attempt first** in every mode:
@@ -70,6 +79,21 @@ A learner model rather than a chat log:
 
 You can see and edit all of it in **Memory**. **Progress** shows your activity, mastery, a confidence check (how often
 you're right when you're sure) and what's coming back for review.
+
+### A code mentor that never writes your code
+In **Code mentor** mode you learn by building real software, not toy snippets.
+
+* **The project.** The mentor sets a multi-file project in your folder (`exercises/<name>/`). It might be a CLI tool, a
+  parser, a cache or a data pipeline, always at the edge of what you can do.
+* **The editor.** Work in CodeMirror, in the right panel or its own window: Run, Test and Submit.
+* **Hidden tests.** They're checked against the mentor's own hidden reference solution before you see the project. You
+  only ever see what the tests print.
+* **The sandbox.** Your code runs on your Mac, with no network, writes only inside a temporary run folder, and no access
+  to the app's data.
+* **The review.** Submitting sends your work to the mentor, who reviews it like a demanding senior engineer: free-form,
+  pointing at your lines, with questions and hints.
+* **No writing, no revealing.** The mentor can't write to your project, and any reply that repeats the solution is
+  withheld.
 
 ### A coding agent too
 **Code sessions** work in a folder, much like Claude Code:

@@ -538,3 +538,13 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .pb-answer { margin-bottom: 4px; }
 .pb-hint[hidden], .pb-solution[hidden], .pb-sent[hidden], .problem .nudge[hidden], .problem .btn[hidden] { display: none; }
 .steps-more { margin-top: 4px; }
+
+/* Exercise (code project) card */
+.exercise-card { border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
+.ex-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: var(--accent-soft); }
+.ex-title { font-weight: 650; }
+.ex-lang { font-family: var(--mono); font-size: 0.8em; color: var(--muted); }
+.ex-body { padding: 8px 14px; }
+.ex-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; }
+.ex-folder { font-family: var(--mono); font-size: 0.8em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.exercise-line { color: var(--muted); font-size: 0.9em; padding: 2px 0; }

@@ -33,7 +33,7 @@ struct ChatView: View {
         }
         .inspector(isPresented: $app.inspectorShown) {
             InspectorPanel(session: session)
-                .inspectorColumnWidth(min: 260, ideal: 340, max: 640)
+                .inspectorColumnWidth(min: 260, ideal: 340, max: 1100)   // wide enough to write code in
                 .toolbar {
                     Spacer()
                     Button { app.inspectorShown.toggle() } label: { Label("Files", systemImage: "sidebar.right") }.help("Files and pages")

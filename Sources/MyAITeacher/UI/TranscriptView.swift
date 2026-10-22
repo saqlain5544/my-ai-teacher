@@ -123,7 +123,8 @@ struct TranscriptView: NSViewRepresentable {
         // MARK: TranscriptSink
         func reset(_ messages: [ChatMessage], conversation: Conversation) {
             pendingDeltas.removeAll()
-            var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
+            // A code mentor plans its hidden reference solution while it thinks: the learner never sees that thinking.
+            var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking && conversation.mode != .code)]
             if messages.isEmpty && (session?.base ?? 0) == 0 { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }
@@ -331,6 +332,8 @@ struct TranscriptView: NSViewRepresentable {
                 if let id = j["id"]?.string, let t = j["text"]?.string { session?.edit(messageID: id, newText: t) }
             case "suggest":
                 if let t = j["text"]?.string { session?.send(t) }
+            case "openExercise":
+                if let id = j["id"]?.string, !id.isEmpty { app.showExercise(id) }
             case "study":
                 // A hint or solution opened on a ```problem: logged as help; a solution seen without an attempt also goes to
                 // the tutor with the learner's next message.

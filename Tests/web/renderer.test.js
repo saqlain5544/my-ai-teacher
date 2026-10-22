@@ -920,6 +920,43 @@
     T.interaction({ id: 'qh1' }, false); T.status('', false);
   });
 
+  test('exercise card: the brief and an editor button, never the hidden tests or solution', () => {
+    const input = { action: 'create', title: 'LRU cache', language: 'python', brief: 'Implement an **LRU cache** with O(1) `get` and `put`.',
+      files: { 'lru.py': 'class LRU: ...' }, tests: { 'test_lru.py': 'SECRET_TEST_ASSERTION' }, solution: { 'lru.py': 'SECRET_SOLUTION_CODE' }, test: 'python3 -m unittest' };
+    const a = A([{ kind: 'toolUse', id: 'ex1', name: 'exercise', input }]);
+    T.reset([U('set me a project'), a, R('ex1', 'exercise', 'Exercise ex-1 is open', { meta: { exercise: 'ex-1', title: 'LRU cache', folder: '/x/exercises/lru-cache' } })], {});
+    const card = $('[data-tool-id="ex1"]'); noErrors(card, 'exercise');
+    ok($('.exercise-card', card) && $('.exercise-card strong', card), 'brief rendered');
+    const html = document.body.innerHTML;
+    ok(!html.includes('SECRET_TEST_ASSERTION') && !html.includes('SECRET_SOLUTION_CODE'), 'hidden inputs never reach the page');
+    posts.length = 0; click($('[data-act="ex-open"]', card));
+    eq(lastPost('openExercise'), { type: 'openExercise', id: 'ex-1' });
+    // A setup that failed its own checks shows no output (it can quote the tests).
+    const b = A([{ kind: 'toolUse', id: 'ex2', name: 'exercise', input }]);
+    T.reset([U('q'), b, R('ex2', 'exercise', 'Your reference solution fails: AssertionError SECRET_TEST_ASSERTION', { isError: true })], {});
+    ok(!document.body.innerHTML.includes('SECRET_TEST_ASSERTION'), 'failed setup output hidden');
+    // Built in steps: adding hidden files shows a line, never the files; publishing shows the project from the result.
+    const c = A([{ kind: 'toolUse', id: 'ex3', name: 'exercise', input: { action: 'add', id: 'ex-2', part: 'solution', files: { 'a.py': 'SECRET_SOLUTION_CODE' } } },
+      { kind: 'toolUse', id: 'ex4', name: 'exercise', input: { action: 'publish', id: 'ex-2' } }]);
+    T.reset([U('q'), c, R('ex3', 'exercise', 'Added 1 file(s)'), R('ex4', 'exercise', 'open', { meta: { exercise: 'ex-2', title: 'Rate limiter', brief: 'A *token bucket*', folder: '/x' } })], {});
+    ok(!document.body.innerHTML.includes('SECRET_SOLUTION_CODE'), 'added hidden files never shown');
+    ok($('[data-tool-id="ex4"] .exercise-card em') && $('[data-tool-id="ex4"]').textContent.includes('Rate limiter'), 'published project card');
+  });
+
+  test('a user message of hidden context alone shows nothing', () => {
+    const hidden = { id: 'u-h', role: 'user', blocks: [{ kind: 'text', text: '<context>continue</context>', meta: { hidden: true } }] };
+    T.reset([U('q'), A('part one'), hidden, A('part two')], {});
+    const el = $('#m-u-h'); ok(!el || el.hidden, 'no row for it');
+    ok(!document.body.textContent.includes('<context>'), 'its text never shows');
+  });
+
+  test('thinking cut off inside a code block renders as code, not broken math', async () => {
+    const a = A([{ kind: 'thinking', text: 'Plan:\n```python\nPATTERN = re.compile(r"^\\s*v?(?P<release>\\d+(?:\\.\\d+)*)\\(x\\)' }, { kind: 'text', text: 'ok' }]);
+    T.reset([U('q'), a], { showThinking: true });
+    const d = $('#m-' + a.id + ' details.thinking'); ok(d, 'thinking shown'); d.open = true; await sleep(50);
+    noErrors($('#m-' + a.id), 'thinking'); ok($('#m-' + a.id + ' .thinking-body pre'), 'rendered as a code block');
+  });
+
   test('quiz review names the misconception and a confident miss', () => {
     const a = A([{ kind: 'toolUse', id: 'qz3', name: 'quiz', input: { questions: [{ type: 'single_choice', prompt: 'x^2·x^3', options: ['x^6', 'x^5'] }] } }]);
     const graded = [{ correct: false, given: 0, answer: 1, misconception: 'multiplies the exponents', certainty: 3, hints: 0 }];

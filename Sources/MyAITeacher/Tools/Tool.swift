@@ -37,6 +37,11 @@ struct ToolContext: Sendable {
     var subAgentModels: [String] = []
     /// Other providers, limits and the lesson's grants for sub-agents; nil runs them on the lesson's client with defaults.
     var agentHost: AgentHost? = nil
+    /// Where the teacher's own code runs instead of the lesson folder (code mentor lessons: nothing the mentor tries out,
+    /// a reference solution least of all, lands where the learner can open it).
+    var scratch: URL? = nil
+    /// Folders the teacher's code may never write (with `scratch`): the lesson folder and the learner's exercise projects.
+    var readOnly: [URL] = []
     /// 0 for the teacher; n inside a sub-agent n levels down.
     var agentDepth = 0
     /// Inside a sub-agent: what its own sub-agents may not exceed.

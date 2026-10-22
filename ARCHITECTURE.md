@@ -250,6 +250,42 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
   was shown and archives instead of deleting; concepts fold only with the same words or a trailing qualifier;
   prerequisites stay acyclic; the concept index updates incrementally.
 
+## Code mentor exercises
+* `exercise` tool (core in Code mentor, deferred elsewhere).
+  * `create` takes a brief, starter files, hidden tests, a hidden reference solution and a test command.
+  * It first proves the exercise in scratch folders: the tests must pass on starter plus solution, and fail on the
+    starter alone. A failure goes back to the model with the output.
+  * The starter (plus `BRIEF.md`) goes to `<folder>/exercises/<slug>/`. The tests and solution go to
+    `support/exercises/<id>/`.
+  * `read` returns the learner's files and last output; `check` runs the hidden tests on their current work.
+* `Sandbox` is `sandbox-exec` with an allow-default profile:
+  * no network (unix sockets aside);
+  * writes only in the run folder, `/private/var/folders`, `/private/tmp` and build caches;
+  * no reads of the app's support folder (keys, hidden tests, solutions) or credential stores;
+  * API keys stripped from the environment, a timeout, and capped output.
+
+  Paths go through `realpath`: Foundation's symlink resolution drops `/private`, and Seatbelt would never match.
+* Tests run in a scratch copy of the learner's project, with the hidden tests merged in. The tests never land in the
+  learner's folder, and only the test command's output comes back.
+* The editor is CodeMirror 6, bundled once from `web-src/editor` (`npm ci && npm run build`) into `vendor/codemirror.js`
+  (~940 KB, loaded only by `editor.html`). It runs in the inspector's Exercise tab or the "exercise" window. Edits save as
+  the learner types, and Submit (`ExerciseActions`) sends the files and test output to the lesson as hidden context.
+* `ExerciseExtension`, registered first so its refusals beat approval prompts:
+  * it refuses the teacher's `write`, `edit` and shell writes into an exercise folder;
+  * through the `willStoreReply` hook, it withholds any fenced code block that repeats four or more of the hidden
+    solution's signature lines (or most of a short block) before the reply is stored.
+* The exercise card never renders the call's tests or solution, or a failed setup's output, which can quote them.
+
+## Depth standard
+Every teaching prompt carries the same standard:
+* no toy or textbook-filler examples: real systems, data, papers and failure modes;
+* teaching pitched at the frontier, getting harder after successes;
+* solve and verify with tools before teaching;
+* specific and quantitative.
+
+Sub-agents' report rules ask for full-depth, verified work, and the code agent for production-grade changes. Reasoning
+effort defaults to high for lessons and sub-agents; the live harness still runs with thinking off.
+
 ## Learning first
 Two kinds of default came out of the AI-tutor trials. Answers on demand helped practice and hurt exams (Bastani, PNAS 2025);
 help the learner had to ask for went unused. So these are app behaviour, not just prompt text:
