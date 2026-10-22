@@ -46,7 +46,7 @@ enum ProviderCatalog {
         ProviderConfig(id: "opencode-go", name: "OpenCode Go", api: .openai, baseURL: "https://opencode.ai/inference/go/openai/v1",
                        envKeys: ["OPENCODE_API_KEY"], defaultModel: "deepseek-v4.1-flash", headers: ["User-Agent": "my-ai-teacher/1.0"],
                        suggestedModels: ["deepseek-v4.1-flash", "deepseek-v4-pro", "glm-5.3", "kimi-k3", "qwen3.8-max", "minimax-m3.1-flash-free"],
-                       quirks: [.reasoningEffort, .reasoningContentBack],
+                       quirks: [.reasoningEffort, .reasoningContentBack, .deepseekThinking],
                        note: "OpenCode's Go subscription: DeepSeek, GLM, Kimi, Qwen, MiniMax, MiMo and more with one key (the same as Zen), plus free models.",
                        sessionHeader: "x-opencode-session", modelsDev: "opencode-go",
                        apiBases: [APIKind.anthropic.rawValue: "https://opencode.ai/inference/go/anthropic/v1",

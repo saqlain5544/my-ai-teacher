@@ -190,7 +190,8 @@ struct OpenAIClient: LLMClient {
             body["chat_template_kwargs"] = .object([key: false])
         }
         // DeepSeek thinks unless told not to (default effort high); it maps medium/xhigh to its own low/high/max.
-        if q.contains(.deepseekThinking) { body["thinking"] = ["type": r.thinking == .off ? "disabled" : "enabled"] }
+        // DeepSeek V4's own switch, for DeepSeek models only (a gateway like OpenCode Go serves models that refuse it).
+        if q.contains(.deepseekThinking), r.model.lowercased().contains("deepseek") { body["thinking"] = ["type": r.thinking == .off ? "disabled" : "enabled"] }
         if r.thinking != .off {
             if q.contains(.reasoningEffort) || q.contains(.deepseekThinking) { body["reasoning_effort"] = .string(r.thinking.rawValue) }
             if q.contains(.openrouterReasoning) { body["reasoning"] = ["effort": .string(r.thinking.rawValue)] }

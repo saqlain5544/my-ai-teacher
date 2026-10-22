@@ -65,7 +65,15 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   Give it a base URL, an optional key variable and a default model.
 * **Choosing a model.** The model picker in the toolbar lists each provider's live catalogue. Search is forgiving: word order
   doesn't matter and typos are fine ("deepseek nvidia", "nvdia deepsek", "sonet 5.5"), but version numbers must match.
-* **Thinking.** The lightbulb in the toolbar sets reasoning effort for the lesson. **Settings › General › Show the
+* **Context.** Automatic by default: a lesson keeps up to half the model's window (at most 400k tokens) before older
+  tool output is trimmed and earlier parts are summarised. You can set a fixed budget in Settings › General.
+* **Plan and check substantial answers** (Settings › General, on by default).
+  * A substantial request gets a hidden plan first: what you need, an outline, what to verify with tools, what to research.
+  * A reviewer reads the reply before you do. If it finds a real problem (an error, an unchecked claim, a toy example, a
+    solution you should have attempted), the teacher revises it.
+  * The first draft stays in the transcript, collapsed; click it to see it and the review's notes.
+* **Thinking.** The lightbulb in the toolbar sets reasoning effort for the lesson; **Max** is used where the model takes it
+  (DeepSeek V4, Claude) and means High elsewhere. **Settings › General › Show the
   model's thinking** reveals it in the transcript.
 
 ## Lessons
@@ -145,6 +153,12 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
 * **Your project** appears in `exercises/<name>/` in the lesson's folder (quick questions use `~/AI Teacher Workspace`).
   It holds the starter files and `BRIEF.md`. The hidden tests and solution live in the app's own data, never in your
   folder.
+* **Lessons come first.** The mentor designs each lesson before teaching it: the real system, the concepts with
+  analogies, research in the real docs and source, and two to four working examples it runs first. A full lesson with
+  its exercises can take several minutes on a fast model, and longer on free ones.
+* **Your own editor.** **Open in Helix** on the exercise card (or the terminal button in the Exercise tab) opens the
+  project in Helix, in Ghostty, Alacritty or Terminal. Save your files, then press **Check my work**, or tell the mentor
+  "check my exercise". The hidden tests run on what you saved and the mentor reviews it.
 * **The editor** opens in the right panel's **Exercise** tab; the pop-out button gives it its own window. You get a file
   list (+ to add, double-click to rename, × to delete), and every edit is saved as you type.
   * **Run** (⌘R) runs the program.

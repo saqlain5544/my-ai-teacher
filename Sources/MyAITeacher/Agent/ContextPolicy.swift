@@ -188,7 +188,11 @@ enum ContextPolicy {
     }
 
     /// Effective budget: the setting, capped at half the model's context window when known.
+    /// Automatic (0): half the model's window, up to 400k: a 1M-token model reasons over the lesson itself, not a summary
+    /// of it once a lesson passes a fixed 48k (prompt caching keeps the long prefix cheap). Unknown window: 64k.
+    static let automaticCap = 400_000, automaticFallback = 64_000
     static func budget(setting: Int, contextWindow: Int?) -> Int {
+        guard setting > 0 else { return contextWindow.map { $0 > 0 ? min($0 / 2, automaticCap) : automaticFallback } ?? automaticFallback }
         guard let w = contextWindow, w > 0 else { return setting }
         return min(setting, w / 2)
     }

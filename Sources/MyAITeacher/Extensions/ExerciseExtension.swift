@@ -24,7 +24,7 @@ final class ExerciseExtension: AgentExtension {
         """
 
     static let buildInDraft = """
-        Not now: you've run code three times without setting the project. Write it straight into an exercise draft \
+        Not now: you've run code twenty times without setting the project. Write it straight into an exercise draft \
         (action draft, then add the starter, tests and solution, then publish): publish runs your tests on your solution and on \
         the starter, and shows you any failure to fix. Building and checking it here first doubles the learner's wait.
         """
@@ -34,7 +34,7 @@ final class ExerciseExtension: AgentExtension {
         // A code mentor sets projects through `exercise`; prototyping one in run_code first keeps the learner waiting.
         if session.conversation.mode == .code, tool.name == "run_code", exercises(session.id).isEmpty {
             let n = runsSinceExercise[session.id, default: 0]
-            if n >= 3 { return .deny(Self.buildInDraft) }
+            if n >= 20 { return .deny(Self.buildInDraft) }
             runsSinceExercise[session.id] = n + 1
         }
         let folders = exercises(session.id).map { $0.dir.standardizedFileURL.path }

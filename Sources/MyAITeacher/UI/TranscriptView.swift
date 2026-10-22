@@ -332,6 +332,14 @@ struct TranscriptView: NSViewRepresentable {
                 if let id = j["id"]?.string, let t = j["text"]?.string { session?.edit(messageID: id, newText: t) }
             case "suggest":
                 if let t = j["text"]?.string { session?.send(t) }
+            case "openHelix":
+                guard let id = j["id"]?.string, let e = ExerciseStore.load(id) else { return }
+                Task { @MainActor in if let problem = await ExternalEditor.openHelix(e.dir) { self.run("T.notice(\(JSON.string(problem).compact))") } }
+            case "checkExercise":
+                // Helix (or any editor) saved the files: the hidden tests run on them, and the result goes to the teacher.
+                guard let id = j["id"]?.string else { return }
+                if let s = session, s.isRunning { run("T.notice('Your teacher is still replying. Check again when it\u{2019}s done.')"); return }
+                Task { @MainActor in _ = await ExerciseActions.submit(id) }
             case "openExercise":
                 if let id = j["id"]?.string, !id.isEmpty { app.showExercise(id) }
             case "study":

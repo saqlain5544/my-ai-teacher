@@ -22,9 +22,13 @@
     else {
       h += (brief ? '<div class="ex-body md">' + ctx.md(brief) + '</div>' : '') +
         '<div class="ex-foot"><span class="ex-folder">' + ctx.esc(meta.folder || '') + '</span>' +
-        '<button class="btn primary" data-act="ex-open" data-id="' + ctx.esc(meta.exercise || '') + '">Open in editor</button></div>';
+        '<span class="ex-actions"><button class="btn" data-act="ex-helix" data-id="' + ctx.esc(meta.exercise || '') + '" title="Open the project in Helix, in your terminal">Open in Helix</button>' +
+        '<button class="btn" data-act="ex-open" data-id="' + ctx.esc(meta.exercise || '') + '">Built-in editor</button>' +
+        '<button class="btn primary" data-act="ex-check" data-id="' + ctx.esc(meta.exercise || '') + '" title="Run the hidden tests on your saved files and send them to your teacher">Check my work</button></span></div>';
     }
     return h + '</div>';
   });
   R.registerAction('ex-open', (el, e, ctx) => ctx.post({ type: 'openExercise', id: el.getAttribute('data-id') }));
+  R.registerAction('ex-helix', (el, e, ctx) => ctx.post({ type: 'openHelix', id: el.getAttribute('data-id') }));
+  R.registerAction('ex-check', (el, e, ctx) => { ctx.post({ type: 'checkExercise', id: el.getAttribute('data-id') }); ctx.flash(el, 'Checking…'); });
 })();

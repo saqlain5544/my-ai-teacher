@@ -548,3 +548,12 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .ex-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; }
 .ex-folder { font-family: var(--mono); font-size: 0.8em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .exercise-line { color: var(--muted); font-size: 0.9em; padding: 2px 0; }
+
+/* A draft revised after the self-check: collapsed, openable */
+.msg.superseded > .blocks, .msg.superseded > .msg-foot, .msg.superseded > .draft-note .draft-issues { display: none; }
+.msg.superseded.open > .blocks { display: block; opacity: 0.6; }
+.msg.superseded.open > .draft-note .draft-issues { display: block; }
+.draft-note { color: var(--muted); font-size: 0.88em; }
+.draft-issues { margin: 4px 0 8px 18px; padding: 0; }
+
+.ex-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }

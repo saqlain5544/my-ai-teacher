@@ -15,6 +15,8 @@ struct ExercisePanel: View {
                         .foregroundStyle(e.passed ? .green : .secondary)
                     Text(e.title).font(.headline).lineLimit(1)
                     Spacer()
+                    Button { Task { await ExternalEditor.openHelix(e.dir) } } label: { Image(systemName: "terminal") }
+                        .buttonStyle(.borderless).help("Open the project in Helix")
                     Button { openWindow(id: "exercise") } label: { Image(systemName: "macwindow.on.rectangle") }
                         .buttonStyle(.borderless).help("Open the editor in its own window")
                 }

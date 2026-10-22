@@ -931,6 +931,8 @@
     ok(!html.includes('SECRET_TEST_ASSERTION') && !html.includes('SECRET_SOLUTION_CODE'), 'hidden inputs never reach the page');
     posts.length = 0; click($('[data-act="ex-open"]', card));
     eq(lastPost('openExercise'), { type: 'openExercise', id: 'ex-1' });
+    posts.length = 0; click($('[data-act="ex-helix"]', card)); eq(lastPost('openHelix'), { type: 'openHelix', id: 'ex-1' });
+    click($('[data-act="ex-check"]', $('[data-tool-id="ex1"]'))); eq(lastPost('checkExercise'), { type: 'checkExercise', id: 'ex-1' });
     // A setup that failed its own checks shows no output (it can quote the tests).
     const b = A([{ kind: 'toolUse', id: 'ex2', name: 'exercise', input }]);
     T.reset([U('q'), b, R('ex2', 'exercise', 'Your reference solution fails: AssertionError SECRET_TEST_ASSERTION', { isError: true })], {});
@@ -941,6 +943,16 @@
     T.reset([U('q'), c, R('ex3', 'exercise', 'Added 1 file(s)'), R('ex4', 'exercise', 'open', { meta: { exercise: 'ex-2', title: 'Rate limiter', brief: 'A *token bucket*', folder: '/x' } })], {});
     ok(!document.body.innerHTML.includes('SECRET_SOLUTION_CODE'), 'added hidden files never shown');
     ok($('[data-tool-id="ex4"] .exercise-card em') && $('[data-tool-id="ex4"]').textContent.includes('Rate limiter'), 'published project card');
+  });
+
+  test('a draft the self-check revised is collapsed, with what the review found', () => {
+    const draft = A('The derivative of $x^2$ is $x$.', { meta: { superseded: true, reviewIssues: ['The derivative of x^2 is 2x, not x.'] } });
+    T.reset([U('q'), draft, A('The derivative of $x^2$ is $2x$.')], {});
+    const el = $('#m-' + draft.id);
+    ok(el.classList.contains('superseded') && $('.draft-note', el), 'marked as a draft');
+    ok(getComputedStyle($('.blocks', el)).display === 'none', 'collapsed');
+    click($('[data-act="draft-toggle"]', el));
+    ok(getComputedStyle($('.blocks', el)).display !== 'none' && el.textContent.includes('not x'), 'opens with the review notes');
   });
 
   test('a user message of hidden context alone shows nothing', () => {

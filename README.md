@@ -45,7 +45,13 @@ Every mode follows one depth standard:
 * teaching is pitched at the frontier of what you can do, and gets harder as you succeed;
 * models plan, solve and verify with tools before they answer.
 
-Reasoning effort defaults to high for lessons and sub-agents.
+Reasoning effort defaults to high for lessons and sub-agents, and **Max** is available where the model supports it
+(DeepSeek V4, Claude).
+* **Context grows with the model.** Lessons keep up to half the model's window, at most 400k tokens, before trimming or
+  summarising.
+* **Plan and check.** A substantial request gets a hidden plan first. The plan lists what to verify with tools and what
+  to research. A reviewer then reads the reply before you do; if it finds real problems, the reply is revised, and the
+  draft stays collapsed in the transcript.
 
 ### Teaching that makes you think
 AI tutors that hand out answers raise practice scores and lower exam scores ([Bastani et al., PNAS 2025](https://www.pnas.org/doi/10.1073/pnas.2422633122)).
@@ -82,6 +88,14 @@ you're right when you're sure) and what's coming back for review.
 
 ### A code mentor that never writes your code
 In **Code mentor** mode you learn by building real software, not toy snippets.
+
+* **Lessons designed first.** Before teaching, the mentor makes a hidden lesson design: the real system the topic comes
+  from (nginx's `limit_req`, Redis eviction, Git's object store, …), the concepts with analogies and where they break,
+  and what to read. It then reads the real docs and source, builds and runs working examples, and only then writes the
+  lesson. Every example in it has actually run.
+* **Exercises in your own editor.** Each exercise card has **Open in Helix**, which opens the project in Helix in
+  Ghostty, Alacritty or Terminal. When you're done, **Check my work** runs the hidden tests on your saved files and the
+  mentor reviews them.
 
 * **The project.** The mentor sets a multi-file project in your folder (`exercises/<name>/`). It might be a CLI tool, a
   parser, a cache or a data pipeline, always at the edge of what you can do.

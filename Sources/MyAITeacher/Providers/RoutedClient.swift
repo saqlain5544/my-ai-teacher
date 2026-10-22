@@ -136,7 +136,11 @@ enum ModelsDev {
             m.name = m.name ?? md["name"]?.string
             m.contextWindow = md["limit"]?["context"]?.int ?? m.contextWindow
             m.maxOutput = md["limit"]?["output"]?.int ?? m.maxOutput
-            if let r = md["reasoning"]?.bool { m.reasoning = r; if r, m.efforts == nil { m.efforts = ["low", "medium", "high"] } }
+            if let r = md["reasoning"]?.bool {
+                m.reasoning = r
+                // DeepSeek V4 takes reasoning_effort "max" too (measured through Go).
+                if r, m.efforts == nil { m.efforts = ["low", "medium", "high"] + (m.id.lowercased().contains("deepseek") ? ["max"] : []) }
+            }
             if let t = md["tool_call"]?.bool { m.tools = t }
             if let inputs = md["modalities"]?["input"]?.array?.compactMap(\.string) { m.vision = inputs.contains("image") }
             if let i = md["cost"]?["input"]?.double, let o = md["cost"]?["output"]?.double {

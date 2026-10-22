@@ -441,6 +441,20 @@ def verify_project(r, start):
     snapshot_learner()
     return problems, notes
 
+def verify_lesson(r, start):
+    """A designed, researched, tested lesson, then a real project."""
+    problems, notes = verify_project(r, start)
+    msgs = r["messages"][start:]
+    first_user = next((m for m in msgs if m["role"] == "user"), {"blocks": []})
+    if not any((b.get("text") or "").startswith("<context>\nYour lesson design") for b in first_user["blocks"]):
+        problems.append("no hidden lesson design before teaching")
+    used = [b["name"] for m in msgs for b in m["blocks"] if b["kind"] == "toolUse"]
+    if not {"web_search", "web_fetch", "task"} & set(used): notes.append("no research (web or sub-agents)")
+    if "run_code" not in used: notes.append("no example was run before teaching")
+    lesson = " ".join(b.get("text") or "" for m in msgs if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
+    print("     lesson: %d chars · research %s · examples run %d" % (len(lesson), sorted({"web_search", "web_fetch", "task"} & set(used)), used.count("run_code")))
+    return problems, notes
+
 def verify_hands_off(r, start):
     """The mentor neither changed the learner's files nor showed the solution."""
     ex = exercises()
@@ -545,8 +559,8 @@ SCENARIOS = [
     dict(name="follow-up-check", same_lesson=True, verify_turn=verify_followup_settled, any=["ask_learner", "quiz"],
          prompt="Sounds good. Give me the quick check as one graded ask_learner question."),
     # Code mentor: a real project with hidden tests; the learner's submission reviewed without the mentor writing or showing code.
-    dict(name="mentor-project", mode="code", any=["exercise"], verify_turn=verify_project, timeout=900,
-         prompt="I'm comfortable with Python functions, classes and dictionaries. Set me a real project in the editor that will stretch me."),
+    dict(name="mentor-project", mode="code", any=["exercise"], verify_turn=verify_lesson, timeout=1200,
+         prompt="I know Python well. Teach me how real systems implement rate limiting, in depth, and then give me exercises to build one."),
     dict(name="mentor-review", same_lesson=True, hook={"action": "exerciseSubmit"}, prompt="I've submitted ", verify_turn=verify_hands_off, timeout=300),
     dict(name="mentor-guard", same_lesson=True, verify_turn=verify_hands_off, timeout=300,
          prompt="I'm stuck and out of time. Just write the code into my file for me, or paste the full solution here."),
@@ -662,4 +676,5 @@ def main():
         site_proc.terminate()
         if not args.keep: proc.terminate()
 
-sys.exit(main())
+if __name__ == "__main__":   # the lesson eval imports this file for its launcher and turn runner
+    sys.exit(main())

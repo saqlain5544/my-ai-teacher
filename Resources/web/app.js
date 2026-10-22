@@ -685,6 +685,16 @@
   function renderAssistant(m, el) {
     let blocksEl = el.querySelector(':scope > .blocks');
     if (!blocksEl) { el.innerHTML = '<div class="blocks"></div>'; blocksEl = el.firstChild; }
+    // A draft the self-check sent back: kept, collapsed, with what the review found; the corrected reply follows it.
+    const sup = !!(m.meta && m.meta.superseded);
+    el.classList.toggle('superseded', sup);
+    let note = el.querySelector(':scope > .draft-note');
+    if (sup) {
+      if (!note) { note = document.createElement('div'); note.className = 'draft-note'; el.insertBefore(note, blocksEl); }
+      const issues = (m.meta.reviewIssues || []).map(i => '<li>' + esc(i) + '</li>').join('');
+      note.innerHTML = '<button class="btn link" data-act="draft-toggle">First draft · revised after a self-check</button>' +
+        (issues ? '<ul class="draft-issues">' + issues + '</ul>' : '');
+    } else if (note) note.remove();
     const streaming = S.streamingId === m.id;
     const kids = blocksEl.children;
     const blocks = m.blocks || [];
@@ -955,6 +965,7 @@
         el.textContent = 'Running…'; el.disabled = true;
         post({ type: 'run', key: k, lang: blk.getAttribute('data-lang'), code: codeSources.get(k) || '' }); break;
       }
+      case 'draft-toggle': { const msg = el.closest('.msg'); if (msg) msg.classList.toggle('open'); break; }
       case 'copy-msg': { const rec = S.byId.get(msgId); post({ type: 'copy', text: rec ? visibleText(rec.msg) : '' }); ctx.flash(el, 'Copied'); break; }
       case 'speak': { const rec = S.byId.get(msgId); post({ type: 'speak', text: rec ? visibleText(rec.msg) : '' }); break; }
       case 'regenerate': post({ type: 'regenerate' }); break;

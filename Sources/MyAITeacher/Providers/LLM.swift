@@ -13,9 +13,14 @@ enum APIKind: String, Codable, CaseIterable, Sendable, Identifiable {
 }
 
 enum ThinkingLevel: String, Codable, CaseIterable, Sendable, Identifiable {
-    case off, low, medium, high
+    case off, low, medium, high, max
     var id: String { rawValue }
-    var budget: Int { switch self { case .off: 0; case .low: 2048; case .medium: 8192; case .high: 24576 } }
+    var budget: Int { switch self { case .off: 0; case .low: 2048; case .medium: 8192; case .high: 24576; case .max: 32768 } }
+
+    /// What the model can take: `max` only where the model lists it (DeepSeek V4, Claude); elsewhere `high`.
+    func supported(by info: ModelInfo?) -> ThinkingLevel {
+        self == .max && !(info?.efforts?.contains("max") ?? false) ? .high : self
+    }
 }
 
 struct ToolSpec: Sendable {

@@ -304,6 +304,29 @@ final class ChatSession: ObservableObject, Identifiable {
         if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
         var steps = 0
         var limitContinues = 0
+        // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
+        let asked = messages.lastIndex { $0.role == .user && !$0.isToolResultOnly }
+        let askedText = asked.map { i in messages[i].blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") } ?? ""
+        let deep = settings.deepWork && !conversation.mode.isAgent && DeepWork.isSubstantial(askedText)
+        let modelInfo = app.modelInfo(conversation.providerID, conversation.model)
+        let lightThinking = ([.off, .low, .medium].contains(settings.thinking) ? settings.thinking : .medium).supported(by: modelInfo)
+        var plan: String?
+        var reviewed = !deep
+        if deep, let i = asked, !Task.isCancelled {
+            setStatus("Planning…")
+            var msgs = requestMessages()
+            let ask = DeepWork.planRequest(conversation.mode)
+            if msgs.last?.role == .user { msgs[msgs.count - 1].blocks.append(.text(ask)) }
+            else { msgs.append(ChatMessage(role: .user, blocks: [.text(ask)])) }
+            let rq = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "", messages: msgs, maxTokens: 4_000,
+                                thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id)
+            if let p = await DeepWork.collect(client, rq) {
+                plan = p
+                messages[i].blocks.insert(Block(kind: .text, text: DeepWork.planNote(p, mode: conversation.mode), meta: ["hidden": true, "deepPlan": true]), at: 0)
+                persist(i)
+                sink?.upsert(messages[i])
+            }
+        }
         while !Task.isCancelled && steps < settings.maxToolTurns {
             steps += 1
             await compactIfNeeded(client: client)
@@ -314,7 +337,7 @@ final class ChatSession: ObservableObject, Identifiable {
                                      messages: requestMessages(),
                                      tools: tools.map { $0.name == "task" ? taskSpec() : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
-                                     thinking: info?.reasoning == false ? .off : settings.thinking, sessionID: conversation.id)
+                                     thinking: info?.reasoning == false ? .off : settings.thinking.supported(by: info), sessionID: conversation.id)
             host.willRequest(&request, self)
             var assistant = ChatMessage(role: .assistant, blocks: [], model: conversation.model)
             var step = StepMetrics(provider: provider.id, model: conversation.model, startedAt: Date())
@@ -383,6 +406,31 @@ final class ChatSession: ObservableObject, Identifiable {
                     </context>
                     """, meta: ["hidden": true])]))
                 continue
+            }
+            if calls.isEmpty, !reviewed, !Task.isCancelled, assistant.error == nil {
+                reviewed = true
+                let reply = assistant.blocks.filter { $0.kind == .text }.compactMap(\.text).joined(separator: "\n")
+                if reply.count > 200 {
+                    setStatus("Checking the answer…")
+                    let from = asked ?? 0
+                    let input = DeepWork.reviewInput(request: askedText, plan: plan, reply: reply, evidence: DeepWork.evidence(Array(messages[min(from, messages.count)...])))
+                    let rq = LLMRequest(model: conversation.model, system: DeepWork.reviewerSystem, messages: [ChatMessage(role: .user, blocks: [.text(input)])],
+                                        maxTokens: 2_000, thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id + "-review")
+                    if let out = await DeepWork.collect(client, rq), !Task.isCancelled {
+                        let v = DeepWork.verdict(out)
+                        if v.revise {
+                            // The draft stays, collapsed; the corrected reply follows it.
+                            var meta = messages[idx].meta?.object ?? [:]
+                            meta["superseded"] = true
+                            meta["reviewIssues"] = .array(v.issues.map { .string($0) })
+                            messages[idx].meta = .object(meta)
+                            persist(idx)
+                            sink?.upsert(messages[idx])
+                            append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: DeepWork.revisionNote(v.issues), meta: ["hidden": true])]))
+                            continue
+                        }
+                    }
+                }
             }
             if calls.isEmpty {
                 // A background report arrived during this step: read it before ending the turn.

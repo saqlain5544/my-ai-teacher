@@ -581,6 +581,7 @@ enum SubAgent {
         // Effort, mapped per provider by the clients exactly as for the lesson; a model that doesn't reason gets off.
         var effort = q.effort ?? (keepPrevious ? previous?.effort : nil) ?? def.effort ?? limits.effort
         if info?.reasoning == false, effort != .off { notes.append("\(model) doesn't reason, so its effort is off."); effort = .off }
+        effort = effort.supported(by: info)
 
         // Budget: the call's, else the type's, else the defaults — within the limits.
         let asked = q.budget

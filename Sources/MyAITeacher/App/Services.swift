@@ -11,6 +11,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     var recentFolders: [WorkspaceRef] = []
     var lastFolder: String?
     var autoMemory = true
+    /// Plan → research → verify for substantial requests (`DeepWork`).
+    var deepWork = true
     var memoryProviderID: String?
     var memoryModel: String?
     var workspacePath: String = AppPaths.workspace.path   // default folder
@@ -22,7 +24,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     var learnerLevel: String = ""
     var voiceIdentifier: String?
     var speechRate: Double = 0.5
-    var compactAtTokens = 48_000   // context budget (tokens)
+    /// Context budget in tokens; 0 = automatic (half the model's window, up to 400k: `ContextPolicy.budget`).
+    var compactAtTokens = 0
     var showThinking = true
     var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
     var experiments = true              // local A/B experiments (see Experiments)
@@ -46,6 +49,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         recentFolders = (try? c.decode([WorkspaceRef].self, forKey: .recentFolders)) ?? []
         lastFolder = try? c.decode(String.self, forKey: .lastFolder)
         autoMemory = (try? c.decode(Bool.self, forKey: .autoMemory)) ?? d.autoMemory
+        deepWork = (try? c.decode(Bool.self, forKey: .deepWork)) ?? d.deepWork
         memoryProviderID = try? c.decode(String.self, forKey: .memoryProviderID)
         memoryModel = try? c.decode(String.self, forKey: .memoryModel)
         workspacePath = (try? c.decode(String.self, forKey: .workspacePath)) ?? d.workspacePath
@@ -58,7 +62,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
         let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
-        compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(max(savedBudget, 20_000), 900_000)   // migrate the old default; the stepper's range
+        // The old fixed defaults (120k, then 48k) become automatic; anything else the learner chose stays, within the stepper's range.
+        compactAtTokens = [0, 48_000, 120_000].contains(savedBudget) ? 0 : min(max(savedBudget, 20_000), 900_000)
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
         experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments

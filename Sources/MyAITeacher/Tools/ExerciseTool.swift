@@ -20,7 +20,8 @@ struct ExerciseTool: Tool {
     full reference implementation (hidden). Then action="publish" (id): the app runs your tests on your solution (must pass) \
     and on the starter (must fail), then opens the project in the learner's editor. action="create" does all of it in one \
     call for a small project. Write the project straight into the draft: don't build or test it with run_code first, \
-    publish runs the proof and shows you any failure to fix with add. action="read" (id): the learner's current files and last test output; "check" (id): run the \
+    publish runs the proof and shows you any failure to fix with add. The learner edits the files in their own editor (Helix) \
+    and asks you to check them. action="read" (id): the learner's current files and last test output; "check" (id): run the \
     hidden tests on their work; "list": this lesson's exercises.
     """
     let risk = ToolRisk.readOnly
