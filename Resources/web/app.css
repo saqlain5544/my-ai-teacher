@@ -282,6 +282,41 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .plan h4 { margin: 0 0 6px; }
 .plan .mod { padding: 3px 0; }
 .plan .obj { color: var(--muted); font-size: 0.9em; padding-left: 26px; }
+/* A lesson plan: modules as a curriculum list, never one paragraph. */
+.plan-card { display: flex; flex-direction: column; gap: 10px; font-size: 0.97em; }
+.plan-top { display: flex; flex-direction: column; gap: 6px; }
+.plan-title { font-weight: 650; font-size: 1.06em; line-height: 1.35; }
+.plan-meta { display: flex; flex-wrap: wrap; gap: 6px; }
+.plan-meta .pill.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+.plan-goal { color: var(--muted); line-height: 1.55; }
+.plan-goal b { color: var(--fg); font-weight: 600; margin-right: 5px; }
+.plan-mods { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+.plan-mod { display: flex; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+.plan-mod:first-child { border-top: 0; padding-top: 2px; }
+.plan-mark { flex: none; width: 17px; height: 17px; margin-top: 2px; border-radius: 50%; border: 1.5px solid var(--border); display: grid; place-items: center; font-size: 10px; font-weight: 700; color: var(--faint); }
+.plan-mod.plan-done .plan-mark { background: var(--good); border-color: var(--good); color: #fff; }
+.plan-mod.plan-in_progress .plan-mark { background: var(--accent); border-color: var(--accent); color: #fff; }
+.plan-mod.plan-done .plan-mtitle { color: var(--muted); }
+.plan-body { min-width: 0; }
+.plan-mtitle { font-weight: 600; line-height: 1.42; }
+.plan-n { color: var(--faint); font-variant-numeric: tabular-nums; font-weight: 500; margin-right: 7px; }
+.plan-objs { margin: 5px 0 0; padding-left: 1.05em; color: var(--muted); font-size: 0.92em; line-height: 1.45; }
+.plan-objs li { margin: 2px 0; }
+.plan-objs li::marker { color: var(--faint); }
+.board-id { color: var(--faint); font-size: 0.78em; font-weight: 700; letter-spacing: 0.03em; margin-right: 7px; font-variant-numeric: tabular-nums; }
+.board-lane-name { font-size: 0.74em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); margin-bottom: 4px; }
+.board-focus { padding: 10px 12px; border-radius: 10px; background: var(--accent-soft, rgba(79, 110, 247, 0.1)); border: 1px solid var(--accent); }
+.board-focus-title { font-weight: 650; font-size: 1.04em; line-height: 1.35; }
+.board-next { margin-top: 5px; line-height: 1.5; }
+.board-next b { font-weight: 600; margin-right: 5px; }
+.board-nonext { color: var(--muted); font-style: italic; }
+.board-evidence { color: var(--muted); font-size: 0.88em; margin-top: 4px; }
+.board-cnext, .board-after { color: var(--muted); font-size: 0.9em; line-height: 1.45; margin-top: 2px; }
+.board-after { color: var(--faint); font-size: 0.82em; }
+.board-review .plan-mark { color: var(--accent); border-color: var(--accent); }
+.board-parked summary { cursor: pointer; font-size: 0.74em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
+.board-parked-list { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: 0.94em; line-height: 1.5; }
+.board-reason { color: var(--faint); }
 
 /* Welcome */
 .welcome { text-align: center; padding: 9vh 10px 20px; }

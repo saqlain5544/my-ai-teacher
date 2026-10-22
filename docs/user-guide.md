@@ -188,8 +188,13 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
 * **Flashcards** (⌥⌘1) use FSRS spaced repetition. Ask the teacher to "make flashcards" from any lesson. While
   reviewing, Space shows the answer and keys 1–4 rate it (Again, Hard, Good, Easy). A card you forget comes back later
   in the same session, and in your next lesson.
-* **Learning plans.** Ask for a plan for a bigger goal ("I want to be ready for my calculus exam in six weeks"). Plans
-  appear in Progress, where **Continue this plan** picks up the next module.
+* **Course board.** Ask for a plan for a bigger goal ("I want to be ready for my calculus exam in six weeks"). The
+  teacher keeps it on a board of cards: one **focus** card with the concrete next action, what comes next, what is
+  done (only with evidence: a quiz, an exercise, an explanation), and **parked** questions. A detour doesn't lose
+  the thread: the teacher answers, parks it if it's worth returning to, and comes back to the focus. The board is
+  the **Plan** tab of the right panel and the one-line strip above the message box; there you can save a question
+  for later or ask for a check on a card. Boards appear in Progress too, where **Continue this course** starts a
+  new lesson that picks up exactly where the board says.
 
 ## Memory
 
@@ -216,7 +221,7 @@ merges duplicates. Turn it off in **Settings › Memory**, where you can also ch
 * **Confidence check**: how often you're right when you're guessing, unsure or sure, and the hints and solutions you've
   used;
 * **Coming back to**: the re-checks and transfer checks that are scheduled;
-* learning plans, recent quizzes and model usage.
+* course boards, recent quizzes and model usage.
 
 ## Code sessions
 

@@ -166,13 +166,15 @@ final class TeachingContextExtension: AgentExtension {
         if !follow.isEmpty { out.append(Self.followUpSection(follow)) }
         let plans = s.study.plans().prefix(3)
         if !plans.isEmpty {
-            var p = "# Active learning plans\n"
+            let linked = s.study.boardID(forLesson: session.id)
+            var p = "# Course boards\n"
             for plan in plans {
-                let mods = plan.data["modules"]?.array ?? []
-                let done = mods.filter { $0["status"]?.string == "done" }.count
-                let next = mods.first { $0["status"]?.string != "done" }?["title"]?.string ?? "—"
-                p += "- \(plan.title) [\(plan.id)]: \(done)/\(mods.count) modules done; next: \(next)\n"
+                let b = CourseBoard(plan: plan)
+                let next = b.focus.map { "focus \($0.id.uppercased()) \($0.title)" + ($0.next.map { " — next: \(MemoryText.clip($0, 80))" } ?? "") }
+                    ?? b.nextActions(1).first.map { "next \($0.id.uppercased()) \($0.title)" } ?? "nothing left"
+                p += "- \(plan.title) [\(plan.id)]: \(b.doneCount)/\(b.courseCount) done; \(next)" + (plan.id == linked ? " (this lesson's board)" : "") + "\n"
             }
+            if linked == nil { p += "None is linked to this lesson: `lesson_plan get` with plan=<id> continues one; create one for a new goal.\n" }
             out.append(p)
         }
         // Folder context.

@@ -728,6 +728,53 @@
   });
 
   // ───────────── Tool cards ─────────────
+  test('a lesson plan renders as a curriculum, not one paragraph', () => {
+    const plan = { id: 'plan-abc', title: 'Zig standard library', subject: 'Zig', goal: 'Master std, from allocators to servers', modules: [
+      { title: 'Orientation', objectives: ['Recognise the layout of std', 'Explain @import("std")'], status: 'done' },
+      { title: 'Allocators', objectives: ['Explain why APIs demand an Allocator'], status: 'in_progress' },
+      { title: 'Collections', objectives: ['ArrayList and HashMap', 'sort and EnumMap'], status: 'todo' },
+    ] };
+    const b = { kind: 'toolUse', id: 'tplan', name: 'lesson_plan', input: Object.assign({ action: 'create' }, plan) };
+    const msgs = [U('make a plan'), A([b]), R('tplan', 'lesson_plan', 'Created plan plan-abc: Zig standard library with 3 modules.\n# Zig standard library\n- step', { meta: { plan } })];
+    T.status('', false); T.reset(msgs, {});
+    const card = $('[data-tool-id="tplan"]'), body = $('.body', card);
+    ok($('.plan-card', body), 'a structured plan card');
+    eq($$('.plan-mod', body).length, 3, 'three modules');
+    eq($$('.plan-mod.plan-done', body).length, 1, 'one done');
+    ok($('.plan-mod.plan-in_progress', body), 'one in progress');
+    eq($$('.plan-objs li', body).length, 5, 'objectives are list items');
+    ok($$('.plan-mtitle', body)[1].querySelector('.plan-n').textContent === '2', 'numbered modules');
+    ok(!$('.plan-title', body).textContent.includes('plan-'), 'the id is not in the title');
+    ok(!$('.plan-card p', body), 'no giant paragraph');
+    ok(/1 done/.test(body.textContent), 'a progress pill counts done modules');
+  });
+  test('a course board renders its focus, lanes and parked drawer', () => {
+    const plan = { id: 'plan-b1', title: 'Calculus I', subject: 'calculus', goal: 'Pass the final', focus: 'c1', revision: 7, deadline: '2099-01-01', cards: [
+      { id: 'c1', title: 'Limits and continuity', lane: 'doing', next: 'three one-sided-limit problems', objectives: ['graphical limits', 'one-sided limits'], evidence: ['graphical limits 4/5'] },
+      { id: 'c2', title: 'Derivatives', lane: 'backlog', after: ['c1'], next: 'power rule on five functions' },
+      { id: 'c3', title: 'Orientation', lane: 'done', evidence: ['diagnostic 5/5'] },
+      { id: 'c4', title: 'Review: one-sided limits', lane: 'review' },
+      { id: 'c5', title: 'Why does 0.999… equal 1?', lane: 'parked', parked_reason: 'tangent, answered' },
+    ], modules: [{ title: 'Limits and continuity', status: 'in_progress' }, { title: 'Derivatives', status: 'todo' }, { title: 'Orientation', status: 'done' }, { title: 'Review: one-sided limits', status: 'todo' }] };
+    const b = { kind: 'toolUse', id: 'tboard', name: 'lesson_plan', input: { action: 'add', title: 'Derivatives' } };
+    const msgs = [U('plan'), A([b]), R('tboard', 'lesson_plan', 'Added C2 Derivatives → backlog.\n<lesson_state rev="7" source="app">\nFocus: C1\n</lesson_state>', { meta: { plan } })];
+    T.status('', false); T.reset(msgs, {});
+    const card = $('[data-tool-id="tboard"]'), body = $('.body', card);
+    ok($('.plan-card.board', body), 'a board card');
+    ok($('.board-focus', body), 'the focus card is called out');
+    ok($('.board-focus-title', body).textContent.includes('C1') && $('.board-focus-title', body).textContent.includes('Limits and continuity'), 'focus id and title');
+    ok($('.board-next', body).textContent.includes('three one-sided-limit problems'), 'the next action is a sentence');
+    eq($$('.board-lane', body).length, 3, 'review, up next and done lanes');
+    ok($('.board-review .plan-mtitle', body).textContent.includes('Review: one-sided limits'), 'review lane');
+    ok($('.board-after', body).textContent.includes('C1'), 'prerequisites are shown');
+    ok($('.plan-mod.plan-done', body) && $('.plan-mod.plan-done .board-evidence', body).textContent.includes('diagnostic 5/5'), 'done cards carry their evidence');
+    ok($('.board-parked summary', body).textContent.includes('1'), 'a parked drawer with its count');
+    ok($('.board-parked-list', body).textContent.includes('0.999'), 'the parked question');
+    ok(!$('.plan-ol', body), 'no legacy numbered list');
+    ok(/1 done/.test(body.textContent) && /1 parked/.test(body.textContent) && /due 2099-01-01/.test(body.textContent), 'pills: ' + body.textContent.slice(0, 200));
+    ok(!body.textContent.includes('<lesson_state'), 'the raw state block is not shown to the learner');
+    ok(!body.textContent.includes('plan-b1'), 'the id stays out of the title');
+  });
   test('tool cards render for every built-in tool', () => {
     const calls = [
       ['bash', { command: 'ls -la' }, 'total 0'], ['read', { path: '/tmp/a.txt' }, '1\thello'], ['write', { path: 'a.py', content: 'print(1)' }, 'Wrote 1 line'],

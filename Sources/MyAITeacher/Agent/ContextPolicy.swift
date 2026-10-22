@@ -12,14 +12,39 @@ enum ContextPolicy {
     static let recentTurnsKept = 3        // turns never trimmed
 
     static func estimateTokens(_ msgs: [ChatMessage]) -> Int {
-        var chars = 0
+        var units = 0.0
         for m in msgs {
             for b in m.blocks {
-                chars += (b.text?.count ?? 0) + (b.input.map { $0.compact.count } ?? 0)
-                if b.hasPayload { chars += 6_000 }   // ~1.5k tokens per image
+                if let t = b.text { units += tokens(t) }
+                if let i = b.input { units += tokens(i.compact) }
+                if b.hasPayload { units += 1_500 }   // ~1.5k tokens per image
             }
         }
-        return chars / 4
+        return Int(units)
+    }
+
+    /// A cheap, script-aware estimate: Latin text is ~4 characters per token, but CJK, kana and Hangul are ~1 per
+    /// character. Counting them as ¼ (as the app used to) under-estimates a Japanese or Chinese lesson 4–6×, so the
+    /// budget, microcompaction and last-resort squeeze all fire too late — or the provider rejects the request.
+    /// The token estimate of one string, for callers cutting text themselves.
+    static func estimate(_ text: String) -> Int { Int(tokens(text)) }
+
+    private static func tokens(_ s: String) -> Double {
+        guard !s.isEmpty else { return 0 }
+        var cjk = 0, total = 0
+        for u in s.unicodeScalars {
+            total += 1
+            if isCJK(u) { cjk += 1 }
+        }
+        return Double(cjk) + Double(total - cjk) / 4.0
+    }
+    private static func isCJK(_ u: Unicode.Scalar) -> Bool {
+        switch u.value {
+        case 0x1100...0x11FF, 0x2E80...0x2FDF, 0x3000...0x30FF, 0x3130...0x318F, 0x3400...0x4DBF,
+             0x4E00...0x9FFF, 0xA960...0xA97F, 0xAC00...0xD7AF, 0xF900...0xFAFF, 0xFF00...0xFFEF:
+            return true
+        default: return false
+        }
     }
 
     /// Indices of messages that start a learner turn (real user messages, not tool results).

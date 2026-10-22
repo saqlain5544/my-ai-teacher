@@ -408,30 +408,44 @@ struct StudyProgressView: View {
     }
 
     private func planCard(_ p: LessonPlan) -> some View {
-        let mods = p.data["modules"]?.array ?? []
-        let done = mods.filter { $0["status"]?.string == "done" }.count
+        let b = CourseBoard(plan: p)
+        let parked = b.lane(.parked)
         return VStack(alignment: .leading, spacing: 6) {
             HStack {
                 Text(p.title).font(.headline)
                 Spacer()
-                Text("\(done)/\(mods.count)").foregroundStyle(.secondary)
+                Text("\(b.doneCount)/\(b.courseCount)").foregroundStyle(.secondary)
                 Button { app.services.study.deletePlan(p.id); reload() } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
             }
             if let g = p.goal { Text(g).font(.callout).foregroundStyle(.secondary) }
-            ProgressView(value: mods.isEmpty ? 0 : Double(done) / Double(mods.count))
-            ForEach(Array(mods.enumerated()), id: \.offset) { i, m in
+            ProgressView(value: b.courseCount == 0 ? 0 : Double(b.doneCount) / Double(b.courseCount))
+            if let f = b.focus {
+                Text("Focus: \(f.title)").font(.callout.weight(.semibold))
+                if let n = f.next { Text("Next: \(n)").font(.callout).foregroundStyle(.secondary) }
+            }
+            ForEach(b.cards.filter { $0.lane != .parked }) { c in
                 HStack(spacing: 6) {
-                    Image(systemName: m["status"]?.string == "done" ? "checkmark.circle.fill" : (m["status"]?.string == "in_progress" ? "play.circle.fill" : "circle"))
-                        .foregroundStyle(m["status"]?.string == "done" ? .green : (m["status"]?.string == "in_progress" ? .blue : .secondary))
-                    Text("\(i + 1). \(m["title"]?.string ?? "")").font(.callout)
+                    Image(systemName: c.lane == .done ? "checkmark.circle.fill" : (c.lane == .doing ? "play.circle.fill" : c.lane == .review ? "arrow.triangle.2.circlepath.circle" : "circle"))
+                        .foregroundStyle(c.lane == .done ? .green : (c.lane == .doing ? .blue : c.lane == .review ? .orange : .secondary))
+                    Text("\(c.id.uppercased()) \(c.title)").font(.callout)
                 }
             }
-            Button("Continue this plan") {
-                app.newLesson(prompt: "Let's continue my learning plan \"\(p.title)\" [\(p.id)]. Check where I am and teach the next module.")
-            }.buttonStyle(.link)
+            HStack(spacing: 10) {
+                if !parked.isEmpty { Text("\(parked.count) parked").font(.caption).foregroundStyle(.secondary) }
+                if let d = b.daysLeft() { Text(d < 0 ? "deadline passed" : "\(d) day\(d == 1 ? "" : "s") left").font(.caption).foregroundStyle(.secondary) }
+            }
+            Button("Continue this course") { resume(b) }.buttonStyle(.link)
         }
         .padding(14)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+    }
+
+    /// A new lesson on this board: linked before the first message, so the mentor's first request carries the state card.
+    private func resume(_ b: CourseBoard) {
+        let id = app.newLesson()
+        app.services.study.link(board: b.id, lesson: id)
+        app.session(for: id)?.send("Let's continue my course \"\(b.title)\". Pick up from the board: " +
+                                   (b.focus.map { f in "the focus is \(f.title)" + (f.next.map { ", next: \($0)" } ?? "") } ?? "start the next card") + ".")
     }
 
     static func hours(_ s: Double) -> String { s < 3600 ? "\(Int(s / 60))m" : String(format: "%.1fh", s / 3600) }

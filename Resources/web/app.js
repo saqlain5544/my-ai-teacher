@@ -510,6 +510,15 @@
     } catch (e) { return '<p>' + esc(text) + '</p>'; }
   }
   const inline = s => markdown(String(s == null ? '' : s), false).replace(/^\s*<p>|<\/p>\s*$/g, '');
+  /** Single newlines as hard breaks (outside fences), for text that was written as lines, not markdown paragraphs. */
+  function hardLines(text) {
+    const out = []; let fence = false;
+    for (const line of String(text == null ? '' : text).split('\n')) {
+      if (/^\s{0,3}(```|~~~)/.test(line)) fence = !fence;
+      out.push(!fence && line.trim() ? line + '  ' : line);
+    }
+    return out.join('\n');
+  }
 
   // ── Streaming: render only what changed ──
   // A streaming reply is split at blank lines that can't change meaning (outside fences and $$ blocks, not before a
@@ -831,7 +840,7 @@
       case 'mac': return (i.action || '') + ' ' + ((i.apps || []).join(', ') || i.app || i.ref || i.query || '');
       case 'flashcards': return (i.action || '') + ' ' + (i.deck || '') + (i.cards ? ' · ' + i.cards.length + ' cards' : '');
       case 'mastery': return (i.action || '') + ' ' + (i.concept || i.subject || '');
-      case 'lesson_plan': return (i.action || '') + ' ' + (i.title || i.id || '');
+      case 'lesson_plan': return (i.action || '') + ' ' + (i.title || i.card || i.id || i.plan || '');
       default: return '';
     }
   }
@@ -901,11 +910,81 @@
         const shown = out.replace(/^Everything until <\/untrusted_\w+> comes from[^\n]*\n/gm, '').replace(/<\/?untrusted_\w+_content[^>]*>\n?/g, '');
         return (shot ? '<img class="tool-shot" src="' + esc(shot) + '" alt="">' : '') + (shown ? pre(shown, 8000) : '');
       }
-      case 'lesson_plan': return out ? '<div class="md plan">' + markdown(out.replace(/^# /, '#### '), false) + '</div>' : '';
+      case 'lesson_plan': return planBody(b, r);
       case 'task': return '<div class="label">Brief</div><div class="md">' + markdown(i.prompt || '', false) + '</div>' + (out ? '<div class="label">Report</div><div class="md">' + markdown(out, false) + '</div>' : (S.progress.get(b.id) ? pre(S.progress.get(b.id)) : ''));
       default: return (Object.keys(i).length ? '<div class="label">Input</div>' + pre(JSON.stringify(i, null, 2)) : '') + (out ? '<div class="label">Result</div>' + pre(out) : '');
     }
   }
+
+  /** A lesson plan as a real curriculum: title, goal, then modules with their status and objectives (never one paragraph). */
+  function planBody(b, r) {
+    const i = b.input || {};
+    const structured = (r && r.meta && r.meta.plan) || (Array.isArray(i.modules) ? i : null);
+    const out = r ? (r.text || '') : (S.progress.get(b.id) || '');
+    if (structured && Array.isArray(structured.cards)) return boardBody(structured);
+    if (!structured || !Array.isArray(structured.modules)) {
+      return out ? '<div class="md plan">' + markdown(hardLines(out), false) + '</div>' : '';
+    }
+    const mods = structured.modules || [];
+    const done = mods.filter(m => m.status === 'done').length;
+    const title = String(structured.title || 'Learning plan').replace(/\s*\[plan-[0-9a-z]+\]\s*$/i, '');
+    let html = '<div class="plan-card"><div class="plan-top"><div class="plan-title">' + inline(title) + '</div><div class="plan-meta">' +
+      '<span class="pill">' + mods.length + ' module' + (mods.length === 1 ? '' : 's') + '</span>' +
+      (done ? '<span class="pill good">' + done + ' done</span>' : '') +
+      (structured.subject ? '<span class="pill">' + esc(structured.subject) + '</span>' : '') + '</div></div>';
+    if (structured.goal) html += '<div class="plan-goal"><b>Goal</b> ' + inline(structured.goal) + '</div>';
+    html += '<ol class="plan-mods">' + mods.map((m, n) => {
+      const status = ['done', 'in_progress', 'todo'].includes(m.status) ? m.status : 'todo';
+      const mark = status === 'done' ? '✓' : status === 'in_progress' ? '▸' : '';
+      const objs = (m.objectives || []).filter(o => o != null && String(o).trim());
+      return '<li class="plan-mod plan-' + status + '"><span class="plan-mark" aria-hidden="true">' + mark + '</span><div class="plan-body">' +
+        '<div class="plan-mtitle"><span class="plan-n">' + (n + 1) + '</span>' + inline(m.title || '') + '</div>' +
+        (objs.length ? '<ul class="plan-objs">' + objs.map(o => '<li>' + inline(o) + '</li>').join('') + '</ul>' : '') +
+        '</div></li>';
+    }).join('') + '</ol></div>';
+    return html;
+  }
+  /** The course board: the focus card first (title + the concrete next action), then the lanes; parked detours last. */
+  function boardBody(bd) {
+    const cards = bd.cards || [];
+    const title = String(bd.title || 'Course board').replace(/\s*\[plan-[0-9a-z]+\]\s*$/i, '');
+    const course = cards.filter(c => c.lane !== 'parked');
+    const done = course.filter(c => c.lane === 'done').length;
+    const parked = cards.filter(c => c.lane === 'parked');
+    const focus = cards.find(c => c.id === bd.focus && c.lane === 'doing') || cards.find(c => c.lane === 'doing');
+    const id = c => '<span class="board-id">' + esc(String(c.id || '').toUpperCase()) + '</span>';
+    let html = '<div class="plan-card board"><div class="plan-top"><div class="plan-title">' + inline(title) + '</div><div class="plan-meta">' +
+      '<span class="pill">' + course.length + ' card' + (course.length === 1 ? '' : 's') + '</span>' +
+      (done ? '<span class="pill good">' + done + ' done</span>' : '') +
+      (parked.length ? '<span class="pill">' + parked.length + ' parked</span>' : '') +
+      (bd.subject ? '<span class="pill">' + esc(bd.subject) + '</span>' : '') +
+      (bd.deadline ? '<span class="pill">due ' + esc(bd.deadline) + '</span>' : '') + '</div></div>';
+    if (bd.goal) html += '<div class="plan-goal"><b>Goal</b> ' + inline(bd.goal) + '</div>';
+    if (focus) {
+      html += '<div class="board-focus"><div class="board-lane-name">Focus</div><div class="board-focus-title">' + id(focus) + inline(focus.title || '') + '</div>' +
+        '<div class="board-next">' + (focus.next ? '<b>Next</b> ' + inline(focus.next) : '<span class="board-nonext">next action not set</span>') + '</div>' +
+        ((focus.objectives || []).length ? '<ul class="plan-objs">' + focus.objectives.map(o => '<li>' + inline(String(o)) + '</li>').join('') + '</ul>' : '') +
+        ((focus.evidence || []).length ? '<div class="board-evidence">' + inline(focus.evidence.slice(-2).join(' · ')) + '</div>' : '') + '</div>';
+    }
+    const lanes = [['review', 'Review'], ['backlog', 'Up next'], ['done', 'Done']];
+    for (const [lane, name] of lanes) {
+      const cs = cards.filter(c => c.lane === lane);
+      if (!cs.length) continue;
+      html += '<div class="board-lane board-' + lane + '"><div class="board-lane-name">' + name + ' · ' + cs.length + '</div><ol class="plan-mods">' + cs.map(c =>
+        '<li class="plan-mod plan-' + (lane === 'done' ? 'done' : 'todo') + '"><span class="plan-mark" aria-hidden="true">' + (lane === 'done' ? '✓' : lane === 'review' ? '↻' : '') + '</span><div class="plan-body">' +
+        '<div class="plan-mtitle">' + id(c) + inline(c.title || '') + '</div>' +
+        (c.next && lane !== 'done' ? '<div class="board-cnext">' + inline(c.next) + '</div>' : '') +
+        (c.after && c.after.length && lane !== 'done' ? '<div class="board-after">after ' + esc(c.after.map(a => String(a).toUpperCase()).join(', ')) + '</div>' : '') +
+        (lane === 'done' && (c.evidence || []).length ? '<div class="board-evidence">' + inline(c.evidence[c.evidence.length - 1]) + '</div>' : '') +
+        '</div></li>').join('') + '</ol></div>';
+    }
+    if (parked.length) {
+      html += '<details class="board-parked"><summary>Parked · ' + parked.length + '</summary><ul class="board-parked-list">' + parked.map(c =>
+        '<li>' + id(c) + inline(c.title || '') + (c.parked_reason ? ' <span class="board-reason">— ' + inline(c.parked_reason) + '</span>' : '') + '</li>').join('') + '</ul></details>';
+    }
+    return html + '</div>';
+  }
+
 
   function renderApproval(b, pend) {
     const p = pend.payload || {};

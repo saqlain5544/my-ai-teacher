@@ -12,6 +12,7 @@ struct Composer: View {
 
     var body: some View {
         VStack(spacing: 6) {
+            BoardStrip(session: session)
             if let err = session.errorMessage {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)

@@ -93,6 +93,7 @@ final class AppModel: ObservableObject {
         extensions.register(ComputerUseExtension(app: self))
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
+        extensions.register(CourseBoardExtension())
         extensions.register(LanguageExtension())
         extensions.register(ActivityExtension())
         Telemetry.shared.start(db: global.db)

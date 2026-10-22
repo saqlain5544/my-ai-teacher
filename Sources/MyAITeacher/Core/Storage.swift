@@ -44,6 +44,7 @@ enum Schema_ {
         notes TEXT, updated_at REAL NOT NULL, PRIMARY KEY(subject, concept));
     CREATE TABLE IF NOT EXISTS plans(id TEXT PRIMARY KEY, title TEXT NOT NULL, subject TEXT, goal TEXT, data TEXT NOT NULL,
         conversation_id TEXT, created_at REAL NOT NULL, updated_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS board_links(conversation_id TEXT PRIMARY KEY, plan_id TEXT NOT NULL, updated_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS quiz_attempts(id INTEGER PRIMARY KEY AUTOINCREMENT, conversation_id TEXT, title TEXT, topic TEXT,
         score REAL, total INTEGER, data TEXT, created_at REAL NOT NULL);
     CREATE TABLE IF NOT EXISTS usage_log(day TEXT NOT NULL, provider TEXT NOT NULL, model TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0,

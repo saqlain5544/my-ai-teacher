@@ -701,13 +701,17 @@ final class ChatSession: ObservableObject, Identifiable {
         // Rolling summary: the range is folded in chunk by chunk (previous summary + next chunk), so nothing is silently
         // dropped however long the range is; usually it is one chunk, since compaction runs incrementally.
         var summary = conversation.compactSummary
+        // The course board is not in the transcript (the app keeps it): the summary carries its state so a lesson resumed
+        // from the summary alone, and the reflection pass, still know the focus and what is parked.
+        let state = host.summaryContext(self).joined(separator: "\n\n")
         for chunk in ContextPolicy.chunks(Array(messages[startIdx..<cut]), maxChars: 60_000) {
             let excerpt = Reflection.transcriptExcerpt(chunk, maxChars: 60_000)
             let prompt = """
             Summarise this part of a tutoring session so the lesson can continue seamlessly. \
             \(summary.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
             Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Exercises & results / \
-            Decisions & preferences / Files & artifacts / Next steps. Be specific (formulas, examples, scores).
+            Decisions & preferences / Files & artifacts / Course state / Next steps. Be specific (formulas, examples, scores).\
+            \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)
 
             <transcript>
             \(excerpt)
@@ -724,7 +728,8 @@ final class ChatSession: ObservableObject, Identifiable {
             }) ?? ""
             if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
             // A failed summary must not leave the request oversized: fall back to a deterministic digest.
-            summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines) : ContextPolicy.digest(chunk, previous: summary)
+            summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines)
+                : ContextPolicy.digest(chunk, previous: summary) + (state.isEmpty ? "" : "\n\nCourse state:\n" + state)
         }
         let text = summary ?? ""
         conversation.compactSummary = text.trimmingCharacters(in: .whitespacesAndNewlines)

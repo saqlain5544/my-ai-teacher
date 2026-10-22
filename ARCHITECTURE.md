@@ -311,6 +311,29 @@ help the learner had to ask for went unused. So these are app behaviour, not jus
 * Graded choice, true/false, numeric and math questions must carry an `answer`. Without one, nothing is auto-graded and the
   learner model learns nothing from the answer. Wrapped keys (`{"item": …}`) and lists of accepted math forms are read.
 
+## Course board
+
+The mentor's intent for a goal that spans replies and lessons lives on a **course board** (`CourseBoard`, persisted as
+version 2 of `plans.data`; legacy `modules` plans convert on read), not in the transcript. A board has cards with
+stable ids (C1…), one of five lanes — backlog, doing (the one focus card, WIP = 1), review, done, parked — a `next`
+action, prerequisites (`after`), a `concept` for evidence, a revision and a capped log. `lesson_plan` is the only
+writer: add / start / park / resume / complete / note / move / get / list, plus the legacy create / update. Validation
+is the feature: a second `start` names the current focus, `complete` needs evidence, `park` needs a reason, an empty
+modules update is refused, and a card completed while its concept's mastery is low gets a Review card (the board is
+intent; mastery is belief). A lesson works from one board (`board_links`, set when a board is created, named or
+resumed from Progress); several lessons can share it.
+
+What keeps the mentor oriented is not the board but the **state card**: `CourseBoardExtension.willRequest` appends an
+app-generated `<lesson_state>` block (course, focus, next, then, parked, open loop, watch, evidence; ≤ 200 tokens
+whatever the course size) to the last learner message of every request — the request copy only, so the transcript
+and the cached prefix stay clean, and it survives compaction because it is rendered from the database, not recovered
+from the transcript. The usage rules sit once in the system prompt (`# Course board`). The summary prompt carries the
+same block under "Course state", graded quiz answers and `mastery` records attach evidence to the card that teaches
+the concept without moving it, and a ```problem the mentor just posed shows as the open loop. UI: the Plan inspector
+tab, a strip above the composer, the transcript plan card and the Progress screen, whose **Continue this course**
+links the board before the first message so the first request already carries the state. Learners park questions and
+ask for checks; only the mentor marks cards done.
+
 ## Long lessons
 * A lesson loads as a window (from the compaction point or the last 400 messages); earlier messages page in on request.
   Compaction folds ranges into a rolling summary (digest fallback if the model fails); requests still over budget
@@ -478,7 +501,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
-| — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, curricula |
+| — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |
 
 ## Measured (Apple Silicon, macOS 27)
