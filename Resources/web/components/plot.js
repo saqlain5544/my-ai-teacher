@@ -1,3 +1,4 @@
+// @lazy — the plotter loads the first time a reply uses ```plot (see components/manifest.js).
 // Tiny, safe function plotter for ```plot blocks. No eval: expressions are compiled from a parsed AST.
 (function () {
   'use strict';
@@ -288,4 +289,14 @@
   }
 
   window.Plot = { render, compile };
+})();
+
+(function () {
+  'use strict';
+  window.TeacherUI.defineComponent({ names: ['plot', 'graph', 'function-plot'], raw: true,
+    render(code, ctx, env) {
+      if (env && env.open) return '<div class="plot-block" data-key="p-pending"><div class="diagram-pending">Plotting…</div></div>';
+      try { return '<div class="plot-block" data-key="p' + ctx.hash(code) + '">' + window.Plot.render(code) + '</div>'; }
+      catch (e) { return '<div class="plot-block"><div class="diagram-error">Plot error: ' + ctx.esc(e.message) + '<pre>' + ctx.esc(code) + '</pre></div></div>'; }
+    } });
 })();

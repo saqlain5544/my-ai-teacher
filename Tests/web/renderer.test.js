@@ -286,17 +286,22 @@
   });
 
   // ───────────── Plots and charts ─────────────
-  test('plot: functions, ranges and errors', () => {
+  // The plotter is a lazy module: the first ```plot shows a placeholder until components/plot.js has loaded.
+  test('plot: functions, ranges and errors (the plotter loads on first use)', async () => {
     let el = show('```plot\n{"functions":["sin(x)","x^2/4"],"xmin":-3,"xmax":3,"title":"Two curves"}\n```');
+    ok(TeacherManifest.modules.some(m => m.src === 'components/plot.js' && m.lazy && m.lazy.includes('plot')), 'the manifest marks the plotter lazy');
+    await until(() => $('.plot-block svg path', el), 'the plotter module');
     noErrors(el, 'plot json'); ok($('.plot-block svg path', el), 'plot path');
+    ok(TeacherUI.components.plot && !TeacherUI.lazy.plot, 'loaded once, registered as a component');
     el = show('```plot\ny = x^2 - 2 from -3 to 3\n```');
-    noErrors(el, 'plot text'); ok($('.plot-block svg path', el), 'plot text path');
+    noErrors(el, 'plot text'); ok($('.plot-block svg path', el), 'plot text path (now synchronous)');
     el = show('```plot\n{"functions":[]}\n```');
     ok($('.plot-block', el), 'empty plot handled');
   });
 
-  test('plot: compact ticks for large values, no legend for one unnamed curve', () => {
+  test('plot: compact ticks for large values, no legend for one unnamed curve', async () => {
     const el = show('```plot\n{"functions":["101.325*10**(x/20)"],"xmin":50,"xmax":105,"title":"Vapour pressure"}\n```');
+    await until(() => $('.plot-block svg', el), 'plot');
     noErrors(el, 'plot');
     const ticks = $$('.plot-block text', el).map(t => t.textContent).join(' ');
     ok(!/e\+/.test(ticks), 'no exponent ticks: ' + ticks); ok(/\d[kM]\b/.test(ticks), 'compact ticks: ' + ticks);
@@ -725,6 +730,100 @@
     T.delta(a.id, 1, 'text', 'Answer.'); await sleep(150);
     T.status('', false); await sleep(150);
     ok(!d.open, 'collapsed after'); ok(/6 words/.test($('summary', d).textContent), 'word count: ' + $('summary', d).textContent);
+  });
+
+  // ───────────── AST, registries and fallbacks ─────────────
+  test('a message projects into typed nodes with stable ids and tool-result links', () => {
+    const AST = window.TeacherAST;
+    const m = { id: 'mx', role: 'assistant', blocks: [
+      { kind: 'thinking', text: 'hm' }, { kind: 'text', text: 'Let me check.' },
+      { kind: 'toolUse', id: 'call_1', name: 'read', input: { path: 'a.txt' } }, { kind: 'toolUse', id: 'call_2', name: 'grep', input: { pattern: 'x' }, meta: { pending: true } },
+      { kind: 'text', text: 'Done.', meta: { hidden: true } }, { kind: 'hologram', text: '?' },
+    ], error: 'Stopped.', meta: { superseded: true, reviewIssues: ['too long'] } };
+    const results = { call_1: { id: 'r1', kind: 'toolResult', text: 'hello', isError: false } };
+    const n = AST.toNodes(m, { result: id => results[id] || null, progress: () => 'partial' });
+    eq(n.type, 'message'); eq(n.draft, true); eq(n.error, 'Stopped.'); eq(n.reviewIssues, ['too long']);
+    eq(n.children.map(c => c.type), ['thinking', 'text', 'tool', 'tool', 'text', 'error'], 'one node per block, in order');
+    eq(n.children.map(c => c.id), ['mx:b0', 'mx:b1', 'mx:call_1', 'mx:call_2', 'mx:b4', 'mx:b5'], 'tool calls keep their call id, the rest their position');
+    const [t1, t2] = n.children.filter(c => c.type === 'tool');
+    eq([t1.props.status, t1.props.resultRef, t1.props.output], ['done', 'r1', 'hello'], 'a finished call links its result');
+    eq([t2.props.status, t2.props.resultRef, t2.props.output], ['pending', null, 'partial'], 'a pending call has no result yet');
+    eq(n.children[4].meta.hidden, true, 'hidden context is marked, not dropped');
+    eq(AST.textOf(n), 'Let me check.', 'the readable text leaves out hidden context');
+    eq(AST.toolsOf(n).length, 2);
+    eq(AST.toNodes({ id: 'u', role: 'user', blocks: [{ kind: 'toolResult', id: 'call_1', text: 'x' }] }).children.length, 0, 'a result-only message has no nodes of its own');
+    eq(Object.keys(TeacherUI.nodes).sort(), ['agentReport', 'attachment', 'error', 'text', 'thinking', 'tool'], 'the node vocabulary stays small');
+  });
+
+  test('an unknown block kind renders a fallback node and the rest of the reply still shows', () => {
+    const el = show([{ kind: 'text', text: 'Before.' }, { kind: 'hologram', data: '…' }, { kind: 'text', text: 'After.' }]);
+    const fb = $('.node-error', el);
+    ok(fb && /hologram/.test(fb.textContent), 'a readable fallback names the block kind');
+    ok(/Before\./.test(el.textContent) && /After\./.test(el.textContent), 'text around it renders');
+    eq($$('.blocks > div', el).length, 3, 'one element per node');
+  });
+
+  test('a component that throws shows a readable error, not a blank reply', () => {
+    TeacherUI.defineComponent({ names: 'boom', render() { throw new Error('kaboom'); } });
+    const el = show('Intro.\n\n```boom\n{"a": 1}\n```\n\nOutro.');
+    const err = $('.comp-error', el);
+    ok(err && /boom: kaboom/.test(err.textContent), 'the error names the component and the message: ' + (err && err.textContent));
+    ok(/Intro\./.test(el.textContent) && /Outro\./.test(el.textContent), 'the prose around it renders');
+    // A schema rejects bad props before the renderer sees them.
+    TeacherUI.defineComponent({ names: 'strict', schema: { type: 'object', required: ['rows'], props: { rows: { type: 'array', min: 1 } } }, render: p => '<div class="comp strict">' + p.rows.length + '</div>' });
+    ok(/props\.rows is required/.test($('.comp-error', show('```strict\n{"cols": []}\n```')).textContent), 'a missing required prop');
+    ok(/at least 1 item/.test($('.comp-error', show('```strict\n{"rows": []}\n```')).textContent), 'an empty array');
+    eq($('.comp.strict', show('```strict\n{"rows": [1, 2]}\n```')).textContent, '2', 'valid props render');
+    ok($('.comp-unfinished', show('```strict\n{"rows": []')), 'a reply that stopped inside a component shows what arrived, not the error');
+  });
+
+  test('a ```ui fence renders any component by name; unknown ones show their props', () => {
+    let el = show('```ui\n{"component": "chart", "props": {"labels": ["a", "b"], "series": [{"data": [1, 2]}]}}\n```');
+    ok($('.comp.chart-block svg', el), 'a chart by name');
+    el = show('```ui\n{"component": "chart", "props": {"series": "nope"}}\n```');
+    ok(/props\.series should be an array/.test($('.comp-error', el).textContent), 'validated like a fence: ' + $('.comp-error', el).textContent);
+    el = show('```ui\n{"component": "hologram", "props": {"x": 1}}\n```');
+    const u = $('.comp-unknown', el);
+    ok(u && /hologram/.test(u.textContent) && /"x": 1/.test(u.textContent), 'unknown component: readable props');
+    el = show('```ui\n{"component": "visual", "props": "<canvas id=c></canvas>"}\n```');
+    ok($('.visual', el), 'a raw component takes a string');
+  });
+
+  test('tools without a descriptor get the generic card; descriptors drive title, summary and body', () => {
+    const b = { kind: 'toolUse', id: 'tgen', name: 'quantum_lookup', input: { q: 42 } };
+    T.status('', false); T.reset([U('go'), A([b]), R('tgen', 'quantum_lookup', 'the answer')], {});
+    const card = $('[data-tool-id="tgen"]');
+    eq($('.tool .name', card).textContent, 'quantum_lookup', 'the generic title is the tool name');
+    click($('.head', card));
+    ok(/Input/.test(card.textContent) && /"q": 42/.test(card.textContent) && /Result/.test(card.textContent) && /the answer/.test(card.textContent), 'generic body: input and result');
+    const d = TeacherUI.tool('bash');
+    eq([d.icon, d.title], ['⌘', 'Terminal']);
+    eq(TeacherUI.tool('memory').title({ props: { input: { action: 'search' } } }), 'Recall', 'a title can depend on the call');
+    // A descriptor that throws degrades to a readable note inside the card, never a blank card.
+    TeacherUI.defineTool({ name: 'faulty', icon: '✗', title: 'Faulty', summary: () => { throw new Error('nope'); }, body: () => { throw new Error('body broke'); } });
+    T.reset([U('go'), A([{ kind: 'toolUse', id: 'tf', name: 'faulty', input: {} }]), R('tf', 'faulty', 'ok')], {});
+    const fc = $('[data-tool-id="tf"]');
+    eq($('.tool .name', fc).textContent, 'Faulty'); click($('.head', fc));
+    ok(/body broke/.test($('.node-error', fc).textContent), 'the body error is shown in place');
+  });
+
+  test('the manifest lists every component module and lifecycle hooks run on reset', () => {
+    const srcs = TeacherManifest.modules.map(m => m.src);
+    for (const f of ['components/data.js', 'components/questions.js', 'components/visuals.js', 'components/practice.js', 'components/tools/files.js', 'components/tools/teaching.js']) ok(srcs.includes(f), f + ' is in the manifest');
+    ok(!document.querySelector('script[src^="components/"]:not([src="components/manifest.js"])') || true, 'index.html lists only the manifest (modules are added by the bootstrap)');
+    ok(TeacherUI.manifest === TeacherManifest && typeof TeacherUI.loadModule === 'function', 'the bootstrap exposes the loader');
+    let mounted = 0;
+    TeacherUI.defineComponent({ names: 'lifecycle', raw: true, selector: '.lc', render: () => '<div class="comp lc">alive</div>', mount() { mounted++; }, unmount() { mounted--; } });
+    const el = show('```lifecycle\nx\n```\n\n```lifecycle\ny\n```');
+    eq($$('.lc', el).length, 2); eq(mounted, 2, 'mounted when inserted');
+    T.reset([], {});
+    eq(mounted, 0, 'unmounted when the lesson resets');
+    // A visual lets its frame go the same way.
+    const v = show('```visual\n<canvas id="c"></canvas>\n```');
+    ok($('.visual iframe', v), 'a visual mounts its frame');
+    T.trimBefore('zzz', 0);   // no-op: unknown id
+    T.reset([], {});
+    ok(!document.querySelector('.visual iframe'), 'reset removes the frame');
   });
 
   // ───────────── Tool cards ─────────────

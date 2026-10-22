@@ -392,6 +392,11 @@ svg.chart { width: 100%; max-width: 640px; height: auto; font-family: -apple-sys
 .say:hover { opacity: 1; }
 .vocab-card > .say { position: absolute; top: 10px; right: 8px; }
 .comp-error { border: 1px solid var(--bad-soft); border-radius: 10px; padding: 8px 12px; }
+/* A node or component the page could not render: readable, in place, never a blank reply. */
+.node-error { color: var(--muted); font-size: 0.9em; border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; margin: 0.5em 0; }
+.comp-unknown { border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; }
+.comp-unknown pre { white-space: pre-wrap; font-family: var(--mono); font-size: 0.85em; color: var(--muted); margin: 4px 0 0; }
+.comp-loading { color: var(--muted); }
 blockquote.callout { border-left-width: 4px; color: var(--fg); background: var(--card); padding: 8px 14px; }
 blockquote.callout .callout-title { display: block; font-weight: 700; margin-bottom: 2px; }
 .callout-note, .callout-info { border-left-color: var(--accent) !important; }

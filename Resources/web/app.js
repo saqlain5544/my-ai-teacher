@@ -1,5 +1,6 @@
 // Transcript renderer core for My AI Teacher. Swift drives it through window.T.*; it talks back via the `bridge` handler.
-// Features plug in through window.TeacherUI (registry.js) — see components/*.js.
+// Features plug in through window.TeacherUI (registry.js): nodes.js is the typed view of a message the renderer walks,
+// components/*.js the rich blocks, components/tools/*.js the tool cards; components/manifest.js lists the modules.
 (function () {
   'use strict';
   const R = window.TeacherUI;
@@ -29,7 +30,7 @@
   // ───────────────────────── State ─────────────────────────
   const S = {
     messages: [], byId: new Map(), results: new Map(), pending: new Map(), progress: new Map(), cards: new Map(),
-    openTools: new Set(), codeOutputs: new Map(), dirty: new Set(), streamingId: null, welcome: null,
+    openTools: new Set(), codeOutputs: new Map(), codeEpoch: 0, dirty: new Set(), streamingId: null, welcome: null,
     running: false, showThinking: true,
   };
 
@@ -287,11 +288,14 @@
     codeSources.set(key, code);
     const l = (lang || '').toLowerCase();
     const runnable = RUNNABLE.has(l) && !(env && env.streamingFence);
+    // An open fence is re-rendered on every frame: highlighting the whole (growing) code each time is quadratic. Short
+    // snippets still get colours; long ones stay plain until they close.
+    const plain = env && env.live && code.length > 1600;
     const out = S.codeOutputs.get(key);
     return '<div class="code-block" dir="ltr" data-key="' + key + '" data-lang="' + esc(l) + '">' +
       '<div class="code-head"><span class="lang">' + esc(l || 'text') + '</span><span>' +
       (runnable ? '<button class="run" data-act="run">▶ Run</button>' : '') + '<button data-act="copy-code">Copy</button></span></div>' +
-      '<pre><code class="hljs">' + highlight(code, l) + '</code></pre>' +
+      '<pre><code class="hljs">' + (plain ? esc(code) : highlight(code, l)) + '</code></pre>' +
       (out ? '<div class="code-output' + (out.failed ? ' failed' : '') + '"><span class="label">Output</span>' + esc(out.text) + '</div>' : '') + '</div>';
   }
 
@@ -309,18 +313,23 @@
     let code = tok.content;
     // Models sometimes put a component's JSON on the fence line itself (```steps [{"title":…}]): that is its content.
     const rest = info.slice(raw.length).trim();
-    if (rest && /^[\[{]/.test(rest) && R.fences[lang]) code = rest + '\n' + code;
-    else if (rest && !code.trim() && !R.fences[lang]) code = rest;   // ```python print(1)```: the code is on the fence line
+    const known = !!(R.components[lang] || R.lazy[lang]);
+    if (rest && /^[\[{]/.test(rest) && known) code = rest + '\n' + code;
+    else if (rest && !code.trim() && !known) code = rest;   // ```python print(1)```: the code is on the fence line
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;
     // A stray or mid-line fence leaves an empty block: show nothing rather than an empty code box.
     if (!code.trim() && !isLastOpen) return '';
-    const custom = R.fences[lang];
     // The reply ended inside this fence: a forgotten closing fence on complete content renders as usual, but content cut
     // off mid-way (stopped, or the token limit) shows what arrived instead of a parse error.
     const unclosed = !env.streaming && env.openFence && idx === env.lastFenceIdx;
+    if (lang === 'ui') { const out = renderUI(code, isLastOpen, unclosed); if (out != null) return out; }
+    const custom = R.components[lang];
     if (custom) {
-      const out = custom(code, ctx, { open: isLastOpen });
-      if (out != null) return unclosed && /comp-error|diagram-error/.test(out) ? unfinished(lang, code) : out;
+      const out = renderComponent(custom, lang, code, isLastOpen, unclosed);
+      if (out != null) return out;
+    } else if (R.lazy[lang]) {
+      loadComponent(lang);
+      return '<div class="comp comp-loading" data-lazy="' + esc(lang) + '"><div class="diagram-pending">Loading ' + esc(lang) + '…</div></div>';
     }
     if (lang === 'mermaid' || lang === 'mmd') {
       const key = 'm' + hash(code.trim() + (darkMQ.matches ? 'd' : 'l'));
@@ -333,11 +342,6 @@
       // blank boxes): this is a placeholder that processMermaid fills, from the cache at once or after drawing.
       return '<div class="mermaid-block" data-key="' + key + '" data-pending="1"' + (unclosed ? ' data-unfinished="1"' : '') + '>' + (done ? '' : '<div class="diagram-pending">Drawing diagram…</div>') + '</div>';
     }
-    if (lang === 'plot' || lang === 'graph' || lang === 'function-plot') {
-      if (isLastOpen) return '<div class="plot-block" data-key="p-pending"><div class="diagram-pending">Plotting…</div></div>';
-      try { return '<div class="plot-block" data-key="p' + hash(code) + '">' + Plot.render(code) + '</div>'; }
-      catch (e) { return '<div class="plot-block"><div class="diagram-error">Plot error: ' + esc(e.message) + '<pre>' + esc(code) + '</pre></div></div>'; }
-    }
     if ((lang === 'svg' || ((lang === 'xml' || lang === 'html') && /^\s*<svg[\s>]/.test(code))) && !isLastOpen) {
       return '<div class="svg-block" data-key="s' + hash(code) + '">' + DOMPurify.sanitize(code, { USE_PROFILES: { svg: true, svgFilters: true }, ALLOW_DATA_ATTR: false, FORBID_ATTR: ['class', 'id'] }) + '</div>';
     }
@@ -349,7 +353,86 @@
       return '<div class="html-live">' + R.fences.visual(code, ctx, {}) +
         '<details class="visual-source"><summary>Show HTML</summary>' + renderCode(code, 'html', { streamingFence: true }) + '</details></div>';
     }
-    return renderCode(code, lang, isLastOpen ? { streamingFence: true } : env);
+    return renderCode(code, lang, isLastOpen ? { streamingFence: true, live: true } : env);
+  }
+
+  // ── Components: the one path every rich block takes ──
+  const compError = (name, e, code) => '<div class="comp comp-error"><div class="diagram-error">' + esc(name) + ': ' + esc((e && e.message) || e) + (code != null ? '<pre>' + esc(code) + '</pre>' : '') + '</div></div>';
+  const compPending = name => '<div class="comp"><div class="diagram-pending">Building ' + esc(name) + '…</div></div>';
+  /** Parse (lenient JSON unless `raw`), validate (`schema`, `validate`), render — inside an error boundary: a component
+   *  that throws shows a readable box with its source, never a blank or a broken reply. `null` means "not mine": the
+   *  fence falls through to a code block. */
+  function renderComponent(d, lang, code, open, unclosed) {
+    try {
+      if (d.raw) {
+        const out = d.render(code, ctx, { open, lang });
+        if (out == null) return null;
+        return unclosed && /comp-error|diagram-error/.test(out) ? unfinished(lang, code) : out;
+      }
+      if (open) return d.pending ? d.pending(ctx, lang) : compPending(lang);
+      let props;
+      try { props = d.parse ? d.parse(code, ctx) : R.parseLoose(code); }
+      catch (e) {
+        // Prose instead of a spec (the model wrote the content itself): show it as written, not an error.
+        if (d.prose && !/^\s*[\[{]/.test(code)) return '<div class="comp md" data-key="tx' + hash(code) + '">' + markdown(code, false) + '</div>';
+        throw e;
+      }
+      return renderProps(d, lang, props, code, unclosed);
+    } catch (e) {
+      if (unclosed) return unfinished(lang, code);
+      return d.fallback ? d.fallback(code, ctx, e) : compError(lang, e, code);
+    }
+  }
+  function renderProps(d, lang, props, code, unclosed) {
+    try {
+      if (d.schema) R.check(props, d.schema);
+      if (d.validate) { const v = d.validate(props, ctx); if (v !== undefined) props = v; }
+      const out = d.render(props, ctx, { code, lang });
+      return out == null ? null : out;
+    } catch (e) {
+      if (unclosed) return unfinished(lang, code);
+      return d.fallback ? d.fallback(code, ctx, e) : compError(lang, e, code);
+    }
+  }
+  /** ```ui {"component": "chart", "props": {…}}: a component by name. Unknown names render their props readably. */
+  function renderUI(code, open, unclosed) {
+    if (open) return compPending('component');
+    let spec;
+    try { spec = R.parseLoose(code); } catch (e) { return unclosed ? unfinished('ui', code) : compError('ui', e, code); }
+    const name = spec && typeof spec === 'object' ? String(spec.component || spec.type || spec.name || '') : '';
+    const props = spec && spec.props !== undefined ? spec.props : spec;
+    const d = R.components[name];
+    if (!d) {
+      if (R.lazy[name]) { loadComponent(name); return '<div class="comp comp-loading" data-lazy="' + esc(name) + '"><div class="diagram-pending">Loading ' + esc(name) + '…</div></div>'; }
+      return '<div class="comp comp-unknown"><div class="label">' + (name ? esc(name) : 'component') + '</div><pre>' + esc(JSON.stringify(props, null, 2)) + '</pre></div>';
+    }
+    if (d.raw) return renderComponent(d, name, typeof props === 'string' ? props : JSON.stringify(props), false, unclosed);
+    return renderProps(d, name, props, code, unclosed);
+  }
+  // A lazy module (components/manifest.js marks them) loads the first time a reply uses one of its components; the
+  // placeholder is replaced when every message renders again. A module that fails, or doesn't define the name, leaves
+  // the fence to the code-block fallback.
+  const loadingModules = new Set();
+  function loadComponent(name) {
+    const src = R.lazy[name];
+    if (!src || loadingModules.has(src)) return;
+    loadingModules.add(src);
+    const done = ok => {
+      Object.keys(R.lazy).forEach(k => { if (R.lazy[k] === src && (!ok || !R.components[k])) delete R.lazy[k]; });
+      invalidate();
+    };
+    if (R.loadModule) R.loadModule(src).then(done, () => done(false));
+    else { const s = document.createElement('script'); s.src = src; s.onload = () => done(true); s.onerror = () => done(false); document.head.appendChild(s); }
+  }
+  /** Rendered HTML is stale (a theme change, a module that just loaded): every message renders again on the next frame. */
+  function invalidate() {
+    mdCache.clear(); segCache.clear();
+    for (const m of S.messages) {
+      const r = S.byId.get(m.id); if (!r || !r.el) continue;
+      r.el.querySelectorAll('.md').forEach(n => { n._src = null; n._segs = null; });
+      r.el.querySelectorAll('[data-tool-id]').forEach(n => { n._sig = null; });
+      schedule(m.id);
+    }
   }
 
   // Diagrams in the app's own palette (light/dark), rounded, roomy, system font — not Mermaid's stock look.
@@ -499,7 +582,20 @@
   DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
     if (data.attrName === 'style' && node.closest && (node.closest('.katex') || node.closest('svg'))) data.forceKeepAttr = true;
   });
+  // Finished markdown is cached by content, so re-rendering a lesson (paging, a theme change, a card refresh) parses each
+  // block once. The key carries the run outputs' count: a block's HTML gains its output when the learner runs it.
+  const mdCache = new Cache(600, 6e6);
   function markdown(text, streaming) {
+    text = String(text == null ? '' : text);
+    if (streaming || text.length > 20000) return renderMarkdown(text, streaming);
+    const key = S.codeEpoch + '\u0000' + text;
+    const hit = mdCache.get(key);
+    if (hit !== undefined) return hit;
+    const html = renderMarkdown(text, false);
+    mdCache.set(key, html);
+    return html;
+  }
+  function renderMarkdown(text, streaming) {
     const env = { streaming };
     // An odd number of fence markers: the last fence is still open (streaming), or the reply ended inside it (stopped).
     if (text.indexOf('```') >= 0 || text.indexOf('~~~') >= 0) { const f = text.match(/^\s{0,3}(```|~~~)/gm); env.openFence = !!(f && f.length % 2 === 1); }
@@ -625,6 +721,76 @@
   const visibleText = m => (m.blocks || []).filter(b => b.kind === 'text' && !isHidden(b)).map(b => b.text || '').join('\n');
   const isToolResultOnly = m => m.role === 'user' && m.blocks.length > 0 && m.blocks.every(b => b.kind === 'toolResult');
 
+  // ───────────────────────── Nodes ─────────────────────────
+  // A reply renders through its AST (nodes.js): each node type has one renderer (R.nodes), keyed DOM, an error boundary
+  // and an unmount. Rich content is a component inside a text leaf or a tool card, never a node type of its own.
+  const lookup = { result: id => S.results.get(id) || null, pending: id => S.pending.get(id) || null, progress: id => S.progress.get(id) || '' };
+  const nodeError = text => '<div class="node-error">' + text + '</div>';
+  function renderNode(el, n, env) {
+    const d = R.nodes[n.type];
+    el._node = n;
+    if (!d) { el.className = 'node-error'; setHTML(el, nodeError(esc(n.type) + ' cannot be shown by this version of the app.')); return; }
+    try { d.render(el, n, ctx, env); }
+    catch (e) {
+      console.log('node', n.type, e);
+      el.className = 'node-error'; el._src = null; el._html = null;
+      setHTML(el, nodeError('This ' + esc(n.type) + ' could not be shown: ' + esc((e && e.message) || e)));
+    }
+  }
+  function unmountEl(el) {
+    const n = el._node, d = n && R.nodes[n.type];
+    if (d && d.unmount) { try { d.unmount(el, n, ctx); } catch (e) { console.log('unmount', n.type, e); } }
+    el._node = null;
+    unmountComponents(el);
+  }
+  /** Components with an `unmount` (iframes, timers) inside `root`, root included. */
+  function unmountComponents(root) {
+    if (!root || root.nodeType !== 1) return;
+    for (const name in R.components) {
+      const d = R.components[name];
+      if (d.name !== name || !d.unmount || !d.selector) continue;
+      const list = (root.matches(d.selector) ? [root] : []).concat(Array.from(root.querySelectorAll(d.selector)));
+      for (const el of list) { try { d.unmount(el, ctx); } catch (e) { console.log('unmount', name, e); } }
+    }
+  }
+  /** Everything under `root` leaves the page: node and component unmounts run once each. */
+  function unmountTree(root) {
+    root.querySelectorAll('.blocks > div').forEach(el => {
+      const n = el._node, d = n && R.nodes[n.type];
+      if (d && d.unmount) { try { d.unmount(el, n, ctx); } catch (e) { console.log('unmount', n.type, e); } }
+      el._node = null;
+    });
+    unmountComponents(root);
+  }
+  function agentReportHTML(p) {
+    return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(p.handle || '') + '</b> · ' +
+      esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state || 'finished')) + '</span>' +
+      '<button class="btn mini" data-act="agent-open" data-agent="' + esc(p.agent) + '">Open</button></div>' +
+      '<details><summary>Report</summary><div class="md">' + markdown(p.text || '', false) + '</div></details></div>';
+  }
+  R.defineNode({ type: 'text', render(el, n, c, env) {
+    el.className = 'md';
+    // Keyed on the streaming flag as well: when the stream ends, an unclosed fence must render as finished.
+    const src = (env.live ? '\u0001' : '') + n.props.markdown;
+    if (el._src !== src) { morph(el, env.live ? markdownLive(n.props.markdown) : markdown(n.props.markdown, false)); el._src = src; }
+  } });
+  R.defineNode({ type: 'thinking', render(el, n, c, env) { renderThinking(el, { text: n.props.text }, env.live); } });
+  R.defineNode({ type: 'tool',
+    render(el, n, c, env) {
+      el.className = 'tool-wrap';
+      el._block = n.block; el._msgId = env.message.id;
+      el.setAttribute('data-tool-id', n.props.callId); S.cards.set(n.props.callId, el);
+      renderToolCard(el, n.block);
+    },
+    unmount(el, n) { if (S.cards.get(n.props.callId) === el) S.cards.delete(n.props.callId); } });
+  R.defineNode({ type: 'attachment', render(el, n) {
+    el.className = 'attachments';
+    const p = n.props;
+    setHTML(el, p.kind === 'image' ? '<img src="' + esc(imageSrc(p)) + '" alt="">' : '<span class="file-chip">📄 ' + esc(p.name || 'file') + '</span>');
+  } });
+  R.defineNode({ type: 'agentReport', render(el, n) { el.className = ''; setHTML(el, agentReportHTML(n.props)); } });
+  R.defineNode({ type: 'error', render(el, n) { el.className = 'node-error'; setHTML(el, nodeError(esc(n.props.message))); } });
+
   function ensureEl(m) {
     let rec = S.byId.get(m.id);
     if (rec && rec.el) return rec.el;
@@ -656,15 +822,8 @@
   function renderUser(m, el) {
     if (el._editing) return;
     // A background sub-agent's report: a compact notice (the teacher reads it; the learner can open it).
-    const rep = (m.blocks || []).find(b => b.meta && b.meta.agentReport);
-    if (rep) {
-      const r = rep.meta, body = (rep.text || '').replace(/^<background-agent[^>]*>\n?|\n?<\/background-agent>\s*$/g, '');
-      el.className = 'msg agent-note';
-      return setHTML(el, '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(r.handle || '') + '</b> · ' +
-        esc(r.title || '') + ' — ' + (r.state === 'done' ? 'finished' : esc(r.state || 'finished')) + '</span>' +
-        '<button class="btn mini" data-act="agent-open" data-agent="' + esc(r.agentReport) + '">Open</button></div>' +
-        '<details><summary>Report</summary><div class="md">' + markdown(body, false) + '</div></details></div>');
-    }
+    const rep = R.ast.toNodes(m).children.find(n => n.type === 'agentReport');
+    if (rep) { el.className = 'msg agent-note'; return setHTML(el, agentReportHTML(rep.props)); }
     const imgs = m.blocks.filter(b => b.kind === 'image'), files = m.blocks.filter(b => b.kind === 'file');
     const text = visibleText(m);
     let html = '';
@@ -706,36 +865,24 @@
     } else if (note) note.remove();
     const streaming = S.streamingId === m.id;
     const kids = blocksEl.children;
-    const blocks = m.blocks || [];
+    const msgNode = R.ast.toNodes(m, lookup);
+    const lastIndex = (m.blocks || []).length - 1;
     let vi = 0;
-    blocks.forEach((b, i) => {
-      if (b.kind === 'thinking' && (!(b.text || '').trim() || !S.showThinking)) return;
-      if (b.kind === 'text' && !(b.text || '').length) return;
+    for (const n of msgNode.children) {
+      if (n.type === 'thinking' && (!n.props.text.trim() || !S.showThinking)) continue;
+      if (n.type === 'text' && !n.props.markdown.length) continue;
       let node = kids[vi];
-      const want = b.kind + ':' + (b.kind === 'toolUse' ? b.id : i);
-      if (!node || node._key !== want) {
+      // Keyed by node id and type: a block that changes kind at the same position gets a fresh element.
+      if (!node || node._key !== n.id || node._type !== n.type) {
         const fresh = document.createElement('div');
-        fresh._key = want;
+        fresh._key = n.id; fresh._type = n.type;
         if (node) blocksEl.insertBefore(fresh, node); else blocksEl.appendChild(fresh);
         node = fresh;
       }
-      const isLast = i === blocks.length - 1;
-      if (b.kind === 'text') {
-        node.className = 'md';
-        // Keyed on the streaming flag as well: when the stream ends, an unclosed fence must render as finished.
-        const live = streaming && isLast, src = (live ? '\u0001' : '') + b.text;
-        if (node._src !== src) { morph(node, live ? markdownLive(b.text) : markdown(b.text, false)); node._src = src; }
-      } else if (b.kind === 'thinking') {
-        renderThinking(node, b, streaming && isLast);
-      } else if (b.kind === 'toolUse') {
-        node.className = 'tool-wrap';
-        node._block = b;
-        node.setAttribute('data-tool-id', b.id); S.cards.set(b.id, node);
-        renderToolCard(node, b);
-      }
+      renderNode(node, n, { live: streaming && n.index === lastIndex, streaming, message: m });
       vi++;
-    });
-    while (kids.length > vi) blocksEl.removeChild(kids[kids.length - 1]);
+    }
+    while (kids.length > vi) { const last = kids[kids.length - 1]; unmountEl(last); blocksEl.removeChild(last); }
     let tail = el.querySelector(':scope > .tail');
     if (!tail) { tail = document.createElement('div'); tail.className = 'tail'; el.appendChild(tail); }
     let th = '';
@@ -746,7 +893,7 @@
       const { msgs, user } = turnOf(m.id);
       th += R.footers.map(f => f(m, msgs, user, ctx)).join('');
     }
-    if (!streaming && endsTurn(m) && blocks.some(b => b.kind === 'text' && (b.text || '').trim())) {
+    if (!streaming && endsTurn(m) && msgNode.children.some(n => n.type === 'text' && n.props.markdown.trim())) {
       th += '<div class="msg-actions"><button data-act="copy-msg">Copy</button><button data-act="speak">Read aloud</button>' +
         '<button data-act="regenerate">Regenerate</button>' +
         '<button class="chip" data-act="quick" data-q="simpler">Explain simpler</button>' +
@@ -775,6 +922,8 @@
     return (text.match(/^\s*```/gm) || []).length % 2 ? text + '\n```' : text;
   }
 
+  /** Thinking streams as plain text — one text node, updated per frame — and becomes markdown once it finishes (or the
+   *  learner opens a finished block). Parsing all the reasoning on every frame is what made long thoughts stutter. */
   function renderThinking(node, b, live) {
     node.className = '';
     let d = node.querySelector('details');
@@ -784,21 +933,40 @@
       d.addEventListener('toggle', () => {
         if (d._prog) { d._prog = false; return; }
         d._user = true;
-        const body = d.querySelector('.thinking-body');
-        if (d.open && d._b && body._src !== d._b.text) { morph(body, markdown(closedFences(d._b.text), false)); body._src = d._b.text; }
+        if (d.open && d._b && !d._live) renderThinkingMarkdown(d, d._b);
       });
     }
     const setOpen = v => { if (d.open !== v) { d._prog = true; d.open = v; } };
     d._b = b;
+    d._live = live;
     d.classList.toggle('live', live);
     if (!d._user) setOpen(live);
     const words = (b.text || '').trim().split(/\s+/).length;
     d.querySelector('summary').textContent = live ? 'Thinking…' : 'Thought process · ' + words + ' words';
     const body = d.querySelector('.thinking-body');
-    if (body._src !== b.text && d.open) {
-      morph(body, markdown(closedFences(b.text), live)); body._src = b.text;
-      if (live) body.scrollTop = body.scrollHeight;
+    if (!live) d.classList.remove('raw');
+    if (!d.open) return;
+    if (live) {
+      const t = b.text || '';
+      d.classList.add('raw');
+      if (body._plain !== t) {
+        const n = body.firstChild;
+        if (n && n.nodeType === 3 && body.childNodes.length === 1) n.nodeValue = t;
+        else body.textContent = t;
+        body._plain = t; body._src = null;
+        body.scrollTop = body.scrollHeight;
+      }
+    } else {
+      renderThinkingMarkdown(d, b);
     }
+  }
+
+  function renderThinkingMarkdown(d, b) {
+    const body = d.querySelector('.thinking-body');
+    const text = closedFences(b.text || '');
+    if (body._src === text) return;
+    morph(body, markdown(text, false));
+    body._src = text; body._plain = null;
   }
 
   // Large images live on disk (Swift's blob store) and load by reference; small ones may still be inline.
@@ -806,185 +974,68 @@
     : b.data && /^[A-Za-z0-9+/=\s]*$/.test(b.data) ? 'data:' + (/^image\/[\w.+-]+$/.test(b.mime || '') ? b.mime : 'image/png') + ';base64,' + b.data : '';
 
   // ───────────────────────── Tool cards ─────────────────────────
-  const TOOL_META = {
-    bash: ['⌘', 'Terminal'], read: ['📄', 'Read'], write: ['✏️', 'Write'], edit: ['✏️', 'Edit'], ls: ['📁', 'List'],
-    glob: ['🔎', 'Find files'], grep: ['🔎', 'Search files'], web_search: ['🌐', 'Web search'], web_fetch: ['🌐', 'Read page'],
-    run_code: ['▶︎', 'Run code'], math: ['∑', 'Math'], todo_write: ['☑︎', 'Checklist'], task: ['🧭', 'Sub-agent'],
-    flashcards: ['🗂', 'Flashcards'], mastery: ['📈', 'Mastery'], lesson_plan: ['🗺', 'Learning plan'], memory_search: ['🧠', 'Recall'],
-    memory_save: ['🧠', 'Remember'], memory_update: ['🧠', 'Update memory'], memory_forget: ['🧠', 'Forget'], memory: ['🧠', 'Memory'],
-    load_tools: ['🧰', 'Load tools'], agents: ['🧭', 'Sub-agents'], project_memory: ['📒', 'Project memory'],
-    browser: ['🌐', 'Browser'], computer: ['🖥', 'Computer'], mac: ['🖥', 'Mac apps'],
-  };
-  const MEMORY_TITLES = { search: 'Recall', save: 'Remember', update: 'Update memory', forget: 'Forget' };
-  function summaryOf(b) {
-    const i = b.input || {};
-    switch (b.name) {
-      case 'bash': return i.command || '';
-      case 'read': case 'write': case 'edit': case 'ls': return i.path || '';
-      case 'glob': case 'grep': return i.pattern || '';
-      case 'web_search': return i.query || '';
-      case 'web_fetch': return i.url || '';
-      case 'run_code': return (i.language || '') + ' snippet';
-      case 'math': return (i.operation || '') + ' ' + (i.expression || '');
-      case 'task': return (i.resume ? '↻ ' + i.resume + ' · ' : '') + (i.description || '') + (i.model ? ' · ' + i.model : '');
-      case 'agents': return (i.action || '') + (i.id ? ' ' + i.id : '');
-      case 'project_memory': return (i.action === 'add' ? (i.section ? i.section + ': ' : '') : (i.action || 'view') + ' ') + (i.text || '');
-      case 'memory_save': return (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '');
-      case 'memory_search': return i.query || '';
-      case 'memory_update': case 'memory_forget': return '#' + (i.id || '');
-      case 'memory': return i.action === 'search' ? (i.query || '') : i.action === 'save' ? (i.scope === 'folder' ? '[folder] ' : '') + (i.content || '')
-        : '#' + (i.id || '') + (i.content ? ' ' + i.content : '');
-      case 'load_tools': return (i.names || []).join(', ');
-      case 'browser': return (i.action || '') + ' ' + (i.url || i.ref || i.text || i.key || i.selector || (i.fields ? i.fields.length + ' fields' : ''));
-      case 'computer': return (i.action || '') + (i.coordinate ? ' (' + i.coordinate.join(', ') + ')' : '') + (i.text ? ' ' + i.text : '');
-      case 'mac': return (i.action || '') + ' ' + ((i.apps || []).join(', ') || i.app || i.ref || i.query || '');
-      case 'flashcards': return (i.action || '') + ' ' + (i.deck || '') + (i.cards ? ' · ' + i.cards.length + ' cards' : '');
-      case 'mastery': return (i.action || '') + ' ' + (i.concept || i.subject || '');
-      case 'lesson_plan': return (i.action || '') + ' ' + (i.title || i.card || i.id || i.plan || '');
-      default: return '';
-    }
+  // Presentation lives in components/tools/*.js: `R.tool(name)` merges a tool's descriptor (icon, title, summary, body,
+  // open, compact, headActions, card) over the generic default below. The core draws only the frame.
+  const pre = (t, max = 20000) => '<pre>' + esc(t.length > max ? t.slice(0, max) + '\n…' : t) + '</pre>';
+  const fmtMs = ms => ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s';
+  R.defineTool({ name: 'default', icon: '🔧', title: n => n.props.name, summary: () => '',
+    body(n, c) {
+      const i = n.props.input || {}, out = n.props.output || '';
+      return (Object.keys(i).length ? '<div class="label">Input</div>' + c.pre(JSON.stringify(i, null, 2)) : '') + (out ? '<div class="label">Result</div>' + c.pre(out) : '');
+    } });
+  /** The tool node for a card's block (the message id is remembered on the element, so a refresh needs no message). */
+  function toolNode(el, b) {
+    const msgEl = el.closest ? el.closest('.msg') : null;
+    return R.ast.toNodes({ id: el._msgId || (msgEl ? msgEl.id.slice(2) : ''), blocks: [b] }, lookup).children[0];
+  }
+  /** One failing descriptor must not blank the card or the reply. */
+  function guard(what, fn, fallback) {
+    try { return fn(); }
+    catch (e) { console.log('tool', what, e); return fallback !== undefined ? fallback : nodeError(esc(what) + ' could not be shown: ' + esc((e && e.message) || e)); }
   }
 
-  function renderToolCard(node, b) {
+  /** Everything a card's HTML depends on, cheaply: an unchanged card must not be rebuilt while a reply streams (the plan
+   *  markdown, a 20k-character output and its escaping would otherwise run on every frame). */
+  function toolSignature(b) {
+    const r = S.results.get(b.id), pend = S.pending.get(b.id);
+    const meta = r && r.meta ? [r.meta.ms, r.meta.running ? 1 : 0, r.meta.handle, r.meta.agentID, r.meta.background ? 1 : 0,
+      r.meta.state, r.meta.latex, r.meta.title, r.meta.agentReport].join(',') : '';
+    return [b.id, b.name, S.openTools.has(b.id) ? 1 : 0, b.meta && b.meta.pending ? 1 : 0,
+      r ? (r.text || '').length + ':' + (r.isError ? 1 : 0) + ':' + meta : 'running',
+      pend ? pend.kind + ':' + ((pend.payload && (pend.payload.title || '')) || '') : '',
+      (S.progress.get(b.id) || '').length].join('|');
+  }
+
+  function renderToolCard(node, b, force) {
     if (!b) return;
-    const r = S.results.get(b.id);
-    const pend = S.pending.get(b.id);
-    const pendingCall = b.meta && b.meta.pending;
-    const custom = R.toolCards[b.name];
-    if (custom && !pendingCall && !(pend && pend.kind === 'permission')) {
-      const out = custom(b, r, pend, ctx);
+    const sig = toolSignature(b);
+    if (!force && node._sig === sig) return;
+    node._sig = sig;
+    const tn = toolNode(node, b), p = tn.props, d = R.tool(b.name);
+    const r = p.result, pend = p.interaction;
+    const pendingCall = p.status === 'pending';
+    if (d.card && !pendingCall && !(pend && pend.kind === 'permission')) {
+      const out = guard(b.name, () => d.card(b, r, pend, ctx));
       if (out != null) return setHTML(node, out);
     }
-    let [icon, title] = TOOL_META[b.name] || ['🔧', b.name];
-    if (b.name === 'memory' && b.input && MEMORY_TITLES[b.input.action]) title = MEMORY_TITLES[b.input.action];
-    const running = pendingCall || !r || (r.meta && r.meta.running);
-    const isErr = r && r.isError;
-    const compact = ['memory', 'memory_save', 'memory_search', 'memory_update', 'memory_forget', 'mastery', 'load_tools', 'project_memory'].includes(b.name) && !pend;
-    const open = S.openTools.has(b.id) || b.name === 'todo_write' || (b.name === 'lesson_plan' && r && !running);
+    const icon = d.icon || '🔧';
+    const title = typeof d.title === 'function' ? guard(b.name, () => d.title(tn), b.name) : (d.title || b.name);
+    const running = pendingCall || p.status === 'running';
+    const isErr = p.status === 'error';
+    const compact = !!d.compact && !pend;
+    const open = S.openTools.has(b.id) || !!(d.open && guard(b.name, () => d.open(tn), false));
     let state = running ? '<span class="spinner"></span>' : (isErr ? 'failed' : (r && r.meta && r.meta.ms ? fmtMs(r.meta.ms) : '✓'));
     if (pend && pend.kind === 'permission') state = 'needs approval';
     let html = '';
     if (pend && pend.kind === 'permission') html += renderApproval(b, pend);
-    // Sub-agents: open the live transcript in the right-hand panel, or stop just this one.
-    const agentID = (r && r.meta && r.meta.agentID) || (b.input && b.input.resume) || b.id;
-    const bg = r && r.meta && r.meta.background;
-    const agentActs = b.name !== 'task' || pendingCall || (!running && !bg && !(r && r.meta && (r.meta.subagent || r.meta.agentID))) ? ''
-      : '<span class="tool-acts">' + (r && r.meta && r.meta.handle ? '<span class="agent-handle">' + esc(r.meta.handle) + (bg ? ' · background' : '') + '</span>' : '') +
-        '<button class="btn mini" data-act="agent-open" data-agent="' + esc(agentID) + '">Open</button>' +
-        (running ? '<button class="btn mini danger" data-act="agent-stop" data-agent="' + esc(agentID) + '">Stop</button>' : '') + '</span>';
+    const acts = d.headActions ? guard(b.name, () => d.headActions(tn, ctx) || '', '') : '';
+    const summary = d.summary ? guard(b.name, () => d.summary(tn) || '', '') : '';
     html += '<div class="tool' + (open ? ' open' : '') + (isErr ? ' error' : '') + (compact && !open ? ' compact' : '') + '">' +
       '<div class="head" data-act="toggle-tool"><span class="icon">' + icon + '</span><span class="name">' + esc(title) + '</span>' +
-      '<span class="sum">' + esc(summaryOf(b)) + '</span>' + agentActs + '<span class="state">' + state + '</span></div>' +
-      '<div class="body">' + (open ? toolBody(b, r) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
+      '<span class="sum">' + esc(summary) + '</span>' + acts + '<span class="state">' + state + '</span></div>' +
+      '<div class="body">' + (open ? guard(b.name, () => (d.body || R.tools.default.body)(tn, ctx)) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
     setHTML(node, html);
   }
-  const fmtMs = ms => ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s';
-
-  function toolBody(b, r) {
-    const i = b.input || {};
-    const out = r ? (r.text || '') : (S.progress.get(b.id) || '');
-    const pre = (s, max = 20000) => '<pre>' + esc(s.length > max ? s.slice(0, max) + '\n…' : s) + '</pre>';
-    switch (b.name) {
-      case 'bash': return '<div class="label">Command</div>' + pre(i.command || '') + (out ? '<div class="label">Output</div>' + pre(out) : '');
-      case 'run_code': return renderCode(i.code || '', i.language || '', { streamingFence: true }) + (out ? '<div class="label">Output</div>' + pre(out) : '');
-      case 'web_search': {
-        const res = r && r.meta && r.meta.results;
-        if (!res) return out ? pre(out) : '';
-        return '<ul class="results">' + res.map(x => '<li><a class="t" href="' + esc(x.url) + '">' + esc(x.title) + '</a><div class="u">' + esc(x.url) + '</div><div class="s">' + esc(x.snippet) + '</div></li>').join('') + '</ul>';
-      }
-      case 'web_fetch': {
-        const t = r && r.meta && r.meta.title;
-        return '<div><a href="' + esc(i.url) + '">' + esc(t || i.url) + '</a></div>' + (out ? '<div class="label">Extracted</div>' + pre(out, 4000) : '');
-      }
-      case 'edit': return '<div class="label">' + esc(i.path) + '</div><pre class="diff"><span class="del">' + esc(i.old_string || '') + '</span><span class="add">' + esc(i.new_string || '') + '</span></pre>' + (out ? '<div class="label">Result</div>' + pre(out) : '');
-      case 'write': return renderCode(i.content || '', (i.path || '').split('.').pop(), { streamingFence: true }) + (out ? pre(out) : '');
-      case 'math': { const latex = r && r.meta && r.meta.latex; return (latex ? tex(latex, true) : '') + (out ? pre(out) : ''); }
-      case 'todo_write':
-        return '<ul class="todo">' + (i.todos || []).map(t => '<li class="' + esc(t.status) + '">' + (t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○') + ' <span>' + esc(t.content) + '</span></li>').join('') + '</ul>';
-      case 'flashcards':
-        if (i.action === 'add' && i.cards) return '<div class="md">' + i.cards.slice(0, 30).map(c => '<p><b>Q:</b> ' + inline(c.front) + '<br><b>A:</b> ' + inline(c.back) + '</p>').join('') + '</div>' + (out ? pre(out) : '');
-        return out ? pre(out) : '';
-      case 'browser': case 'computer': case 'mac': {
-        // What the agent did and saw: the screenshot, and the result without the untrusted-content envelope.
-        const shot = r ? imageSrc(r) : '';
-        const shown = out.replace(/^Everything until <\/untrusted_\w+> comes from[^\n]*\n/gm, '').replace(/<\/?untrusted_\w+_content[^>]*>\n?/g, '');
-        return (shot ? '<img class="tool-shot" src="' + esc(shot) + '" alt="">' : '') + (shown ? pre(shown, 8000) : '');
-      }
-      case 'lesson_plan': return planBody(b, r);
-      case 'task': return '<div class="label">Brief</div><div class="md">' + markdown(i.prompt || '', false) + '</div>' + (out ? '<div class="label">Report</div><div class="md">' + markdown(out, false) + '</div>' : (S.progress.get(b.id) ? pre(S.progress.get(b.id)) : ''));
-      default: return (Object.keys(i).length ? '<div class="label">Input</div>' + pre(JSON.stringify(i, null, 2)) : '') + (out ? '<div class="label">Result</div>' + pre(out) : '');
-    }
-  }
-
-  /** A lesson plan as a real curriculum: title, goal, then modules with their status and objectives (never one paragraph). */
-  function planBody(b, r) {
-    const i = b.input || {};
-    const structured = (r && r.meta && r.meta.plan) || (Array.isArray(i.modules) ? i : null);
-    const out = r ? (r.text || '') : (S.progress.get(b.id) || '');
-    if (structured && Array.isArray(structured.cards)) return boardBody(structured);
-    if (!structured || !Array.isArray(structured.modules)) {
-      return out ? '<div class="md plan">' + markdown(hardLines(out), false) + '</div>' : '';
-    }
-    const mods = structured.modules || [];
-    const done = mods.filter(m => m.status === 'done').length;
-    const title = String(structured.title || 'Learning plan').replace(/\s*\[plan-[0-9a-z]+\]\s*$/i, '');
-    let html = '<div class="plan-card"><div class="plan-top"><div class="plan-title">' + inline(title) + '</div><div class="plan-meta">' +
-      '<span class="pill">' + mods.length + ' module' + (mods.length === 1 ? '' : 's') + '</span>' +
-      (done ? '<span class="pill good">' + done + ' done</span>' : '') +
-      (structured.subject ? '<span class="pill">' + esc(structured.subject) + '</span>' : '') + '</div></div>';
-    if (structured.goal) html += '<div class="plan-goal"><b>Goal</b> ' + inline(structured.goal) + '</div>';
-    html += '<ol class="plan-mods">' + mods.map((m, n) => {
-      const status = ['done', 'in_progress', 'todo'].includes(m.status) ? m.status : 'todo';
-      const mark = status === 'done' ? '✓' : status === 'in_progress' ? '▸' : '';
-      const objs = (m.objectives || []).filter(o => o != null && String(o).trim());
-      return '<li class="plan-mod plan-' + status + '"><span class="plan-mark" aria-hidden="true">' + mark + '</span><div class="plan-body">' +
-        '<div class="plan-mtitle"><span class="plan-n">' + (n + 1) + '</span>' + inline(m.title || '') + '</div>' +
-        (objs.length ? '<ul class="plan-objs">' + objs.map(o => '<li>' + inline(o) + '</li>').join('') + '</ul>' : '') +
-        '</div></li>';
-    }).join('') + '</ol></div>';
-    return html;
-  }
-  /** The course board: the focus card first (title + the concrete next action), then the lanes; parked detours last. */
-  function boardBody(bd) {
-    const cards = bd.cards || [];
-    const title = String(bd.title || 'Course board').replace(/\s*\[plan-[0-9a-z]+\]\s*$/i, '');
-    const course = cards.filter(c => c.lane !== 'parked');
-    const done = course.filter(c => c.lane === 'done').length;
-    const parked = cards.filter(c => c.lane === 'parked');
-    const focus = cards.find(c => c.id === bd.focus && c.lane === 'doing') || cards.find(c => c.lane === 'doing');
-    const id = c => '<span class="board-id">' + esc(String(c.id || '').toUpperCase()) + '</span>';
-    let html = '<div class="plan-card board"><div class="plan-top"><div class="plan-title">' + inline(title) + '</div><div class="plan-meta">' +
-      '<span class="pill">' + course.length + ' card' + (course.length === 1 ? '' : 's') + '</span>' +
-      (done ? '<span class="pill good">' + done + ' done</span>' : '') +
-      (parked.length ? '<span class="pill">' + parked.length + ' parked</span>' : '') +
-      (bd.subject ? '<span class="pill">' + esc(bd.subject) + '</span>' : '') +
-      (bd.deadline ? '<span class="pill">due ' + esc(bd.deadline) + '</span>' : '') + '</div></div>';
-    if (bd.goal) html += '<div class="plan-goal"><b>Goal</b> ' + inline(bd.goal) + '</div>';
-    if (focus) {
-      html += '<div class="board-focus"><div class="board-lane-name">Focus</div><div class="board-focus-title">' + id(focus) + inline(focus.title || '') + '</div>' +
-        '<div class="board-next">' + (focus.next ? '<b>Next</b> ' + inline(focus.next) : '<span class="board-nonext">next action not set</span>') + '</div>' +
-        ((focus.objectives || []).length ? '<ul class="plan-objs">' + focus.objectives.map(o => '<li>' + inline(String(o)) + '</li>').join('') + '</ul>' : '') +
-        ((focus.evidence || []).length ? '<div class="board-evidence">' + inline(focus.evidence.slice(-2).join(' · ')) + '</div>' : '') + '</div>';
-    }
-    const lanes = [['review', 'Review'], ['backlog', 'Up next'], ['done', 'Done']];
-    for (const [lane, name] of lanes) {
-      const cs = cards.filter(c => c.lane === lane);
-      if (!cs.length) continue;
-      html += '<div class="board-lane board-' + lane + '"><div class="board-lane-name">' + name + ' · ' + cs.length + '</div><ol class="plan-mods">' + cs.map(c =>
-        '<li class="plan-mod plan-' + (lane === 'done' ? 'done' : 'todo') + '"><span class="plan-mark" aria-hidden="true">' + (lane === 'done' ? '✓' : lane === 'review' ? '↻' : '') + '</span><div class="plan-body">' +
-        '<div class="plan-mtitle">' + id(c) + inline(c.title || '') + '</div>' +
-        (c.next && lane !== 'done' ? '<div class="board-cnext">' + inline(c.next) + '</div>' : '') +
-        (c.after && c.after.length && lane !== 'done' ? '<div class="board-after">after ' + esc(c.after.map(a => String(a).toUpperCase()).join(', ')) + '</div>' : '') +
-        (lane === 'done' && (c.evidence || []).length ? '<div class="board-evidence">' + inline(c.evidence[c.evidence.length - 1]) + '</div>' : '') +
-        '</div></li>').join('') + '</ol></div>';
-    }
-    if (parked.length) {
-      html += '<details class="board-parked"><summary>Parked · ' + parked.length + '</summary><ul class="board-parked-list">' + parked.map(c =>
-        '<li>' + id(c) + inline(c.title || '') + (c.parked_reason ? ' <span class="board-reason">— ' + inline(c.parked_reason) + '</span>' : '') + '</li>').join('') + '</ul></details>';
-    }
-    return html + '</div>';
-  }
-
 
   function renderApproval(b, pend) {
     const p = pend.payload || {};
@@ -997,11 +1048,16 @@
   function refreshCard(toolId) {
     const el = document.querySelector('[data-tool-id="' + CSS.escape(toolId) + '"]');
     if (!el) return;
-    el._html = null; renderToolCard(el, el._block);   // setHTML keeps focus and caret
+    el._html = null; renderToolCard(el, el._block, true);   // setHTML keeps focus and caret
   }
   const ctx = {
-    esc, hash, tex, post, inline,
+    esc, hash, tex, post, inline, pre, hardLines, fmtMs,
+    check: R.check,
     pending: id => S.pending.get(id),
+    result: id => S.results.get(id) || null,
+    progress: id => S.progress.get(id) || '',
+    imageSrc: b => imageSrc(b || {}),
+    code: (code, lang) => renderCode(String(code == null ? '' : code), lang || '', { streamingFence: true }),
     md: (s) => markdown(String(s == null ? '' : s), false),
     flash(el, text) { const t = el.textContent; el.textContent = text; setTimeout(() => { el.textContent = t; }, 1100); },
     refreshCard,
@@ -1036,7 +1092,7 @@
     switch (act) {
       case 'toggle-tool':
         if (S.openTools.has(toolId)) S.openTools.delete(toolId); else S.openTools.add(toolId);
-        toolEl._html = null; renderToolCard(toolEl, toolEl._block); break;
+        toolEl._html = null; renderToolCard(toolEl, toolEl._block, true); break;
       case 'copy-code': { const k = el.closest('.code-block').getAttribute('data-key'); post({ type: 'copy', text: codeSources.get(k) || '' }); ctx.flash(el, 'Copied'); break; }
       case 'copy-src': post({ type: 'copy', text: mermaidSrc.get(el.getAttribute('data-src-key')) || '' }); ctx.flash(el, 'Copied'); break;
       case 'run': {
@@ -1127,6 +1183,7 @@
       S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear(); S.cards.clear();
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;
+      unmountTree(thread);
       thread.innerHTML = '';
       // Empty with older messages on disk (the first loaded message was edited away): the way back, not the welcome.
       if (!messages.length && opts && opts.earlier > 0) { T.earlier(opts.earlier); return; }
@@ -1175,7 +1232,7 @@
     interaction(p, active) {
       if (active) S.pending.set(p.id, p); else S.pending.delete(p.id);
       const el = document.querySelector('[data-tool-id="' + CSS.escape(p.id) + '"]');
-      if (el) { el._html = null; renderToolCard(el, el._block); if (active) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
+      if (el) { el._html = null; renderToolCard(el, el._block, true); if (active) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
     },
     status(text, running) {
       S.running = !!running;
@@ -1184,7 +1241,7 @@
       statusEl.querySelector('.label').textContent = text || '';
     },
     codeOutput(key, text, failed) {
-      S.codeOutputs.set(key, { text, failed });
+      S.codeOutputs.set(key, { text, failed }); S.codeEpoch++;
       document.querySelectorAll('.code-block[data-key="' + key + '"]').forEach(el => {
         let o = el.querySelector('.code-output');
         if (!o) { o = document.createElement('div'); el.appendChild(o); }
@@ -1202,7 +1259,7 @@
       const i = S.messages.findIndex(m => m.id === id);
       if (i <= 0) return;
       for (const m of S.messages.splice(0, i)) {
-        const el = document.getElementById('m-' + m.id); if (el) el.remove();
+        const el = document.getElementById('m-' + m.id); if (el) { unmountTree(el); el.remove(); }
         S.byId.delete(m.id);
         (m.blocks || []).forEach(b => { S.cards.delete(b.id); S.progress.delete(b.id); });
         if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.delete(b.id));
@@ -1219,6 +1276,7 @@
     setFontSize(px) { document.documentElement.style.setProperty('--font-size', px + 'px'); },
     card(front, back, show) {
       document.body.classList.add('card-mode');
+      unmountTree(thread);
       thread.innerHTML = '<div class="flashcard"><div class="face md">' + markdown(front || '', false) + '</div>' +
         (show ? '<div class="divider"></div><div class="face back md">' + markdown(back || '', false) + '</div>' : '') + '</div>';
       processNode(thread);
@@ -1226,9 +1284,9 @@
     scrollToBottom() { stick = true; scrollBottom(true); },
   };
   darkMQ.addEventListener('change', () => {
-    mermaidSvg.clear();
+    mermaidSvg.clear();   // diagram placeholders are keyed by the theme
     if (window.mermaid) mermaid.initialize(mermaidConfig());
-    for (const m of S.messages) { const r = S.byId.get(m.id); if (r && r.el) { r.el.querySelectorAll('.md').forEach(n => { n._src = null; }); schedule(m.id); } }
+    invalidate();
   });
   post({ type: 'ready' });
 })();
