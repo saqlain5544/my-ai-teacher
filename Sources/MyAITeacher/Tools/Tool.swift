@@ -51,6 +51,8 @@ struct ToolContext: Sendable {
     var quizzes = true
     /// Code agent mode: files written or edited are syntax-checked at once, and `bash` may run in the background.
     var codeAgent = false
+    /// The code agent's checkpoint key for this turn: sub-agents working in the lesson's folder back files up under it.
+    var checkpointTurn: String? = nil
 }
 
 protocol Tool: Sendable {

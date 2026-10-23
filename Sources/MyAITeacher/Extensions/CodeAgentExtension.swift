@@ -21,6 +21,8 @@ final class CodeAgentExtension: AgentExtension {
         return k
     }
 
+    func currentTurnKey(_ session: ChatSession) -> String? { session.conversation.mode.isAgent ? key(for: session) : nil }
+
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision {
         guard session.conversation.mode.isAgent, Self.writers.contains(tool.name), let p = call.input?["path"]?.string else { return .allow }
         Checkpoints.backup(session.services.workspace, turn: key(for: session), file: resolvePath(p, workspace: session.services.workspace.url))

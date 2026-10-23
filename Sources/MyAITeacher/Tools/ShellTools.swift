@@ -9,6 +9,24 @@ actor ShellState {
     func set(_ conv: String, _ u: URL) { cwd[conv] = u }
     /// B1, B2… per lesson, for commands run in the background.
     func nextHandle(_ conv: String) -> String { handles[conv, default: 0] += 1; return "B\(handles[conv]!)" }
+
+    private var tasks: [String: [String: Task<Void, Never>]] = [:]
+    private var doneEarly: Set<String> = []
+    /// Remembers a running background command so Stop can end it.
+    func register(_ conv: String, handle: String, task: Task<Void, Never>) {
+        if doneEarly.remove("\(conv)/\(handle)") != nil { return }
+        tasks[conv, default: [:]][handle] = task
+    }
+    func finished(_ conv: String, handle: String) {
+        if tasks[conv]?.removeValue(forKey: handle) == nil { doneEarly.insert("\(conv)/\(handle)") }
+        if tasks[conv]?.isEmpty == true { tasks[conv] = nil }
+    }
+    /// Cancels every background command of the lesson (the processes are terminated) and forgets them.
+    func stopAll(_ conv: String) {
+        for t in (tasks[conv] ?? [:]).values { t.cancel() }
+        tasks[conv] = nil
+    }
+    func running(_ conv: String) -> [String] { (tasks[conv] ?? [:]).keys.sorted() }
 }
 
 struct BashTool: Tool {
@@ -51,6 +69,8 @@ struct BashTool: Tool {
         if text.isEmpty { text = "(no output)" }
         if r.timedOut { text += "\n[timed out after \(Int(timeout)) s]" }
         if r.exitCode != 0 { text += "\n[exit code \(r.exitCode)]" }
+        let bg = await ShellState.shared.running(ctx.conversationID)
+        if !bg.isEmpty { text += "\nBackground commands still running: \(bg.joined(separator: ", "))." }
         return ToolOutput(text: text, isError: r.exitCode != 0 && !r.timedOut ? false : r.timedOut, meta: ["exit": .number(Double(r.exitCode))])
     }
 
@@ -61,9 +81,11 @@ struct BashTool: Tool {
         let conv = ctx.conversationID, outputs = ctx.services.workspace.outputsDir
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
         let title = input["description"]?.string ?? String(command.prefix(80))
-        Task.detached(priority: .utility) {
+        let task = Task.detached(priority: .utility) {
             let started = Date()
             let r = await ProcessRunner.run(shell, ["-c", command], cwd: cwd, timeout: timeout)
+            await ShellState.shared.finished(conv, handle: handle)
+            if Task.isCancelled { return }
             var out = r.combined
             if out.count > 30_000 {
                 let url = outputs.appendingPathComponent("bash-\(handle)-\(Int(started.timeIntervalSince1970)).txt")
@@ -77,7 +99,8 @@ struct BashTool: Tool {
             let msg = ChatMessage(role: .user, blocks: [Block(kind: .text, text: text, meta: ["backgroundTask": .string(handle), "title": .string(title), "exit": .number(Double(r.exitCode)), "seconds": .number(Double(secs))])])
             await MainActor.run { AppModel.shared.session(for: conv)?.deliver(msg) }
         }
-        return ToolOutput(text: "Started in the background as \(handle): `\(command)` (timeout \(Int(timeout)) s). Its output arrives as a <background-task id=\"\(handle)\"> message when it finishes; carry on with other work and don't poll for it.",
+        await ShellState.shared.register(conv, handle: handle, task: task)
+        return ToolOutput(text: "Started in the background as \(handle): `\(command)` (timeout \(Int(timeout)) s). Its output arrives as a <background-task id=\"\(handle)\"> message when it finishes; carry on with other work and don't poll for it. Stop ends it.",
                           meta: ["background": .string(handle)])
     }
 }
