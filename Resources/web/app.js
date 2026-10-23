@@ -870,7 +870,7 @@
         files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
-    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button></div>';
+    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button>' + (R.userActions ? R.userActions(m) : '') + '</div>';
     setHTML(el, html);
   }
 

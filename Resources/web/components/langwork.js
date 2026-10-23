@@ -297,11 +297,6 @@
     const host = el.closest('[data-rd-key]') || el.closest('.lw-reading');
     return host ? readers.get(host.getAttribute('data-rd-key') || host.getAttribute('data-key')) : null;
   }
-  function popFor(key, create) {
-    let p = document.querySelector('.rd-pop[data-rd-key="' + CSS.escape(key) + '"]');
-    if (!p && create) { p = document.createElement('div'); p.className = 'rd-pop'; p.hidden = true; p.setAttribute('data-rd-key', key); document.body.appendChild(p); }
-    return p;
-  }
   R.registerAction('rd-mode', el => { const st = stateOf(el); if (!st) return; st.mode = el.getAttribute('data-v'); refreshReading(st.key); });
   const sentenceText = (st, si) => { const s = st.sentences[si]; return s ? st.text.slice(s[0], s[1]).trim() : ''; };
   R.registerAction('rd-say', (el, e) => {
@@ -340,44 +335,106 @@
     el.disabled = true; el.textContent = '✓ Logged';
   });
 
-  // Click a word: its reading, meaning and dictionary entry, with Save (the sentence goes with it).
+  // ── Lookups: a word of a reading passage, or any word selected anywhere in the lesson ──
+  // One popover on the page (a message's paint containment would clip one inside it), showing one lookup at a time:
+  // L = { key, word, lemma, reading, sentence, lang, title, el (the passage's word, marked when saved), translation, result }.
+  const lookups = new Map();
+  let currentLookup = null;
+  function popover() {
+    let p = document.getElementById('rd-pop');
+    if (!p) { p = document.createElement('div'); p.id = 'rd-pop'; p.className = 'rd-pop'; p.hidden = true; document.body.appendChild(p); }
+    return p;
+  }
+  function openLookup(L, rect) {
+    L.key = nextKey('lk');
+    lookups.set(L.key, L); currentLookup = L;
+    if (lookups.size > 60) lookups.delete(lookups.keys().next().value);
+    const pop = popover();
+    pop.innerHTML = popHTML(L, null);
+    pop.hidden = false;
+    pop.style.left = (window.scrollX + Math.max(8, Math.min(document.documentElement.clientWidth - 336, rect.left))) + 'px';
+    pop.style.top = (window.scrollY + rect.bottom + 6) + 'px';
+    post({ type: 'langwork', op: 'lookup', key: L.key, word: L.word, lemma: L.lemma || null, lang: L.lang, sentence: L.sentence });
+  }
+  function closeLookup() { popover().hidden = true; document.querySelectorAll('.rd-w.sel').forEach(x => x.classList.remove('sel')); }
+
+  // A word of a passage.
   document.addEventListener('click', e => {
     const w = e.target.closest && e.target.closest('.rd-w');
-    if (!w) { if (!(e.target.closest && e.target.closest('.rd-pop'))) document.querySelectorAll('.rd-pop').forEach(p => { p.hidden = true; }); return; }
+    if (!w) {
+      if (!(e.target.closest && (e.target.closest('.rd-pop') || e.target.closest('.sel-lookup')))) closeLookup();
+      return;
+    }
     const card = w.closest('.lw-reading'); if (!card) return;
     const st = readers.get(card.getAttribute('data-key')); if (!st) return;
-    const pop = popFor(st.key, true);
     const s = +w.getAttribute('data-s'), en = +w.getAttribute('data-e');
     const tok = (st.tokens || st.words).find(t => t.s === s) || { s, e: en };
-    const word = st.text.slice(s, en);
     const si = st.sentences.findIndex(([a, b]) => s >= a && s < b);
-    const key = nextKey('lk');
-    st.lookup = { key, word, tok, si, el: w };
     card.querySelectorAll('.rd-w.sel').forEach(x => x.classList.remove('sel')); w.classList.add('sel');
-    pop.innerHTML = popHTML(st, null);
-    pop.hidden = false;
-    const wr = w.getBoundingClientRect();
-    pop.style.left = (window.scrollX + Math.max(8, Math.min(document.documentElement.clientWidth - 336, wr.left))) + 'px';
-    pop.style.top = (window.scrollY + wr.bottom + 6) + 'px';
-    post({ type: 'langwork', op: 'lookup', key, word, lemma: tok.l || null, lang: st.lang, sentence: sentenceText(st, si) });
+    openLookup({ word: st.text.slice(s, en), lemma: tok.l, reading: tok.r, sentence: sentenceText(st, si), lang: st.lang, title: st.title, el: w }, w.getBoundingClientRect());
   });
-  function popHTML(st, r) {
-    const lk = st.lookup; if (!lk) return '';
-    const t = lk.tok || {};
-    const reading = (r && r.reading) || t.r || '';
-    let h = '<div class="rd-pop-head"><span class="rd-pop-word"' + langAttr(st.lang) + '>' + esc(lk.word) + '</span>' + (reading ? '<span class="rd-pop-reading">' + esc(reading) + '</span>' : '') +
-      play(lk.word, st.lang) + '<button class="rd-pop-x" data-act="rd-close" aria-label="Close">✕</button></div>';
-    const lemma = (r && r.lemma) || t.l;
-    if (lemma && lemma !== lk.word) h += '<div class="rd-pop-lemma">dictionary form: <b' + langAttr(st.lang) + '>' + esc(lemma) + '</b></div>';
+
+  // A word selected anywhere in the lesson (a reply, your own message, a quiz): a small "Look up" button by the selection.
+  function selectionLang(node) {
+    const el = node && (node.nodeType === 1 ? node : node.parentElement);
+    const tagged = el && el.closest('[lang]:not(html)');
+    const K = window.TeacherKeyboard && window.TeacherKeyboard.state;
+    return (tagged && tagged.getAttribute('lang')) || (K && K.lang) || '';
+  }
+  /** The sentence around a selection: the block's text cut at sentence boundaries. */
+  function sentenceAround(range) {
+    const block = (range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement).closest('p, li, td, .ll-text, .dl-text, .gl-tr, .md, .q-given, .bubble, div');
+    if (!block) return '';
+    const text = block.textContent || '';
+    const pre = document.createRange(); pre.selectNodeContents(block); pre.setEnd(range.startContainer, range.startOffset);
+    const at = pre.toString().length;
+    try {
+      for (const s of new Intl.Segmenter(selectionLang(range.startContainer) || undefined, { granularity: 'sentence' }).segment(text)) {
+        if (at >= s.index && at < s.index + s.segment.length) return s.segment.trim();
+      }
+    } catch (_) {}
+    return text.trim().slice(0, 300);
+  }
+  let selBtn = null;
+  document.addEventListener('mouseup', e => {
+    if (e.target.closest && (e.target.closest('input, textarea, .rd-pop, .sel-lookup, #kbd, .rd-body, button'))) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel && !sel.isCollapsed ? String(sel).trim() : '';
+      if (selBtn) { selBtn.remove(); selBtn = null; }
+      if (!text || text.length > 40 || /\n/.test(text) || !/\p{L}/u.test(text)) return;
+      const range = sel.getRangeAt(0);
+      if (!range.startContainer.parentElement || !range.startContainer.parentElement.closest('.msg')) return;
+      const lang = selectionLang(range.startContainer);
+      const rect = range.getBoundingClientRect();
+      selBtn = document.createElement('button');
+      selBtn.className = 'sel-lookup btn mini'; selBtn.textContent = '🔎 Look up';
+      selBtn.style.left = (window.scrollX + rect.left) + 'px'; selBtn.style.top = (window.scrollY + rect.bottom + 4) + 'px';
+      selBtn.addEventListener('mousedown', ev => ev.preventDefault());
+      selBtn.addEventListener('click', () => {
+        openLookup({ word: text, sentence: sentenceAround(range), lang, title: '' }, rect);
+        selBtn.remove(); selBtn = null;
+      });
+      document.body.appendChild(selBtn);
+    }, 0);
+  });
+
+  function popHTML(L, r) {
+    const reading = (r && r.reading) || L.reading || '';
+    let h = '<div class="rd-pop-head"><span class="rd-pop-word"' + langAttr(L.lang) + '>' + esc(L.word) + '</span>' + (reading ? '<span class="rd-pop-reading">' + esc(reading) + '</span>' : '') +
+      play(L.word, L.lang) + '<button class="rd-pop-x" data-act="rd-close" aria-label="Close">✕</button></div>';
+    const lemma = (r && r.lemma) || L.lemma;
+    if (lemma && lemma !== L.word) h += '<div class="rd-pop-lemma">dictionary form: <b' + langAttr(L.lang) + '>' + esc(lemma) + '</b></div>';
     if (!r) h += '<div class="rd-pop-senses muted">Looking it up…</div>';
     else {
       if (r.senses && r.senses.length) h += '<ol class="rd-pop-senses">' + r.senses.slice(0, 5).map(x => '<li>' + (x.pos ? '<span class="rd-pos">' + esc(x.pos) + '</span> ' : '') + esc(x.text) + '</li>').join('') + '</ol>';
       else h += '<div class="rd-pop-senses muted">' + esc(r.note || 'No dictionary entry found. Ask your teacher about it.') + '</div>';
       if (r.source) h += '<div class="rd-pop-src">' + esc(r.source) + '</div>';
+      if (r.kanji && R.kanjiHTML) h += R.kanjiHTML(r.kanji);
     }
     const saved = r && r.saved;
-    h += '<div class="rd-pop-actions"><button class="btn mini primary" data-act="rd-save"' + (saved ? ' disabled' : '') + '>' + (saved ? '✓ In your words (' + esc(saved) + ')' : '＋ Save with this sentence') + '</button>' +
-      '<button class="btn mini" data-act="rd-translate">Translate sentence</button><button class="btn mini" data-act="rd-ask">Ask teacher</button></div><div class="rd-pop-tr"></div>';
+    h += '<div class="rd-pop-actions"><button class="btn mini primary" data-act="rd-save"' + (saved ? ' disabled' : '') + '>' + (saved ? '✓ In your words (' + esc(saved) + ')' : '＋ Save' + (L.sentence ? ' with this sentence' : '')) + '</button>' +
+      (L.sentence ? '<button class="btn mini" data-act="rd-translate">Translate sentence</button>' : '') + '<button class="btn mini" data-act="rd-ask">Ask teacher</button></div><div class="rd-pop-tr"></div>';
     return h;
   }
   // Any other audio (a 🔊 elsewhere) ends a passage being read aloud: the app stops the voice, so its "spoken" never comes.
@@ -386,24 +443,24 @@
     if (!b) return;
     for (const st of readers.values()) if (st.playing || st.waiting) { stopPlaying(st); st.waiting = null; }
   }, true);
-  R.registerAction('rd-close', el => { const p = el.closest('.rd-pop'); if (p) p.hidden = true; });
+  R.registerAction('rd-close', () => closeLookup());
   R.registerAction('rd-save', (el, e, ctx) => {
-    const st = stateOf(el); if (!st || !st.lookup) return;
-    const lk = st.lookup, r = lk.result || {};
+    const L = currentLookup; if (!L) return;
+    const r = L.result || {};
     const meaning = (r.senses && r.senses[0] && r.senses[0].text) || '';
-    ctx.post({ type: 'vocab', op: 'add', word: { term: r.lemma || lk.tok.l || lk.word, lang: st.lang, reading: r.reading || lk.tok.r || '', meaning: meaning.slice(0, 160) || '(look up)',
-      example: sentenceText(st, lk.si), example_meaning: lk.translation || '', pos: r.senses && r.senses[0] && r.senses[0].pos || '', tags: ['reading'], notes: st.title ? 'From “' + st.title + '”' : '' } });
+    ctx.post({ type: 'vocab', op: 'add', word: { term: r.lemma || L.lemma || L.word, lang: L.lang, reading: r.reading || L.reading || '', meaning: meaning.slice(0, 160) || '(look up)',
+      example: L.sentence || '', example_meaning: L.translation || '', pos: r.senses && r.senses[0] && r.senses[0].pos || '', tags: ['reading'], notes: L.title ? 'From “' + L.title + '”' : '' } });
     el.disabled = true; el.textContent = '✓ Saved';
-    if (lk.el) lk.el.classList.add('saved');
+    if (L.el) L.el.classList.add('saved');
   });
   R.registerAction('rd-translate', (el, e, ctx) => {
-    const st = stateOf(el); if (!st || !st.lookup) return;
+    const L = currentLookup; if (!L) return;
     el.disabled = true; el.textContent = 'Translating…';
-    ctx.post({ type: 'langwork', op: 'translate', key: st.lookup.key, text: sentenceText(st, st.lookup.si), lang: st.lang });
+    ctx.post({ type: 'langwork', op: 'translate', key: L.key, text: L.sentence, lang: L.lang });
   });
   R.registerAction('rd-ask', (el, e, ctx) => {
-    const st = stateOf(el); if (!st || !st.lookup) return;
-    ctx.post({ type: 'suggest', text: 'In “' + sentenceText(st, st.lookup.si) + '”, what does “' + st.lookup.word + '” mean here, and how does the sentence work?' });
+    const L = currentLookup; if (!L) return;
+    ctx.post({ type: 'suggest', text: L.sentence ? 'In “' + L.sentence + '”, what does “' + L.word + '” mean here, and how does the sentence work?' : 'What does “' + L.word + '” mean, and how is it used?' });
   });
 
   /** From the app (T.lang): a lookup, a passage's analysis, a translation, the end of a spoken sentence. */
@@ -418,17 +475,93 @@
       for (const st of readers.values()) if (st.waiting === key) { st.waiting = null; const then = st.then; st.then = null; if (then) then(); else highlight(st, -1); }
       return;
     }
-    for (const st of readers.values()) {
-      if (!st.lookup || st.lookup.key !== key) continue;
-      const pop = popFor(st.key, false); if (!pop) continue;
-      if (kind === 'lookup') { st.lookup.result = data || {}; pop.innerHTML = popHTML(st, data || {}); }
-      if (kind === 'translation') {
-        st.lookup.translation = data && data.text || '';
-        const box = pop.querySelector('.rd-pop-tr'), b = pop.querySelector('[data-act="rd-translate"]');
-        if (box) box.innerHTML = data && data.text ? '<div class="rd-tr-text">' + esc(data.text) + '</div><div class="rd-pop-src">' + esc(data.source || '') + '</div>' : '<div class="muted">' + esc((data && data.note) || 'No on-device translation for this language.') + '</div>';
-        if (b) { b.disabled = false; b.textContent = 'Translate sentence'; }
-      }
+    if (kind === 'page') { if (R.pageEvent) R.pageEvent(key, data); return; }
+    const L = lookups.get(key); if (!L) return;
+    const pop = popover(); const showing = currentLookup === L && !pop.hidden;
+    if (kind === 'lookup') { L.result = data || {}; if (showing) pop.innerHTML = popHTML(L, L.result); }
+    if (kind === 'translation') {
+      L.translation = data && data.text || '';
+      if (!showing) return;
+      const box = pop.querySelector('.rd-pop-tr'), b = pop.querySelector('[data-act="rd-translate"]');
+      if (box) box.innerHTML = data && data.text ? '<div class="rd-tr-text">' + esc(data.text) + '</div><div class="rd-pop-src">' + esc(data.source || '') + '</div>' : '<div class="muted">' + esc((data && data.note) || 'No on-device translation for this language.') + '</div>';
+      if (b) { b.disabled = false; b.textContent = 'Translate sentence'; }
     }
+  };
+
+  // ── Your own texts, read like a passage: a pasted text, an attached file or PDF (or a photo's text read on this Mac),
+  // a web page. The learner's message gets "📖 Read…" actions; the passage opens under it with everything a ```reading
+  // has (lookups, readings, audio, the reading log). Page-only: nothing goes to the teacher unless the learner asks.
+  const ownReads = new Map();   // message id -> [{ id, props }]
+  const targetLang = () => { const K = window.TeacherKeyboard && window.TeacherKeyboard.state; return (K && K.lang) || ''; };
+  const URL_RE = /https?:\/\/[^\s<>"')\]]+/;
+  function ownText(m) {
+    return (m.blocks || []).filter(b => b.kind === 'text' && !(b.meta && (b.meta.hidden || b.meta.languageState))).map(b => b.text || '').join('\n').trim();
+  }
+  /** "📖 Read…" actions for a learner's message (app.js puts them in the message's action row). */
+  R.userActions = function (m) {
+    if (!targetLang()) return '';
+    let h = '';
+    (m.blocks || []).forEach((b, i) => {
+      if (b.kind === 'file' && String(b.text || '').trim().length >= 20) h += '<button data-act="read-own" data-kind="file" data-i="' + i + '">📖 Read ' + esc(b.name || 'the file') + '</button>';
+    });
+    const t = ownText(m);
+    if (URL_RE.test(t)) h += '<button data-act="read-own" data-kind="url">📖 Read this page</button>';
+    else if (t.replace(/\s+/g, '').length >= 40) h += '<button data-act="read-own" data-kind="text">📖 Read as a passage</button>';
+    return h;
+  };
+  function mountOwn(msgEl, id, props) {
+    let box = msgEl.querySelector('.own-read[data-own="' + id + '"]');
+    if (!box) { box = document.createElement('div'); box.className = 'own-read'; box.setAttribute('data-own', id); msgEl.appendChild(box); }
+    const d = R.component('reading'); if (!d) return;
+    const p = d.validate ? d.validate(Object.assign({}, props)) : props;
+    box.innerHTML = '<button class="btn mini link own-close" data-act="read-own-close" data-own="' + esc(id) + '">✕ Close</button>' + d.render(p, R._ctx, { code: 'own:' + id + ':' + p.text.length, lang: '' });
+    box.querySelectorAll('.lw-reading').forEach(el => d.mount(el, R._ctx));
+  }
+  function addOwn(msgId, id, props) {
+    const list = ownReads.get(msgId) || [];
+    if (!list.some(x => x.id === id)) list.push({ id, props });
+    ownReads.set(msgId, list);
+    const el = document.getElementById('m-' + msgId);
+    if (el) mountOwn(el, id, props);
+  }
+  // A re-rendered message gets its open passages back.
+  R.registerProcessor(root => {
+    const els = (root.matches && root.matches('.msg.user') ? [root] : []).concat(Array.from(root.querySelectorAll ? root.querySelectorAll('.msg.user') : []));
+    for (const el of els) for (const o of ownReads.get(el.id.slice(2)) || []) if (!el.querySelector('.own-read[data-own="' + o.id + '"]')) mountOwn(el, o.id, o.props);
+  });
+  const pendingPages = new Map();   // key -> { msgId, id, url }
+  R.registerAction('read-own', (el, e, ctx) => {
+    const msgEl = el.closest('.msg'); if (!msgEl) return;
+    const msgId = msgEl.id.slice(2), m = ctx.message(msgId); if (!m) return;
+    const kind = el.getAttribute('data-kind'), lang = targetLang();
+    if (kind === 'file') {
+      const b = m.blocks[+el.getAttribute('data-i')]; if (!b) return;
+      addOwn(msgId, 'f' + el.getAttribute('data-i'), { lang, title: b.name || 'Your file', text: String(b.text).slice(0, 12000) });
+    } else if (kind === 'text') {
+      addOwn(msgId, 't', { lang, title: 'Your text', text: ownText(m).slice(0, 12000) });
+    } else if (kind === 'url') {
+      const url = (URL_RE.exec(ownText(m)) || [])[0]; if (!url) return;
+      const key = nextKey('pg');
+      pendingPages.set(key, { msgId, id: 'u', url });
+      el.disabled = true; el.textContent = 'Fetching the page…';
+      ctx.post({ type: 'langwork', op: 'page', key, url, lang });
+    }
+  });
+  R.registerAction('read-own-close', el => {
+    const msgEl = el.closest('.msg'), id = el.getAttribute('data-own');
+    if (!msgEl) return;
+    const list = (ownReads.get(msgEl.id.slice(2)) || []).filter(o => o.id !== id);
+    ownReads.set(msgEl.id.slice(2), list);
+    const box = msgEl.querySelector('.own-read[data-own="' + id + '"]'); if (box) box.remove();
+  });
+  /** From the app: a fetched page's main text (or why it couldn't be read). */
+  R.pageEvent = function (key, data) {
+    const p = pendingPages.get(key); if (!p) return;
+    pendingPages.delete(key);
+    const btn = document.querySelector('#m-' + CSS.escape(p.msgId) + ' [data-act="read-own"][data-kind="url"]');
+    if (btn) { btn.disabled = false; btn.textContent = '📖 Read this page'; }
+    if (!data || !data.text) { if (window.TeacherToast) window.TeacherToast((data && data.note) || 'The page has no text to read.'); return; }
+    addOwn(p.msgId, p.id, { lang: targetLang(), title: data.title || p.url, text: data.text, note: data.truncated ? 'The first part of the page (' + data.shown + ' of ' + data.total + ' characters).' : '' });
   };
 
   R.injectStyles('langwork', `
@@ -495,7 +628,10 @@
     .rd-s.speaking { background: color-mix(in srgb, var(--warn-soft) 70%, transparent); border-radius: 4px; }
     .rd-play { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: .7em; padding: 0 3px; opacity: 0; vertical-align: middle; }
     .rd-s:hover .rd-play, .rd-s.speaking .rd-play { opacity: 1; }
-    .rd-pop { position: absolute; z-index: 20; width: 320px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 10px 12px; font-size: .92em; }
+    .sel-lookup { position: absolute; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
+    .msg.user .own-read { align-self: stretch; margin-top: 8px; position: relative; }
+    .own-read .own-close { position: absolute; right: 8px; top: -2px; z-index: 1; }
+    .rd-pop { position: absolute; z-index: 60; width: 320px; background: var(--bg); border: 1px solid var(--border); border-radius: 12px; box-shadow: 0 8px 28px rgba(0,0,0,.18); padding: 10px 12px; font-size: .92em; }
     .rd-pop-head { display: flex; align-items: baseline; gap: 8px; }
     .rd-pop-word { font-size: 1.5em; }
     .rd-pop-reading { color: var(--accent); }

@@ -388,6 +388,9 @@ struct TranscriptView: NSViewRepresentable {
                     let to = s.language?.native ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")
                     let text = j["text"]?.string ?? ""
                     Task { reply("translation", await LanguageWork.translate(text, from: lang, to: to)) }
+                case "page":
+                    let url = j["url"]?.string ?? ""
+                    Task { reply("page", await LanguageWork.page(url)) }
                 case "read":
                     guard let lang else { return }
                     let words = j["words"]?.int ?? 0

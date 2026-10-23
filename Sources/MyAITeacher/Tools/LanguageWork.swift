@@ -156,6 +156,55 @@ enum LanguageWork {
         return t.isEmpty ? nil : String(t.prefix(400))
     }
 
+    // MARK: Pages
+
+    /// A web page the learner wants to read, as plain text for the reading component: the main content (HTML cleaned by
+    /// the same converter as `web_fetch`, cached with it), Markdown taken out, at most `limit` characters cut at a
+    /// paragraph. Returns {title, text, url, truncated, shown, total} or {note}.
+    static func page(_ raw: String, limit: Int = 8000) async -> JSON {
+        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !s.hasPrefix("http") { s = "https://" + s }
+        guard let url = URL(string: s), ["http", "https"].contains(url.scheme ?? "") else { return ["note": "That isn't a web address."] }
+        var md: String, title: String?
+        if let cached = await FetchCache.shared.get(url.absoluteString) { (md, title) = cached }
+        else {
+            var req = URLRequest(url: url, timeoutInterval: 25)
+            req.setValue(WebSearch.userAgent, forHTTPHeaderField: "User-Agent")
+            req.setValue("text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8", forHTTPHeaderField: "Accept")
+            guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return ["note": "The page didn't load."] }
+            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+            guard code < 400 else { return ["note": .string("The site answered \(code).")] }
+            let ct = ((resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+            if ct.contains("html") || ct.isEmpty || ct.contains("xml") {
+                let r = HTMLToMarkdown.convert(html: String(decoding: data.prefix(6_000_000), as: UTF8.self), baseURL: resp.url ?? url)
+                (md, title) = (r.markdown, r.title)
+            } else if ct.contains("text/") {
+                (md, title) = (String(decoding: data.prefix(2_000_000), as: UTF8.self), nil)
+            } else { return ["note": "That link isn't a page of text."] }
+            await FetchCache.shared.put(url.absoluteString, md, title)
+        }
+        md = plainText(md)
+        guard md.count >= 20 else { return ["note": "The page has no text to read (it may need JavaScript)."] }
+        let total = md.count
+        var text = md
+        if total > limit {
+            let cut = String(md.prefix(limit))
+            text = cut.range(of: "\n\n", options: .backwards).map { String(cut[..<$0.lowerBound]) } ?? cut
+        }
+        return ["title": .string(title ?? url.host ?? ""), "text": .string(text), "url": .string(url.absoluteString),
+                "truncated": .bool(text.count < total), "shown": .number(Double(text.count)), "total": .number(Double(total))]
+    }
+
+    /// Markdown as text to read: no images, link targets, emphasis marks, code fences, tables' rules or heading marks.
+    static func plainText(_ md: String) -> String {
+        var t = md
+        for (p, r) in [("!\\[[^\\]]*\\]\\([^)]*\\)", ""), ("\\[([^\\]]*)\\]\\([^)]*\\)", "$1"), ("```[\\s\\S]*?```", ""), ("(?m)^[ \\t]*[|:\\-][|:\\- ]*$", ""),
+                       ("(?m)^#{1,6}\\s*", ""), ("(?m)^>\\s?", ""), ("[*_`]{1,3}", ""), ("(?m)^[ \\t]*[-+*][ \\t]+", ""), ("\\|", " "), ("\\^?\\[\\d{1,3}\\]\\^?", ""), ("[ \\t]+", " "), ("(?m)^ ", ""), ("\\n{3,}", "\n\n")] {
+            t = t.replacingOccurrences(of: p, with: r, options: .regularExpression)
+        }
+        return t.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
     // MARK: Translation
 
     /// A sentence translated on device (Apple's Translation, macOS 26+, with the language pair installed in System

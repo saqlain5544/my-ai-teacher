@@ -1692,6 +1692,42 @@
     const done = lastPost('langwork'); ok(done && done.op === 'read' && done.words === 16 && done.unit === 'characters', JSON.stringify(done));
   });
 
+  test('language work: your own texts read like a passage — a file, pasted text, a web page — and any selected word looks up', async () => {
+    T.setLanguage({ target: 'es', native: 'en' });
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Mira este artículo: https://example.es/teletrabajo y también este texto.' }, { kind: 'file', name: 'menu.txt', text: 'Menú del día: sopa de lentejas, merluza a la plancha y flan casero. Pan y bebida incluidos.' }] };
+    const u2 = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Ayer fui al mercado con mi hermana y compramos fruta, pan y queso para toda la semana.' }] };
+    T.status('', false); T.reset([u, A('Vale.'), u2, A('¡Muy bien!')], {});
+    const m1 = $('#m-' + u.id), m2 = $('#m-' + u2.id);
+    ok($('[data-act="read-own"][data-kind="file"]', m1), 'a file to read: ' + $('.msg-actions', m1).textContent);
+    ok($('[data-act="read-own"][data-kind="url"]', m1), 'a page to read');
+    ok($('[data-act="read-own"][data-kind="text"]', m2), 'pasted text to read');
+    posts.length = 0; click($('[data-act="read-own"][data-kind="file"]', m1));
+    const r1 = $('.own-read .lw-reading', m1); ok(r1, 'the file opens as a passage under the message');
+    ok(/menu\.txt/.test($('.rd-title', r1).textContent), 'titled with the file');
+    const an = lastPost('langwork'); ok(an && an.op === 'analyze' && /merluza/.test(an.text), 'analysed by the app like any passage');
+    click($('[data-act="read-own"][data-kind="url"]', m1));
+    const pg = lastPost('langwork'); ok(pg && pg.op === 'page' && pg.url === 'https://example.es/teletrabajo', JSON.stringify(pg));
+    T.lang('page', pg.key, { title: 'El teletrabajo en España', text: 'Cada vez más empresas permiten trabajar desde casa dos o tres días por semana.', truncated: false });
+    ok($$('.own-read .lw-reading', m1).length === 2 && /teletrabajo/.test($('#m-' + u.id).textContent), 'the page opens as a passage');
+    click($('[data-act="read-own"][data-kind="text"]', m2)); ok($('.own-read .lw-reading', m2), 'pasted text too');
+    click($('[data-act="read-own-close"]', m2)); ok(!$('.own-read', m2), 'closed');
+    // Select a word in a reply: a Look up button, then the same popover with its sentence.
+    const md = $('#m-' + u2.id + ' .bubble .md'); const tn = md.querySelector('p').firstChild;
+    const range = document.createRange(); range.setStart(tn, 5); range.setEnd(tn, 8);   // "fui"
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    md.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    const btn = await until(() => $('.sel-lookup'), 'the look-up button');
+    posts.length = 0; click(btn);
+    const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === 'fui' && /Ayer fui al mercado/.test(lk.sentence) && lk.lang === 'es', JSON.stringify(lk));
+    ok(!$('.rd-pop').hidden, 'popover open');
+    T.lang('lookup', lk.key, { word: 'fui', lemma: 'ir', senses: [{ pos: 'Verb', text: 'first-person singular preterite of ir' }], source: 'Wiktionary' });
+    ok(/dictionary form/.test($('.rd-pop').textContent) && /preterite/.test($('.rd-pop').textContent), $('.rd-pop').textContent);
+    posts.length = 0; click($('.rd-pop [data-act="rd-save"]'));
+    const v = lastPost('vocab'); ok(v && v.word.term === 'ir' && /Ayer fui/.test(v.word.example), 'saved as its dictionary form with the sentence: ' + JSON.stringify(v));
+    click($('.rd-pop [data-act="rd-close"]')); sel.removeAllRanges();
+    T.setLanguage(null);
+  });
+
   test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {
     const el = show('```vocab\n[{"term":"りんご","lang":"ja","reading":"ringo","meaning":"apple","example":"りんごを食べる"}]\n```');
     const b = $('.vocab-save', el); ok(b, 'save button');
