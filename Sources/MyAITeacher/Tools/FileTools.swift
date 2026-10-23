@@ -6,6 +6,7 @@ private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp",
 
 struct ReadTool: Tool {
     let name = "read"
+    var subAgentVariant: Tool? { self }
     let description = """
     Read a file from the local filesystem. Returns lines prefixed with line numbers (cat -n style). \
     Relative paths resolve against the workspace. Use `offset`/`limit` for large files (default: first 2000 lines). \
@@ -73,6 +74,7 @@ struct ReadTool: Tool {
 
 struct WriteTool: Tool {
     let name = "write"
+    var subAgentVariant: Tool? { self }
     let description = "Write a file (creates parent directories, overwrites existing files). Prefer `edit` for changing existing files. Relative paths resolve against the workspace."
     let risk = ToolRisk.write
     var schema: JSON {
@@ -108,6 +110,7 @@ enum HeredocSlip {
 
 struct EditTool: Tool {
     let name = "edit"
+    var subAgentVariant: Tool? { self }
     let description = """
     Exact string replacement in a file. `old_string` must match the file exactly (including whitespace) and be unique \
     unless `replace_all` is true. Several changes to one file: `edits` (applied in order, all or nothing). Read the file \
@@ -168,6 +171,7 @@ struct EditTool: Tool {
 
 struct LsTool: Tool {
     let name = "ls"
+    var subAgentVariant: Tool? { self }
     let description = "List a directory (default: workspace). Shows entries with type and size; hides .git, node_modules and similar."
     let risk = ToolRisk.readOnly
     var schema: JSON { Schema.object(["path": Schema.string("Directory path (default workspace).")]) }
@@ -192,6 +196,7 @@ struct LsTool: Tool {
 
 struct GlobTool: Tool {
     let name = "glob"
+    var subAgentVariant: Tool? { self }
     let description = "Find files by glob pattern (e.g. \"**/*.py\", \"src/**/*.swift\"). Returns paths sorted by modification time, newest first."
     let risk = ToolRisk.readOnly
     var schema: JSON {
@@ -266,6 +271,7 @@ struct GlobTool: Tool {
 
 struct GrepTool: Tool {
     let name = "grep"
+    var subAgentVariant: Tool? { self }
     let description = """
     Search file contents with a regular expression (ripgrep syntax when available). \
     output_mode: "files_with_matches" (default), "content" (matching lines with line numbers), or "count". \

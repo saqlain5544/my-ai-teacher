@@ -64,9 +64,13 @@ protocol Tool: Sendable {
     /// Hard limit for one call (seconds); nil = none (waits for the learner). Past it the call is abandoned and the
     /// model gets an error it can act on, so a stalled site or process never hangs the lesson.
     func timeout(_ input: JSON) -> Double?
+    /// What a sub-agent gets of this tool: itself, a restricted variant (memory: search only), or nil (the default) when
+    /// sub-agents can't have it — interactive and teaching tools, since a sub-agent can't wait for the learner.
+    var subAgentVariant: Tool? { get }
 }
 
 extension Tool {
+    var subAgentVariant: Tool? { nil }
     var spec: ToolSpec { ToolSpec(name: name, description: description, schema: schema) }
     func timeout(_ input: JSON) -> Double? {
         switch risk {

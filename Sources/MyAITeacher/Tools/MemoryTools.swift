@@ -3,6 +3,7 @@ import Foundation
 /// One compact tool over the learner model (≈200 schema tokens instead of four tools).
 /// Ids: "12" learner memory, "f3" folder memory, "c7" concept.
 struct MemoryTool: Tool {
+    var subAgentVariant: Tool? { MemoryTool(readOnly: true) }   // search only: sub-agents never write the learner model
     let name = "memory"
     /// Sub-agents get a search-only variant.
     var readOnly = false

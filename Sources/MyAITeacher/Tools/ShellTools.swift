@@ -9,6 +9,7 @@ actor ShellState {
 }
 
 struct BashTool: Tool {
+    var subAgentVariant: Tool? { self }
     func timeout(_ input: JSON) -> Double? { Double(min(600, max(1, input["timeout"]?.int ?? 120))) + 20 }
     let name = "bash"
     let description = """
@@ -50,6 +51,7 @@ struct BashTool: Tool {
 
 /// Runs a self-contained snippet in a scratch directory. Used by the tutor and by "Run" buttons on code blocks.
 struct RunCodeTool: Tool {
+    var subAgentVariant: Tool? { self }
     func timeout(_ input: JSON) -> Double? { Double(min(300, input["timeout"]?.int ?? 30)) + 60 }   // + compile time
     let name = "run_code"
     let description = """

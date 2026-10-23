@@ -43,15 +43,14 @@ enum ToolRegistry {
         loadable(node, settings).map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 
-    /// Tools a research sub-agent may use without supervision.
-    /// Every tool a sub-agent can be given; its type and the `task` call choose from these. Never the interactive or
-    /// teaching tools (sub-agents can't wait for the learner), and memory is search-only.
-    static let subagentPool: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemoryTool(readOnly: true),
-                                       WriteTool(), EditTool(), BashTool(), RunCodeTool(), TaskTool(), AgentsTool()]
+    /// Every tool a sub-agent can be given; its type and the `task` call choose from these. Derived from each tool's
+    /// `subAgentVariant`, so a new tool is declared once (in `all`) and says itself whether sub-agents may use it.
+    static let subagentPool: [Tool] = all.compactMap(\.subAgentVariant)
 }
 
 /// Delegates a self-contained task to a sub-agent with its own context; only its final report returns.
 struct TaskTool: Tool {
+    var subAgentVariant: Tool? { self }
     let name = "task"
     let description = """
     Launch a sub-agent with its own context and tools; only its report comes back. `type` (default explore): explore — \
@@ -149,6 +148,7 @@ private extension String {
 
 /// Manage this lesson's sub-agents: list them with their usage, check one, steer one, wait for one, stop or resume one.
 struct AgentsTool: Tool {
+    var subAgentVariant: Tool? { self }
     let name = "agents"
     let description = """
     Manage this lesson's sub-agents (from `task`): list (type, model, effort, budget use, tokens, time, cost), status, send \

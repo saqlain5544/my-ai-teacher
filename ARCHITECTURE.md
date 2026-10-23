@@ -142,7 +142,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 |---|---|---|
 | React to the agent loop (inject context, gate tools, observe results, act after a turn) | Implement `AgentExtension` (all hooks optional) and register it in `AppModel.registerExtensions()` | none |
 | Listen to app events (UI badges, logging, sync) | `EventBus.subject.sink { … }` (`AppEvent`) | none |
-| Add a tool | Conform to `Tool` (name, description, JSON schema, `risk`, `run`) and add it to `ToolRegistry.all`. `risk` drives permissions; interactive tools await `ctx.interactions.request(…)` | none |
+| Add a tool | Conform to `Tool` (name, description, JSON schema, `risk`, `run`) and add it to `ToolRegistry.all`. Sub-agents get it only if it returns `self` (or a restricted variant) from `subAgentVariant`. `risk` drives permissions; interactive tools await `ctx.interactions.request(…)` | none |
 | Add a provider | Add a `ProviderConfig` preset (Anthropic/OpenAI/Gemini wire format + quirks) to `ProviderCatalog`, or add a custom provider in Settings | none |
 | Add a wire protocol | Implement `LLMClient` (emit `StreamEvent`s) and a case in `APIKind` | 1 switch |
 | Summarise a long history (another agent, an import) | `Compaction.summaryRange(…)` picks the messages, `Compaction.summarise(…)` writes the rolling summary (digest fallback, usage per call, cancellation-safe) | none |

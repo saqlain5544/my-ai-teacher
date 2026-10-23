@@ -273,6 +273,7 @@ struct LessonPlanTool: Tool {
 // MARK: - Math (SymPy)
 
 struct MathTool: Tool {
+    var subAgentVariant: Tool? { self }
     let name = "math"
     let description = """
     Exact and symbolic math via SymPy: evaluate, simplify, expand, factor, solve (equations/systems), diff, integrate, \

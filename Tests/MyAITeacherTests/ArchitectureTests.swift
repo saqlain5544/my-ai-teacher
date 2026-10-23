@@ -186,3 +186,24 @@ final class CompactionTests: XCTestCase {
         XCTAssertTrue(s.text.contains("Focus: collisions"))
     }
 }
+
+/// The tool registry is declared once; everything else is derived from it and must stay consistent.
+final class ToolRegistryTests: XCTestCase {
+    func testSubAgentPoolIsDerivedAndUnchanged() {
+        let names = Set(ToolRegistry.subagentPool.map(\.name))
+        XCTAssertEqual(names, ["read", "ls", "glob", "grep", "web_search", "web_fetch", "math", "memory", "write", "edit", "bash", "run_code", "task", "agents"])
+        XCTAssertEqual(ToolRegistry.subagentPool.count, names.count, "no duplicates")
+        let memory = ToolRegistry.subagentPool.first { $0.name == "memory" } as? MemoryTool
+        XCTAssertEqual(memory?.readOnly, true, "sub-agents only search memory")
+        XCTAssertFalse(ToolRegistry.subagentPool.contains { $0.risk == .interactive }, "sub-agents can't wait for the learner")
+    }
+
+    func testEveryToolAnAgentCanGetExists() {
+        XCTAssertEqual(ToolRegistry.byName.count, ToolRegistry.all.count, "tool names are unique")
+        for node in AgentTree.nodes {
+            for name in AgentTree.core(node.id) + AgentTree.deferred(node.id) {
+                XCTAssertNotNil(ToolRegistry.byName[name], "\(node.id) refers to unknown tool \(name)")
+            }
+        }
+    }
+}

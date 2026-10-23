@@ -120,6 +120,7 @@ enum WebSearch {
 }
 
 struct WebSearchTool: Tool {
+    var subAgentVariant: Tool? { self }
     func timeout(_ input: JSON) -> Double? { 30 }
     let name = "web_search"
     let description = """
@@ -172,6 +173,7 @@ actor FetchCache {
 }
 
 struct WebFetchTool: Tool {
+    var subAgentVariant: Tool? { self }
     func timeout(_ input: JSON) -> Double? { 40 }
     let name = "web_fetch"
     let description = """
