@@ -172,6 +172,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func stop() {
         runTask?.cancel()
         app.interactions.cancelAll(conversationID: id)
+        Task { await ShellState.shared.stopAll(id) }
     }
 
     /// Re-runs the last assistant turn.
@@ -679,6 +680,7 @@ final class ChatSession: ObservableObject, Identifiable {
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         ctx.quizzes = Testing.on(settings, conversation.mode)
         ctx.codeAgent = conversation.mode.isAgent
+        ctx.checkpointTurn = app.extensions.get(CodeAgentExtension.self)?.currentTurnKey(self)
         let t0 = Date()
         var result: Block
         do {

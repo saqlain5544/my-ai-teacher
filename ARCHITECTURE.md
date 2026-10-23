@@ -242,7 +242,12 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   or lint command (or one given) and parses clang/swift/zig/go, tsc, rustc, python and eslint output into
   `file:line:col severity message`, grouped by file and capped (`Diagnostics.parse` / `summary`). `bash` with
   `background: true` runs detached (≤ 30 min) and delivers a `<background-task>` message through `ChatSession.deliver`,
-  like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the foreground.
+  like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the foreground. `ShellState` keeps
+  the lesson's running background tasks by handle: Stop cancels them (the processes end, nothing is delivered), and a
+  foreground `bash` result names the ones still running. A coder sub-agent working in the lesson's folder (no
+  worktree) backs files up under the turn's checkpoint too (`ToolContext.checkpointTurn`), so Undo covers its edits.
+  `ProjectProfile.detect` caches per folder behind a fingerprint of the manifests' dates and sizes (ten minutes; the
+  git part refreshed after a minute), so neither the prompt nor `diagnostics` re-walks the folder.
 * **Checkpoints and undo** (`Checkpoints`, `CodeAgentExtension`): registered before `PermissionExtension`, its
   `shouldRun` copies a file to `.teacher/checkpoints/<turn>/` before the agent's first write or edit to it in the turn
   (a created file is recorded as absent). `didFinishTurn` keeps only files whose content differs from the backup and

@@ -881,6 +881,14 @@ enum SubAgent {
             sub.agentDepth = cfg.depth
             sub.agentCeiling = AgentCeiling(handle: handle, readOnly: cfg.scope.readOnly, tools: Set(cfg.tools))
             sub.agentProvider = cfg.providerID
+            sub.checkpointTurn = ctx.checkpointTurn
+            // Working in the lesson's own folder (not a worktree copy): the change joins the turn's Undo.
+            if let turn = ctx.checkpointTurn, name == "write" || name == "edit", let p = input["path"]?.string {
+                let root = cfg.scope.root.standardizedFileURL.path, home = ctx.workspace.standardizedFileURL.path
+                if root == home || root.hasPrefix(home + "/") {
+                    Checkpoints.backup(ctx.services.workspace, turn: turn, file: resolvePath(p, workspace: sub.workspace))
+                }
+            }
             sub.shellID = "\(ctx.conversationID)/\(handle)"
             let block: Block
             do {

@@ -12,6 +12,8 @@ enum Checkpoints {
     struct Manifest: Codable, Sendable { var files: [Entry]; var createdAt: Date }
 
     static let keep = 40
+    /// Backups and restores are read-modify-write on the turn's manifest; sub-agents call in from several threads.
+    private static let lock = NSLock()
 
     static func dir(_ ws: Workspace, turn: String) -> URL { ws.stateDir.appendingPathComponent("checkpoints", isDirectory: true).appendingPathComponent(turn, isDirectory: true) }
     private static func manifestURL(_ ws: Workspace, turn: String) -> URL { dir(ws, turn: turn).appendingPathComponent("manifest.json") }
@@ -30,6 +32,7 @@ enum Checkpoints {
     /// Records `file` before the agent changes it (once per turn per file). Returns false when the file is the app's own state.
     @discardableResult
     static func backup(_ ws: Workspace, turn: String, file: URL) -> Bool {
+        lock.lock(); defer { lock.unlock() }
         let url = file.standardizedFileURL
         if ws.isStatePath(url) { return false }
         var m = manifest(ws, turn: turn) ?? Manifest(files: [], createdAt: Date())
@@ -61,6 +64,7 @@ enum Checkpoints {
     /// Puts every file of the turn back as it was, then forgets the checkpoint (an undo happens once). Returns what
     /// happened, for the notice and for the agent.
     static func restore(_ ws: Workspace, turn: String) -> (restored: [String], removed: [String], failed: [String]) {
+        lock.lock(); defer { lock.unlock() }
         guard let m = manifest(ws, turn: turn) else { return ([], [], []) }
         defer { if m.files.allSatisfy({ !$0.existed || $0.backup != nil }) { try? FileManager.default.removeItem(at: manifestURL(ws, turn: turn)) } }
         let fm = FileManager.default

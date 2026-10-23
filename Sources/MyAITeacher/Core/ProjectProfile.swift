@@ -38,7 +38,7 @@ struct ProjectProfile: Sendable, Equatable {
         "proto": "Protobuf", "gleam": "Gleam", "odin": "Odin", "nim": "Nim", "jl": "Julia", "r": "R", "tf": "Terraform", "sol": "Solidity",
     ]   // data and docs (json, yaml, toml, md) are not counted: a project is written in its code
 
-    static func detect(_ folder: URL) async -> ProjectProfile {
+    private static func compute(_ folder: URL) async -> ProjectProfile {
         var p = ProjectProfile()
         let fm = FileManager.default
         let has = { (name: String) in fm.fileExists(atPath: folder.appendingPathComponent(name).path) }
@@ -147,6 +147,7 @@ struct ProjectProfile: Sendable, Equatable {
         }
 
         // Languages by file count, bounded.
+        walks += 1
         var counts: [String: Int] = [:]
         if let e = fm.enumerator(at: folder, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants, .skipsHiddenFiles]) {
             var n = 0
@@ -161,16 +162,66 @@ struct ProjectProfile: Sendable, Equatable {
         }
         p.languages = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(6).map { ($0.key, $0.value) }
 
-        // Git, briefly.
-        if fm.fileExists(atPath: folder.appendingPathComponent(".git").path) || ProcessRunner.which("git") != nil {
-            let git = Worktree.git
-            let branch = await ProcessRunner.run(git, Worktree.safe + ["-C", folder.path, "rev-parse", "--abbrev-ref", "HEAD"], timeout: 5)
-            if branch.exitCode == 0 {
-                let status = await ProcessRunner.run(git, Worktree.safe + ["-C", folder.path, "status", "--porcelain"], timeout: 10)
-                let dirty = status.exitCode == 0 ? status.stdout.split(separator: "\n").count : 0
-                p.git = (branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), dirty)
-            }
+        p.git = await gitState(folder)
+        return p
+    }
+
+    /// Test hook: how many times the language walk has run.
+    nonisolated(unsafe) static var walks = 0
+
+    static func gitState(_ folder: URL) async -> (branch: String, dirty: Int)? {
+        guard FileManager.default.fileExists(atPath: folder.appendingPathComponent(".git").path) || ProcessRunner.which("git") != nil else { return nil }
+        let git = Worktree.git
+        let branch = await ProcessRunner.run(git, Worktree.safe + ["-C", folder.path, "rev-parse", "--abbrev-ref", "HEAD"], timeout: 5)
+        guard branch.exitCode == 0 else { return nil }
+        let status = await ProcessRunner.run(git, Worktree.safe + ["-C", folder.path, "status", "--porcelain"], timeout: 10)
+        let dirty = status.exitCode == 0 ? status.stdout.split(separator: "\n").count : 0
+        return (branch.stdout.trimmingCharacters(in: .whitespacesAndNewlines), dirty)
+    }
+
+    // MARK: cache
+
+    private struct Entry { var profile: ProjectProfile; var taken: Date; var gitTaken: Date; var fingerprint: [String] }
+    private static let cacheLock = NSLock()
+    nonisolated(unsafe) private static var cache: [String: Entry] = [:]
+    private static let fingerprintFiles = ["Package.swift", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "tsconfig.json",
+        "Cargo.toml", "Cargo.lock", "go.mod", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "uv.lock", "build.zig", "Makefile", "makefile", "CMakeLists.txt",
+        "build.gradle", "build.gradle.kts", "pom.xml", "Gemfile", "mix.exs", "gleam.toml", "deno.json", "deno.jsonc", ".teacher/commands"]
+
+    private static func fingerprint(_ folder: URL) -> [String] {
+        let fm = FileManager.default
+        func stamp(_ path: String) -> String {
+            guard let a = try? fm.attributesOfItem(atPath: path) else { return "-" }
+            return "\((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0)/\((a[.size] as? NSNumber)?.intValue ?? 0)"
         }
+        return ["dir " + stamp(folder.path)] + fingerprintFiles.map { $0 + " " + stamp(folder.appendingPathComponent($0).path) }
+    }
+
+    static func invalidate(_ folder: URL) {
+        cacheLock.lock(); cache[folder.standardizedFileURL.path] = nil; cacheLock.unlock()
+    }
+    static func invalidateAll() {
+        cacheLock.lock(); cache = [:]; cacheLock.unlock()
+    }
+
+    static func detect(_ folder: URL) async -> ProjectProfile {
+        let key = folder.standardizedFileURL.path
+        let fp = fingerprint(folder)
+        let now = Date()
+        cacheLock.lock()
+        let hit = cache[key]
+        cacheLock.unlock()
+        if var e = hit, e.fingerprint == fp, now.timeIntervalSince(e.taken) < 600 {
+            if now.timeIntervalSince(e.gitTaken) > 60 {
+                e.profile.git = await gitState(folder)
+                e.gitTaken = Date()
+                cacheLock.lock(); cache[key] = e; cacheLock.unlock()
+            }
+            return e.profile
+        }
+        let p = await compute(folder)
+        let t = Date()
+        cacheLock.lock(); cache[key] = Entry(profile: p, taken: t, gitTaken: t, fingerprint: fp); cacheLock.unlock()
         return p
     }
 
