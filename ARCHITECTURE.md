@@ -145,6 +145,8 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 | Add a tool | Conform to `Tool` (name, description, JSON schema, `risk`, `run`) and add it to `ToolRegistry.all`. `risk` drives permissions; interactive tools await `ctx.interactions.request(…)` | none |
 | Add a provider | Add a `ProviderConfig` preset (Anthropic/OpenAI/Gemini wire format + quirks) to `ProviderCatalog`, or add a custom provider in Settings | none |
 | Add a wire protocol | Implement `LLMClient` (emit `StreamEvent`s) and a case in `APIKind` | 1 switch |
+| Summarise a long history (another agent, an import) | `Compaction.summaryRange(…)` picks the messages, `Compaction.summarise(…)` writes the rolling summary (digest fallback, usage per call, cancellation-safe) | none |
+| Gate tool calls (budgets, policies) | Implement `shouldRun` in an `AgentExtension`; gates chain in registration order (`ExtensionHost.chain`) | none |
 | Run an A/B test | Add an `Experiment` to `Experiments.all` and branch on `Experiments.arm(e, unit: lessonID)` | none |
 | Run background work | `Runtime.job(name) { … }` (one per name, watchdog, restart on a crash), `Runtime.call` (returns a value), `Runtime.every` (periodic service) — not `Task.detached` | none |
 | Add a sub-agent type | Settings → Agents, or a `.teacher/agents/<name>.md` in the folder (or `AgentCatalog.builtIns`) | none |

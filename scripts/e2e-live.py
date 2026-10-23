@@ -82,15 +82,21 @@ OPEN_CARD_MESSAGES = """JSON.stringify(Array.from(document.querySelectorAll('[da
 # ───────────── Answering cards like a learner (clicks in the page) ─────────────
 MAX_ANSWERS = 3   # a learner who always answers keeps a tutor quizzing forever; after this many, skip like a learner
 
+def skip_card(sel):
+    """Skips a card as a learner would: Skip, then a reason (since the quiz controls, Skip sends nothing until one is picked)."""
+    js("""(() => { const c = () => document.querySelector('%s'); const b = c() && c().querySelector('[data-act="q-skip"]'); if (!b) return;
+      b.click(); const why = c().querySelector('[data-act="q-skip-why"][data-v="not_now"]') || c().querySelector('[data-act="q-skip-why"]');
+      if (why) why.click(); })()""" % sel)
+
 def answer_pending(p, scenario, n_answered=0, retry=False):
     pid, kind = p["id"], p["kind"]
     sel = '[data-tool-id="%s"]' % pid
     # A card it can't fill (e.g. only a drawing) is skipped, as a learner would, instead of retried until the turn times out.
     if retry and kind != "permission" and "Answer at least one question" in (js_value("(document.querySelector('%s') || {}).innerText" % sel) or ""):
-        js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
+        skip_card(sel)
         return "skip"
     if kind != "permission" and n_answered >= MAX_ANSWERS:
-        js("(() => { const b = document.querySelector('%s [data-act=\\\"q-skip\\\"]'); if (b) b.click(); })()" % sel)
+        skip_card(sel)
         return "skip"
     if kind == "permission":   # the scenario's choice (e.g. "lesson" for a browser site) when the card offers it, else once, else the first
         js("(() => { const c = document.querySelector('%s'), b = v => c.querySelector('[data-act=\"approve\"]' + (v ? '[data-v=\"' + v + '\"]' : ''));"

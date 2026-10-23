@@ -128,3 +128,61 @@ final class SubAgentLeanTests: XCTestCase {
         XCTAssertTrue(run(signed: true).filter(\.isToolResultOnly).allSatisfy { $0.blocks[0].text?.count == 40_000 })
     }
 }
+
+/// Compaction, apart from the lesson loop: the range a summary replaces and the summary calls.
+final class CompactionTests: XCTestCase {
+    /// Learner/teacher pairs of `chars` characters each.
+    private func lesson(_ turns: Int, _ text: (Int) -> String) -> [ChatMessage] {
+        (0..<turns).flatMap { i in [ChatMessage(role: .user, blocks: [.text(text(i))]), ChatMessage(role: .assistant, blocks: [.text(text(i))])] }
+    }
+
+    func testRangeKeepsAShareOfTheBudgetAndStartsTheTailWithTheLearner() throws {
+        let msgs = lesson(20) { _ in String(repeating: "a", count: 4_000) }   // ~1k tokens per message
+        let r = try XCTUnwrap(Compaction.summaryRange(msgs, compactedThrough: nil, budget: 10_000))
+        XCTAssertEqual(r.lowerBound, 0)
+        XCTAssertEqual(msgs[r.upperBound].role, .user, "the verbatim tail starts with a learner message")
+        let kept = ContextPolicy.estimateTokens(Array(msgs[r.upperBound...]))
+        XCTAssertLessThanOrEqual(kept, 3_000 + 1_000)
+    }
+
+    func testRangeCountsCJKInTokens() throws {
+        // 1,000 CJK characters ≈ 1,000 tokens (counting chars ÷ 4 kept 4× too much).
+        let msgs = lesson(20) { _ in String(repeating: "学", count: 1_000) }
+        let r = try XCTUnwrap(Compaction.summaryRange(msgs, compactedThrough: nil, budget: 10_000))
+        XCTAssertLessThanOrEqual(ContextPolicy.estimateTokens(Array(msgs[r.upperBound...])), 4_000)
+    }
+
+    func testRangeStartsAfterThePreviousCompaction() throws {
+        let msgs = lesson(20) { _ in String(repeating: "a", count: 4_000) }
+        let r = try XCTUnwrap(Compaction.summaryRange(msgs, compactedThrough: msgs[5].id, budget: 10_000))
+        XCTAssertEqual(r.lowerBound, 6)
+        XCTAssertNil(Compaction.summaryRange(msgs, compactedThrough: msgs[r.upperBound - 1].id, budget: 10_000), "nothing new to summarise")
+        XCTAssertNil(Compaction.summaryRange(Array(msgs.prefix(2)), compactedThrough: nil, budget: 100_000), "small lessons stay whole")
+    }
+
+    private struct Scripted: LLMClient {
+        let reply: String
+        func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+            AsyncThrowingStream { c in
+                c.yield(.text(reply)); c.yield(.usage(Usage(input: 100, output: 20))); c.yield(.stop("end_turn")); c.finish()
+            }
+        }
+    }
+
+    func testSummaryUsesTheModelAndCountsEveryCall() async {
+        let msgs = lesson(3) { "turn \($0) about momentum" }
+        let good = String(repeating: "Goal: momentum. ", count: 10)
+        let s = await Compaction.summarise(msgs, previous: nil, state: "", client: Scripted(reply: "<think>x</think>" + good), model: "m", sessionID: "c")
+        XCTAssertFalse(s.cancelled)
+        XCTAssertEqual(s.text, good.trimmingCharacters(in: .whitespaces), "reasoning before </think> is dropped")
+        XCTAssertEqual(s.usage.count, 1)
+        XCTAssertEqual(s.usage.first?.output, 20)
+    }
+
+    func testFailedSummaryFallsBackToADigestWithTheCourseState() async {
+        let msgs = lesson(3) { "turn \($0) about momentum" }
+        let s = await Compaction.summarise(msgs, previous: nil, state: "Focus: collisions", client: Scripted(reply: "ok"), model: "m", sessionID: "c")
+        XCTAssertTrue(s.text.contains("Learner: turn 0 about momentum"), s.text)
+        XCTAssertTrue(s.text.contains("Focus: collisions"))
+    }
+}

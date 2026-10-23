@@ -766,63 +766,19 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         // Tier 3 only if still over budget.
         guard tokens > budget, messages.count > 8 else { return prepared }
+        guard let range = Compaction.summaryRange(messages, compactedThrough: conversation.compactedThrough, budget: budget) else { return prepared }
         setStatus("Summarising earlier parts of the lesson…")
         let sp = Signposts.begin("compaction", "\(messages.count) messages"); defer { Signposts.end("compaction", sp) }
-        // Keep ~30% of the budget verbatim, counted in tokens: counting characters (÷4) kept 4× too much of a CJK lesson,
-        // so the summary could never bring it back under the budget.
-        var keepTokens = 0
-        var cut = messages.count
-        for i in stride(from: messages.count - 1, through: 0, by: -1) {
-            keepTokens += ContextPolicy.estimateTokens([messages[i]])
-            if keepTokens > budget * 3 / 10 { cut = i; break }
-        }
-        while cut < messages.count && (messages[cut].role != .user || messages[cut].isToolResultOnly) { cut += 1 }
-        guard cut > 1, cut < messages.count else { return prepared }
-        let startIdx = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }.map { $0 + 1 } ?? 0
-        guard startIdx < cut else { return prepared }
-        // Rolling summary: the range is folded in chunk by chunk (previous summary + next chunk), so nothing is silently
-        // dropped however long the range is; usually it is one chunk, since compaction runs incrementally.
-        var summary = conversation.compactSummary
         // The course board is not in the transcript (the app keeps it): the summary carries its state so a lesson resumed
         // from the summary alone, and the reflection pass, still know the focus and what is parked.
         let state = host.summaryContext(self).joined(separator: "\n\n")
-        for chunk in ContextPolicy.chunks(Array(messages[startIdx..<cut]), maxChars: 60_000) {
-            let excerpt = Reflection.transcriptExcerpt(chunk, maxChars: 60_000)
-            let prompt = """
-            Summarise this part of a tutoring session so the lesson can continue seamlessly. \
-            \(summary.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
-            Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Tests & results / \
-            Decisions & preferences / Files & artifacts / Course state / Next steps. Be specific (formulas, examples, scores).\
-            \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)
-
-            <transcript>
-            \(excerpt)
-            </transcript>
-            """
-            let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
-                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096, sessionID: conversation.id, cache: false)
-            // A supervised job (Runtime › jobs): a failed call, or one silent for 120 s (every streamed event is a heartbeat),
-            // is retried with backoff, then the digest below.
-            let part = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 120) { beat -> SummaryCall in
-                var out = SummaryCall()
-                for try await ev in BeatingClient(inner: client, beat: beat).stream(req) {
-                    switch ev { case .text(let s): out.text += s; case .usage(let u): out.usage = out.usage + u; default: break }
-                }
-                return out
-            }) ?? SummaryCall()
-            recordAuxiliary(part.usage)
-            // Stopped mid-summary: keep the lesson as it was. The fallback digest below is for a summary call that failed,
-            // not one the learner cancelled; saving it would replace the lesson's history with a rough digest for good.
-            if Task.isCancelled { return prepared }
-            var text = part.text
-            if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
-            // A failed summary must not leave the request oversized: fall back to a deterministic digest.
-            summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines)
-                : ContextPolicy.digest(chunk, previous: summary) + (state.isEmpty ? "" : "\n\nCourse state:\n" + state)
-        }
-        let text = summary ?? ""
-        conversation.compactSummary = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        conversation.compactedThrough = messages[cut - 1].id
+        let throughID = messages[range.upperBound - 1].id
+        let result = await Compaction.summarise(Array(messages[range]), previous: conversation.compactSummary, state: state,
+                                                client: client, model: conversation.model, sessionID: conversation.id)
+        result.usage.forEach(recordAuxiliary)
+        if result.cancelled { return prepared }   // stopped mid-summary: the lesson stays as it was
+        conversation.compactSummary = result.text
+        conversation.compactedThrough = throughID
         conversation.usage?.input = 0
         sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
         save()
@@ -936,12 +892,6 @@ final class ChatSession: ObservableObject, Identifiable {
         default: "Using \(name)…"
         }
     }
-}
-
-/// One compaction summary call's text and usage.
-private struct SummaryCall: Sendable {
-    var text = ""
-    var usage = Usage()
 }
 
 /// Coalesces streamed tool output to ≤ 10 UI updates per second.

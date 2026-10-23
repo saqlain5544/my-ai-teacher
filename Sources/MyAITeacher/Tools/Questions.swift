@@ -519,7 +519,7 @@ struct QuizTool: Tool {
                          data: ["questions": .array(questions), "answers": .array(answers), "hints": .array(hintsOpened), "certainty": .array(certainties)])
         EventBus.publish(.studyDataChanged)
         var text = "Quiz \"\(input["title"]?.string ?? "")\" submitted. " + (autoTotal == 0
-            ? "Nothing could be auto-graded (no answer key), so grade every answer below.\n"
+            ? "Nothing could be auto-graded (no answer key, or a free-text answer that doesn't match the key word for word), so grade every answer below.\n"
             : "Auto-graded score: \(String(format: "%g", (score * 10).rounded() / 10))/\(autoTotal).\n")
         if let c = reply["confidence"]?.int { text += "Self-rated confidence before answering: \(c)/5.\n" }
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
