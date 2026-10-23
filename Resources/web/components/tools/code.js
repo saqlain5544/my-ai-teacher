@@ -16,6 +16,10 @@
     open: n => n.props.status === 'error' || (meta(n).errors || 0) > 0,
     body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });
 
+  R.defineTool({ name: 'source', icon: '📚', title: 'Library source',
+    summary: n => { const i = input(n), m = meta(n); return (i.action || 'locate') + ' ' + (i.library || '') + (i.path ? ' ' + i.path + (i.from ? ':' + i.from : '') : i.query ? ' “' + i.query + '”' : '') + (m.root && i.action === 'locate' ? ' → ' + m.root : ''); },
+    body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });
+
   R.defineTool({ name: 'symbols', icon: '§', title: 'Symbols',
     summary: n => (input(n).path ? 'outline of ' + input(n).path : 'definitions of ' + (input(n).query || '')) + (meta(n).count != null ? ' · ' + meta(n).count : ''),
     body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });

@@ -108,6 +108,10 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
   questions and hints rather than code. A pass with green tests records the project's concept as mastered.
 * **The engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files and the project
   profile, like the code agent, so it reads your code precisely and builds its examples against your real toolchain.
+* **Languages and libraries from their source.** Ask to master Zig's standard library, Rust's `core`, Go's `net/http`,
+  Python's `asyncio`, or a package in your project, and the mentor teaches from the source installed on your Mac: it
+  finds it by name (`source`), outlines it, reads the real implementation and cites file and line. The projects then
+  reimplement a real piece of it against the original's behaviour.
 * **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
   teaches with questions, targeted hints and concepts so you find the fix.
 
