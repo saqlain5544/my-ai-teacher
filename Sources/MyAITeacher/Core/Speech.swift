@@ -5,7 +5,7 @@ import NaturalLanguage
 
 /// Read-aloud (AVSpeechSynthesizer) and dictation (on-device Speech framework).
 @MainActor
-final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
+final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVAudioPlayerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isListening = false
     /// The language being dictated (nil: the Mac's).
@@ -23,9 +23,46 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
 
     /// Speaks mixed-language text: one utterance per language run, each with the best installed voice for it.
     /// `language` forces a single language (click-to-hear on a foreign word).
-    func speak(_ markdown: String, language: String? = nil, voice: String?, rate: Double) {
+    func speak(_ markdown: String, language: String? = nil, voice: String?, rate: Double, onFinish: (@MainActor () -> Void)? = nil) {
         stop()
+        finish = nil
         let text = Self.speakable(markdown)
+        // One language (a word, a sentence, a passage in the target language): the open-source voice when it is the
+        // better one for it (the Mac has only a compact voice), rendered on device and played; the Mac's voice otherwise.
+        if let lang = language.map({ String($0.prefix(2)).lowercased() }), SpeechEngines.useOpenVoice(lang, preference: AppModel.shared.settings.value.speechOutput) {
+            let ticket = UUID(); openTicket = ticket
+            isSpeaking = true
+            Task {
+                let wav = await OpenSpeech.synthesize(text, lang: lang, speed: rate / 0.5)
+                await MainActor.run {
+                    guard self.openTicket == ticket else { return }
+                    if let wav, let p = try? AVAudioPlayer(contentsOf: wav) {
+                        self.player = p; self.playerFinish = onFinish; self.playerFile = wav
+                        p.delegate = self; p.play()
+                    } else { self.openTicket = nil; self.speakApple(text, language: language, voice: voice, rate: rate, onFinish: onFinish) }
+                }
+            }
+            return
+        }
+        speakApple(text, language: language, voice: voice, rate: rate, onFinish: onFinish)
+    }
+    private var openTicket: UUID?
+    private var player: AVAudioPlayer?
+    private var playerFile: URL?
+    private var playerFinish: (@MainActor () -> Void)?
+    nonisolated func audioPlayerDidFinishPlaying(_ p: AVAudioPlayer, successfully: Bool) {
+        Task { @MainActor in
+            guard p === self.player else { return }
+            self.endPlayer(); self.isSpeaking = self.synth.isSpeaking
+            let f = self.playerFinish; self.playerFinish = nil; f?()
+        }
+    }
+    private func endPlayer() {
+        player?.stop(); player = nil; openTicket = nil
+        if let f = playerFile { try? FileManager.default.removeItem(at: f); playerFile = nil }
+    }
+
+    private func speakApple(_ text: String, language: String?, voice: String?, rate: Double, onFinish: (@MainActor () -> Void)?) {
         let baseVoice = voice.flatMap(AVSpeechSynthesisVoice.init(identifier:))
         let baseLang = baseVoice?.language ?? Locale.preferredLanguages.first ?? "en-US"
         let segments: [(String, String)] = language.map { [(text, $0)] } ?? Self.segments(text, base: String(baseLang.prefix(2)))
@@ -35,9 +72,14 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
             u.rate = Float(rate) * AVSpeechUtteranceMaximumSpeechRate * 0.9
             u.postUtteranceDelay = 0.05
             synth.speak(u)
+            last = u
         }
         isSpeaking = !segments.isEmpty
+        if segments.isEmpty { onFinish?() } else { finish = onFinish }
     }
+    /// The last utterance queued and what to do once it has been spoken (a reading's next sentence).
+    private var last: AVSpeechUtterance?
+    private var finish: (@MainActor () -> Void)?
 
     nonisolated static func bestVoice(_ lang: String) -> AVSpeechSynthesisVoice? {
         let all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.lowercased().hasPrefix(lang.lowercased()) }
@@ -85,11 +127,16 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
 
     func stop() {
         if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        if player != nil || openTicket != nil { endPlayer(); playerFinish = nil }
         isSpeaking = false
     }
 
     nonisolated func speechSynthesizer(_ s: AVSpeechSynthesizer, didFinish u: AVSpeechUtterance) {
-        Task { @MainActor in self.isSpeaking = self.synth.isSpeaking }
+        let id = ObjectIdentifier(u)
+        Task { @MainActor in
+            self.isSpeaking = self.synth.isSpeaking
+            if let l = self.last, ObjectIdentifier(l) == id { self.last = nil; let f = self.finish; self.finish = nil; f?() }
+        }
     }
 
     /// Strips Markdown/LaTeX/code so speech sounds natural.
@@ -109,16 +156,23 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
 
     func toggleDictation(language: String? = nil, onText: @escaping (String) -> Void) {
         if isListening { stopListening(); return }
-        dictate(language: language) { text, _ in onText(text) }
+        dictate(language: language) { text, _, _ in onText(text) }
     }
 
-    /// Listens in `language` (an ISO code; nil for the Mac's language) and reports partial results, then the final one.
-    func dictate(language: String?, onText: @escaping (String, Bool) -> Void) {
+    /// Which recogniser heard the learner, said as it is: on this Mac or on Apple's servers, and which model.
+    @Published private(set) var engineName = ""
+
+    /// Listens in `language` (an ISO code; nil for the Mac's language) and reports partial results, then the final one
+    /// with `info`: the engine that heard it and, with a `target` sentence, the pitch of the learner's voice against
+    /// the synthetic voice saying it. The engine is the best this Mac has for the language: Apple's on-device
+    /// SpeechAnalyzer when its model is installed, else Whisper when the learner installed it (and the Mac would
+    /// otherwise send the audio to Apple), else SFSpeechRecognizer (on device for English, Apple's servers otherwise).
+    func dictate(language: String?, target: String? = nil, onText: @escaping (String, Bool, JSON?) -> Void) {
         if isListening { stopListening() }
         SFSpeechRecognizer.requestAuthorization { status in
             Task { @MainActor in
-                guard status == .authorized else { onText("", true); return }
-                self.startListening(language: language, onText: onText)
+                guard status == .authorized else { onText("", true, ["engine": "Speech recognition isn't allowed: System Settings › Privacy & Security › Speech Recognition"]); return }
+                await self.startListening(language: language, target: target, onText: onText)
             }
         }
     }
@@ -137,45 +191,183 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// The Mac's recogniser locales never change while the app runs (the composer asks on every render).
     nonisolated static let supportedLocales = SFSpeechRecognizer.supportedLocales()
 
-    private func startListening(language: String?, onText: @escaping (String, Bool) -> Void) {
-        let wanted = Self.recognizerLocale(language)
-        guard let recognizer = wanted.flatMap(SFSpeechRecognizer.init(locale:)) ?? SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable else { onText("", true); return }
-        listeningLanguage = wanted == nil ? nil : language
-        lastText = ""
-        onFinal = { [weak self] in onText(self?.lastText ?? "", true) }
+    private enum Engine { case analyzer, whisper, sf(onDevice: Bool) }
+    private var analyzerStream: AnyObject?
+    /// The microphone's samples (mono), kept for Whisper and the pitch comparison: at most a minute.
+    private var recorded: [Float] = []
+    private var recordedRate: Double = 16_000
+    private var target: String?
+    private var currentEngine: Engine = .sf(onDevice: false)
+    private var lastText = ""
+    private var onFinal: ((String) -> Void)?
+
+    private func chooseEngine(_ language: String?) async -> Engine {
+        let pref = AppModel.shared.settings.value.speechInput
+        let sfLocale = Self.recognizerLocale(language)
+        let sfOnDevice = sfLocale.flatMap(SFSpeechRecognizer.init(locale:))?.supportsOnDeviceRecognition ?? false
+        if pref == "whisper", OpenSpeech.recognizer(for: language) { return .whisper }
+        if pref != "online", let language, await SpeechEngines.appleModelStatus(language) == .installed { return .analyzer }
+        if pref != "online", !sfOnDevice, OpenSpeech.recognizer(for: language) { return .whisper }
+        return .sf(onDevice: sfOnDevice)
+    }
+
+    private func startListening(language: String?, target: String?, onText: @escaping (String, Bool, JSON?) -> Void) async {
         let engine = AVAudioEngine()
-        let req = SFSpeechAudioBufferRecognitionRequest()
-        req.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in req.append(buf) }
-        // No microphone, or one held by another app: the caller hears a final empty result instead of waiting forever.
-        do { engine.prepare(); try engine.start() } catch { listeningLanguage = nil; onFinal = nil; onText("", true); return }
-        self.engine = engine
-        self.request = req
-        isListening = true
-        task = recognizer.recognitionTask(with: req) { result, error in
-            Task { @MainActor in
-                if let r = result { self.lastText = r.bestTranscription.formattedString; onText(self.lastText, false) }
-                if error != nil || (result?.isFinal ?? false) { self.stopListening() }
+        recorded = []; recordedRate = format.sampleRate; lastText = ""; self.target = target
+        currentEngine = await chooseEngine(language)
+        listeningLanguage = language
+        let lang = language ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")
+        whisperLanguage = lang
+
+        var append: ((AVAudioPCMBuffer) -> Void)?
+        switch currentEngine {
+        case .analyzer:
+            if #available(macOS 26.0, *), let (module, _, kind) = await SpeechEngines.module(for: lang), let s = await AnalyzerStream(module: module) {
+                do {
+                    try await s.start(module: module) { text, _ in Task { @MainActor in self.lastText = text; onText(text, false, nil) } }
+                    analyzerStream = s
+                    append = { s.append($0) }
+                    engineName = "On this Mac (Apple \(kind))"
+                } catch { currentEngine = .sf(onDevice: false) }
+            } else { currentEngine = .sf(onDevice: false) }
+        case .whisper:
+            engineName = "On this Mac (Whisper large-v3-turbo)"
+            onText("", false, ["engine": .string(engineName + " — transcribes when you stop")])
+        case .sf: break
+        }
+        if case .sf = currentEngine {
+            guard let recognizer = Self.recognizerLocale(language).flatMap(SFSpeechRecognizer.init(locale:)) ?? SFSpeechRecognizer(locale: Locale.current),
+                  recognizer.isAvailable else { listeningLanguage = nil; onText("", true, ["engine": "No speech recogniser for this language on this Mac"]); return }
+            let req = SFSpeechAudioBufferRecognitionRequest()
+            req.shouldReportPartialResults = true
+            if recognizer.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }
+            engineName = recognizer.supportsOnDeviceRecognition ? "On this Mac (Apple speech recognition)" : "Apple speech recognition — online (the audio goes to Apple)"
+            request = req
+            append = { req.append($0) }
+            task = recognizer.recognitionTask(with: req) { result, error in
+                Task { @MainActor in
+                    if let r = result { self.lastText = r.bestTranscription.formattedString; onText(self.lastText, false, nil) }
+                    if error != nil || (result?.isFinal ?? false) { self.stopListening() }
+                }
             }
         }
+        onFinal = { [weak self] text in
+            guard let self else { return }
+            let samples = self.recorded, rate = self.recordedRate, target = self.target, name = self.engineName
+            Task {
+                var info: [String: JSON] = ["engine": .string(name)]
+                if let target, !target.isEmpty, samples.count > Int(rate * 0.3) {
+                    if let p = await Self.pitchInfo(samples: samples, rate: rate, target: target, lang: lang) { info["pitch"] = p }
+                }
+                await MainActor.run { onText(text, true, .object(info)) }
+            }
+        }
+        let feed = append
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
+            feed?(buf)
+            guard let ch = buf.floatChannelData?[0] else { return }
+            let chunk = Array(UnsafeBufferPointer(start: ch, count: Int(buf.frameLength)))
+            Task { @MainActor in
+                guard let self, self.recorded.count < Int(self.recordedRate * 60) else { return }
+                self.recorded.append(contentsOf: chunk)
+            }
+        }
+        // No microphone, or one held by another app: the caller hears a final empty result instead of waiting forever.
+        do { engine.prepare(); try engine.start() } catch {
+            listeningLanguage = nil; onFinal = nil; task?.cancel(); task = nil; request = nil
+            onText("", true, ["engine": .string("The microphone couldn't start (\(error.localizedDescription))")]); return
+        }
+        self.engine = engine
+        isListening = true
     }
-    private var lastText = ""
-    private var onFinal: (() -> Void)?
 
     func stopListening() {
+        guard isListening || engine != nil else { return }
         engine?.stop()
         engine?.inputNode.removeTap(onBus: 0)
-        request?.endAudio()
-        task?.cancel()
-        engine = nil; request = nil; task = nil
+        engine = nil
         let wasListening = isListening
         isListening = false
         listeningLanguage = nil
         let done = onFinal; onFinal = nil
-        if wasListening { done?() }
+        let lang = whisperLanguage
+        switch currentEngine {
+        case .analyzer:
+            if #available(macOS 26.0, *), let s = analyzerStream as? AnalyzerStream {
+                analyzerStream = nil
+                Task { let text = await s.finish(); await MainActor.run { if wasListening { done?(text.isEmpty ? self.lastText : text) } } }
+                return
+            }
+        case .whisper:
+            let samples = recorded, rate = recordedRate
+            Task {
+                var heard = ""
+                if let wav = Self.writeWAV(samples, rate: rate) { heard = await OpenSpeech.transcribe(wav, lang: lang) ?? ""; try? FileManager.default.removeItem(at: wav) }
+                await MainActor.run { if wasListening { done?(heard) } }
+            }
+            return
+        case .sf:
+            request?.endAudio()
+            task?.cancel()
+        }
+        request = nil; task = nil
+        if wasListening { done?(lastText) }
     }
+    private var whisperLanguage: String?
+
+    /// The learner's recording as a 16 kHz mono 16-bit WAV (what Whisper reads).
+    nonisolated static func writeWAV(_ samples: [Float], rate: Double) -> URL? {
+        guard !samples.isEmpty, let src = AVAudioFormat(commonFormat: .pcmFormatFloat32, sampleRate: rate, channels: 1, interleaved: false),
+              let dst = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 16_000, channels: 1, interleaved: true),
+              let inBuf = AVAudioPCMBuffer(pcmFormat: src, frameCapacity: AVAudioFrameCount(samples.count)),
+              let conv = AVAudioConverter(from: src, to: dst),
+              let outBuf = AVAudioPCMBuffer(pcmFormat: dst, frameCapacity: AVAudioFrameCount(Double(samples.count) * 16_000 / rate + 64)) else { return nil }
+        inBuf.frameLength = AVAudioFrameCount(samples.count)
+        samples.withUnsafeBufferPointer { p in inBuf.floatChannelData![0].update(from: p.baseAddress!, count: samples.count) }
+        var fed = false
+        var err: NSError?
+        conv.convert(to: outBuf, error: &err) { _, st in if fed { st.pointee = .endOfStream; return nil }; fed = true; st.pointee = .haveData; return inBuf }
+        guard err == nil else { return nil }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-rec-\(UUID().uuidString.prefix(8)).wav")
+        guard let f = try? AVAudioFile(forWriting: url, settings: dst.settings, commonFormat: .pcmFormatInt16, interleaved: true) else { return nil }
+        do { try f.write(from: outBuf) } catch { return nil }
+        return url
+    }
+
+    // MARK: Pitch against the synthetic voice
+
+    /// The learner's pitch contour and the synthetic voice's for the same sentence (rendered offline, not played).
+    nonisolated static func pitchInfo(samples: [Float], rate: Double, target: String, lang: String) async -> JSON? {
+        let learner = Pitch.contour(Pitch.track(samples, sampleRate: rate))
+        guard !learner.isEmpty, let (ref, refRate) = await synthesize(target, lang: lang) else { return nil }
+        let reference = Pitch.contour(Pitch.track(ref, sampleRate: refRate))
+        return Pitch.json(learner: learner, target: reference)
+    }
+
+    /// The target sentence spoken by the best installed voice into memory (AVSpeechSynthesizer.write), as mono samples.
+    nonisolated static func synthesize(_ text: String, lang: String) async -> ([Float], Double)? {
+        await withCheckedContinuation { (c: CheckedContinuation<([Float], Double)?, Never>) in
+            DispatchQueue.main.async {
+                let synth = AVSpeechSynthesizer()
+                let u = AVSpeechUtterance(string: text)
+                u.voice = bestVoice(lang)
+                u.rate = AVSpeechUtteranceDefaultSpeechRate
+                var samples: [Float] = [], rate = 22_050.0, done = false
+                Self.keepAlive.insert(synth)
+                synth.write(u) { buffer in
+                    guard !done else { return }
+                    guard let pcm = buffer as? AVAudioPCMBuffer, pcm.frameLength > 0 else {
+                        done = true; DispatchQueue.main.async { Self.keepAlive.remove(synth) }
+                        c.resume(returning: samples.isEmpty ? nil : (samples, rate)); return
+                    }
+                    rate = pcm.format.sampleRate
+                    if let f = pcm.floatChannelData?[0] { samples.append(contentsOf: UnsafeBufferPointer(start: f, count: Int(pcm.frameLength))) }
+                    else if let i = pcm.int16ChannelData?[0] { samples.append(contentsOf: UnsafeBufferPointer(start: i, count: Int(pcm.frameLength)).map { Float($0) / 32768 }) }
+                }
+            }
+        }
+    }
+    @MainActor static var keepAlive = Set<AVSpeechSynthesizer>()
 }
