@@ -54,7 +54,9 @@ final class CodeMentorTests: XCTestCase {
     func testChangesSinceTheSnapshot() async throws {
         try write("shop.py", "def total(items):\n    raise NotImplementedError\n")
         try write("README.md", "# Shop\n"); try write(".teacher/tests/test_shop.py", "def test_x(): pass\n"); try write("node_modules/x.js", "junk")
-        XCTAssertEqual(ProjectStore.projectFiles(ws), ["README.md", "shop.py"], "the app's state and build folders are not the learner's work")
+        try write(".env", "TOKEN=secret\n"); try write(".github/workflows/ci.yml", "x")
+        XCTAssertEqual(ProjectStore.projectFiles(ws), ["README.md", "shop.py"], "the app's state, build folders and dotfiles are not the learner's work")
+        XCTAssertFalse(TestOutput.parse("retry 3 failed attempts\n", exit: 0).failed == 3, "a log line is not a test summary")
         ProjectStore.snapshot(ws, why: "starter")
         XCTAssertEqual(ProjectStore.changedCount(ws), 0)
         try write("shop.py", "def total(items):\n    return sum(i['price'] * i['qty'] for i in items)\n")

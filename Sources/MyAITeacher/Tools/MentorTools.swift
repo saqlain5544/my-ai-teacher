@@ -188,7 +188,8 @@ struct ProjectReviewTool: Tool {
             ProjectStore.snapshot(ws, why: "review \(round.number)")
             var text = "Round \(round.number) recorded: \(verdict), \(findings.count) new finding\(findings.count == 1 ? "" : "s"), \(carried.count) carried over, \(resolvedIDs.count) resolved."
             if verdict == "pass" {
-                if let r = p.lastRun, r.green, let concept = p.concept {
+                // Credit only a green run that is newer than the baseline the learner worked from (never a stale one).
+                if let r = p.lastRun, r.green, r.at >= (p.rounds.dropLast().last?.at ?? p.snapshotAt ?? .distantPast), let concept = p.concept {
                     let m = ctx.services.study.recordAttempt(subject: p.subject ?? "programming", concept: concept, correct: true, note: "project review passed with green tests")
                     text += " Mastery of \(concept): \(Int(m.pKnown * 100))%."
                     EventBus.publish(.studyDataChanged)

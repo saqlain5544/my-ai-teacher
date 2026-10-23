@@ -83,16 +83,30 @@ enum ProjectStore {
         while let raw = e.nextObject() as? URL {
             let u = raw.resolvingSymlinksInPath()
             let name = u.lastPathComponent
-            if ProjectProfile.skip.contains(name) || name == ".git" || name == Workspace.stateDirName || name.hasPrefix(".") && (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { e.skipDescendants(); continue }
             let v = try? u.resourceValues(forKeys: [.isDirectoryKey, .fileSizeKey])
-            if v?.isDirectory == true { continue }
+            if v?.isDirectory == true { if ProjectProfile.skip.contains(name) || name.hasPrefix(".") { e.skipDescendants() }; continue }
+            // Dotfiles (.env, .npmrc) hold secrets, not the learner's work: never snapshotted, never in a diff.
+            if name.hasPrefix(".") || ProjectProfile.skip.contains(name) { continue }
             if (v?.fileSize ?? 0) > maxFileBytes { continue }
-            guard let data = fm.contents(atPath: u.path), !data.prefix(4096).contains(0) else { continue }
+            guard Self.isText(u) else { continue }
             guard u.path.hasPrefix(root.path + "/") else { continue }
             out.append(String(u.path.dropFirst(root.path.count + 1)))
             if out.count >= maxFiles { break }
         }
         return out.sorted()
+    }
+
+    /// A text file, judged by its first 4 KB (the whole file is never read just to list it).
+    static func isText(_ u: URL) -> Bool {
+        guard let h = try? FileHandle(forReadingFrom: u) else { return false }
+        defer { try? h.close() }
+        let head = (try? h.read(upToCount: 4096)) ?? Data()
+        return !head.contains(0)
+    }
+    /// The files the snapshot holds, from its manifest.
+    private static func snapshotted(_ ws: Workspace) -> Set<String> {
+        guard let d = try? Data(contentsOf: manifestURL(ws)), let m = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { return [] }
+        return Set(m.keys)
     }
 
     /// Records the project's files as the baseline for the next review.
@@ -131,8 +145,7 @@ enum ProjectStore {
     static func changes(_ ws: Workspace) async -> [Change] {
         let fm = FileManager.default
         let dir = snapshotDir(ws)
-        let hasSnapshot = fm.fileExists(atPath: manifestURL(ws).path)
-        let before: Set<String> = hasSnapshot ? Set(((try? fm.subpathsOfDirectory(atPath: dir.path)) ?? []).filter { !$0.hasSuffix("/") && fm.contents(atPath: dir.appendingPathComponent($0).path) != nil && !((try? fm.attributesOfItem(atPath: dir.appendingPathComponent($0).path))?[.type] as? FileAttributeType == .typeDirectory) }) : []
+        let before = snapshotted(ws)
         let now = projectFiles(ws)
         var out: [Change] = []
         for rel in now {
@@ -189,7 +202,8 @@ enum TestOutput {
     static func parse(_ output: String, exit: Int32) -> Result {
         var passed = 0, failed = 0, found = false
         // pytest: "3 passed, 1 failed in 0.1s" / "4 passed" / "1 failed, 3 passed, 2 errors"
-        if let m = first(#"^=+ .*?(\d+ (?:passed|failed|error)[^=]*?) in [\d.]+s"#, in: output) ?? first(#"\b(\d+ (?:passed|failed)\b[^\n]*)"#, in: output) {
+        // pytest's banner line, or a bare summary line ("4 passed in 0.1s"): never a count buried in a log line.
+        if let m = first(#"^=+ .*?(\d+ (?:passed|failed|error)[^=]*?) in [\d.]+s"#, in: output) ?? first(#"^\s*(\d+ (?:passed|failed)\b[^\n]*?) in [\d.]+s"#, in: output) {
             found = true
             for (n, kind) in all(#"(\d+) (passed|failed|errors?)"#, in: m[1], group: 0).compactMap({ s -> (Int, String)? in let p = s.split(separator: " "); return p.count == 2 ? (Int(p[0]) ?? 0, String(p[1])) : nil }) {
                 if kind == "passed" { passed += n } else { failed += n }
