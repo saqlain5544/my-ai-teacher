@@ -139,7 +139,7 @@ struct ProjectReviewTool: Tool {
         case "start":
             var p = ProjectStore.load(ws) ?? MentorProject()
             let changes = await ProjectStore.changes(ws)
-            var s = "Review round \(p.rounds.count + 1)" + (p.title.map { " of \($0)" } ?? "") + ".\n"
+            var s = "Review round \(p.rounds.count + 1)" + (p.title.map { " of \($0)" } ?? "") + ". Project folder: \(ws.url.path) (the learner's files are here and nowhere else).\n"
             if let command = p.testCommand, input["run_tests"]?.bool != false {
                 let (run, out) = await ProjectTestRunner.run(command, ws: ws, timeout: TimeInterval(min(900, max(10, input["timeout"]?.int ?? 300))), why: "review", progress: ctx.progress)
                 p = ProjectStore.load(ws) ?? p
@@ -153,7 +153,11 @@ struct ProjectReviewTool: Tool {
                     open.map { "  [\($0.id)] \($0.file)\($0.line.map { ":\($0)" } ?? "") \($0.severity): \($0.text)" }.joined(separator: "\n") + "\n\n"
             }
             s += "Changed since the \(p.snapshotWhy ?? "baseline")\(p.snapshotAt.map { " (\(ProjectTestsTool.ago($0)))" } ?? ""):\n" + ProjectStore.render(changes)
-            s += "\n\nNow review: correctness first (the failing tests and why), then design, edge cases, naming, complexity, the tests they should add. Point at lines. Questions and targeted hints, never the code. Then call `project_review` findings."
+            if changes.isEmpty {
+                s += "\n\nNo project file differs from the baseline: the learner hasn't saved any change yet (or saved in an editor buffer, not to disk). Don't look for their files anywhere else. Tell them that nothing has changed on disk in \(ws.url.lastPathComponent), ask them to save and say which file they worked on, and offer to go through the first failing test together. Don't record a round."
+            } else {
+                s += "\n\nNow review: correctness first (the failing tests and why), then design, edge cases, naming, complexity, the tests they should add. Point at lines. Questions and targeted hints, never the code. Then call `project_review` findings."
+            }
             return ToolOutput(text: s, meta: ["changes": .array(changes.map { ["path": .string($0.path), "kind": .string($0.kind), "added": .number(Double($0.added)), "removed": .number(Double($0.removed))] }),
                                             "round": .number(Double(p.rounds.count + 1))])
         case "findings":

@@ -433,12 +433,28 @@ def verify_lesson(r, start):
     return problems, notes
 
 def verify_review(r, start):
-    """Checking the learner's work runs the tests; the reply reviews it (bash evidence, no crash)."""
+    """Checking the learner's work runs the tests (project_review does) and records a round when something changed."""
     problems, notes = [], []
-    used = [b["name"] for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolUse"]
-    if not (set(used) & {"bash", "run_code"}): problems.append("the mentor checked without running the tests")
+    msgs = r["messages"][start:]
+    used = [b["name"] for m in msgs for b in m["blocks"] if b["kind"] == "toolUse"]
+    if not (set(used) & {"project_review", "bash", "run_code"}): problems.append("the mentor checked without running the tests")
+    if "project_review" not in used: notes.append("the review didn't go through project_review")
+    starts = [b for m in msgs for b in m["blocks"] if b["kind"] == "toolResult" and b["name"] == "project_review"]
     if not project_tests(): notes.append("no test files under .teacher/tests")
+    if (LAB / ".teacher/project.json").exists():
+        p = json.loads((LAB / ".teacher/project.json").read_text())
+        print("     project.json: tests `%s` · %d runs · %d rounds" % (p.get("testCommand"), len(p.get("runs", [])), len(p.get("rounds", []))))
+        if not p.get("rounds"): notes.append("no review round was recorded")
+    else: problems.append("no .teacher/project.json: project_tests set was never called")
     return problems, notes
+
+def learner_edits():
+    """The learner's work before a review: a small change to the first source file the mentor created."""
+    for f in sorted(LAB.rglob("*.py")):
+        if ".teacher" in f.parts: continue
+        f.write_text(f.read_text() + "\n# learner: started on this\n")
+        print("     learner edited %s" % f.relative_to(LAB)); return
+    print("     (no source file to edit)")
 
 def steering():
     """The teacher should steer its background agent (`agents` send); if it hasn't after 10 s, the learner does (the
@@ -530,9 +546,9 @@ SCENARIOS = [
     dict(name="follow-up-check", same_lesson=True, verify_turn=verify_followup_settled, any=["ask_learner", "quiz"],
          prompt="Sounds good. Give me the quick check as one graded ask_learner question."),
     # Code mentor: the mentor creates the starter files and tests in .teacher/tests, then reviews the learner's edits.
-    dict(name="mentor-project", mode="code", any=["write", "edit", "bash"], verify_turn=verify_lesson, timeout=1200,
+    dict(name="mentor-project", folder=True, mode_after_open="code", any=["write", "edit", "bash"], verify_turn=verify_lesson, timeout=1200,
          prompt="I know Python well. Teach me how real systems implement rate limiting, in depth, and set up a project for me to build one. Put the tests in .teacher/tests."),
-    dict(name="mentor-review", same_lesson=True, prompt="I've changed the files; check my work and review it.", verify_turn=verify_review, timeout=300),
+    dict(name="mentor-review", same_lesson=True, before=learner_edits, prompt="I've changed the files; check my work and review it.", verify_turn=verify_review, timeout=300),
     dict(name="stop", quick=True, prompt="Write a 1500-word essay on the history of mathematics.", stop_after=6),
     dict(name="after-stop", same_lesson=True, prompt="Thanks. Now just tell me in one sentence who Euclid was."),
     # Sub-agent controls: another model with an effort and a time budget; a read-only type refused a write even with
