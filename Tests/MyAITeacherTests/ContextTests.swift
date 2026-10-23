@@ -146,6 +146,22 @@ final class PolicyTests: XCTestCase {
         XCTAssertEqual(ContextPolicy.squeeze(msgs, budget: 1_000_000).map(\.plainText), msgs.map(\.plainText), "under budget: untouched")
     }
 
+    func testTextOnlyModelsGetImagesAsNotes() {
+        let msgs = [ChatMessage(role: .user, blocks: [.image(mime: "image/png", base64: "AAAA"), .text("What colour is it?")]),
+                    ChatMessage(role: .assistant, blocks: [.toolUse(id: "t", name: "browser", input: [:])]),
+                    ChatMessage(role: .user, blocks: [Block.toolResult(id: "t", name: "browser", content: "shot", meta: nil)])]
+        var shot = msgs[2]; shot.blocks[0].data = "QUJD"; shot.blocks[0].mime = "image/png"
+        let out = ContextPolicy.describeImages([msgs[0], msgs[1], shot])
+        XCTAssertEqual(out[0].blocks.map(\.kind), [.text, .text]); XCTAssertEqual(out[0].blocks[0].text, ContextPolicy.imageNote)
+        XCTAssertFalse(out[2].blocks[0].hasPayload); XCTAssertTrue(out[2].blocks[0].text?.contains("image omitted") == true)
+        XCTAssertEqual(out[1].blocks.map(\.kind), [.toolUse], "everything else is untouched")
+        XCTAssertTrue(ChatSession.rejectsImages(HTTPError(status: 400, body: "Upstream request failed: [invalid_value] Beam supports text input only. This conversation contains an image.")))
+        XCTAssertTrue(ChatSession.rejectsImages(HTTPError(status: 400, body: #"{"error":{"message":"This model does not support vision inputs"}}"#)))
+        XCTAssertFalse(ChatSession.rejectsImages(HTTPError(status: 400, body: "max_tokens too large")))
+        XCTAssertFalse(ChatSession.rejectsImages(HTTPError(status: 429, body: "image rate limit")))
+        XCTAssertFalse(ChatSession.rejectsImages(URLError(.timedOut)))
+    }
+
     func testRollingSummaryInputsCoverEverything() {
         let msgs = (0..<300).map { ChatMessage(role: $0 % 2 == 0 ? .user : .assistant, blocks: [.text("message \($0) " + String(repeating: "x", count: 900))]) }
         let parts = ContextPolicy.chunks(msgs, maxChars: 60_000)

@@ -99,7 +99,8 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | Research | Searches the web, compares sources and cites every claim |
 
 **In the composer and transcript:**
-* **Attach files.** Drop in images, PDFs or files; the teacher reads them.
+* **Attach files.** Drop in images, PDFs or files; the teacher reads them. With a model that cannot see images (some free
+  models are text-only), the picture is passed on as a note and the teacher asks you to describe it instead.
 * **Dictate** with the microphone button.
 * **Stop** a reply with ⌘. or the stop button.
 * **Under each reply:**

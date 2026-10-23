@@ -41,6 +41,9 @@ struct Sidebar: View {
 
     var body: some View {
         List(selection: $app.selection) {
+            // The folder and its access level, as the first row: a top safe-area inset sat under the translucent title
+            // bar, where the window controls and the sidebar toggle were drawn over its text.
+            Section { FolderSwitcher().listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 6, trailing: 6)).listRowBackground(Color.clear) }
             Section {
                 Label("Flashcards", systemImage: "rectangle.on.rectangle.angled")
                     .badge(app.dueCount)
@@ -61,7 +64,6 @@ struct Sidebar: View {
             }
         }
         .listStyle(.sidebar)
-        .safeAreaInset(edge: .top, spacing: 0) { FolderSwitcher().padding(.horizontal, 10).padding(.bottom, 6) }
         .searchable(text: $query, placement: .sidebar, prompt: "Search lessons")
         .onChange(of: query) { _, q in app.search(q) }
         .toolbar {

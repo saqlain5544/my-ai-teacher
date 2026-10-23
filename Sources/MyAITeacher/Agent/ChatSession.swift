@@ -357,6 +357,16 @@ final class ChatSession: ObservableObject, Identifiable {
                     break
                 } catch {
                     if Task.isCancelled || (error as? URLError)?.code == .cancelled { break }
+                    // The model can't see the attached picture: send it as a note instead, this turn and from now on.
+                    if assistant.blocks.isEmpty, conversation.imagesUnsupported != true, Self.rejectsImages(error),
+                       request.messages.contains(where: { $0.blocks.contains { $0.kind == .image || ($0.kind == .toolResult && $0.hasPayload) } }) {
+                        conversation.imagesUnsupported = true
+                        save()
+                        sink?.notice("This model can't see images: the picture was passed on as a note instead.")
+                        request.messages = requestMessages()
+                        host.willRequest(&request, self)
+                        continue
+                    }
                     if assistant.blocks.isEmpty, attempt < 3, Self.isTransient(error) {
                         attempt += 1; step.retries = attempt
                         setStatus("Provider busy — retrying (\(attempt)/3)…")
@@ -664,8 +674,17 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func requestMessages() -> [ChatMessage] {
-        ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
-                              budget: contextBudget - (conversation.systemPrompt?.count ?? 0) / 4)
+        let prepared = ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
+                                             budget: contextBudget - (conversation.systemPrompt?.count ?? 0) / 4)
+        return conversation.imagesUnsupported == true ? ContextPolicy.describeImages(prepared) : prepared
+    }
+
+    /// A text-only model refusing the request because of a picture in it (OpenCode Go's Beam: "supports text input only.
+    /// This conversation contains an image"): not transient, but not the end of the lesson either.
+    nonisolated static func rejectsImages(_ error: Error) -> Bool {
+        guard let h = error as? HTTPError, [400, 415, 422].contains(h.status) else { return false }
+        let m = h.localizedDescription.lowercased()
+        return (m.contains("image") || m.contains("vision") || m.contains("multimodal")) && !m.contains("rate limit")
     }
 
     private func estimateTokens() -> Int {

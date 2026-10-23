@@ -164,6 +164,23 @@ enum ContextPolicy {
         return out
     }
 
+    /// For a model that cannot see images: every picture becomes a short note saying one was attached, so the lesson
+    /// goes on (the provider would otherwise refuse the whole request) and the tutor knows to ask about it.
+    static let imageNote = "[The learner attached an image. This model can't see images: ask them to describe it or paste its text.]"
+    static func describeImages(_ msgs: [ChatMessage]) -> [ChatMessage] {
+        var out = msgs
+        for i in out.indices {
+            out[i].blocks = out[i].blocks.map { b in
+                if b.kind == .image { return .text(imageNote) }
+                guard b.kind == .toolResult, b.hasPayload else { return b }
+                var t = b; t.data = nil; t.blob = nil; t.mime = nil
+                t.text = (t.text ?? "") + "\n[image omitted: this model can't see images]"
+                return t
+            }
+        }
+        return out
+    }
+
     /// Two learner-side messages in a row (a background agent's report after tool results, the summary before the next
     /// prompt) become one — tool results first, then the rest: the shape every provider accepts.
     static func mergeConsecutiveUserTurns(_ msgs: [ChatMessage]) -> [ChatMessage] {

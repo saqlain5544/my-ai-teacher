@@ -197,7 +197,9 @@ struct BoardStrip: View {
     @StateObject private var model = BoardModel()
 
     var body: some View {
-        Group {
+        // Always a real view, even with no board yet: modifiers on an empty Group never attach, so a strip that starts
+        // empty (every new lesson) would never bind its model and never appear once the board is created.
+        VStack(spacing: 0) {
             if let b = model.board, !session.conversation.mode.isAgent {
                 Button {
                     app.inspectorTab = .plan
