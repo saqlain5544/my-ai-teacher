@@ -271,7 +271,10 @@ struct VocabTool: Tool {
                 "term": Schema.string("The word or phrase, in its script."), "reading": Schema.string("Pronunciation: kana, pinyin, romanisation (non-Latin scripts)."),
                 "meaning": Schema.string("Meaning in the learner's language."), "pos": Schema.string("Part of speech."),
                 "example": Schema.string("An example sentence in the target language."), "example_meaning": Schema.string("Its translation."),
-                "notes": Schema.string("Usage, register, collocations, a mnemonic."), "tags": Schema.array(Schema.string("Tag"), "Topic tags."),
+                "notes": Schema.string("Usage notes, a mnemonic."), "tags": Schema.array(Schema.string("Tag"), "Topic tags."),
+                "register": Schema.string("Where it fits: formal, polite, casual, written, slang…"),
+                "collocations": Schema.array(Schema.string("Collocation"), "Words it goes with (電話をかける, make a decision)."),
+                "family": Schema.array(Schema.string("Related word"), "Its word family: same root or kanji (書く, 書類, 読書)."),
             ], required: ["term", "meaning"]), "add: the words."),
             "tag": Schema.string("list: only words with this tag."),
             "query": Schema.string("search: text in the term, reading or meaning."),
@@ -319,8 +322,13 @@ struct VocabTool: Tool {
             var added: [VocabItem] = []
             for w in input["words"]?.array ?? [] {
                 guard let term = w["term"]?.string ?? w["word"]?.string, let meaning = w["meaning"]?.string ?? w["translation"]?.string else { continue }
+                // Register, collocations and the word family go on the card with the notes (the back of the flashcard).
+                var notes = [w["notes"]?.string].compactMap { $0 }.filter { !$0.isEmpty }
+                if let r = w["register"]?.string, !r.isEmpty { notes.append("Register: \(r)") }
+                if let c = w["collocations"]?.array?.compactMap(\.string), !c.isEmpty { notes.append("Goes with: " + c.joined(separator: ", ")) }
+                if let f = w["family"]?.array?.compactMap(\.string), !f.isEmpty { notes.append("Family: " + f.joined(separator: ", ")) }
                 if let v = study.addVocab(lang: lang, term: term, reading: w["reading"]?.string, meaning: meaning, pos: w["pos"]?.string, example: w["example"]?.string,
-                                          exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: ctx.conversationID) { added.append(v) }
+                                          exampleMeaning: w["example_meaning"]?.string, notes: notes.isEmpty ? nil : notes.joined(separator: " · "), tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: ctx.conversationID) { added.append(v) }
             }
             guard !added.isEmpty else { return .error("No words saved: each needs `term` and `meaning`.") }
             EventBus.publish(.studyDataChanged)
@@ -340,7 +348,10 @@ struct VocabTool: Tool {
         case "due":
             let due = study.dueVocab(lang: lang, limit: limit)
             if due.isEmpty { return ToolOutput(text: "No \(lang.map(Languages.englishName) ?? "") words are due right now.") }
-            return ToolOutput(text: "\(due.count) word(s) due for review — bring them back in use (a sentence to complete, a quick translation, a dictation), not as a list:\n" + due.map(line).joined(separator: "\n"))
+            // Leeches (forgotten again and again) need a new way in, not another repetition.
+            let leeches = due.filter { $0.lapses >= 3 }.map(\.term)
+            return ToolOutput(text: "\(due.count) word(s) due for review — bring them back in use (a sentence to complete, a quick translation, a dictation), not as a list:\n" + due.map(line).joined(separator: "\n")
+                              + (leeches.isEmpty ? "" : "\nForgotten 3+ times: \(leeches.joined(separator: ", ")) — teach these differently (a contrast with the word it's confused with, a mnemonic, the kanji's parts, a vivid sentence)."))
         case "list":
             let items = study.vocab(lang: lang, tag: input["tag"]?.string, limit: limit)
             if items.isEmpty { return ToolOutput(text: "No words saved yet\(lang.map { " for \(Languages.englishName($0))" } ?? "").") }

@@ -55,6 +55,7 @@ struct Composer: View {
                                     onPasteImage: { img in
                                         if let m = ImageUtil.loadForModel(image: img, name: "Pasted image") {
                                             session.attachments.append(Attachment(name: "Pasted image", block: m.block, thumbnail: img))
+                                            Self.readText(in: img, name: "the pasted image", for: session)
                                         }
                                     },
                                     focusTick: focusTick,
@@ -198,7 +199,10 @@ struct Composer: View {
             let ext = url.pathExtension.lowercased()
             let name = url.lastPathComponent
             if imageExts.contains(ext) {
-                if let m = ImageUtil.loadForModel(url) { session.attachments.append(Attachment(name: name, block: m.block, thumbnail: NSImage(contentsOf: url))) }
+                if let m = ImageUtil.loadForModel(url) {
+                    session.attachments.append(Attachment(name: name, block: m.block, thumbnail: NSImage(contentsOf: url)))
+                    if let img = NSImage(contentsOf: url) { readText(in: img, name: name, for: session) }
+                }
             } else if ext == "pdf", let doc = PDFDocument(url: url) {
                 var text = ""
                 for i in 0..<min(doc.pageCount, 300) { text += "\n--- Page \(i + 1) ---\n" + (doc.page(at: i)?.string ?? "") }
@@ -218,6 +222,21 @@ struct Composer: View {
                 session.attachments.append(Attachment(name: name, block: .file(name: name, content: String(decoding: data, as: UTF8.self)), thumbnail: nil))
             } else {
                 session.errorMessage = "Can't attach \(name): unsupported or too large."
+            }
+        }
+    }
+
+    /// A photo in a language lesson (a page, a menu, a sign): its text read on device in the lesson's language goes with
+    /// it, so the teacher works from the exact words.
+    @MainActor
+    static func readText(in image: NSImage, name: String, for session: ChatSession) {
+        guard session.conversation.mode == .language || session.language?.target != nil else { return }
+        let lang = session.language?.target
+        Task {
+            guard let text = await OCR.text(in: image, lang: lang), text.count >= 2 else { return }
+            await MainActor.run {
+                let title = "Text in \(name) (read on this Mac)"
+                session.attachments.append(Attachment(name: title, block: .file(name: title, content: text), thumbnail: nil))
             }
         }
     }

@@ -86,11 +86,12 @@ extension StudyStore {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines), meaning = meaning.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty, !meaning.isEmpty else { return nil }
         let clean = { (s: String?) -> String? in s.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
-        let existing = (try? db.query("SELECT card_id, reading, example, example_meaning FROM vocab WHERE lang=? AND term=?", lang, term))?.first
+        let existing = (try? db.query("SELECT card_id, reading, example, example_meaning, notes FROM vocab WHERE lang=? AND term=?", lang, term))?.first
         let r = clean(reading) ?? existing?.string("reading"), ex = clean(example) ?? existing?.string("example"), exm = clean(exampleMeaning) ?? existing?.string("example_meaning")
         let front = r.map { "\(term)\n\n*\($0)*" } ?? term
         var back = meaning
         if let e = ex { back += "\n\n> \(e)" + (exm.map { "\n> *\($0)*" } ?? "") }
+        if let n = clean(notes) ?? existing?.string("notes") { back += "\n\n" + n }   // register, collocations, word family
         var cardID = existing?.int("card_id").map(Int64.init)
         if let c = cardID { try? db.execute("UPDATE cards SET front=?, back=? WHERE id=?", front, back, c) }
         else { cardID = addCard(deck: Self.vocabDeck(lang), front: front, back: back, concept: nil, subject: lang, source: source) }

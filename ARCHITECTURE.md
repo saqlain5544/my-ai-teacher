@@ -342,19 +342,65 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   (`T.setLanguage`, on reset and after every turn) and to `ChatSession.language` (the composer), and a one-line
   `<language_state>` is appended to the last learner message of every request (request copy only, like the board card).
 * **Keyboard.** `Resources/web/keyboard-layouts.js` is the one layouts file: the page (`components/keyboard.js`) and the
-  composer (`KeyboardLayouts`, which parses the JSON after the assignment) both read it. Composition lives in both
-  (`keyboard.js` and `ScriptComposer`, with the same tests): Hangul jamo → syllables with compound vowels and finals and
-  jamo-wise backspace; kana ゛゜ and small forms; romaji → kana syllable by syllable as typed; a tone key that cycles
-  pinyin marks by the placement rule; combining marks (Vietnamese tones, niqqud, harakat) folding into the previous
-  letter. On the page the panel opens when an eligible field takes focus (never numeric, math or code fields) and types
-  with `setRangeText` + an input event, so the forms' own validation runs.
-* **Components** (`components/langlearn.js`): `gloss` (interlinear, role colours, SVG alignment arcs drawn on mount and
-  resize), `listen` (speak messages with a `rate` multiplier), `dialogue`, `conjugation`, `tones`; the `speak` question
-  type posts `dictate` (start/stop) and the app streams `T.dictation(key, text, final)` from `Speech.dictate(language:)`,
-  which picks the recogniser locale for the language; `listen` on any question renders the player first. Grading:
-  `accents: "strict"` keeps diacritics in `Questions.norm`; pinyin tone marks and numbers agree (`pinyinNumbers`, only
-  for `lang: zh`); `speak` answers are `{heard, target}` graded by `speechMatch` (words, or characters for scripts
-  without spaces, as a multiset; ≥ 80% is correct).
+  composer (`KeyboardLayouts` + `ScriptKeyboardView`, which parse the JSON after the assignment) both read it, with the
+  same modes (tap, kana/romaji, "Mac keys"), compact/full state, helpers and tests. Composition lives in both
+  (`keyboard.js` and `ScriptComposer`): Hangul jamo → syllables with compound vowels and finals and jamo-wise backspace;
+  kana ゛゜ and small forms; romaji → kana syllable by syllable as typed; pinyin tones by key (tone1–4, cycle) or typed
+  digit, placed on the last syllable (initial + final, so "nǐhao3" marks "hao"); combining marks (Vietnamese tones,
+  niqqud, harakat) folding into the previous letter; `abugida` (a Devanagari/Bengali vowel letter after a consonant
+  becomes its sign). `physical`/`physical_shift` rows map the Mac's key positions (event.code on the page, key codes in
+  the composer) to the script's standard layout (Arabic PC, ЙЦУКЕН, 2-set Korean, InScript, Kedmanee…), and the key
+  lights up. Kana before the caret that spell a saved word offer its kanji (`StudyStore.kanaWords`, sent with
+  `T.setLanguage`). `InputSources` (Carbon TIS) finds the Mac's input source for the language: "Use Mac input" selects
+  it (restored when the keyboard closes), "Add Mac input…" opens Keyboard settings — enabling one is the learner's call.
+  On the page the panel opens by itself only for a field whose question has the target `lang` (or whose prompt is in the
+  language); others keep the ⌨ toggle. The composer's language button and keys sit in a `FirstMouse` host
+  (`NSHostingView` accepting the first mouse down): a SwiftUI button in an inactive window only activated it. Keys go to
+  the composer of the keyboard's lesson (`sessionID`). Spell-check: every page input/textarea gets `spellcheck="false"`
+  (`quietInputs`, all modes); the composer's spell-checker is off while a language is taught, and its autocorrect,
+  grammar check and completion are always off.
+* **Components** (`components/langlearn.js`, `components/langwork.js`): `gloss`, `listen`, `dialogue`, `conjugation`,
+  `tones`; `reading` (Intl.Segmenter words until the app's `LanguageWork.analyze` answers with UTF-16 offsets, readings,
+  lemmas and saved/known marks; ruby for all / new / no words; click a word → `LanguageWork.lookup`: reading, Wiktionary
+  senses for the language section, else `DCSCopyTextDefinition`, deck status; translate a sentence →
+  `LanguageWork.translate`: Translation framework when the pair is installed, else the on-device Foundation model,
+  labelled; save with the sentence; sentence-by-sentence speech with `onFinish` → `T.lang('spoken')`, shadowing pauses;
+  Done → `reading_log`); `correction` (the learner's text against the corrected one, word by word, errors with type and
+  why, rubric, "more natural", a second attempt checked on the page). The bridge: page `{type:'langwork', op}` →
+  `T.lang(kind, key, data)`.
+* **Questions.** `speak` (`dictate` with the target → `T.dictation(key, text, final, info)` with the engine, the
+  alignment and the pitch), `dictation` (`listen` is the key), `translate`, `rewrite`, `build_sentence`, `table`, and
+  `rubric`/`min_words` on written ones. `TextDiff` aligns in order (LCS over words; characters for unspaced scripts;
+  Japanese by kana reading unless strict, or by writing when that matches better) for dictation, speech and the cards.
+  `accents: "strict"` keeps diacritics; harakat/niqqud are optional otherwise; pinyin marks and numbers agree. Written
+  answers the app can't check come back with how to answer them (a ```correction per answer). Questions whose text
+  slips into another script, or into simplified Chinese inside Japanese, are refused before the learner sees them; `vocab`
+  add flags readings that contradict the dictionary.
+* **`<language_state>`** also names the words due (to reuse in new sentences) and the week's reading.
+* **Speech** (`Speech`, `SpeechEngines`, `OpenSpeech`). Recognition per language, best first: Apple's on-device
+  SpeechAnalyzer (`SpeechTranscriber`, or `DictationTranscriber` where it has no model) when its model is installed
+  (Settings › Voice downloads it through `AssetInventory`); Whisper when the learner installed it and the Mac would
+  otherwise go online; else `SFSpeechRecognizer` (on device only for English on the test Mac). The card names the
+  engine and says when audio went to Apple. The final result carries the pitch of the learner's voice against
+  `AVSpeechSynthesizer.write` of the target (YIN F0 at 8 kHz, semitones around each median, 80 points, correlation),
+  labelled as melody only. Voices: the best installed per language; the open-source voice when the Mac has only a
+  compact one ("auto"). `OpenSpeech` downloads sherpa-onnx 1.13.8 (arm64 shared: bin/ + lib/), Supertonic 3 and
+  Whisper large-v3-turbo int8 on request into Application Support/MyAITeacher/speech/, checks each file against a
+  pinned sha256 (or git blob sha1), unpacks with /usr/bin/tar, and runs `sherpa-onnx-offline(-tts)` as subprocesses;
+  any failure falls back to the Mac's engines.
+
+  | Measured on the dev Mac (macOS 27.0.1) | ja | zh | ko | ar | es | fr | de | ru | hi |
+  |---|---|---|---|---|---|---|---|---|---|
+  | Mac voices installed (all compact) | 9 | 18 | 9 | 1 | 18 | 18 | 9 | 1 | 1 |
+  | SFSpeechRecognizer | online | online | online | online | online | online | online | online | online |
+  | SpeechTranscriber (on device, download) | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | — | ✓ |
+  | DictationTranscriber (on device, download) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+  | Supertonic 3 voice (open, 129 MB) | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+  | Whisper large-v3-turbo (open, 1.04 GB) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
+  | Foundation model (translation fallback) | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | — | — |
+
+  Translation framework: ja→en reports "supported, not installed" (a download in System Settings); the other pairs were
+  not probed. Dictionary Services had only English–Urdu and Arabic–English dictionaries enabled.
 
 ## Depth standard
 Every teaching prompt carries the same standard:

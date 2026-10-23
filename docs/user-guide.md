@@ -184,19 +184,41 @@ In **Language mentor** mode, say which language you want to learn and where you 
 school"). The mentor places you with a few questions, sets your profile, and from then on knows the language, your level
 and which words are due.
 
-* **The keyboard for the script.** A ⌨ button appears next to every answer field in a quiz or form, and in the message
-  box's toolbar, when the language needs one: Japanese (kana, or type romaji and get kana), Korean (jamo join into
-  syllables; backspace removes one jamo), Chinese pinyin with an ā→á key that cycles the tone mark, Arabic, Persian,
-  Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi, Bengali and Thai, plus accent rows for Spanish, French, German,
-  Portuguese, Italian, Vietnamese and many more. The panel's menu switches to any other layout; ✕ hides it until you
-  press ⌨ again. For 汉字 use the Mac's own input source.
+* **The keyboard for the script.** Once the language is known, a **⌨ 日本語** (or العربية, Русский…) button sits next
+  to every answer field and in the message box; the panel opens by itself when you click into a field that asks for the
+  language (not for questions you answer in your own language). It has the same layouts and modes in both places:
+  * **Tap** the keys, or **Mac keys**: your own keyboard types the script in its standard layout (Arabic PC, ЙЦУКЕН,
+    2-set Korean, InScript Hindi, Thai Kedmanee, Greek, Hebrew), and the key you pressed lights up on the panel.
+  * Japanese: a gojūon table (゛ ゜ and 小 for voiced and small kana, カナ for katakana) or **ローマ字** — type romaji,
+    get kana. Kana that spell a word you saved offer its kanji (たべる → 食べる).
+  * Chinese pinyin: type the syllable then its tone — a tone key or simply the digit (ni3 → nǐ).
+  * Hindi and Bengali: a vowel typed after a consonant becomes its vowel sign (क + आ → का); Arabic harakat attach to the
+    letter before them; Korean jamo join into syllables and backspace removes one jamo.
+  * **Compact** keeps only the helper keys (marks, tones) when you type with your own keyboard; **✕** hides the panel.
+  * **Use Mac input** switches the Mac to its own input source for the language (kanji/hanzi conversion, the full
+    layout) when it is installed, and back when you close the keyboard; **Add Mac input…** opens Keyboard settings.
+  * Spell-check and autocorrect are off in every answer field: your mistakes are yours to make and the teacher's to find.
+* **Reading.** Passages come as a reading card: click any word for its reading, meaning and dictionary entry
+  (Wiktionary, or your Mac's dictionaries), **Translate sentence** (Apple's on-device translation when the language pair
+  is installed in System Settings › General › Language & Region › Translation Languages, else Apple's on-device model,
+  marked as such), and **＋ Save with this sentence** to keep it in your words. Readings over kanji/hanzi show for every
+  word, only for words you don't know yet, or not at all. **▶ Read aloud** plays sentence by sentence (the sentence
+  being read is highlighted), **🗣 Shadow** pauses after each one for you to repeat it, and **✓ Done reading** counts the
+  passage toward what you read this week.
 * **In the lesson:** glossed sentences (click a word to see where it lands in the translation; click any foreign
   word anywhere to hear it), listening cards with **Slowly** and hidden text for dictation, role-play dialogues where
   your lines stay hidden until you reveal them, conjugation tables with the stem and the ending in different colours,
   and tone diagrams for Mandarin.
-* **Tests:** **Say it** questions listen through the microphone in the target language (the Mac asks for permission the
-  first time) and show which words it understood; dictation questions play the audio first; where accents matter, the
-  mentor grades them strictly.
+* **Tests are real work:** dictation (checked word by word — a wrong word struck through with the right one beside it;
+  Japanese is compared by reading, so kana for kanji counts), **Say it** (the microphone; the card shows what was heard
+  against the sentence, word by word, which engine heard you and whether the audio left your Mac, and the pitch of your
+  voice against a synthetic voice saying the same sentence — the melody only, not your vowels or consonants),
+  translation both ways, rewriting a text in another register, one sentence from given words, a paradigm table to fill,
+  and essays marked on a rubric. Accents are graded strictly where the mentor says they matter; Arabic short vowels and
+  Hebrew points are optional unless it does.
+* **Corrections.** Your writing comes back as a correction card: your text against the corrected one, word by word, each
+  error with its type and why, the rubric scores, a more natural version, and a box to write it again — **Check**
+  compares your new attempt on the spot, **Send to teacher** sends it.
 * **Dictation in the target language.** With a target language set, the microphone button in the message box offers to
   dictate in it as well as in your own language.
 * **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
@@ -306,7 +328,7 @@ Stop the agent any time with ⌘. or Esc twice.
 | Agents | Sub-agent defaults, limits and custom agent types |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide, the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
-| Voice | Read-aloud voice and speed |
+| Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |
 
 ## Your data
 
