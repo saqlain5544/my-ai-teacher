@@ -594,7 +594,9 @@ struct AskLearnerTool: Tool {
             for (i, q) in norm.enumerated() {
                 lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")]: \(q["prompt"]?.string ?? "")\n   Answer: \(Questions.describeAnswer(q, answers[safe: i] ?? .null))")
             }
-            return ToolOutput(text: "Learner's answers:\n" + lines.joined(separator: "\n") + Questions.writingNote(norm, answers: answers), images: Questions.images(from: answers),
+            return ToolOutput(text: "Learner's answers:\n" + lines.joined(separator: "\n") + Questions.writingNote(norm, answers: answers)
+                              + "\n\nRespond to these answers (feedback, or the teaching they call for) and end your reply there; more questions come after the learner has responded.",
+                              images: Questions.images(from: answers),
                               meta: ["answers": .array(answers)])
         }
         let sel = reply["selected"]?.array?.compactMap(\.string) ?? []
@@ -738,8 +740,11 @@ struct QuizTool: Tool {
         }
         if hinted > 0 { s.append("Answers given after a hint don't raise mastery: say briefly what the hint unlocked.") }
         if ungraded == 0 {
-            s.append(wrong == 0 && missedAgain.isEmpty ? "Praise specifically and briefly, then move on (harder questions or the next step)." : "Praise what's right briefly.")
+            s.append(wrong == 0 && missedAgain.isEmpty ? "Praise specifically and briefly, then say what comes next (a harder step, or the next point)." : "Praise what's right briefly.")
         }
+        // Feedback is the end of this reply: the learner reads it and answers, asks, or says they're ready. A new set of
+        // questions straight after the result turns the lesson into a drill they can't steer.
+        s.append("End your reply with this feedback (and, if useful, one question they answer in their own words in the chat). No new quiz or ask_learner in this reply: the next questions come after the learner has responded.")
         return s.joined(separator: "\n")
     }
 }

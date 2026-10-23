@@ -216,6 +216,8 @@ final class LearningFirstTests: XCTestCase {
         XCTAssertEqual(wrong.correct, false)
         XCTAssertTrue(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("record each with `mastery`"))
         XCTAssertFalse(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("Praise specifically"))
+        // After a result the reply ends with the feedback: the learner answers before the next set of questions.
+        XCTAssertTrue(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0).contains("No new quiz or ask_learner in this reply"))
     }
 
     /// A live re-check on "the chain rule" stayed open: the tutor's question said "chain rule".
