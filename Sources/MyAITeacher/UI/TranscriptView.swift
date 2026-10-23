@@ -408,7 +408,15 @@ struct TranscriptView: NSViewRepresentable {
                     var extra = info?.object ?? [:]
                     if final, let target, !text.isEmpty { extra["diff"] = Questions.diffJSON(TextDiff.align(target: target, given: text, lang: lang)) }
                     if extra["engine"] == nil, !app.speech.engineName.isEmpty { extra["engine"] = .string(app.speech.engineName) }
-                    self?.run("T.dictation(\(JSON.string(key).compact),\(JSON.string(text).compact),\(final),\(JSON.object(extra).compact))")
+                    let send = { (x: [String: JSON]) in self?.run("T.dictation(\(JSON.string(key).compact),\(JSON.string(text).compact),\(final),\(JSON.object(x).compact))") }
+                    // Heard online while Apple's on-device model for the language could be downloaded: offer it on the card.
+                    if final, extra["pitch"] == nil, app.speech.engineName.contains("online"), let lang {
+                        Task { @MainActor in
+                            var x = extra
+                            if await SpeechEngines.appleModelStatus(lang) == .downloadable { x["modelDownload"] = .string(lang) }
+                            send(x)
+                        }
+                    } else { send(extra) }
                 }
             case "vocab":
                 // The Save button on a ```vocab card: into the learner's vocabulary and its flashcard deck.
@@ -420,6 +428,16 @@ struct TranscriptView: NSViewRepresentable {
                                              exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: s.id) != nil {
                     EventBus.publish(.studyDataChanged)
                     run("T.notice(\(JSON.string("Saved “\(term)” to your \(Languages.englishName(lang)) vocabulary (reviewed as a flashcard).").compact))")
+                }
+            case "speechModel":
+                // "Hear me on this Mac": Apple's on-device recognition model for the language, from the speak card.
+                guard let lang = j["lang"]?.string else { return }
+                run("T.notice(\(JSON.string("Downloading Apple's \(Languages.englishName(lang)) speech model (on-device recognition)…").compact))")
+                Task { @MainActor in
+                    do {
+                        try await SpeechEngines.installAppleModel(lang) { _ in }
+                        self.run("T.notice(\(JSON.string("\(Languages.englishName(lang)) speech recognition now runs on this Mac.").compact))")
+                    } catch { self.run("T.notice(\(JSON.string("The \(Languages.englishName(lang)) speech model didn't download: \(error.localizedDescription)").compact))") }
                 }
             case "inputSource":
                 // The keyboard panel's "Use Mac input": switch to the language's installed input source, or open Keyboard settings.

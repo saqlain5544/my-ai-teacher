@@ -232,7 +232,7 @@
         const score = d ? d.score : m ? m.score : 0;
         h += '<div class="sp-heard"><span class="sp-label">Heard:</span> <span class="fl"' + langAttr(lang) + '>' + esc(heard) + '</span><span class="sp-score' + (score >= 0.8 ? ' good' : '') + '">' + Math.round(score * 100) + '% matched</span></div>';
         if (d && st.final !== false) h += '<div class="sp-diff"><span class="sp-label">Against the sentence:</span> ' + window.TeacherLangWork.diffHTML(d.ops, lang) + '</div>';
-        if (st.engine) h += '<div class="sp-engine">' + esc(st.engine) + '</div>';
+        if (st.engine) h += '<div class="sp-engine">' + esc(st.engine) + (st.modelDownload ? ' <button class="btn mini link" data-act="sp-model" data-lang="' + esc(st.modelDownload) + '">Hear me on this Mac instead (download Apple\'s model)</button>' : '') + '</div>';
         if (st.pitch) h += pitchHTML(st.pitch, lang);
       } else if (active) h += '<div class="q-help">Say the sentence out loud; the Mac listens in ' + (lang ? esc(lang) : 'the target language') + ' and shows what it understood, word by word.</div>';
       return h + '</div>';
@@ -257,7 +257,7 @@
     const st = speakState.get(key) || {};
     st.heard = text || st.heard || '';
     st.final = !!final;
-    if (info) { if (info.diff) st.diff = info.diff; if (info.engine) st.engine = info.engine; if (info.pitch) st.pitch = info.pitch; }
+    if (info) { if (info.diff) st.diff = info.diff; if (info.engine) st.engine = info.engine; if (info.pitch) st.pitch = info.pitch; if (info.modelDownload) st.modelDownload = info.modelDownload; }
     if (final) st.recording = false;
     speakState.set(key, st);
     const [id, qi] = [key.slice(0, key.lastIndexOf(':')), +key.slice(key.lastIndexOf(':') + 1)];
@@ -267,6 +267,12 @@
     if (F && st.heard) F.answers[qi] = Object.assign({ heard: st.heard, target: q ? String(q.target || q.text || '') : '' }, st.engine ? { engine: st.engine } : {});
     if (R._ctx) R._ctx.refreshCard(id);
   };
+
+  R.registerAction('sp-model', (el, e, ctx) => {
+    ctx.post({ type: 'speechModel', lang: el.getAttribute('data-lang') });
+    el.disabled = true; el.textContent = 'Downloading…';
+    speakState.forEach(st => { if (st.modelDownload === el.getAttribute('data-lang')) st.modelDownload = null; });
+  });
 
   // Pitch: the learner's voice against the synthetic voice saying the same sentence, both as semitones over time
   // (each voice centred on its own median, time stretched to the same length). It shows the shape of the melody —

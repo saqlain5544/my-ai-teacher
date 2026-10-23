@@ -1570,7 +1570,9 @@
     ok($('.q-speak .btn.recording', $('[data-tool-id="sp1"]')), 'recording state');
     T.dictation('sp1:0', 'buenos', false);
     ok($('.q-speak .sp-heard', $('[data-tool-id="sp1"]')).textContent.includes('buenos'), 'partial result shown');
-    T.dictation('sp1:0', 'buenos dias', true);
+    T.dictation('sp1:0', 'buenos dias', true, { engine: 'Apple speech recognition — online (the audio goes to Apple)', modelDownload: 'es' });
+    ok(/online/.test($('.sp-engine', $('[data-tool-id="sp1"]')).textContent), 'the card says the audio went online');
+    posts.length = 0; click($('[data-act="sp-model"]', $('[data-tool-id="sp1"]'))); eq(lastPost('speechModel'), { type: 'speechModel', lang: 'es' }, 'offers the on-device model');
     const c2 = $('[data-tool-id="sp1"]');
     ok(!$('.q-speak .btn.recording', c2), 'recording ended');
     eq($$('.sp-diff .d-same', c2).length, 2, 'both words matched, in order: ' + ($('.sp-diff', c2) || {}).innerHTML);
