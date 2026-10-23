@@ -276,7 +276,7 @@
         (hasReadings(lang) ? '<span class="lw-views rd-modes" title="Readings above the words">' + [['all', 'Readings'], ['new', 'New words'], ['none', 'None']].map(([v, t]) => '<button data-act="rd-mode" data-v="' + v + '" class="' + (st.mode === v ? 'on' : '') + '">' + t + '</button>').join('') + '</span>' : '') +
         '<button class="btn mini" data-act="rd-all">▶ Read aloud</button><button class="btn mini" data-act="rd-all" data-shadow="1" title="Pauses after each sentence for you to repeat it">🗣 Shadow</button></div>' +
         '<div class="rd-body"' + langAttr(lang) + '>' + readingBody(st) + '</div>' +
-        '<div class="rd-pop" hidden></div>';
+''; 
       if (p.translation) h += '<details class="rd-tr"><summary>Translation</summary><div class="md">' + ctx.md(Array.isArray(p.translation) ? p.translation.join('\n\n') : String(p.translation)) + '</div></details>';
       if (p.note) h += '<div class="ll-note md">' + ctx.inline(p.note) + '</div>';
       h += '<div class="rd-foot"><span class="muted">Click any word for its reading and meaning, and to save it with this sentence.</span><button class="btn mini" data-act="rd-done">✓ Done reading</button></div>';
@@ -292,11 +292,21 @@
     document.querySelectorAll('.lw-reading[data-key="' + key + '"] .rd-body').forEach(b => { b.innerHTML = readingBody(st); });
     document.querySelectorAll('.lw-reading[data-key="' + key + '"] .rd-modes button').forEach(b => b.classList.toggle('on', b.getAttribute('data-v') === st.mode));
   }
-  R.registerAction('rd-mode', el => { const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st) return; st.mode = el.getAttribute('data-v'); refreshReading(st.key); });
+  // The word popover lives on the page, not in the card: a message's paint containment (content-visibility) would clip it.
+  function stateOf(el) {
+    const host = el.closest('[data-rd-key]') || el.closest('.lw-reading');
+    return host ? readers.get(host.getAttribute('data-rd-key') || host.getAttribute('data-key')) : null;
+  }
+  function popFor(key, create) {
+    let p = document.querySelector('.rd-pop[data-rd-key="' + CSS.escape(key) + '"]');
+    if (!p && create) { p = document.createElement('div'); p.className = 'rd-pop'; p.hidden = true; p.setAttribute('data-rd-key', key); document.body.appendChild(p); }
+    return p;
+  }
+  R.registerAction('rd-mode', el => { const st = stateOf(el); if (!st) return; st.mode = el.getAttribute('data-v'); refreshReading(st.key); });
   const sentenceText = (st, si) => { const s = st.sentences[si]; return s ? st.text.slice(s[0], s[1]).trim() : ''; };
   R.registerAction('rd-say', (el, e) => {
     e.stopPropagation();
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st) return;
+    const st = stateOf(el); if (!st) return;
     stopPlaying(st); say(st, +el.getAttribute('data-si'));
   });
   function highlight(st, si) {
@@ -310,7 +320,7 @@
   }
   function stopPlaying(st) { st.playing = false; st.then = null; clearTimeout(st.timer); highlight(st, -1); }
   R.registerAction('rd-all', el => {
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st) return;
+    const st = stateOf(el); if (!st) return;
     if (st.playing) { stopPlaying(st); post({ type: 'speak', text: '', stop: true }); return; }
     st.playing = true;
     const shadow = el.hasAttribute('data-shadow');
@@ -325,7 +335,7 @@
     step(0);
   });
   R.registerAction('rd-done', (el, e, ctx) => {
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st) return;
+    const st = stateOf(el); if (!st) return;
     ctx.post({ type: 'langwork', op: 'read', key: st.key, lang: st.lang, title: st.title, words: countWords(st.text), chars: st.text.length, unit: UNSPACED.test(st.text) ? 'characters' : 'words' });
     el.disabled = true; el.textContent = '✓ Logged';
   });
@@ -333,11 +343,10 @@
   // Click a word: its reading, meaning and dictionary entry, with Save (the sentence goes with it).
   document.addEventListener('click', e => {
     const w = e.target.closest && e.target.closest('.rd-w');
-    const card = e.target.closest && e.target.closest('.lw-reading');
-    if (!card) return;
-    const pop = card.querySelector('.rd-pop');
-    if (!w) { if (pop && !e.target.closest('.rd-pop')) pop.hidden = true; return; }
+    if (!w) { if (!(e.target.closest && e.target.closest('.rd-pop'))) document.querySelectorAll('.rd-pop').forEach(p => { p.hidden = true; }); return; }
+    const card = w.closest('.lw-reading'); if (!card) return;
     const st = readers.get(card.getAttribute('data-key')); if (!st) return;
+    const pop = popFor(st.key, true);
     const s = +w.getAttribute('data-s'), en = +w.getAttribute('data-e');
     const tok = (st.tokens || st.words).find(t => t.s === s) || { s, e: en };
     const word = st.text.slice(s, en);
@@ -347,9 +356,9 @@
     card.querySelectorAll('.rd-w.sel').forEach(x => x.classList.remove('sel')); w.classList.add('sel');
     pop.innerHTML = popHTML(st, null);
     pop.hidden = false;
-    const cr = card.getBoundingClientRect(), wr = w.getBoundingClientRect();
-    pop.style.left = Math.max(8, Math.min(cr.width - 330, wr.left - cr.left)) + 'px';
-    pop.style.top = (wr.bottom - cr.top + 6) + 'px';
+    const wr = w.getBoundingClientRect();
+    pop.style.left = (window.scrollX + Math.max(8, Math.min(document.documentElement.clientWidth - 336, wr.left))) + 'px';
+    pop.style.top = (window.scrollY + wr.bottom + 6) + 'px';
     post({ type: 'langwork', op: 'lookup', key, word, lemma: tok.l || null, lang: st.lang, sentence: sentenceText(st, si) });
   });
   function popHTML(st, r) {
@@ -379,7 +388,7 @@
   }, true);
   R.registerAction('rd-close', el => { const p = el.closest('.rd-pop'); if (p) p.hidden = true; });
   R.registerAction('rd-save', (el, e, ctx) => {
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st || !st.lookup) return;
+    const st = stateOf(el); if (!st || !st.lookup) return;
     const lk = st.lookup, r = lk.result || {};
     const meaning = (r.senses && r.senses[0] && r.senses[0].text) || '';
     ctx.post({ type: 'vocab', op: 'add', word: { term: r.lemma || lk.tok.l || lk.word, lang: st.lang, reading: r.reading || lk.tok.r || '', meaning: meaning.slice(0, 160) || '(look up)',
@@ -388,12 +397,12 @@
     if (lk.el) lk.el.classList.add('saved');
   });
   R.registerAction('rd-translate', (el, e, ctx) => {
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st || !st.lookup) return;
+    const st = stateOf(el); if (!st || !st.lookup) return;
     el.disabled = true; el.textContent = 'Translating…';
     ctx.post({ type: 'langwork', op: 'translate', key: st.lookup.key, text: sentenceText(st, st.lookup.si), lang: st.lang });
   });
   R.registerAction('rd-ask', (el, e, ctx) => {
-    const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st || !st.lookup) return;
+    const st = stateOf(el); if (!st || !st.lookup) return;
     ctx.post({ type: 'suggest', text: 'In “' + sentenceText(st, st.lookup.si) + '”, what does “' + st.lookup.word + '” mean here, and how does the sentence work?' });
   });
 
@@ -411,7 +420,7 @@
     }
     for (const st of readers.values()) {
       if (!st.lookup || st.lookup.key !== key) continue;
-      const pop = document.querySelector('.lw-reading[data-key="' + st.key + '"] .rd-pop'); if (!pop) continue;
+      const pop = popFor(st.key, false); if (!pop) continue;
       if (kind === 'lookup') { st.lookup.result = data || {}; pop.innerHTML = popHTML(st, data || {}); }
       if (kind === 'translation') {
         st.lookup.translation = data && data.text || '';

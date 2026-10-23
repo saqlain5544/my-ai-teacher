@@ -491,6 +491,7 @@
       b.addEventListener('mousedown', ev => ev.preventDefault());
       b.addEventListener('click', () => { K.target = el; K.open = !K.open; K.auto = K.open; render(); el.focus(); });
       el.insertAdjacentElement('afterend', b);
+      el.classList.add('kbd-has-toggle');   // room for the toggle, which sits over the field's right edge (RTL text starts there)
     }
   }
   const shortName = l => String(l.name || '').split(' · ')[0];
@@ -517,7 +518,7 @@
       setLayout(target); K.auto = true; K.open = K.open && !!K.layout; if (K.layout) intro();
     }
     render();
-    document.querySelectorAll(FIELDS).forEach(el => { if (el._kbdToggle) { el._kbdToggle = false; const t = el.nextElementSibling; if (t && t.classList.contains('kbd-toggle')) t.remove(); } });
+    document.querySelectorAll(FIELDS).forEach(el => { if (el._kbdToggle) { el._kbdToggle = false; el.classList.remove('kbd-has-toggle'); const t = el.nextElementSibling; if (t && t.classList.contains('kbd-toggle')) t.remove(); } });
     if (K.layout) addToggles(document.body);
   };
 
@@ -552,10 +553,14 @@
     .kbd-key.kbd-space { min-width: 200px; }
     .kbd-key.kbd-mark { color: var(--accent); }
     .kbd-key.kbd-tone { color: var(--fg); font-size: .95em; }
+    .kbd-key[data-fn="dakuten"], .kbd-key[data-fn="handakuten"] { font-size: 1.5em; color: var(--fg); }
+    body.kbd-open #toast { bottom: 340px; z-index: 50; }   /* notices stay readable above the panel */
+    body.kbd-open.kbd-compact #toast { bottom: 170px; }
     .kbd-head .kbd-fn { border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 8px; cursor: pointer; font: inherit; }
     .kbd-toggle { border: 1px solid var(--border); background: var(--bg); color: var(--muted); cursor: pointer; font-size: .78em; padding: 1px 7px; border-radius: 999px; margin-left: 4px; vertical-align: middle; white-space: nowrap; }
     .kbd-toggle:hover { color: var(--accent); border-color: var(--accent); }
     .quiz-q .kbd-toggle, .ask .kbd-toggle { float: right; margin-top: -32px; margin-right: 6px; position: relative; z-index: 1; }
+    .quiz-q input.q-text.kbd-has-toggle, .quiz-q textarea.q-text.kbd-has-toggle, .ask textarea.kbd-has-toggle { padding-right: 104px; }
   `);
   window.TeacherKeyboard = { wants, state: K, layouts: LAYOUTS, hangul, hangulBackspace, romajiToKana, cycleTone, setTone, abugida, voicing, insert, special, setLayout, render, eligible, physicalChar, matchWords, modesOf };
 })();

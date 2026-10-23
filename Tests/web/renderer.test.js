@@ -1490,6 +1490,7 @@
     T.setLanguage({ target: 'ru', native: 'en', inputSource: { id: 'com.apple.keylayout.RussianWin', name: 'Russian – PC', enabled: true, selected: false } });
     const text = $('[data-q-input="0"]', card);
     ok(/Русский/.test(text.nextElementSibling.textContent), 'the ⌨ toggle names the language: ' + text.nextElementSibling.textContent);
+    ok(parseFloat(getComputedStyle(text).paddingRight) >= 90, 'the field keeps room for the toggle (right-to-left text starts under it)');
     text.value = ''; text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
     const kbd = $('#kbd'); ok(!kbd.hidden, 'open');
     ok($('[data-setmode="keys"]', kbd), 'a "Mac keys" mode for a script with a standard layout');
@@ -1659,7 +1660,7 @@
     const w = $$('.lw-reading .rd-w', el).find(x => x.textContent.includes('電車')); ok(w, 'the word 電車');
     click(w);
     const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === '電車' && lk.sentence === '毎日電車で行きます。', JSON.stringify(lk));
-    const pop = $('.lw-reading .rd-pop', el); ok(!pop.hidden, 'popover open'); ok(/Looking it up/.test(pop.textContent));
+    const pop = $('.rd-pop:not([hidden])'); ok(pop && !pop.closest('.msg'), 'popover open, on the page (not clipped by the message)'); ok(/Looking it up/.test(pop.textContent));
     T.lang('lookup', lk.key, { word: '電車', reading: 'でんしゃ', senses: [{ pos: 'Noun', text: 'train (electric)' }], source: 'Wiktionary' });
     ok(/train/.test(pop.textContent) && /でんしゃ/.test(pop.textContent), pop.textContent);
     posts.length = 0; click($('[data-act="rd-translate"]', pop));
