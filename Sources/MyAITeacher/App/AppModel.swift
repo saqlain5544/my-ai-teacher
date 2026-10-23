@@ -34,8 +34,6 @@ final class AppModel: ObservableObject {
     // Right-side inspector (files + in-app page viewer).
     @Published var inspectorShown = false
     @Published var inspectorTab: InspectorTab = .files
-    /// The exercise open in the editor (the right panel's Exercise tab, or its own window).
-    @Published var exerciseID: String?
     @Published var webURL: URL?
     @Published var revealRequest: URL?
     @Published var dueCount = 0
@@ -47,6 +45,7 @@ final class AppModel: ObservableObject {
 
     private init() {
         ShellEnvironment.shared.load()
+        Toolchains.shared.warmUp()
         let s = SettingsStore()
         let g = GlobalStore()
         let start = s.value.lastFolder.map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } ?? s.defaultFolder
@@ -57,9 +56,6 @@ final class AppModel: ObservableObject {
         services = Services(global: g, workspace: ws)
         if ws.url == s.defaultFolder { g.migrateLegacyConversations(into: ws) }
         registerExtensions()
-        NotificationCenter.default.addObserver(forName: .openExercise, object: nil, queue: .main) { [weak self] n in
-            MainActor.assumeIsolated { self?.showExercise(n.object as? String) }
-        }
         conversations = services.conversations.all()
         refreshCounts()
         EventBus.subject
@@ -67,7 +63,9 @@ final class AppModel: ObservableObject {
             .store(in: &bag)
         settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         Experiments.enabled = s.value.experiments
+        Experiments.loadForced()
         settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
+        settings.$value.map(\.courseBoard).removeDuplicates().sink { Experiments.choose($0, for: Experiments.courseBoard.name) }.store(in: &bag)
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         // A sub-agent starting in the open lesson shows up in the right-hand panel, as it works.
         SubAgentCenter.shared.onReport = { [weak self] run, out in
@@ -87,12 +85,12 @@ final class AppModel: ObservableObject {
 
     /// Built-in features are extensions; add new ones here without touching the agent loop.
     private func registerExtensions() {
-        // First: its refusals (the teacher writing the learner's exercise code) must win over an approval prompt.
-        extensions.register(ExerciseExtension())
         extensions.register(PermissionExtension(app: self))
         extensions.register(ComputerUseExtension(app: self))
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
+        extensions.register(CourseBoardExtension())
+        extensions.register(TestingExtension())
         extensions.register(LanguageExtension())
         extensions.register(ActivityExtension())
         Telemetry.shared.start(db: global.db)
@@ -177,13 +175,6 @@ final class AppModel: ObservableObject {
     }
 
     // MARK: Lessons
-
-    /// Opens an exercise in the right panel's editor.
-    func showExercise(_ id: String?) {
-        exerciseID = id
-        inspectorTab = .exercise
-        inspectorShown = true
-    }
 
     func session(for id: String) -> ChatSession? {
         if let s = sessions[id] { return s }
@@ -365,6 +356,20 @@ final class AppModel: ObservableObject {
                     ],
                     "stats": .array([.string("📁 \(workspace.name) · \(access(for: workspace).title)"), .string(hasMemory ? "🧠 project memory loaded" : "🧠 no project memory yet")])]
         }
+        if mode == .language {
+            let profiles = services.study.languageProfiles().filter { $0.role == "target" }
+            let learning = profiles.map { p in "\(Languages.englishName(p.code))\(p.level.map { " (\($0))" } ?? "")" }.joined(separator: ", ")
+            var sug: [JSON] = [
+                ["title": "Place my level", "subtitle": "A few quick questions, then a plan", "prompt": .string("I want to learn \(profiles.first.map { Languages.englishName($0.code) } ?? "a new language"). Place my level with a short graded test that gets harder, then set my profile and propose where we start.")],
+                ["title": "Conversation practice", "subtitle": "A role-play with my lines hidden", "prompt": "Let's do a role-play dialogue at my level (ordering food, asking the way). Use a dialogue block where I play one role, then quiz me on what we used."],
+                ["title": "Dictation", "subtitle": "Listen, type what you hear", "prompt": "Give me a dictation exercise at my level: a few short sentences I listen to and type, graded strictly, then explain my mistakes."],
+                ["title": "Review my words", "subtitle": "Due vocabulary, used in new sentences", "prompt": "Review the vocabulary that's due, used in new sentences and short questions rather than as a list."],
+            ]
+            if profiles.isEmpty { sug.insert(["title": "Start from zero", "subtitle": "Sounds, script and first phrases", "prompt": "I'm a complete beginner. Ask me which language and why, then start with the sounds, the script (with the on-screen keyboard) and the first useful phrases."], at: 0) }
+            return ["title": .string(profiles.isEmpty ? "Which language are we learning?" : "Back to \(learning)?"),
+                    "subtitle": "Say the language and how far along you are. The mentor places you, shows the keyboard for its script, and keeps the words you learn for review.",
+                    "suggestions": .array(sug), "stats": .array(profiles.map { p in let v = services.study.vocabStats(lang: p.code); return .string("🗣 \(Languages.englishName(p.code)): \(v.total) words, \(v.due) due") })]
+        }
         var stats: [JSON] = []
         let streak = services.study.streakDays()
         if streak > 0 { stats.append(.string("🔥 \(streak)-day streak")) }
@@ -382,6 +387,13 @@ final class AppModel: ObservableObject {
             ["title": "Today's news, explained", "subtitle": "Live web search with sources", "prompt": "Search the web for one important science or technology story from this week and explain it to me with sources."],
         ]
         if isQuick(workspace) { suggestions.removeAll { $0["title"]?.string == "Study this folder" } }
+        // The course in progress comes first: one click picks it up where the board says (linked before the first message).
+        if !Experiments.boardOff, let b = services.study.plans().lazy.map(CourseBoard.init(plan:)).first(where: { $0.doneCount < $0.courseCount }) {
+            let where_ = b.focus.map { "\($0.id.uppercased()) \($0.title)" } ?? "the next card"
+            suggestions.insert(["title": .string("Continue: \(b.title)"), "subtitle": .string("\(b.doneCount) of \(b.courseCount) done · next: \(where_)"),
+                                "prompt": .string("Let's continue my course \"\(b.title)\". Pick up from the board: " + (b.focus.map { f in "the focus is \(f.title)" + (f.next.map { ", next: \($0)" } ?? "") } ?? "start the next card") + "."),
+                                "board": .string(b.id)], at: 0)
+        }
         if dueCount > 0 {
             suggestions.insert(["title": "Review weak spots", "subtitle": .string("\(dueCount) flashcards due + targeted practice"), "prompt": "Look at my mastery and memory, find my weakest concepts and give me targeted practice with a quiz."], at: 0)
         }

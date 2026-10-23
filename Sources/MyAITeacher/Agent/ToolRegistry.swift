@@ -1,15 +1,19 @@
 import Foundation
 
 enum ToolRegistry {
-    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage).
+    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage), and the course
+    /// board — the long-term state manager must never depend on another tool having been loaded (it once came in only
+    /// alongside `mastery`, so switching quizzes off silently switched the board off too).
     static let core: [Tool] = [
         AskLearnerTool(), MathTool(), RunCodeTool(), ReadTool(), WriteTool(), EditTool(), LsTool(), BashTool(),
-        WebSearchTool(), WebFetchTool(), MemoryTool(), LoadToolsTool(),
+        WebSearchTool(), WebFetchTool(), MemoryTool(), LessonPlanTool(), LoadToolsTool(),
     ]
     /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
     static let deferred: [Tool] = [
-        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(), ExerciseTool(),
+        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LanguageTool(), VocabTool(),
     ]
+    /// Always on in Language mentor mode (deferred elsewhere): the mentor must never have to load its own tools.
+    static let languageTools: [Tool] = [LanguageTool(), VocabTool()]
     static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
 
     /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
@@ -20,9 +24,15 @@ enum ToolRegistry {
     ]
 
     /// Core and deferred sets for a lesson, after its experiment arms (stable for the lesson's lifetime).
-    static func layout(_ lessonID: String?) -> (core: [Tool], deferred: [Tool]) {
+    static func layout(_ lessonID: String?, mode: TeachingMode = .tutor) -> (core: [Tool], deferred: [Tool]) {
         let visualInCore = Experiments.arm(Experiments.visualTool, unit: lessonID ?? "") == "core"
-        return visualInCore ? (core.dropLast() + [VisualTool(), LoadToolsTool()], deferred) : (core, deferred + [VisualTool()])
+        var l = visualInCore ? (core: core.dropLast() + [VisualTool(), LoadToolsTool()], deferred: deferred) : (core: core, deferred: deferred + [VisualTool()])
+        if mode == .language {
+            let names = Set(languageTools.map(\.name))
+            l.core += languageTools
+            l.deferred.removeAll { names.contains($0.name) }
+        }
+        return l
     }
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
@@ -35,17 +45,16 @@ enum ToolRegistry {
         var off = Set(settings.disabledTools)
         if mode.isAgent { return agentTools.filter { !off.contains($0.name) } }
         if settings.python == .off { off.insert("math") }   // SymPy needs Python
-        let l = layout(lessonID)
-        // Code mentor sets projects from the first reply: its exercise tool needs no load step.
-        let extra = (mode == .code ? ["exercise"] : []) + loaded.filter { !(mode == .code && $0 == "exercise") }
-        // The code mentor never writes code files: projects come through `exercise`, demonstrations through `run_code`.
-        if mode == .code { off.formUnion(["write", "edit", "bash"]) }
-        return (l.core + extra.compactMap { name in l.deferred.first { $0.name == name } }).filter { !off.contains($0.name) }
+        if Experiments.boardOff { off.insert("lesson_plan") }
+        let l = layout(lessonID, mode: mode)
+        let extra = loaded.compactMap { name in l.deferred.first { $0.name == name } }
+        return (l.core + extra).filter { !off.contains($0.name) }
     }
 
     /// One line per deferred tool for the system prompt.
-    static func deferredIndex(_ lessonID: String? = nil) -> String {
-        layout(lessonID).deferred.map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
+    static func deferredIndex(_ lessonID: String? = nil, mode: TeachingMode = .tutor) -> String {
+        layout(lessonID, mode: mode).deferred
+            .map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 
     /// Tools a research sub-agent may use without supervision.

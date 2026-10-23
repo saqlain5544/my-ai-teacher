@@ -77,6 +77,8 @@ protocol AgentExtension: AnyObject {
     func willSend(_ message: inout ChatMessage, session: ChatSession)
     /// Adjust each request before it is sent to the model.
     func willRequest(_ request: inout LLMRequest, session: ChatSession)
+    /// State the summary of a compacted lesson must carry (it is written from the transcript, which may not hold it).
+    func summaryContext(_ session: ChatSession) -> [String]
     /// Gate a tool call. The first non-`allow` decision wins.
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision
     /// Observe or rewrite a tool result.
@@ -93,6 +95,7 @@ extension AgentExtension {
     func systemPromptSections(_ session: ChatSession) -> [String] { [] }
     func willSend(_ message: inout ChatMessage, session: ChatSession) {}
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {}
+    func summaryContext(_ session: ChatSession) -> [String] { [] }
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision { .allow }
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {}
     func willStoreReply(_ message: inout ChatMessage, session: ChatSession) {}
@@ -113,6 +116,7 @@ final class ExtensionHost {
     func systemPromptSections(_ s: ChatSession) -> [String] { extensions.flatMap { $0.systemPromptSections(s) } }
     func willSend(_ m: inout ChatMessage, _ s: ChatSession) { for e in extensions { e.willSend(&m, session: s) } }
     func willRequest(_ r: inout LLMRequest, _ s: ChatSession) { for e in extensions { e.willRequest(&r, session: s) } }
+    func summaryContext(_ s: ChatSession) -> [String] { extensions.flatMap { $0.summaryContext(s) } }
     func shouldRun(_ c: Block, _ t: Tool, _ s: ChatSession) -> ToolDecision {
         for e in extensions {
             let d = e.shouldRun(c, tool: t, session: s)

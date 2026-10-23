@@ -53,8 +53,9 @@ enum SubAgentPolicy {
             if scope.readOnly { return .deny("\(who.capitalizedFirst) is read-only: it can't change files.") }
             guard let p = input["path"]?.string else { return .allow }   // the tool reports the missing path itself
             let url = resolvePath(p, workspace: scope.root)
-            if url.isInside(scope.root.appendingPathComponent(Workspace.stateDirName)) {
-                return .deny("`.teacher/` is the app's private state folder.")
+            let state = scope.root.appendingPathComponent(Workspace.stateDirName)
+            if url.isInside(state), !url.isInside(state.appendingPathComponent("tests")) {
+                return .deny("`.teacher/` is the app's private state folder; only `.teacher/tests` is writable.")
             }
             guard url.isInside(scope.root) else { return .deny("Sub-agents only write inside \(scope.root.path) (use paths relative to it).") }
             guard grants.access >= .write || grants.granted.contains("write") else {

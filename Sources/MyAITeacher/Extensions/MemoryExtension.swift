@@ -16,7 +16,7 @@ final class MemoryExtension: AgentExtension {
         let recall = session.services.memory.recall(text, core: session.conversation.systemPrompt ?? "")
         guard !recall.note.isEmpty else { return }
         session.services.memory.markUsed(recall.memories.map(\.id))
-        message.blocks.insert(Block(kind: .text, text: recall.note, meta: ["hidden": true]), at: 0)
+        message.blocks.insert(Block(kind: .text, text: recall.note, meta: ["hidden": true, "ephemeral": true]), at: 0)
         var meta = message.meta?.object ?? [:]
         let items: [JSON] = recall.memories.map {
             ["id": .string($0.id), "kind": .string($0.kind.rawValue), "content": .string($0.content), "score": .number(($0.relevance * 100).rounded() / 100)]
@@ -109,14 +109,32 @@ extension MemoryExtension {
 }
 
 /// Logs study time and usage; keeps aggregate counters for the Progress screen.
+/// Study time is the time a lesson is in use — reading a reply, working a problem, waiting for the next one — counted
+/// between the learner's sends and the ends of turns, with a gap of more than `idleGap` treated as away (not counted).
+/// Counting only the model's reply time (as before) showed "0m studied" after a real half-hour lesson.
 @MainActor
 final class ActivityExtension: AgentExtension {
     let id = "activity"
+    static let idleGap: TimeInterval = 15 * 60
+    private var lastActive: [String: Date] = [:]
+
+    /// Seconds to credit for the time since this lesson's last activity (0 after an idle gap, or the first time).
+    static func credit(since last: Date?, now: Date) -> TimeInterval {
+        guard let last else { return 0 }
+        let gap = now.timeIntervalSince(last)
+        return gap > 0 && gap <= idleGap ? gap : 0
+    }
+    private func tick(_ session: ChatSession, now: Date = Date()) -> TimeInterval {
+        let s = Self.credit(since: lastActive[session.id], now: now)
+        lastActive[session.id] = now
+        return s
+    }
+
     func willSend(_ message: inout ChatMessage, session: ChatSession) {
-        session.services.study.logActivity(messages: 1)
+        session.services.study.logActivity(seconds: tick(session), messages: 1)
     }
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {
-        session.services.study.logActivity(seconds: metrics.duration)
+        session.services.study.logActivity(seconds: tick(session))
         let lastUser = session.messages.lastIndex { $0.role == .user && !$0.isToolResultOnly } ?? -1
         for m in session.messages[(lastUser + 1)...] where m.role == .assistant {
             if let step = m.metrics { session.services.logUsage(provider: step.provider, model: step.model, usage: step.usage) }
@@ -152,7 +170,7 @@ final class TeachingContextExtension: AgentExtension {
         let notes = session.studyNotes.suffix(4)
         session.studyNotes = []
         message.blocks.insert(Block(kind: .text, text: "<context>\nSince your last reply:\n" + notes.map { "- " + $0 }.joined(separator: "\n") + "\n</context>",
-                                    meta: ["hidden": true]), at: 0)
+                                    meta: ["hidden": true, "ephemeral": true]), at: 0)
     }
 
     func systemPromptSections(_ session: ChatSession) -> [String] {
@@ -164,15 +182,17 @@ final class TeachingContextExtension: AgentExtension {
         if due > 0 { out.append("# Spaced repetition\n\(due) flashcard(s) are due. Mention it at a natural moment (the learner reviews in the Flashcards screen).") }
         let follow = s.study.dueFollowUps(limit: 5)
         if !follow.isEmpty { out.append(Self.followUpSection(follow)) }
-        let plans = s.study.plans().prefix(3)
+        let plans = Experiments.boardOff ? [] : s.study.plans().prefix(3)
         if !plans.isEmpty {
-            var p = "# Active learning plans\n"
+            let linked = s.study.boardID(forLesson: session.id)
+            var p = "# Course boards\n"
             for plan in plans {
-                let mods = plan.data["modules"]?.array ?? []
-                let done = mods.filter { $0["status"]?.string == "done" }.count
-                let next = mods.first { $0["status"]?.string != "done" }?["title"]?.string ?? "—"
-                p += "- \(plan.title) [\(plan.id)]: \(done)/\(mods.count) modules done; next: \(next)\n"
+                let b = CourseBoard(plan: plan)
+                let next = b.focus.map { "focus \($0.id.uppercased()) \($0.title)" + ($0.next.map { " — next: \(MemoryText.clip($0, 80))" } ?? "") }
+                    ?? b.nextActions(1).first.map { "next \($0.id.uppercased()) \($0.title)" } ?? "nothing left"
+                p += "- \(plan.title) [\(plan.id)]: \(b.doneCount)/\(b.courseCount) done; \(next)" + (plan.id == linked ? " (this lesson's board)" : "") + "\n"
             }
+            if linked == nil { p += "None is linked to this lesson: `lesson_plan get` with plan=<id> continues one; create one for a new goal.\n" }
             out.append(p)
         }
         // Folder context.
@@ -202,6 +222,8 @@ final class TeachingContextExtension: AgentExtension {
             else { f += "\nThe folder is empty." }
         }
         out.append(f)
+        // Code lessons build and run real programs: the installed versions anchor what they teach.
+        if session.conversation.mode == .code, let t = Toolchains.section(Toolchains.shared.entries) { out.append(t) }
         return out
     }
 }

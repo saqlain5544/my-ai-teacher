@@ -144,13 +144,36 @@ final class Embedder: @unchecked Sendable {
     func vector(_ text: String) -> [Float]? {
         lock.lock(); defer { lock.unlock() }
         if !loaded { model = NLEmbedding.sentenceEmbedding(for: .english); loaded = true }
-        guard let model else { return nil }
+        guard let model, Self.isLatinScript(text) else { return nil }
         var sum: [Double]?, n = 0.0
         for p in Self.pieces(String(text.prefix(2000)), max: Self.pieceLength) {
             guard let v = model.vector(for: String(p)) else { continue }
             sum = sum.map { zip($0, v).map(+) } ?? v; n += 1
         }
         return sum?.map { Float($0 / n) }
+    }
+
+    /// Apple ships sentence embeddings for English, French, German and Italian at different dimensions, and the store
+    /// holds one model's vectors (English, 512). Text in another script is not a weak signal through it, it is noise:
+    /// Arabic related and unrelated sentences both scored ~0.97 cosine, and the store's 0.55–0.9 range turned any such
+    /// pair into *full* semantic evidence. Until a multilingual embedder is bundled, only Latin-script text gets a vector;
+    /// everything else falls back to lexical/FTS matching — honest, instead of confidently wrong.
+    static func isLatinScript(_ text: String) -> Bool {
+        let sample = String(text.prefix(600))
+        var letters = 0, latin = 0
+        for u in sample.unicodeScalars where CharacterSet.letters.contains(u) {
+            letters += 1
+            if isLatin(u.value) { latin += 1 }
+        }
+        return letters >= 3 && latin * 5 >= letters * 4
+    }
+    private static func isLatin(_ v: UInt32) -> Bool {
+        switch v {
+        case 0x0041...0x005A, 0x0061...0x007A, 0x00C0...0x024F, 0x1E00...0x1EFF, 0x2C60...0x2C7F, 0xA720...0xA7FF:
+            return true
+        default:
+            return false
+        }
     }
 
     /// Consecutive pieces of at most `max` characters, cut at a space when there is one.

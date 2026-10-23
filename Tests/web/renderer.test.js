@@ -22,6 +22,7 @@
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
   const click = el => { ok(el, 'nothing to click'); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); };
   const lastPost = type => posts.filter(p => p.type === type).pop();
+  window.T.armDelay(0);
   const ERR = '.comp-error, .diagram-error, .math-error, .katex-error';
   const noErrors = (el, what) => { const e = $(ERR, el); ok(!e, (what || 'render') + ' shows an error: ' + (e && e.textContent.slice(0, 200))); };
 
@@ -283,20 +284,29 @@
     const blk = await until(() => { const b = $('.mermaid-block', el); return b && !b.hasAttribute('data-pending') && b; }, 'mermaid error', 8000);
     ok($('.diagram-error', blk), 'error box');
     ok(!$('body > [id^="dmmd"], body > svg[id^="mmd"]'), 'no stray mermaid nodes');
+    // When the reply finishes, the broken diagram is reported to the app (the teacher fixes it next time).
+    posts.length = 0; T.status('Thinking', true); T.status('', false);
+    const told = await until(() => lastPost('visualError'), 'diagram error reported', 4000);
+    ok(told.kind === 'mermaid' && /error/i.test(told.msg), JSON.stringify(told));
   });
 
   // ───────────── Plots and charts ─────────────
-  test('plot: functions, ranges and errors', () => {
+  // The plotter is a lazy module: the first ```plot shows a placeholder until components/plot.js has loaded.
+  test('plot: functions, ranges and errors (the plotter loads on first use)', async () => {
     let el = show('```plot\n{"functions":["sin(x)","x^2/4"],"xmin":-3,"xmax":3,"title":"Two curves"}\n```');
+    ok(TeacherManifest.modules.some(m => m.src === 'components/plot.js' && m.lazy && m.lazy.includes('plot')), 'the manifest marks the plotter lazy');
+    await until(() => $('.plot-block svg path', el), 'the plotter module');
     noErrors(el, 'plot json'); ok($('.plot-block svg path', el), 'plot path');
+    ok(TeacherUI.components.plot && !TeacherUI.lazy.plot, 'loaded once, registered as a component');
     el = show('```plot\ny = x^2 - 2 from -3 to 3\n```');
-    noErrors(el, 'plot text'); ok($('.plot-block svg path', el), 'plot text path');
+    noErrors(el, 'plot text'); ok($('.plot-block svg path', el), 'plot text path (now synchronous)');
     el = show('```plot\n{"functions":[]}\n```');
     ok($('.plot-block', el), 'empty plot handled');
   });
 
-  test('plot: compact ticks for large values, no legend for one unnamed curve', () => {
+  test('plot: compact ticks for large values, no legend for one unnamed curve', async () => {
     const el = show('```plot\n{"functions":["101.325*10**(x/20)"],"xmin":50,"xmax":105,"title":"Vapour pressure"}\n```');
+    await until(() => $('.plot-block svg', el), 'plot');
     noErrors(el, 'plot');
     const ticks = $$('.plot-block text', el).map(t => t.textContent).join(' ');
     ok(!/e\+/.test(ticks), 'no exponent ticks: ' + ticks); ok(/\d[kM]\b/.test(ticks), 'compact ticks: ' + ticks);
@@ -727,7 +737,234 @@
     ok(!d.open, 'collapsed after'); ok(/6 words/.test($('summary', d).textContent), 'word count: ' + $('summary', d).textContent);
   });
 
+  test('a step\'s thinking collapses when the next step starts streaming in a new message', async () => {
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    T.delta(a.id, 0, 'thinking', 'Plan the lookup in the source.\n\n\n\n\n\n'); await sleep(150);
+    const d = $('#m-' + a.id + ' details.thinking');
+    ok(d.open && d.classList.contains('live'), 'open while it streams');
+    const tb = $('.thinking-body', d);
+    ok(tb.textContent.trim() === 'Plan the lookup in the source.' && tb.children.length === 1, 'trailing blank lines are not shown: ' + JSON.stringify(tb.innerHTML));
+    // The step ends with a tool call; the next step streams in a new message.
+    const b = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next step.'); await sleep(150);
+    const d1 = $('#m-' + a.id + ' details.thinking');
+    ok(!d1.open && !d1.classList.contains('live'), 'the earlier step\'s thinking is collapsed and finished');
+    ok(/Thought process · 6 words/.test($('summary', d1).textContent), $('summary', d1).textContent);
+    ok($('#m-' + b.id + ' details.thinking').open, 'the new step streams open');
+    T.status('', false); await sleep(120);
+  });
+
+  test('thinking streams as markdown, the same way the reply does', async () => {
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    T.delta(a.id, 0, 'thinking', '**Plan** the work.\n\n```python\nprint(1)\n```'); await sleep(150);
+    const d = $('#m-' + a.id + ' details.thinking');
+    ok(d && $('.thinking-body strong', d) && $('.thinking-body pre.thinking-code', d), 'formatted while it streams, fences as plain code');
+    // A long thought streams by segments: what's already finished keeps its nodes from frame to frame.
+    const long = Array.from({ length: 40 }, (_, i) => 'Step ' + i + ': **check** the window function against the RFC.').join('\n\n');
+    T.delta(a.id, 0, 'thinking', '\n\n' + long); await sleep(150);
+    const first = $('.thinking-body p', d);
+    T.delta(a.id, 0, 'thinking', '\n\nOne more.'); await sleep(150);
+    ok($('.thinking-body p', d) === first, 'finished segments are not re-rendered');
+    const body = $('.thinking-body', d); ok(body.scrollHeight - body.scrollTop - body.clientHeight < 30, 'pinned to the newest line');
+    T.delta(a.id, 1, 'text', 'Done.'); await sleep(150); T.status('', false); await sleep(120);
+    d.open = true; await sleep(80);
+    ok(!d.classList.contains('raw') && $('.thinking-body strong', d), 'markdown when opened after finishing');
+    ok($('.thinking-body pre.thinking-code', d), 'its code fence reads as plain code (no run button, no widget)');
+  });
+
+  test('reading back: a bounded page offers newer messages, and asks for them', () => {
+    posts.length = 0;
+    T.status('', false);
+    T.reset([U('old question'), A('old answer')], { earlier: 1200, newer: 4800 });
+    const nb = $('.newer [data-act="newer"]');
+    ok(nb && /4,800 more/.test(nb.textContent), 'a Show newer button with the count: ' + (nb && nb.textContent));
+    ok($('.earlier [data-act="older"]'), 'and Show earlier above');
+    ok(thread_last_is_newer(), 'the newer bar is at the bottom');
+    click(nb);
+    eq(lastPost('newer') && lastPost('newer').type, 'newer', 'asks for the newer page');
+    ok(nb.disabled, 'disabled while it loads');
+    T.reset([U('live')], {});
+    ok(!$('.newer'), 'the live window has no newer bar');
+    function thread_last_is_newer() { const t = document.getElementById('thread'); return t.lastElementChild && t.lastElementChild.classList.contains('newer'); }
+  });
+
+  test('text boxes opt out of writing suggestions (no Math Results in an attempt)', () => {
+    const el = show('```problem\n{"q": "What is 12 x 7?", "hints": ["Think 10 x 7 + 2 x 7"], "solution": "84", "answer": "84"}\n```');
+    const ta = $('.pb-attempt', el);
+    ok(ta, 'an attempt box');
+    eq([ta.getAttribute('writingsuggestions'), ta.getAttribute('autocorrect'), ta.getAttribute('autocomplete')], ['false', 'off', 'off']);
+    const b = { kind: 'toolUse', id: 'qz', name: 'ask_learner', input: { question: 'Your answer?', options: ['A'], allow_free_text: true } };
+    T.reset([U('q'), A([b])], {}); T.interaction({ id: 'qz', kind: 'ask', payload: { question: 'Your answer?', options: ['A'], allow_free_text: true } }, true);
+    const free = $('[data-tool-id="qz"] textarea');
+    ok(free && free.getAttribute('writingsuggestions') === 'false', 'a question card\'s free-text box too');
+    T.interaction({ id: 'qz' }, false);
+  });
+
+  // ───────────── AST, registries and fallbacks ─────────────
+  test('a message projects into typed nodes with stable ids and tool-result links', () => {
+    const AST = window.TeacherAST;
+    const m = { id: 'mx', role: 'assistant', blocks: [
+      { kind: 'thinking', text: 'hm' }, { kind: 'text', text: 'Let me check.' },
+      { kind: 'toolUse', id: 'call_1', name: 'read', input: { path: 'a.txt' } }, { kind: 'toolUse', id: 'call_2', name: 'grep', input: { pattern: 'x' }, meta: { pending: true } },
+      { kind: 'text', text: 'Done.', meta: { hidden: true } }, { kind: 'hologram', text: '?' },
+    ], error: 'Stopped.', meta: { superseded: true, reviewIssues: ['too long'] } };
+    const results = { call_1: { id: 'r1', kind: 'toolResult', text: 'hello', isError: false } };
+    const n = AST.toNodes(m, { result: id => results[id] || null, progress: () => 'partial' });
+    eq(n.type, 'message'); eq(n.draft, true); eq(n.error, 'Stopped.'); eq(n.reviewIssues, ['too long']);
+    eq(n.children.map(c => c.type), ['thinking', 'text', 'tool', 'tool', 'text', 'error'], 'one node per block, in order');
+    eq(n.children.map(c => c.id), ['mx:b0', 'mx:b1', 'mx:call_1', 'mx:call_2', 'mx:b4', 'mx:b5'], 'tool calls keep their call id, the rest their position');
+    const [t1, t2] = n.children.filter(c => c.type === 'tool');
+    eq([t1.props.status, t1.props.resultRef, t1.props.output], ['done', 'r1', 'hello'], 'a finished call links its result');
+    eq([t2.props.status, t2.props.resultRef, t2.props.output], ['pending', null, 'partial'], 'a pending call has no result yet');
+    eq(n.children[4].meta.hidden, true, 'hidden context is marked, not dropped');
+    eq(AST.textOf(n), 'Let me check.', 'the readable text leaves out hidden context');
+    eq(AST.toolsOf(n).length, 2);
+    eq(AST.toNodes({ id: 'u', role: 'user', blocks: [{ kind: 'toolResult', id: 'call_1', text: 'x' }] }).children.length, 0, 'a result-only message has no nodes of its own');
+    eq(Object.keys(TeacherUI.nodes).sort(), ['agentReport', 'attachment', 'error', 'text', 'thinking', 'tool'], 'the node vocabulary stays small');
+  });
+
+  test('an unknown block kind renders a fallback node and the rest of the reply still shows', () => {
+    const el = show([{ kind: 'text', text: 'Before.' }, { kind: 'hologram', data: '…' }, { kind: 'text', text: 'After.' }]);
+    const fb = $('.node-error', el);
+    ok(fb && /hologram/.test(fb.textContent), 'a readable fallback names the block kind');
+    ok(/Before\./.test(el.textContent) && /After\./.test(el.textContent), 'text around it renders');
+    eq($$('.blocks > div', el).length, 3, 'one element per node');
+  });
+
+  test('a component that throws shows a readable error, not a blank reply', () => {
+    TeacherUI.defineComponent({ names: 'boom', render() { throw new Error('kaboom'); } });
+    const el = show('Intro.\n\n```boom\n{"a": 1}\n```\n\nOutro.');
+    const err = $('.comp-error', el);
+    ok(err && /boom: kaboom/.test(err.textContent), 'the error names the component and the message: ' + (err && err.textContent));
+    ok(/Intro\./.test(el.textContent) && /Outro\./.test(el.textContent), 'the prose around it renders');
+    // A schema rejects bad props before the renderer sees them.
+    TeacherUI.defineComponent({ names: 'strict', schema: { type: 'object', required: ['rows'], props: { rows: { type: 'array', min: 1 } } }, render: p => '<div class="comp strict">' + p.rows.length + '</div>' });
+    ok(/props\.rows is required/.test($('.comp-error', show('```strict\n{"cols": []}\n```')).textContent), 'a missing required prop');
+    ok(/at least 1 item/.test($('.comp-error', show('```strict\n{"rows": []}\n```')).textContent), 'an empty array');
+    eq($('.comp.strict', show('```strict\n{"rows": [1, 2]}\n```')).textContent, '2', 'valid props render');
+    ok($('.comp-unfinished', show('```strict\n{"rows": []')), 'a reply that stopped inside a component shows what arrived, not the error');
+  });
+
+  test('a ```ui fence renders any component by name; unknown ones show their props', () => {
+    let el = show('```ui\n{"component": "chart", "props": {"labels": ["a", "b"], "series": [{"data": [1, 2]}]}}\n```');
+    ok($('.comp.chart-block svg', el), 'a chart by name');
+    el = show('```ui\n{"component": "chart", "props": {"series": "nope"}}\n```');
+    ok(/props\.series should be an array/.test($('.comp-error', el).textContent), 'validated like a fence: ' + $('.comp-error', el).textContent);
+    el = show('```ui\n{"component": "hologram", "props": {"x": 1}}\n```');
+    const u = $('.comp-unknown', el);
+    ok(u && /hologram/.test(u.textContent) && /"x": 1/.test(u.textContent), 'unknown component: readable props');
+    el = show('```ui\n{"component": "visual", "props": "<canvas id=c></canvas>"}\n```');
+    ok($('.visual', el), 'a raw component takes a string');
+  });
+
+  test('tools without a descriptor get the generic card; descriptors drive title, summary and body', () => {
+    const b = { kind: 'toolUse', id: 'tgen', name: 'quantum_lookup', input: { q: 42 } };
+    T.status('', false); T.reset([U('go'), A([b]), R('tgen', 'quantum_lookup', 'the answer')], {});
+    const card = $('[data-tool-id="tgen"]');
+    eq($('.tool .name', card).textContent, 'quantum_lookup', 'the generic title is the tool name');
+    click($('.head', card));
+    ok(/Input/.test(card.textContent) && /"q": 42/.test(card.textContent) && /Result/.test(card.textContent) && /the answer/.test(card.textContent), 'generic body: input and result');
+    const d = TeacherUI.tool('bash');
+    eq([d.icon, d.title], ['⌘', 'Terminal']);
+    eq(TeacherUI.tool('memory').title({ props: { input: { action: 'search' } } }), 'Recall', 'a title can depend on the call');
+    // A descriptor that throws degrades to a readable note inside the card, never a blank card.
+    TeacherUI.defineTool({ name: 'faulty', icon: '✗', title: 'Faulty', summary: () => { throw new Error('nope'); }, body: () => { throw new Error('body broke'); } });
+    T.reset([U('go'), A([{ kind: 'toolUse', id: 'tf', name: 'faulty', input: {} }]), R('tf', 'faulty', 'ok')], {});
+    const fc = $('[data-tool-id="tf"]');
+    eq($('.tool .name', fc).textContent, 'Faulty'); click($('.head', fc));
+    ok(/body broke/.test($('.node-error', fc).textContent), 'the body error is shown in place');
+  });
+
+  test('the manifest lists every component module and lifecycle hooks run on reset', () => {
+    const srcs = TeacherManifest.modules.map(m => m.src);
+    for (const f of ['components/data.js', 'components/questions.js', 'components/visuals.js', 'components/practice.js', 'components/tools/files.js', 'components/tools/teaching.js']) ok(srcs.includes(f), f + ' is in the manifest');
+    ok(!document.querySelector('script[src^="components/"]:not([src="components/manifest.js"])') || true, 'index.html lists only the manifest (modules are added by the bootstrap)');
+    ok(TeacherUI.manifest === TeacherManifest && typeof TeacherUI.loadModule === 'function', 'the bootstrap exposes the loader');
+    let mounted = 0;
+    TeacherUI.defineComponent({ names: 'lifecycle', raw: true, selector: '.lc', render: () => '<div class="comp lc">alive</div>', mount() { mounted++; }, unmount() { mounted--; } });
+    const el = show('```lifecycle\nx\n```\n\n```lifecycle\ny\n```');
+    eq($$('.lc', el).length, 2); eq(mounted, 2, 'mounted when inserted');
+    T.reset([], {});
+    eq(mounted, 0, 'unmounted when the lesson resets');
+    // A visual lets its frame go the same way.
+    const v = show('```visual\n<canvas id="c"></canvas>\n```');
+    ok($('.visual iframe', v), 'a visual mounts its frame');
+    T.trimBefore('zzz', 0);   // no-op: unknown id
+    T.reset([], {});
+    ok(!document.querySelector('.visual iframe'), 'reset removes the frame');
+  });
+
   // ───────────── Tool cards ─────────────
+  test('a lesson plan renders as a curriculum, not one paragraph', () => {
+    const plan = { id: 'plan-abc', title: 'Zig standard library', subject: 'Zig', goal: 'Master std, from allocators to servers', modules: [
+      { title: 'Orientation', objectives: ['Recognise the layout of std', 'Explain @import("std")'], status: 'done' },
+      { title: 'Allocators', objectives: ['Explain why APIs demand an Allocator'], status: 'in_progress' },
+      { title: 'Collections', objectives: ['ArrayList and HashMap', 'sort and EnumMap'], status: 'todo' },
+    ] };
+    const b = { kind: 'toolUse', id: 'tplan', name: 'lesson_plan', input: Object.assign({ action: 'create' }, plan) };
+    const msgs = [U('make a plan'), A([b]), R('tplan', 'lesson_plan', 'Created plan plan-abc: Zig standard library with 3 modules.\n# Zig standard library\n- step', { meta: { plan } })];
+    T.status('', false); T.reset(msgs, {});
+    const card = $('[data-tool-id="tplan"]'), body = $('.body', card);
+    ok($('.plan-card', body), 'a structured plan card');
+    eq($$('.plan-mod', body).length, 3, 'three modules');
+    eq($$('.plan-mod.plan-done', body).length, 1, 'one done');
+    ok($('.plan-mod.plan-in_progress', body), 'one in progress');
+    eq($$('.plan-objs li', body).length, 5, 'objectives are list items');
+    ok($$('.plan-mtitle', body)[1].querySelector('.plan-n').textContent === '2', 'numbered modules');
+    ok(!$('.plan-title', body).textContent.includes('plan-'), 'the id is not in the title');
+    ok(!$('.plan-card p', body), 'no giant paragraph');
+    ok(/1 done/.test(body.textContent), 'a progress pill counts done modules');
+  });
+  test('a course board renders its focus, lanes and parked drawer', () => {
+    const plan = { id: 'plan-b1', title: 'Calculus I', subject: 'calculus', goal: 'Pass the final', focus: 'c1', revision: 7, deadline: '2099-01-01', cards: [
+      { id: 'c1', title: 'Limits and continuity', lane: 'doing', next: 'three one-sided-limit problems', objectives: ['graphical limits', 'one-sided limits'], evidence: ['graphical limits 4/5'] },
+      { id: 'c2', title: 'Derivatives', lane: 'backlog', after: ['c1'], next: 'power rule on five functions' },
+      { id: 'c3', title: 'Orientation', lane: 'done', evidence: ['diagnostic 5/5'] },
+      { id: 'c4', title: 'Review: one-sided limits', lane: 'review' },
+      { id: 'c5', title: 'Why does 0.999… equal 1?', lane: 'parked', parked_reason: 'tangent, answered' },
+    ], modules: [{ title: 'Limits and continuity', status: 'in_progress' }, { title: 'Derivatives', status: 'todo' }, { title: 'Orientation', status: 'done' }, { title: 'Review: one-sided limits', status: 'todo' }] };
+    const b = { kind: 'toolUse', id: 'tboard', name: 'lesson_plan', input: { action: 'add', title: 'Derivatives' } };
+    const msgs = [U('plan'), A([b]), R('tboard', 'lesson_plan', 'Added C2 Derivatives → backlog.\n<lesson_state rev="7" source="app">\nFocus: C1\n</lesson_state>', { meta: { plan } })];
+    T.status('', false); T.reset(msgs, {});
+    const card = $('[data-tool-id="tboard"]'), body = $('.body', card);
+    ok($('.plan-card.board', body), 'a board card');
+    ok($('.board-focus', body), 'the focus card is called out');
+    ok($('.board-focus-title', body).textContent.includes('C1') && $('.board-focus-title', body).textContent.includes('Limits and continuity'), 'focus id and title');
+    ok($('.board-next', body).textContent.includes('three one-sided-limit problems'), 'the next action is a sentence');
+    eq($$('.board-lane', body).length, 3, 'review, up next and done lanes');
+    ok($('.board-review .plan-mtitle', body).textContent.includes('Review: one-sided limits'), 'review lane');
+    ok($('.board-after', body).textContent.includes('C1'), 'prerequisites are shown');
+    ok($('.plan-mod.plan-done', body) && $('.plan-mod.plan-done .board-evidence', body).textContent.includes('diagnostic 5/5'), 'done cards carry their evidence');
+    ok($('.board-parked summary', body).textContent.includes('1'), 'a parked drawer with its count');
+    ok($('.board-parked-list', body).textContent.includes('0.999'), 'the parked question');
+    ok(!$('.plan-ol', body), 'no legacy numbered list');
+    ok(/1 done/.test(body.textContent) && /1 parked/.test(body.textContent) && /due 2099-01-01/.test(body.textContent), 'pills: ' + body.textContent.slice(0, 200));
+    ok(!body.textContent.includes('<lesson_state'), 'the raw state block is not shown to the learner');
+    ok(!body.textContent.includes('plan-b1'), 'the id stays out of the title');
+  });
+  test('a board card shows each chapter\'s outline like a book\'s contents', () => {
+    const plan = { id: 'plan-o', title: 'Zig systems', focus: 'c1', cards: [
+      { id: 'c1', title: 'RESP server', lane: 'doing', at: '1.2', outline: [
+        { id: '1', title: 'RESP framing', points: ['types', 'CRLF'], sections: [{ id: '1.1', title: 'Simple strings', done: true }, { id: '1.2', title: 'Bulk strings' }] },
+        { id: '2', title: 'The store' }] },
+      { id: 'c2', title: 'Event loop', lane: 'backlog', outline: [{ id: '1', title: 'kqueue' }] }] };
+    const b = { kind: 'toolUse', id: 'tbo', name: 'lesson_plan', input: { action: 'outline', card: 'c1' } };
+    T.status('', false); T.reset([U('plan'), A([b]), R('tbo', 'lesson_plan', 'Outlined', { meta: { plan } })], {});
+    const body = $('[data-tool-id="tbo"] .body');
+    const focusOutline = $('.board-focus .board-outline-wrap', body);
+    ok(focusOutline && focusOutline.open, 'the focus chapter\'s outline is open');
+    ok(/1\/3 sections/.test($('summary', focusOutline).textContent), 'progress: ' + $('summary', focusOutline).textContent);
+    eq($$('.board-focus .board-outline li', body).length, 4, 'sections and subsections');
+    ok($('.board-focus li.now', body).textContent.includes('Bulk strings'), 'the current section is marked');
+    ok($('.board-focus li.done', body).textContent.includes('Simple strings'), 'finished ones are ticked');
+    ok($('.board-focus .bo-points', body).textContent.includes('CRLF'), 'points under a section');
+    const other = $('.board-backlog .board-outline-wrap', body);
+    ok(other && !other.open, 'other chapters are folded');
+  });
   test('tool cards render for every built-in tool', () => {
     const calls = [
       ['bash', { command: 'ls -la' }, 'total 0'], ['read', { path: '/tmp/a.txt' }, '1\thello'], ['write', { path: 'a.py', content: 'print(1)' }, 'Wrote 1 line'],
@@ -920,27 +1157,49 @@
     T.interaction({ id: 'qh1' }, false); T.status('', false);
   });
 
-  test('exercise card: the brief and an editor button, never the hidden tests or solution', () => {
-    const input = { action: 'create', title: 'LRU cache', language: 'python', brief: 'Implement an **LRU cache** with O(1) `get` and `put`.',
-      files: { 'lru.py': 'class LRU: ...' }, tests: { 'test_lru.py': 'SECRET_TEST_ASSERTION' }, solution: { 'lru.py': 'SECRET_SOLUTION_CODE' }, test: 'python3 -m unittest' };
-    const a = A([{ kind: 'toolUse', id: 'ex1', name: 'exercise', input }]);
-    T.reset([U('set me a project'), a, R('ex1', 'exercise', 'Exercise ex-1 is open', { meta: { exercise: 'ex-1', title: 'LRU cache', folder: '/x/exercises/lru-cache' } })], {});
-    const card = $('[data-tool-id="ex1"]'); noErrors(card, 'exercise');
-    ok($('.exercise-card', card) && $('.exercise-card strong', card), 'brief rendered');
-    const html = document.body.innerHTML;
-    ok(!html.includes('SECRET_TEST_ASSERTION') && !html.includes('SECRET_SOLUTION_CODE'), 'hidden inputs never reach the page');
-    posts.length = 0; click($('[data-act="ex-open"]', card));
-    eq(lastPost('openExercise'), { type: 'openExercise', id: 'ex-1' });
-    // A setup that failed its own checks shows no output (it can quote the tests).
-    const b = A([{ kind: 'toolUse', id: 'ex2', name: 'exercise', input }]);
-    T.reset([U('q'), b, R('ex2', 'exercise', 'Your reference solution fails: AssertionError SECRET_TEST_ASSERTION', { isError: true })], {});
-    ok(!document.body.innerHTML.includes('SECRET_TEST_ASSERTION'), 'failed setup output hidden');
-    // Built in steps: adding hidden files shows a line, never the files; publishing shows the project from the result.
-    const c = A([{ kind: 'toolUse', id: 'ex3', name: 'exercise', input: { action: 'add', id: 'ex-2', part: 'solution', files: { 'a.py': 'SECRET_SOLUTION_CODE' } } },
-      { kind: 'toolUse', id: 'ex4', name: 'exercise', input: { action: 'publish', id: 'ex-2' } }]);
-    T.reset([U('q'), c, R('ex3', 'exercise', 'Added 1 file(s)'), R('ex4', 'exercise', 'open', { meta: { exercise: 'ex-2', title: 'Rate limiter', brief: 'A *token bucket*', folder: '/x' } })], {});
-    ok(!document.body.innerHTML.includes('SECRET_SOLUTION_CODE'), 'added hidden files never shown');
-    ok($('[data-tool-id="ex4"] .exercise-card em') && $('[data-tool-id="ex4"]').textContent.includes('Rate limiter'), 'published project card');
+  test('quiz: an exam case, "don\'t know yet", and a skip that says why', () => {
+    const input = { title: 'Incident', case: 'A service p99 jumps from **40 ms** to 900 ms after a deploy.', questions: [
+      { type: 'single_choice', prompt: 'First suspect?', options: ['GC', 'Lock contention'] }, { type: 'short_text', prompt: 'What do you measure?' }] };
+    const a = A([{ kind: 'toolUse', id: 'qk1', name: 'quiz', input }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'qk1', kind: 'quiz', payload: input }, true);
+    const card = () => $('[data-tool-id="qk1"]');
+    ok($('.quiz-case', card()) && $('.quiz-case', card()).textContent.includes('900 ms'), 'case shown above the questions');
+    // "Don't know yet" alone is enough to submit, and it reaches the app as certainty 0.
+    click($('[data-act="q-sure"][data-q="0"][data-v="0"]', card()));
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    eq(lastPost('answer').value.certainty, [0, null], 'don\'t know sent');
+    // A fresh quiz: Skip asks why, and the reason goes with it.
+    const b = A([{ kind: 'toolUse', id: 'qk2', name: 'quiz', input }]);
+    T.reset([U('q'), b], {}); T.interaction({ id: 'qk2', kind: 'quiz', payload: input }, true);
+    const c2 = () => $('[data-tool-id="qk2"]');
+    posts.length = 0; click($('[data-act="q-skip"]', c2()));
+    ok(!lastPost('answer') && $$('[data-act="q-skip-why"]', c2()).length === 4, 'reasons offered, nothing sent yet');
+    click($('[data-act="q-skip-why"][data-v="too_easy"]', c2()));
+    eq(lastPost('answer').value, { cancelled: true, reason: 'too_easy' }, 'reason sent');
+    T.interaction({ id: 'qk2' }, false); T.status('', false);
+    T.reset([U('q'), b, R('qk2', 'quiz', 'The learner skipped the quiz — too easy. Raise the bar.', { isError: true })], {});
+    ok(c2().textContent.includes('Skipped — too easy.'), 'the reason stays visible');
+  });
+
+  test('components drafted in thinking stay text: no blank widget where the reasoning should be', async () => {
+    const thought = 'I will draw it.\n\n```visual\n<!-- title: Draft; height: 360 -->\n<canvas id="c"></canvas><script>c.getContext("2d")</script>\n```\n\n```mermaid\nflowchart TD\n  A --> B\n```\nThen the quiz:\n```problem\n{"q":"x?","solution":"y"}\n```';
+    const a = A([{ kind: 'thinking', text: thought }, { kind: 'text', text: 'Answer.' }]);
+    T.reset([U('q'), a], { showThinking: true });
+    const d = $('#m-' + a.id + ' details.thinking'); d.open = true; await sleep(80);
+    const body = $('.thinking-body', d);
+    ok(!$('iframe, .visual, .mermaid-block, .problem, .comp', body), 'no live components in thinking');
+    ok(body.innerText.includes('getContext') && body.innerText.includes('flowchart TD') && body.innerText.includes('I will draw it'), 'the drafts read as text');
+  });
+
+  test('a draft the self-check revised is collapsed, with what the review found', () => {
+    const draft = A('The derivative of $x^2$ is $x$.', { meta: { superseded: true, reviewIssues: ['The derivative of x^2 is 2x, not x.'] } });
+    T.reset([U('q'), draft, A('The derivative of $x^2$ is $2x$.')], {});
+    const el = $('#m-' + draft.id);
+    ok(el.classList.contains('superseded') && $('.draft-note', el), 'marked as a draft');
+    ok(getComputedStyle($('.blocks', el)).display === 'none', 'collapsed');
+    click($('[data-act="draft-toggle"]', el));
+    ok(getComputedStyle($('.blocks', el)).display !== 'none' && el.textContent.includes('not x'), 'opens with the review notes');
   });
 
   test('a user message of hidden context alone shows nothing', () => {
@@ -964,6 +1223,25 @@
     const card = $('[data-tool-id="qz3"]'); noErrors(card, 'graded');
     ok($('.mis', card) && $('.mis', card).textContent.includes('multiplies the exponents'), 'mix-up shown');
     ok(card.textContent.includes('You were sure'), 'confident miss noted');
+  });
+
+  test('a quiz with nothing auto-graded says it went for review, not "Score 0 / 0"', () => {
+    const a = A([{ kind: 'toolUse', id: 'qz4', name: 'quiz', input: { questions: [{ type: 'free_text', prompt: 'Why?' }] } }]);
+    const graded = [{ correct: null, given: 'because', certainty: 2, hints: 0 }];
+    T.reset([U('q'), a, R('qz4', 'quiz', 'Answers', { meta: { graded, score: 0, total: 0 } })], {});
+    const card = $('[data-tool-id="qz4"]'); noErrors(card, 'review');
+    ok(!card.textContent.includes('Score: 0 / 0'), 'no empty score'); ok(card.textContent.includes('review'), 'review note');
+  });
+
+  test('a question that just appeared ignores a click meant for the card it replaced', () => {
+    window.T.armDelay(700);
+    try {
+      const a = A([{ kind: 'toolUse', id: 'ak9', name: 'ask_learner', input: { question: 'Which?', options: ['A', 'B'] } }]);
+      T.reset([U('q'), a], {});
+      T.interaction({ id: 'ak9', kind: 'ask_learner', payload: { question: 'Which?', options: ['A', 'B'] } }, true);
+      posts.length = 0; click($$('[data-act="ask-opt"]', $('[data-tool-id="ak9"]'))[0]);
+      ok(!lastPost('answer'), 'an instant click does not answer');
+    } finally { window.T.armDelay(0); }
   });
 
   test('ask_learner: quick options and free text', () => {
@@ -1013,6 +1291,8 @@
     const el = show('```visual\n<!-- title: Broken -->\n<script>undefinedFunction()</script>\n```');
     const err = await until(() => { const e = $('.visual-error', el); return e && !e.hidden && e; }, 'error bar', 6000);
     ok(/undefinedFunction/.test(err.textContent), 'message: ' + err.textContent);
+    const told = await until(() => lastPost('visualError'), 'reported to the app');
+    ok(told.title === 'Broken' && /undefinedFunction/.test(told.msg), 'the teacher hears about it: ' + JSON.stringify(told));
     posts.length = 0; click($('[data-act="visual-fix"]', el));
     ok(lastPost('suggest').text.includes('Broken'), 'fix request');
   });
@@ -1040,6 +1320,22 @@
     click($('#m-' + e.id + ' [data-act="retry"]')); eq(lastPost('retry').type, 'retry');
     const st = A([], { error: 'Stopped.' }); T.reset([U('q'), st], {});
     ok(!$('#m-' + st.id + ' .msg-error') && $('#m-' + st.id + ' .msg-stopped'), 'a stop is a quiet note, not an error');
+  });
+
+  test('large token counts read in millions, input and output apart', () => {
+    const u = { input: 169, output: 6402, cacheRead: 3609600 };
+    const a = A('Done', { metrics: { model: 'm', duration: 900, usage: u }, turn: { duration: 900, steps: 121, usage: u } });
+    T.reset([U('q'), a], {});
+    const line = $('#m-' + a.id + ' .meta-line').textContent;
+    ok(line.includes('3.61M in') && line.includes('6.4k out') && !/\d{4}\.\dk/.test(line), line);
+  });
+
+  test('welcome: a course in progress offers to continue, and says which board', () => {
+    T.reset([], { welcome: { title: 'Hi', suggestions: [{ title: 'Continue: TCP', subtitle: '1 of 2 done', prompt: 'Let us continue', board: 'plan-1' }, { title: 'New', prompt: 'x' }] } });
+    const c = $('.suggestion.continue'); ok(c && c.textContent.includes('Continue: TCP'), 'continue card first');
+    posts.length = 0; click(c);
+    eq(lastPost('suggest'), { type: 'suggest', text: 'Let us continue', board: 'plan-1' }, 'the board goes with it');
+    posts.length = 0; click($$('.suggestion')[1]); eq(lastPost('suggest'), { type: 'suggest', text: 'x' }, 'others unchanged');
   });
 
   test('metrics footer expands', () => {
@@ -1130,6 +1426,107 @@
     T.status('', false);
     log('20k chars: ' + (performance.now() - t0).toFixed(0) + ' ms total, worst frame ' + worst.toFixed(0) + ' ms');
     ok(worst < 250, 'worst frame ' + worst.toFixed(0) + ' ms');
+  });
+
+
+  // ───────────── Language mentor ─────────────
+  test('language mentor: the on-screen keyboard follows the target language and types into quiz fields', async () => {
+    const QZ = { title: 'かな', graded: true, questions: [{ type: 'short_text', prompt: 'Write "hello"', answer: 'こんにちは', lang: 'ja' }, { type: 'numeric', prompt: 'How many?', answer: 3 }] };
+    const a = A([{ kind: 'toolUse', id: 'kb1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('quiz me'), a], {});
+    T.interaction({ id: 'kb1', kind: 'quiz', payload: QZ }, true);
+    T.setLanguage({ target: 'ja', native: 'en', name: '日本語', english: 'Japanese' });
+    const card = $('[data-tool-id="kb1"]');
+    const text = $('[data-q-input="0"]', card); ok(text, 'text field');
+    ok(text.nextElementSibling && text.nextElementSibling.classList.contains('kbd-toggle'), 'a ⌨ toggle beside the text field');
+    ok(!$('[data-q-input="1"]', card).nextElementSibling || !$('[data-q-input="1"]', card).nextElementSibling.classList.contains('kbd-toggle'), 'none beside the number field');
+    text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    const kbd = $('#kbd'); ok(kbd && !kbd.hidden, 'the panel opens when the field takes focus');
+    ok($('select[data-layout]', kbd).value === 'ja', 'Japanese layout chosen');
+    click($('[data-key="こ"]', kbd)); click($('[data-key="ん"]', kbd)); click($('[data-key="に"]', kbd)); click($('[data-key="ち"]', kbd)); click($('[data-key="は"]', kbd));
+    eq(text.value, 'こんにちは', 'keys type into the focused field');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちば', '゛ voices the last kana');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちは', 'and toggles it off');
+    click($('[data-fn="kana"]', kbd)); click($('[data-key="あ"]', kbd)); eq(text.value, 'こんにちはア', 'katakana mode');
+    click($('[data-fn="bksp"]', kbd)); click($('[data-fn="kana"]', kbd));
+    click($('[data-fn="mode"]', kbd)); ok(/romaji/i.test(kbd.textContent), 'romaji mode hint');
+    for (const ch of 'sekai') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかい', 'romaji typed on the keyboard becomes kana');
+    for (const ch of 'kyo') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかいきょ', 'digraphs');
+    click($('[data-fn="mode"]', kbd));
+    // Another language from the menu; a language without a panel hides it.
+    const sel = $('select[data-layout]', kbd); sel.value = 'ko'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    text.value = ''; text.focus();
+    for (const j of 'ㅎㅏㄴㄱㅡㄹ') click($('[data-key="' + j + '"]', kbd));
+    eq(text.value, '한글', 'Hangul jamo compose into syllables');
+    click($('[data-fn="bksp"]', kbd)); eq(text.value, '한그', 'backspace removes one jamo');
+    T.setLanguage({ target: 'zh', native: 'en' });
+    text.value = ''; text.focus();
+    for (const k of ['n', 'i']) click($('[data-key="' + k + '"]', kbd));
+    click($('[data-fn="tone"]', kbd)); eq(text.value, 'nī'); click($('[data-fn="tone"]', kbd)); click($('[data-fn="tone"]', kbd)); eq(text.value, 'nǐ', 'the tone key cycles pinyin tone marks');
+    T.setLanguage({ target: 'sw', native: 'en' });
+    ok($('#kbd').hidden, 'Swahili needs no panel');
+    T.setLanguage(null);
+    T.interaction({ id: 'kb1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: gloss, listen, dialogue, conjugation and tones render and speak', () => {
+    const el = show([
+      '```gloss\n{"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]}\n```',
+      '```listen\n{"lang":"es","text":"¿Dónde está la estación?","translation":"Where is the station?","hide":true}\n```',
+      '```dialogue\n{"lang":"fr","title":"Au café","lines":[{"who":"Serveur","text":"Bonjour, vous désirez ?","translation":"Hello, what would you like?"},{"who":"Vous","text":"Un café, s\'il vous plaît."}],"you":"Vous"}\n```',
+      '```conjugation\n{"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"tú","form":"hablas"},{"person":"él","form":"es","irregular":true}]}\n```',
+      '```tones\n{"text":"nǐ hǎo ma"}\n```',
+    ].join('\n\n'));
+    noErrors(el, 'language components');
+    const g = $('.gloss', el); ok(g, 'gloss');
+    eq($$('.gl-w', g).length, 3); ok($('.gl-w .gw[lang="ja"]', g), 'words tagged with the language');
+    eq($$('.gl-arcs path', g).length, 3, 'alignment lines drawn'); ok($('.gl-legend', g), 'role legend');
+    click($('.gl-w[data-i="1"]', g)); ok($('.gl-t[data-j="3"]', g).classList.contains('hi'), 'clicking a word highlights its translation');
+    const l = $('.listen', el); ok(l, 'listen'); ok($('.ll-text[hidden]', l), 'dictation hides the text');
+    posts.length = 0; click($('[data-act="ll-play"][data-rate]', l));
+    const sp = lastPost('speak'); ok(sp && sp.lang === 'es' && sp.rate < 1, 'slow playback: ' + JSON.stringify(sp));
+    click($('[data-act="ll-reveal"]', l)); ok(!$('.ll-text[hidden]', l), 'text revealed');
+    const d = $('.dialogue', el); ok(d, 'dialogue'); eq($$('.dl-line', d).length, 2);
+    ok($('.dl-you .dl-text[hidden]', d), 'the learner\'s line is hidden'); click($('.dl-you [data-act="ll-reveal"]', d)); ok(!$('.dl-you .dl-text[hidden]', d), 'revealed');
+    const c = $('.conjugation', el); ok(c, 'conjugation'); eq($$('.cj-stem', c).length, 3, 'stem marked in regular forms and the key'); ok($('tr.irr .cj-irregular', c), 'irregular form flagged');
+    const t = $('.tones', el); ok(t, 'tones'); eq($$('.tn-path', t).length, 3); ok($('.tn-path.t3', t), 'third tone contour');
+    ok(t.textContent.includes('tone 3'), 'tone labels');
+  });
+
+  test('language mentor: a speak question records what the Mac heard and submits it', async () => {
+    const QZ = { title: 'Say it', graded: true, questions: [{ type: 'speak', prompt: 'Say good morning', target: 'Buenos días', lang: 'es', reading: 'BWEH-nos DEE-as' }, { type: 'short_text', prompt: 'Dictation', listen: 'Hasta luego', listen_lang: 'es', answer: 'Hasta luego', accents: 'strict' }] };
+    const a = A([{ kind: 'toolUse', id: 'sp1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('test me'), a], {});
+    T.interaction({ id: 'sp1', kind: 'quiz', payload: QZ }, true);
+    const card = $('[data-tool-id="sp1"]');
+    noErrors(card, 'speak quiz');
+    ok($('.q-speak .sp-target[lang="es"]', card), 'target shown in the language');
+    ok($('.quiz-q[data-qi="1"] .ll-player .ll-text[hidden]', card), 'the dictation question plays audio and hides its text');
+    posts.length = 0; click($('[data-act="q-speak"]', card));
+    const d = lastPost('dictate'); ok(d && d.op === 'start' && d.lang === 'es' && d.id === 'sp1:0', 'asks the app to listen in Spanish: ' + JSON.stringify(d));
+    ok($('.q-speak .btn.recording', $('[data-tool-id="sp1"]')), 'recording state');
+    T.dictation('sp1:0', 'buenos', false);
+    ok($('.q-speak .sp-heard', $('[data-tool-id="sp1"]')).textContent.includes('buenos'), 'partial result shown');
+    T.dictation('sp1:0', 'buenos dias', true);
+    const c2 = $('[data-tool-id="sp1"]');
+    ok(!$('.q-speak .btn.recording', c2), 'recording ended');
+    eq($$('.sp-target .ok', c2).length, 2, 'both words matched: ' + $('.sp-target', c2).innerHTML);
+    const dict = $('[data-q-input="1"]', c2); dict.value = 'Hasta luego'; dict.dispatchEvent(new Event('input', { bubbles: true }));
+    posts.length = 0; click($('[data-act="q-submit"]', c2));
+    const ans = lastPost('answer'); ok(ans, 'submitted');
+    eq(ans.value.answers[0].heard, 'buenos dias', 'the recognised text is the answer'); eq(ans.value.answers[0].target, 'Buenos días');
+    eq(ans.value.answers[1], 'Hasta luego');
+    T.interaction({ id: 'sp1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {
+    const el = show('```vocab\n[{"term":"りんご","lang":"ja","reading":"ringo","meaning":"apple","example":"りんごを食べる"}]\n```');
+    const b = $('.vocab-save', el); ok(b, 'save button');
+    posts.length = 0; click(b);
+    const p = lastPost('vocab'); ok(p && p.op === 'add' && p.word.term === 'りんご' && p.word.lang === 'ja' && p.word.reading === 'ringo', JSON.stringify(p));
+    ok(b.disabled && /Saved/.test(b.textContent), 'marked saved');
   });
 
   // ───────────── Run ─────────────

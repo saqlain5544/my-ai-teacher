@@ -9,9 +9,11 @@ struct Composer: View {
     @ObservedObject private var speech = AppModel.shared.speech
     @State private var height: CGFloat = 24
     @State private var focusTick = 0
+    @State private var showKeyboard = false
 
     var body: some View {
         VStack(spacing: 6) {
+            BoardStrip(session: session)
             if let err = session.errorMessage {
                 HStack(alignment: .top, spacing: 8) {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
@@ -22,6 +24,9 @@ struct Composer: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
             }
+            if showKeyboard, let layout = KeyboardLayouts.layout(for: session.language?.target) {
+                ScriptKeyboardView(layout: layout) { showKeyboard = false }
+            }
             VStack(alignment: .leading, spacing: 6) {
                 if !session.attachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
@@ -31,7 +36,7 @@ struct Composer: View {
                     }
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    Button(action: pickFiles) { Image(systemName: "paperclip") }
+                    Button(action: pickFiles) { Image(systemName: "paperclip").accessibilityLabel("Attach files") }
                         .buttonStyle(.borderless).help("Attach images, PDFs or files")
                         .padding(.bottom, 4)
                     GrowingTextView(text: $session.draft, height: $height,
@@ -45,23 +50,39 @@ struct Composer: View {
                                     },
                                     focusTick: focusTick)
                         .frame(height: min(max(height, 24), 220))
-                    Button {
-                        speech.toggleDictation { text in session.draft = text }
-                    } label: {
-                        Image(systemName: speech.isListening ? "mic.fill" : "mic").foregroundStyle(speech.isListening ? .red : .secondary)
+                    if let layout = KeyboardLayouts.layout(for: session.language?.target) {
+                        Button { showKeyboard.toggle() } label: {
+                            Image(systemName: showKeyboard ? "keyboard.fill" : "keyboard").foregroundStyle(showKeyboard ? Color.accentColor : .secondary)
+                        }
+                        .buttonStyle(.borderless).accessibilityLabel("On-screen keyboard").help("\(layout.english) keyboard (\(layout.name))").padding(.bottom, 4)
                     }
-                    .buttonStyle(.borderless).help("Dictate").padding(.bottom, 4)
+                    if speech.isListening {
+                        Button { speech.stopListening() } label: { Image(systemName: "mic.fill").foregroundStyle(.red) }
+                            .buttonStyle(.borderless).accessibilityLabel("Stop dictation").help("Stop dictation").padding(.bottom, 4)
+                    } else if let target = session.language?.target, Speech.recognizerLocale(target) != nil {
+                        // The Mac listens in the lesson's language, or in the learner's own.
+                        Menu {
+                            Button("Dictate in \(Languages.englishName(target))") { speech.toggleDictation(language: target) { text in session.draft = text } }
+                            Button("Dictate in \(Languages.englishName(session.language?.native ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")))") { speech.toggleDictation { text in session.draft = text } }
+                        } label: { Image(systemName: "mic").foregroundStyle(.secondary) }
+                        .menuStyle(.borderlessButton).menuIndicator(.hidden).fixedSize().accessibilityLabel("Dictate").help("Dictate (choose the language)").padding(.bottom, 4)
+                    } else {
+                        Button {
+                            speech.toggleDictation { text in session.draft = text }
+                        } label: { Image(systemName: "mic").foregroundStyle(.secondary) }
+                        .buttonStyle(.borderless).accessibilityLabel("Dictate").help("Dictate").padding(.bottom, 4)
+                    }
                     if session.isRunning {
                         Button { session.stop() } label: {
                             Image(systemName: "stop.circle.fill").font(.system(size: 22))
                         }
-                        .buttonStyle(.borderless).help("Stop (⌘.)").keyboardShortcut(".", modifiers: .command)
+                        .buttonStyle(.borderless).accessibilityLabel("Stop generating").help("Stop (⌘.)").keyboardShortcut(".", modifiers: .command)
                     } else {
                         Button(action: send) {
                             Image(systemName: "arrow.up.circle.fill").font(.system(size: 22))
                                 .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.5))
                         }
-                        .buttonStyle(.borderless).disabled(!canSend).help("Send (Return)")
+                        .buttonStyle(.borderless).disabled(!canSend).accessibilityLabel("Send").help("Send (Return)")
                     }
                 }
             }
@@ -130,7 +151,11 @@ struct Composer: View {
         if panel.runModal() == .OK { Self.attach(panel.urls, to: session) }
     }
 
-    static func short(_ n: Int) -> String { n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)" }
+    /// 950, 12.4k, 3.61M: large counts in millions, never "3609.8k".
+    static func short(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: n >= 10_000_000 ? "%.1fM" : "%.2fM", Double(n) / 1_000_000) }
+        return n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
 
     // MARK: Attachments
 
@@ -230,6 +255,11 @@ struct GrowingTextView: NSViewRepresentable {
         tv.placeholder = placeholder
         scroll.documentView = tv
         context.coordinator.textView = tv
+        // Keys from the on-screen keyboard land at this view's caret (composition needs the text before it).
+        context.coordinator.keyObserver = NotificationCenter.default.addObserver(forName: .composerKey, object: nil, queue: .main) { [weak tv] n in
+            guard let tv, tv.window != nil, let e = n.object as? KeyboardKeyEvent else { return }
+            MainActor.assumeIsolated { tv.apply(e) }
+        }
         return scroll
     }
 
@@ -251,7 +281,9 @@ struct GrowingTextView: NSViewRepresentable {
         var parent: GrowingTextView
         weak var textView: ComposerTextView?
         var lastFocus = -1
+        var keyObserver: NSObjectProtocol?
         init(_ p: GrowingTextView) { parent = p }
+        deinit { if let o = keyObserver { NotificationCenter.default.removeObserver(o) } }
         func textDidChange(_ n: Notification) {
             guard let tv = textView else { return }
             parent.text = tv.string
@@ -300,4 +332,69 @@ final class ComposerTextView: NSTextView {
     }
 
     override func becomeFirstResponder() -> Bool { needsDisplay = true; return super.becomeFirstResponder() }
+
+    // MARK: On-screen keyboard
+
+    private var romaji = false
+    private var katakana = false
+
+    /// The character before the caret (a composed character sequence), and the UTF-16 range of the last `n` of them.
+    private func before(_ n: Int) -> (text: String, range: NSRange) {
+        let ns = string as NSString
+        let caret = selectedRange().location
+        var loc = caret
+        for _ in 0..<n where loc > 0 { loc = ns.rangeOfComposedCharacterSequence(at: loc - 1).location }
+        return (ns.substring(with: NSRange(location: loc, length: caret - loc)), NSRange(location: loc, length: caret - loc))
+    }
+    private func replaceBefore(_ remove: Int, with text: String) {
+        let sel = selectedRange()
+        let r = remove > 0 && sel.length == 0 ? before(remove).range : sel
+        insertText(text, replacementRange: NSRange(location: r.location, length: sel.location + sel.length - r.location))
+    }
+
+    func apply(_ e: KeyboardKeyEvent) {
+        window?.makeFirstResponder(self)
+        let prev = before(1).text.first
+        switch e.key {
+        case .text(var t):
+            if e.layout.compose == "hangul", t.count == 1, ScriptComposer.isJamo(t.first!) { let r = ScriptComposer.hangul(prev: prev, t.first!); replaceBefore(r.remove, with: r.text); return }
+            if e.layout.compose == "marks", t.unicodeScalars.allSatisfy({ (0x300...0x36F).contains($0.value) }), let p = prev {
+                let v = (String(p) + t).precomposedStringWithCanonicalMapping
+                if v.count == 1 { replaceBefore(1, with: v); return }
+            }
+            if e.shift && e.layout.upper && e.layout.shift == nil { t = t.uppercased() }
+            if e.katakana && e.layout.compose == "kana" { t = ScriptComposer.toKatakana(t) }
+            replaceBefore(0, with: t)
+        case .fn(let f):
+            switch f {
+            case "bksp":
+                if selectedRange().length > 0 { replaceBefore(0, with: ""); return }
+                if e.layout.compose == "hangul", let p = prev { let r = ScriptComposer.hangulBackspace(prev: p); replaceBefore(r.remove, with: r.text); return }
+                if prev != nil { replaceBefore(1, with: "") }
+            case "space": replaceBefore(0, with: " ")
+            case "enter": replaceBefore(0, with: "\n")
+            case "dakuten": if let r = ScriptComposer.voicing(prev: prev, mark: "\u{3099}") { replaceBefore(r.remove, with: r.text) }
+            case "handakuten": if let r = ScriptComposer.voicing(prev: prev, mark: "\u{309A}") { replaceBefore(r.remove, with: r.text) }
+            case "small": if let r = ScriptComposer.toggleSmall(prev: prev) { replaceBefore(r.remove, with: r.text) }
+            case "tone": if let r = ScriptComposer.cycleTone(before(12).text) { replaceBefore(r.remove, with: r.text) }
+            case "kana": katakana = e.katakana
+            case "mode": romaji = e.romaji; katakana = e.katakana
+            default: break
+            }
+        }
+    }
+
+    /// Romaji mode: Latin letters typed on the physical keyboard become kana as soon as a syllable is complete.
+    override func insertText(_ string: Any, replacementRange: NSRange) {
+        super.insertText(string, replacementRange: replacementRange)
+        guard romaji, let s = string as? String, s.count == 1, let c = s.first, c.isASCII, c.isLetter || c == "'" || c == "-", !hasMarkedText() else { return }
+        let ns = self.string as NSString
+        let caret = selectedRange().location
+        let head = ns.substring(to: caret)
+        guard let m = head.range(of: "[A-Za-z'\\-]+$", options: .regularExpression) else { return }
+        let run = String(head[m])
+        let kana = ScriptComposer.romaji(run, katakana: katakana)
+        guard kana != run else { return }
+        insertText(kana, replacementRange: NSRange(location: caret - (run as NSString).length, length: (run as NSString).length))
+    }
 }

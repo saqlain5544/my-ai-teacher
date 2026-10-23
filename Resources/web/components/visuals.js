@@ -113,12 +113,20 @@
     frames.set(fid, f);
   }
 
-  // Inline fence: ```visual  (temporary; renders once the fence closes)
-  R.registerFence(['visual', 'html-live', 'live'], (code, ctx, env) => {
-    if (env && env.open) return '<div class="visual"><div class="diagram-pending">Building visual…</div></div>';
-    const h = header(code);
-    const libs = (h.libs || '').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
-    return frameHTML(h.title, code.replace(/^\s*<!--[\s\S]*?-->/, ''), libs, parseInt(h.height, 10) || 360, 'vf' + ctx.hash(code));
+  // Inline fence: ```visual  (temporary; renders once the fence closes). The frame mounts when the DOM is inserted and
+  // is let go when the lesson resets, trims or re-renders it away.
+  R.defineComponent({ names: ['visual', 'html-live', 'live'], raw: true, selector: '.visual',
+    render(code, ctx, env) {
+      if (env && env.open) return '<div class="visual"><div class="diagram-pending">Building visual…</div></div>';
+      const h = header(code);
+      const libs = (h.libs || '').split(/[,\s]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
+      return frameHTML(h.title, code.replace(/^\s*<!--[\s\S]*?-->/, ''), libs, parseInt(h.height, 10) || 360, 'vf' + ctx.hash(code));
+    },
+    mount(el) { mount(el); },
+    unmount(el) {
+      const f = el.querySelector('iframe');
+      if (f) { frames.delete(el.getAttribute('data-fid')); f.remove(); }
+    },
   });
 
   // Tool card: `visual` (can persist)
@@ -127,11 +135,6 @@
     if (!i.html) return null;
     const saved = r && r.meta && r.meta.saved;
     return frameHTML(i.title, i.html, i.libs || [], i.height, 'vt' + b.id, saved ? 'saved to library' : '');
-  });
-
-  R.registerProcessor(root => {
-    const list = root.matches && root.matches('.visual') ? [root] : Array.from(root.querySelectorAll('.visual'));
-    list.forEach(mount);
   });
 
   window.addEventListener('message', e => {
@@ -145,6 +148,15 @@
       const f = own(d.visualError);
       const box = f && f.closest('.visual') && f.closest('.visual').querySelector('.visual-error');
       if (box) { box.hidden = false; box.querySelector('.visual-error-msg').textContent = '⚠︎ ' + d.msg; }
+      // A visual in the latest reply that breaks is reported to the teacher with the learner's next message, so it gets
+      // fixed without anyone pressing Fix (older replies stay quiet: their errors were reported when they were new).
+      const msgs = document.querySelectorAll('.msg.assistant'), mine = f && f.closest('.msg');
+      if (box && mine && mine === msgs[msgs.length - 1]) {
+        const title = (f.closest('.visual').querySelector('.visual-title') || {}).textContent || 'visual';
+        const m = { type: 'visualError', kind: 'visual', title: title.replace(/^◈\s*/, ''), msg: String(d.msg || '').slice(0, 300) };
+        if (window.__onPost) window.__onPost(m);
+        try { window.webkit.messageHandlers.bridge.postMessage(m); } catch (err) { /* no app (tests) */ }
+      }
     }
   });
 

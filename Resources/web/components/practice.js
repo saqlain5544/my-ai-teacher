@@ -15,11 +15,11 @@
     return Array.isArray(j) ? { items: j } : { title: j.title, items: j.items || j.questions || j.cards || [] };
   }
 
-  R.registerFence(['practice', 'selfcheck', 'self-check'], (code, ctx, env) => {
-    if (env && env.open) return '<div class="comp"><div class="diagram-pending">Building practice…</div></div>';
-    let spec;
-    try { spec = parse(code); } catch (e) { return '<div class="comp comp-error"><div class="diagram-error">practice: ' + ctx.esc(e.message) + '</div></div>'; }
-    const key = 'pr' + ctx.hash(code);
+  R.defineComponent({ names: ['practice', 'selfcheck', 'self-check'], version: 2,
+    pending: () => '<div class="comp"><div class="diagram-pending">Building practice…</div></div>',
+    parse, validate: spec => { R.check(spec.items, { type: 'array', min: 1 }); return spec; },
+    render(spec, ctx, env) {
+    const key = 'pr' + ctx.hash(env.code);
     const items = spec.items.map(it => typeof it === 'string' ? { q: it } : it);
     let h = '<div class="comp practice" data-key="' + key + '" data-n="' + items.length + '">' +
       '<div class="pr-head"><span class="pr-title">✎ ' + ctx.esc(spec.title || 'Practice') + '</span><span class="pr-score"></span></div>';
@@ -32,7 +32,7 @@
         '<span class="pr-mark" hidden><button class="btn" data-act="pr-mark" data-v="got">✓ Got it</button><button class="btn" data-act="pr-mark" data-v="miss">✗ Missed</button></span></div></div>';
     });
     return h + '<div class="pr-foot" hidden><button class="btn primary" data-act="pr-send">Tell the teacher how it went</button></div></div>';
-  });
+  } });
 
   function apply(el) {
     const s = S(el.getAttribute('data-key')), n = +el.getAttribute('data-n');
@@ -91,11 +91,16 @@
   R.registerAction('pr-send', (el, e, ctx) => sendPractice(host(el), ctx));
 
   // ── Problem: attempt first ────────────────────────────────────────────
-  R.registerFence(['problem', 'exercise', 'try'], (code, ctx, env) => {
-    if (env && env.open) return '<div class="comp"><div class="diagram-pending">Setting a problem…</div></div>';
-    let p;
-    try { p = R.parseLoose(code); } catch (e) { return '<div class="comp comp-error"><div class="diagram-error">problem: ' + ctx.esc(e.message) + '</div></div>'; }
-    if (Array.isArray(p)) p = p[0] || {};
+  R.defineComponent({ names: ['problem', 'exercise', 'try'], version: 2,
+    pending: () => '<div class="comp"><div class="diagram-pending">Setting a problem…</div></div>',
+    validate: p => {
+      if (Array.isArray(p)) p = p[0] || {};
+      R.check(p, 'object');
+      if (!String(p.q || p.problem || p.question || p.prompt || '').trim()) throw new Error('needs the question (q)');
+      return p;
+    },
+    render(p, ctx, env) {
+    const code = env.code;
     const q = String(p.q || p.problem || p.question || p.prompt || '');
     const hints = (Array.isArray(p.hints) ? p.hints : p.hint ? [p.hint] : []).map(String);
     const sol = p.solution || p.worked || p.steps || '';
@@ -112,7 +117,7 @@
       '<span class="pb-sent" hidden>Sent to your teacher ✓</span><button class="btn primary" data-act="pb-send">Check my attempt</button></div>' +
       (solution || answer ? '<div class="pb-solution" hidden>' + (answer ? '<div class="pb-answer"><b>Answer:</b> <span class="md">' + ctx.inline(answer) + '</span></div>' : '') + (solution ? '<div class="md">' + ctx.md(solution) + '</div>' : '') + '</div>' : '') +
       '</div>';
-  });
+  } });
 
   function applyProblem(el) {
     const s = S(el.getAttribute('data-key'));

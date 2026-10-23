@@ -4,7 +4,7 @@ import Foundation
 /// with a matching component; answers come back in the shapes documented below.
 enum Questions {
     static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
-                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing"]
+                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing", "speak"]
 
     /// Compact schema: per-type fields are documented once in `type` instead of on every property.
     /// The error for a call without questions, with a call that works (models fix a shown example; they repeat a bare error).
@@ -20,14 +20,18 @@ enum Questions {
             "type": ["type": "string", "enum": .array(types.map { .string($0) }), "description": """
                 Fields by type — choice types: options[] (+allow_other, multiple_choice: max_select); fill_blanks: text with {{}} per \
                 blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit, min, max, \
-                integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter. \
+                integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter; \
+                speak: target (the sentence to say aloud), lang, reading (the learner speaks; recognition shows what was heard). \
                 Optional on all: hints[] (a ladder, gentlest first: nudge → targeted hint → one step; shown one at a time), concept, \
-                placeholder. The app enforces these while the learner types.
+                placeholder; language tests: lang (ISO code: picks the on-screen keyboard), listen (text read aloud before the \
+                question, hidden: dictation) + listen_lang, accents "strict" (diacritics must match in short_text/fill_blanks). \
+                The app enforces these while the learner types.
                 """],
             "prompt": ["type": "string", "description": "Markdown/LaTeX question text."],
             "options": strs, "text": str, "blank_options": ["type": "array", "items": strs], "items": strs,
             "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
             "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "hints": strs, "concept": str,
+            "target": str, "lang": str, "reading": str, "listen": str, "listen_lang": str, "accents": str,
             "allow_other": ["type": "boolean"],
             "min_length": ["type": "integer"], "max_length": ["type": "integer"], "pattern": str, "integer": ["type": "boolean"],
         ]
@@ -102,6 +106,8 @@ enum Questions {
             case "fill_blanks":
                 let text = q["text"]?.string ?? q["prompt"]?.string ?? ""
                 if !text.contains("{{}}") { errs.append("Q\(n): fill_blanks needs `text` containing {{}} for each blank.") }
+            case "speak":
+                if (q["target"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): speak needs `target`, the sentence to say.") }
             case "": errs.append("Q\(n): missing `type`.")
             default: break
             }
@@ -151,15 +157,57 @@ enum Questions {
         return nil
     }
 
-    static func norm(_ s: String) -> String {
+    /// `strict` keeps diacritics (é ≠ e, ü ≠ u, harakat and tone marks count): language tests ask for them; everything
+    /// else folds them, so "cafe" passes for "café". Pinyin tone marks and tone numbers are the same answer either way.
+    static func norm(_ s: String, strict: Bool = false, pinyin: Bool = false) -> String {
+        // Pinyin: tone marks become numbers (nǐ → ni3), and without `strict` the numbers go too (ni3, nǐ and ni all agree).
+        let s = pinyin ? (strict ? pinyinNumbers(s) : pinyinNumbers(s).replacingOccurrences(of: "(?<=[A-Za-zü])[1-5]", with: "", options: .regularExpression)) : s
         // Punctuation that changes meaning survives: a leading minus (-5 ≠ 5), # and + (C# ≠ C), a decimal point (3.14).
-        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        return s.folding(options: strict ? [.caseInsensitive, .widthInsensitive] : [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
             .replacingOccurrences(of: "−", with: "-")
             .replacingOccurrences(of: #"(?<![\w])-(?=\d)"#, with: "\u{1}", options: .regularExpression)
             .replacingOccurrences(of: #"(?<=\d)\.(?=\d)"#, with: "\u{2}", options: .regularExpression)
             .replacingOccurrences(of: #"[^\p{L}\p{N}#+\x{01}\x{02}]+"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\u{1}", with: "-").replacingOccurrences(of: "\u{2}", with: ".")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static let pinyinTones: [Character: (Character, Int)] = {
+        var m: [Character: (Character, Int)] = [:]
+        for (v, marks) in ["a": "āáǎà", "e": "ēéěè", "i": "īíǐì", "o": "ōóǒò", "u": "ūúǔù", "ü": "ǖǘǚǜ", "A": "ĀÁǍÀ", "E": "ĒÉĚÈ", "I": "ĪÍǏÌ", "O": "ŌÓǑÒ", "U": "ŪÚǓÙ", "Ü": "ǕǗǙǛ"] {
+            for (i, c) in marks.enumerated() { m[c] = (Character(v), i + 1) }
+        }
+        return m
+    }()
+    /// Tone marks become tone numbers after each syllable ("nǐ hǎo" → "ni3 hao3"), so marked and numbered pinyin agree.
+    static func pinyinNumbers(_ s: String) -> String {
+        guard s.contains(where: { pinyinTones[$0] != nil }) else { return s }
+        var out = "", tone = 0
+        func flush() { if tone > 0 { out.append(String(tone)); tone = 0 } }
+        for c in s {
+            if let (base, t) = pinyinTones[c] { out.append(base); tone = t }
+            else if c.isLetter || c == "ü" { out.append(c) }
+            else { flush(); out.append(c) }
+        }
+        flush()
+        return out
+    }
+
+    /// How much of `target` the learner's speech contained: words (characters for scripts without spaces) matched as a multiset.
+    static func speechMatch(target: String, heard: String) -> Double {
+        func tokens(_ s: String) -> [String] {
+            let noSpaces = s.trimmingCharacters(in: .whitespaces).contains(" ") == false
+            let cjk = s.unicodeScalars.contains { [.han, .kana, .hangul, .thai].contains(ScriptRuns.script(of: $0)) }
+            if cjk && noSpaces { return s.filter { $0.isLetter || $0.isNumber }.map(String.init) }
+            return norm(s).split(separator: " ").map(String.init)
+        }
+        let t = tokens(target), h = tokens(heard)
+        guard !t.isEmpty else { return 0 }
+        var pool: [String: Int] = [:]
+        for w in h { pool[w, default: 0] += 1 }
+        var hit = 0
+        for w in t where (pool[w] ?? 0) > 0 { pool[w]! -= 1; hit += 1 }
+        return Double(hit) / Double(t.count)
     }
 
     /// The number in an answer: "12 seconds", "12 m/s" → 12; "1 1/2" → 1.5; "3/4"; "3,5" → 3.5; "1,234" → 1234;
@@ -182,6 +230,14 @@ enum Questions {
     static func grade(_ q: JSON, answer a: JSON) async -> Grade {
         let type = q["type"]?.string ?? "single_choice"
         let ans = q["answer"]
+        let strict = q["accents"]?.string?.lowercased() == "strict"
+        let pinyin = (q["lang"]?.string ?? "").lowercased().hasPrefix("zh")
+        if type == "speak" {
+            let target = q["target"]?.string ?? q["text"]?.string ?? ""
+            guard let heard = a["heard"]?.string ?? a.string, !heard.isEmpty else { return Grade(correct: false, score: 0, expected: target) }
+            let s = speechMatch(target: target, heard: heard)
+            return Grade(correct: s >= 0.8, score: s, expected: target)
+        }
         if a.isNull { return Grade(correct: type == "scale" ? nil : false, score: 0, expected: ans.map(describe)) }
         switch type {
         case "single_choice":
@@ -212,17 +268,20 @@ enum Questions {
             let tol = q["tolerance"]?.double ?? max(1e-9, abs(e) * 1e-3)
             return Grade(correct: abs(e - g) <= tol, score: abs(e - g) <= tol ? 1 : 0, expected: describe(ans!))
         case "short_text":
-            let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map(norm)
+            let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
             guard !alts.isEmpty, let g = a.string else { return Grade(expected: ans.map(describe)) }
-            return alts.contains(norm(g)) ? Grade(correct: true, score: 1, expected: describe(ans!)) : Grade(correct: nil, expected: describe(ans!))
+            if alts.contains(norm(g, strict: strict, pinyin: pinyin)) { return Grade(correct: true, score: 1, expected: describe(ans!)) }
+            // Right but for the accents: a mistake in a language test, not a judgement call.
+            if strict, alts.map({ norm($0, pinyin: pinyin) }).contains(norm(g, pinyin: pinyin)) { return Grade(correct: false, score: 0, expected: describe(ans!)) }
+            return Grade(correct: nil, expected: describe(ans!))
         case "fill_blanks":
             let blanks = ans?.array ?? []
             let given = a.array ?? []
             guard !blanks.isEmpty else { return Grade() }
             var ok = 0
             for (i, b) in blanks.enumerated() {
-                let alts = (b.array?.compactMap(\.string) ?? b.string.map { [$0] } ?? []).map(norm)
-                if i < given.count, let g = given[i].string, alts.contains(norm(g)) { ok += 1 }
+                let alts = (b.array?.compactMap(\.string) ?? b.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
+                if i < given.count, let g = given[i].string, alts.contains(norm(g, strict: strict, pinyin: pinyin)) { ok += 1 }
             }
             return Grade(correct: ok == blanks.count, score: Double(ok) / Double(blanks.count),
                          expected: blanks.map { $0.array?.first?.string ?? $0.string ?? "" }.joined(separator: " | "))
@@ -279,6 +338,7 @@ enum Questions {
             }.joined(separator: "; ")
         case "fill_blanks": return (a.array ?? []).map { "“\($0.string ?? "")”" }.joined(separator: ", ") + (q["text"]?.string.map { "  (in: \($0))" } ?? "")
         case "drawing": return "(drawing attached as an image)"
+        case "speak": return a["heard"]?.string.map { "said “\($0)” (recognised on device; target “\(q["target"]?.string ?? "")”)" } ?? "(nothing was recognised)"
         case "code": return "\n```\(q["language"]?.string ?? "")\n\(a.string ?? "")\n```"
         default: return a.string.map { "“\($0)”" } ?? a.compact
         }
@@ -372,7 +432,9 @@ struct AskLearnerTool: Tool {
     Show interactive questions in the chat and WAIT for the learner. Quick choice: `question` + `options`. \
     Form: `questions` (any type). Set `graded: true` for a quiz: include `answer`s; the app auto-grades \
     (choice, true/false, numeric, short text, blanks, ordering, matching, symbolic math), updates mastery, and returns \
-    long text/code/drawings for you to grade. Use for diagnostics, choices, practice (aim ~85% success) and reflection.
+    long text/code/drawings for you to grade. Use for diagnostics, choices, practice and reflection. A test reads like a \
+    real exam: a `case` (a realistic scenario, code, data or a passage) that the questions refer to, needing reading and \
+    reasoning rather than recall; a few questions, each worth answering. Refused while the learner has quizzes off.
     """
     let risk = ToolRisk.interactive
     var schema: JSON {
@@ -384,6 +446,7 @@ struct AskLearnerTool: Tool {
             "title": Schema.string("Form title."),
             "graded": Schema.boolean("Quiz mode: auto-grade with `answer`s."),
             "subject": Schema.string("Subject (graded)."),
+            "case": Schema.string("Markdown shown above the questions: the scenario, code, data or passage they all refer to (exam style)."),
             "questions": ["type": "array", "items": Questions.schema(graded: true)],
         ])
     }
@@ -392,6 +455,7 @@ struct AskLearnerTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let hasForm = !(input["questions"]?.array ?? []).isEmpty, hasQuick = !(input["question"]?.string ?? "").isEmpty
         if input["graded"]?.bool == true, hasForm { return try await QuizTool().run(input, ctx) }
+        if input["graded"]?.bool == true, !ctx.quizzes { return .error(Testing.refusal) }
         // Some models send `graded` with no questions, or nothing at all: say exactly what to send (they repeat a bare error).
         guard hasForm || hasQuick else { return .error(Questions.missingQuestions) }
         var payload = input.object ?? [:]
@@ -401,7 +465,7 @@ struct AskLearnerTool: Tool {
             payload["questions"] = .array(Questions.normalize(qs).map(Questions.publicView))
         }
         let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "ask", conversationID: ctx.conversationID, payload: .object(payload))
-        if reply["cancelled"]?.bool == true { return .error("The learner dismissed the question.") }
+        if reply["cancelled"]?.bool == true { return .error(Testing.skipped("question", reason: reply["reason"]?.string)) }
         if let qs = input["questions"]?.array {
             let norm = Questions.normalize(qs)
             let answers = reply["answers"]?.array ?? []
@@ -425,28 +489,31 @@ struct QuizTool: Tool {
     let description = """
     Show a graded interactive quiz in the chat and WAIT for the answers. Auto-grades single/multiple choice, true/false, \
     numeric, short text (accepted answers), fill-in-the-blanks, ordering, matching and math (symbolic equivalence via SymPy); \
-    returns long text, code and drawings for you to grade. Results update concept mastery. 1-6 questions targeted at what \
-    was just taught; mix types and difficulty (aim ~85% success).
+    returns long text, code and drawings for you to grade. Results update concept mastery. Like a real exam: a `case` \
+    (a realistic scenario, code, data or a passage) the questions refer to, needing reading and reasoning rather than \
+    recall; 2-6 questions on what was just taught, each worth answering. Refused while the learner has quizzes off.
     """
     let risk = ToolRisk.interactive
     var schema: JSON {
         Schema.object([
             "title": Schema.string("Quiz title."),
             "subject": Schema.string("Subject, e.g. algebra."),
+            "case": Schema.string("Markdown shown above the questions: the scenario, code, data or passage they all refer to."),
             "questions": Schema.array(Questions.schema(graded: true), "Questions."),
         ], required: ["title", "questions"])
     }
     func summary(_ input: JSON) -> String { input["title"]?.string ?? "Quiz" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        guard ctx.quizzes else { return .error(Testing.refusal) }
         let questions = Questions.normalize(input["questions"]?.array ?? [])
         guard !questions.isEmpty else { return .error(Questions.missingQuestions) }
         let errs = Questions.validate(questions, graded: true)
         if !errs.isEmpty { return .error("Fix the quiz and call it again:\n" + errs.joined(separator: "\n")) }
-        let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null,
+        let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null, "case": input["case"] ?? .null,
                              "questions": .array(questions.map(Questions.publicView)), "graded": true]
         let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "quiz", conversationID: ctx.conversationID, payload: payload)
-        if reply["cancelled"]?.bool == true { return .error("The learner skipped the quiz.") }
+        if reply["cancelled"]?.bool == true { return .error(Testing.skipped("quiz", reason: reply["reason"]?.string)) }
         let answers = reply["answers"]?.array ?? []
         // Per question: hints the learner opened (the app also opens one when they're stuck) and how sure they were.
         let hintsOpened = reply["hints"]?.array ?? [], certainties = reply["certainty"]?.array ?? []
@@ -457,10 +524,17 @@ struct QuizTool: Tool {
         var autoTotal = 0
         var lines: [String] = []
         var wrong = 0, hinted = 0
-        var sureButWrong: [String] = [], luckyGuesses: [String] = [], missedAgain: [String] = []
+        var sureButWrong: [String] = [], luckyGuesses: [String] = [], missedAgain: [String] = [], unknown: [String] = []
         let missedBefore = study.missedInLesson(ctx.conversationID)
         for (i, q) in questions.enumerated() {
             let a = answers[safe: i] ?? .null
+            // "Don't know yet" (certainty 0): a gap to teach, not a mistake. Nothing is graded or recorded.
+            if certainties[safe: i]?.int == 0 {
+                unknown.append("Q\(i + 1)" + (q["concept"]?.string.map { " (\($0))" } ?? ""))
+                lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(q["concept"]?.string.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   → 🤷 the learner doesn't know this yet")
+                graded.append(["correct": .null, "unknown": true, "explanation": q["explanation"] ?? .null, "answer": q["answer"] ?? .null, "given": a])
+                continue
+            }
             var g = await Questions.grade(q, answer: a)
             let mis = g.correct == true ? nil : Questions.misconception(q, answer: a)
             if mis != nil, g.correct == nil { g.correct = false; g.score = 0 }   // a tagged wrong answer needs no judgement
@@ -511,20 +585,24 @@ struct QuizTool: Tool {
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
         text += "\n" + lines.joined(separator: "\n")
         text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
-                                            ungraded: questions.count - autoTotal)
+                                            ungraded: questions.count - autoTotal - unknown.count, unknown: unknown)
         return ToolOutput(text: text, images: Questions.images(from: answers),
                           meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
     }
 
     /// What to do with the result: a first mistake is corrected now with a retry; a concept missed again in the same lesson
     /// gets a worked example instead of yet another quiz (more questions alone don't help a learner who lacks the method).
-    static func feedbackSteps(wrong: Int, missedAgain: [String] = [], sureButWrong: [String], luckyGuesses: [String], hinted: Int, ungraded: Int = 0) -> String {
+    static func feedbackSteps(wrong: Int, missedAgain: [String] = [], sureButWrong: [String], luckyGuesses: [String], hinted: Int, ungraded: Int = 0,
+                              unknown: [String] = []) -> String {
         var s: [String] = []
+        if !unknown.isEmpty {
+            s.append("\(unknown.joined(separator: ", ")): the learner doesn't know this yet — a gap to teach, not a mistake. Teach it properly (the mechanism, a worked example, a visual) before testing it again, later and in a new context.")
+        }
         if ungraded > 0 {
-            s.append("Grade the 📝 answers yourself and record each with `mastery` (concept, correct). A wrong one is a mistake like any other: name the misconception, then one near-identical retry; if the learner's answers make no sense, ask what they meant before quizzing again.")
+            s.append("Grade the 📝 answers yourself and record each with `mastery` (concept, correct). A wrong one is a mistake like any other: name the misconception and teach the gap behind it; if the learner's answers make no sense, ask what they meant.")
         }
         if wrong > 0 {
-            s.append("For each ❌: say what the learner most likely believed (the misconception named above, if any), why it's tempting, and the fix in a sentence or two. Then give ONE near-identical retry per mistake (same concept, new numbers or wording) with `ask_learner` (graded) before moving on.")
+            s.append("For each ❌: say what the learner most likely believed (the misconception named above, if any), why it's tempting, and the fix. A slip needs only that. A mistake that shows a gap in understanding needs teaching first (a new angle, a worked example), not another question. Then move on: check the point again later in the lesson, in a new context — never quiz the same point twice in a row.")
         }
         if !missedAgain.isEmpty {
             s.append("\(missedAgain.joined(separator: ", ")): missed again in this lesson. Don't quiz it again in this turn: teach it with one worked example, step by step, then ask the learner to explain the key step back in their own words, and end your turn. Try a fresh question later.")

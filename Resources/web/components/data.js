@@ -1,5 +1,6 @@
 // Smart data components: ```chart ```timeline ```steps ```cards ```compare ```kv ```json ```csv ```vocab,
-// GitHub-style callouts (> [!NOTE]) and sortable tables.
+// GitHub-style callouts (> [!NOTE]) and sortable tables. JSON components declare their shape (`schema`/`validate`) and
+// let the core parse, check and guard them; the text-form ones (compare, kv, csv, json) read the fence themselves.
 (function () {
   'use strict';
   const R = window.TeacherUI;
@@ -140,17 +141,21 @@
   const labelsXY = (spec, W, H, M, esc) => (spec.xlabel ? '<text class="plot-axislabel" x="' + (W / 2) + '" y="' + (H - 6) + '" text-anchor="middle">' + esc(spec.xlabel) + '</text>' : '') +
     (spec.ylabel ? '<text class="plot-axislabel" transform="rotate(-90)" x="' + (-(H / 2)) + '" y="13" text-anchor="middle">' + esc(spec.ylabel) + '</text>' : '');
 
-  R.registerFence(['chart', 'bar', 'barchart', 'piechart'], safe('chart', (spec, ctx, code) => box('chart-block', 'ch' + ctx.hash(code), chart(spec, ctx))));
+  R.defineComponent({ names: ['chart', 'bar', 'barchart', 'piechart'], version: 2, prose: true,
+    schema: { type: 'object', props: { type: 'string', title: { type: 'string', max: 300 }, labels: 'array', series: 'array', data: 'array', xlabel: 'string', ylabel: 'string' } },
+    render: (spec, ctx, env) => box('chart-block', 'ch' + ctx.hash(env.code), chart(spec, ctx)) });
 
   // ── Timeline / steps / cards / compare / kv ───────────────────────────
-  R.registerFence('timeline', safe('timeline', (items, ctx, code) => {
-    items = Array.isArray(items) ? items : items.events || [];
-    return box('timeline', 'tl' + ctx.hash(code), items.map(it =>
+  R.defineComponent({ names: 'timeline', version: 2, prose: true,
+    validate: p => R.check(Array.isArray(p) ? p : (p && (p.events || p.items)) || [], { type: 'array', items: 'object' }),
+    render: (items, ctx, env) => box('timeline', 'tl' + ctx.hash(env.code), items.map(it =>
       '<div class="tl-item"><div class="tl-dot"></div><div class="tl-date">' + ctx.esc(it.date || it.year || it.time || '') + '</div>' +
-      '<div class="tl-body"><div class="tl-title">' + ctx.inline(it.title || '') + '</div>' + (it.text || it.description ? '<div class="md">' + ctx.md(it.text || it.description) + '</div>' : '') + '</div></div>').join(''));
-  }));
+      '<div class="tl-body"><div class="tl-title">' + ctx.inline(it.title || '') + '</div>' + (it.text || it.description ? '<div class="md">' + ctx.md(it.text || it.description) + '</div>' : '') + '</div></div>').join('')) });
 
-  R.registerFence('steps', safe('steps', (spec, ctx, code) => {
+  R.defineComponent({ names: 'steps', version: 2, prose: true,
+    validate: spec => { R.check(Array.isArray(spec) ? spec : (spec && spec.steps) || [], 'array'); return spec; },
+    render(spec, ctx, env) {
+    const code = env.code;
     const reveal = !Array.isArray(spec) && !!spec.reveal;   // worked example, one step at a time (practice.js)
     const items = Array.isArray(spec) ? spec : spec.steps || [];
     const body = items.map((it, i) => {
@@ -160,22 +165,21 @@
     }).join('');
     return box('steps' + (reveal ? ' reveal' : ''), 'st' + ctx.hash(code), body +
       (reveal && items.length > 1 ? '<div class="steps-more btn-row"><button class="btn primary" data-act="steps-next">Next step</button><button class="btn link" data-act="steps-all">Show all</button></div>' : ''));
-  }));
+  } });
 
-  R.registerFence('cards', safe('cards', (items, ctx, code) => {
-    items = Array.isArray(items) ? items : items.cards || [];
-    return box('cards', 'cd' + ctx.hash(code), items.map(it =>
+  R.defineComponent({ names: 'cards', version: 2, prose: true,
+    validate: p => R.check(Array.isArray(p) ? p : (p && (p.cards || p.items)) || [], { type: 'array', items: 'object' }),
+    render: (items, ctx, env) => box('cards', 'cd' + ctx.hash(env.code), items.map(it =>
       '<div class="card">' + (it.icon ? '<div class="card-icon">' + ctx.esc(it.icon) + '</div>' : '') + '<div class="card-title">' + ctx.inline(it.title || '') + '</div>' +
-      '<div class="md">' + ctx.md(it.text || it.body || '') + '</div></div>').join(''));
-  }));
+      '<div class="md">' + ctx.md(it.text || it.body || '') + '</div></div>').join('')) });
 
-  R.registerFence(['compare', 'comparison'], (code, ctx, env) => {
+  R.defineComponent({ names: ['compare', 'comparison'], raw: true, render(code, ctx, env) {
     if (/^\s*\|.*\|\s*\n\s*\|[\s:|-]+\|/.test(code) && !(env && env.open)) return box('compare md', 'cp' + ctx.hash(code), ctx.md(code));   // a markdown table
     const rows = !(env && env.open) && !/^\s*[\[{]/.test(code) && labelled(code);
     if (rows) return box('compare md', 'cp' + ctx.hash(code), '<table class="compare-table"><tbody>' + rows.map(([k, v]) =>
       '<tr><th>' + ctx.inline(k) + '</th><td>' + (v.includes('\n') ? ctx.md(v) : ctx.inline(v)) + '</td></tr>').join('') + '</tbody></table>');
     return compareJSON(code, ctx, env);
-  });
+  } });
   // "Before: …" / "After: …" lines (continuation lines join the label above): one row per label, at least two.
   function labelled(code) {
     const rows = [];
@@ -208,13 +212,13 @@
     const m = l.includes('|') ? /^(.+?)\s*\|\s*(.+)$/.exec(l) : /^(.+?)\s*(?::|—|\s-\s)\s*(.+)$/.exec(l);
     return m ? [m[1].replace(/[:=\s]+$/, ''), m[2]] : null;
   });
-  R.registerFence(['kv', 'facts', 'definitions'], (code, ctx, env) => {
+  R.defineComponent({ names: ['kv', 'facts', 'definitions'], raw: true, render(code, ctx, env) {
     if (!/^\s*[\[{]/.test(code) && !(env && env.open)) {
       const rows = kvLines(code).filter(Boolean);
       if (rows.length) return box('kv', 'kv' + ctx.hash(code), '<dl>' + rows.map(([k, v]) => '<dt>' + ctx.inline(k) + '</dt><dd>' + ctx.inline(v) + '</dd>').join('') + '</dl>');
     }
     return factsJSON(code, ctx, env);
-  });
+  } });
   const factsJSON = safe('facts', (spec, ctx, code) => {
     const entries = Array.isArray(spec) ? spec.map(e => Array.isArray(e) ? e : [e.key || e.term, e.value || e.definition]) : Object.entries(spec);
     return box('kv', 'kv' + ctx.hash(code), '<dl>' + entries.map(([k, v]) => '<dt>' + ctx.inline(String(k)) + '</dt><dd>' + ctx.inline(typeof v === 'string' ? v : JSON.stringify(v)) + '</dd>').join('') + '</dl>');
@@ -233,12 +237,12 @@
     const inner = keys.map(k => '<div class="j-row">' + (isArr ? '' : '<span class="j-key">' + ctx.esc(k) + '</span>: ') + tree(v[k], ctx, depth + 1) + '</div>').join('');
     return '<details' + (depth < 2 ? ' open' : '') + '><summary>' + (isArr ? '[' + keys.length + ']' : '{' + keys.length + '}') + '</summary><div class="j-children">' + inner + '</div></details>';
   }
-  R.registerFence('json', (code, ctx, env) => {
+  R.defineComponent({ names: 'json', raw: true, render(code, ctx, env) {
     if (env && env.open) return null;
     treeBudget = 3000;
     try { return box('json-tree', 'js' + ctx.hash(code), '<div class="code-head"><span class="lang">json</span><span><button data-act="copy-raw" data-raw="' + ctx.esc(code) + '">Copy</button></span></div><div class="j-root">' + tree(JSON.parse(code), ctx, 0) + '</div>'); }
     catch (_) { return null; } // not valid JSON: fall back to a code block
-  });
+  } });
 
   function parseCSV(text) {
     const rows = []; let row = [], cell = '', q = false;
@@ -253,19 +257,19 @@
     if (cell || row.length) { row.push(cell); rows.push(row); }
     return rows.filter(r => r.some(c => c.trim()));
   }
-  R.registerFence(['csv', 'tsv'], (code, ctx, env) => {
+  R.defineComponent({ names: ['csv', 'tsv'], raw: true, render(code, ctx, env) {
     if (env && env.open) return null;
     const rows = parseCSV(code);
     if (rows.length < 2) return null;
     return box('md csv', 'cv' + ctx.hash(code), '<table class="sortable"><thead><tr>' + rows[0].map(h => '<th>' + ctx.esc(h) + '</th>').join('') + '</tr></thead><tbody>' +
       rows.slice(1, 1001).map(r => '<tr>' + r.map(c => '<td>' + ctx.esc(c) + '</td>').join('') + '</tr>').join('') + '</tbody></table>' +
       (rows.length > 1001 ? '<div class="muted csv-more">Showing the first 1,000 of ' + (rows.length - 1).toLocaleString() + ' rows.</div>' : ''));
-  });
+  } });
 
   // ── Vocabulary cards (language learning) ──────────────────────────────
-  R.registerFence(['vocab', 'vocabulary', 'words'], safe('vocabulary', (items, ctx, code) => {
-    items = Array.isArray(items) ? items : items.words || [];
-    return box('vocab', 'vc' + ctx.hash(code), items.map(w => {
+  R.defineComponent({ names: ['vocab', 'vocabulary', 'words'], version: 2, prose: true,
+    validate: p => R.check(Array.isArray(p) ? p : (p && (p.words || p.items)) || [], { type: 'array', items: 'object' }),
+    render: (items, ctx, env) => box('vocab', 'vc' + ctx.hash(env.code), items.map(w => {
       const lang = w.lang || w.language || '';
       const rtl = /^(ar|he|fa|ur|ps|yi)/.test(lang);
       const say = (t, l) => t ? '<button class="say" data-act="say" data-lang="' + ctx.esc(l) + '" data-text="' + ctx.esc(t) + '" title="Listen">🔊</button>' : '';
@@ -275,9 +279,16 @@
         '<div class="vocab-meaning">' + ctx.inline(w.meaning || w.translation || '') + '</div>' +
         (w.example ? '<div class="vocab-example"><span' + (lang ? ' lang="' + ctx.esc(lang) + '"' : '') + (rtl ? ' dir="rtl"' : '') + '>' + ctx.esc(w.example) + '</span>' + say(w.example, lang) +
           (w.example_meaning ? '<div class="vocab-ex-meaning">' + ctx.inline(w.example_meaning) + '</div>' : '') + '</div>' : '') +
-        (w.notes ? '<div class="vocab-notes">' + ctx.inline(w.notes) + '</div>' : '') + '</div>';
-    }).join(''));
-  }));
+        (w.notes ? '<div class="vocab-notes">' + ctx.inline(w.notes) + '</div>' : '') +
+        // Into the learner's own vocabulary (reviewed as flashcards): the app's `vocab` message.
+        '<button class="vocab-save" data-act="vocab-save" data-word="' + ctx.esc(JSON.stringify({ term: w.term || w.word || '', lang, reading: w.reading || w.transliteration || '', meaning: w.meaning || w.translation || '', pos: w.pos || '', example: w.example || '', example_meaning: w.example_meaning || '', notes: w.notes || '' })) + '" title="Save to my vocabulary">＋ Save</button></div>';
+    }).join('')) });
+  R.registerAction('vocab-save', (el, e, ctx) => {
+    e.stopPropagation();
+    let word; try { word = JSON.parse(el.getAttribute('data-word')); } catch (_) { return; }
+    ctx.post({ type: 'vocab', op: 'add', word });
+    el.textContent = 'Saved ✓'; el.disabled = true;
+  });
   R.registerAction('say', (el, e, ctx) => { e.stopPropagation(); ctx.post({ type: 'speak', text: el.getAttribute('data-text'), lang: el.getAttribute('data-lang') || null }); });
   R.registerAction('copy-raw', (el, e, ctx) => { ctx.post({ type: 'copy', text: el.getAttribute('data-raw') }); ctx.flash(el, 'Copied'); });
 

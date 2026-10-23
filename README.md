@@ -45,7 +45,13 @@ Every mode follows one depth standard:
 * teaching is pitched at the frontier of what you can do, and gets harder as you succeed;
 * models plan, solve and verify with tools before they answer.
 
-Reasoning effort defaults to high for lessons and sub-agents.
+Reasoning effort defaults to high for lessons and sub-agents, and **Max** is available where the model supports it
+(DeepSeek V4, Claude).
+* **Context grows with the model.** Lessons keep up to half the model's window, at most 400k tokens, before trimming or
+  summarising.
+* **Plan and check.** A substantial request gets a hidden plan first. The plan lists what to verify with tools and what
+  to research. A reviewer then reads the reply before you do; if it finds real problems, the reply is revised, and the
+  draft stays collapsed in the transcript.
 
 ### Teaching that makes you think
 AI tutors that hand out answers raise practice scores and lower exam scores ([Bastani et al., PNAS 2025](https://www.pnas.org/doi/10.1073/pnas.2422633122)).
@@ -54,7 +60,7 @@ Tutors that make students attempt and explain show large gains. So My AI Teacher
 * **Problem cards.** Problems you bring, or that the teacher sets, come as cards. The teacher's hints and worked solution
   stay hidden until you try. Your attempt goes to the teacher, who gives one hint at a time, from a nudge to a full
   solution. If you're stuck for a while, the first hint opens by itself.
-* **Quizzes with 13 question types**, graded instantly, including symbolic math checked with SymPy. Before seeing the
+* **Quizzes with 14 question types**, graded instantly, including symbolic math checked with SymPy. Before seeing the
   result you mark how sure you were (Guessing, Unsure or Sure). A confident mistake gets extra attention.
 * **Wrong answers name the misconception behind them.** The teacher explains it, gives you one near-identical retry,
   remembers it, and checks it again in a later lesson.
@@ -80,20 +86,44 @@ A learner model rather than a chat log:
 You can see and edit all of it in **Memory**. **Progress** shows your activity, mastery, a confidence check (how often
 you're right when you're sure) and what's coming back for review.
 
-### A code mentor that never writes your code
+### A code mentor that builds with you
 In **Code mentor** mode you learn by building real software, not toy snippets.
 
-* **The project.** The mentor sets a multi-file project in your folder (`exercises/<name>/`). It might be a CLI tool, a
-  parser, a cache or a data pipeline, always at the edge of what you can do.
-* **The editor.** Work in CodeMirror, in the right panel or its own window: Run, Test and Submit.
-* **Hidden tests.** They're checked against the mentor's own hidden reference solution before you see the project. You
-  only ever see what the tests print.
-* **The sandbox.** Your code runs on your Mac, with no network, writes only inside a temporary run folder, and no access
-  to the app's data.
-* **The review.** Submitting sends your work to the mentor, who reviews it like a demanding senior engineer: free-form,
-  pointing at your lines, with questions and hints.
-* **No writing, no revealing.** The mentor can't write to your project, and any reply that repeats the solution is
-  withheld.
+* **Lessons designed first.** Before teaching, the mentor makes a hidden lesson design: the real system the topic comes
+  from (nginx's `limit_req`, Redis eviction, Git's object store, …), the concepts with analogies and where they break,
+  and what to read. It then reads the real docs and source, builds and runs working examples, and only then writes the
+  lesson. Every example in it has actually run.
+* **A real project in your folder.** The mentor creates the starter files — real structure, interfaces, TODOs, never the
+  solution — and writes the tests to `.teacher/tests`, versioned with the project. It might be a CLI tool, a parser, a
+  cache or a data pipeline, always at the edge of what you can do.
+* **Your own editor.** There is no built-in editor: use Helix, VS Code, Zed, Xcode, anything. The files are right there
+  in the folder; save, then ask the mentor to check. `bash` runs the tests and the mentor reads your changes.
+* **The review.** Like a demanding senior engineer: correctness, design, naming, edge cases, complexity, the tests you
+  should add, pointing at your lines — with questions and hints rather than code.
+* **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
+  teaches with questions, targeted hints and concepts so you find the fix.
+
+### A language mentor
+In **Language mentor** mode you learn a language the way the research says it sticks: comprehensible input one step
+ahead of you, more output than input, immediate correction, and spaced retrieval of every word you meet.
+
+* **It knows what you're learning.** The target language is detected as the lesson goes (what you asked for, which
+  language the replies are tagged with) or set by the mentor after a quick placement, and every request carries the
+  state: language, level, keyboard, words due.
+* **An on-screen keyboard for the script.** Japanese (kana, or romaji typed as kana), Korean (jamo compose into
+  syllables), Chinese pinyin with a tone-mark key, Arabic, Persian, Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi,
+  Bengali, Thai, and accent rows for Spanish, French, German, Portuguese, Vietnamese and twenty more. It appears under
+  any quiz field and above the message box, so a test can ask for the real script.
+* **Lessons that show the language.** Interlinear glosses with word roles and word-order lines to the translation,
+  listening cards with slow playback and hidden text for dictation, role-play dialogues where your lines stay hidden
+  until you've said them, conjugation tables that separate stem from ending, and Mandarin tone contours.
+* **Tests that use your mouth and ears.** `speak` questions listen on-device in the target language and show which
+  words were heard; dictation questions play first and grade strictly; accents can count.
+* **Your vocabulary.** Words the mentor teaches (or you save from a vocabulary card) become flashcards in that
+  language's deck, and the mentor opens each lesson with the ones that are due, used in new sentences. Progress shows
+  each language's level and how many words are new, learning and known.
+* **Language tools, offline.** Transliteration between scripts, word segmentation with parts of speech (Japanese and
+  Chinese included), and Wiktionary definitions, so the mentor checks readings and forms before teaching them.
 
 ### A coding agent too
 **Code sessions** work in a folder, much like Claude Code:

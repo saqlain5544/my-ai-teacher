@@ -7,9 +7,14 @@ CONFIG=${1:-release}
 APP="$ROOT/build/My AI Teacher.app"
 
 echo "▸ Compiling ($CONFIG)…"
-swift build -c "$CONFIG" --arch arm64 2>&1 | grep -E "error|warning: unre|Compiling|Build complete" || true
+# A failed compile must stop here: the binary from the previous build would otherwise be packaged as if it were new.
+LOG=$(mktemp)
+if ! swift build -c "$CONFIG" --arch arm64 >"$LOG" 2>&1; then
+  grep -E "error" "$LOG" | head -20; rm -f "$LOG"; echo "✗ build failed"; exit 1
+fi
+grep -E "warning: unre|Build complete" "$LOG" || true; rm -f "$LOG"
 BIN="$(swift build -c "$CONFIG" --arch arm64 --show-bin-path)/MyAITeacher"
-[[ -x "$BIN" ]] || { echo "build failed"; exit 1; }
+[[ -x "$BIN" ]] || { echo "✗ build failed"; exit 1; }
 
 echo "▸ Assembling bundle…"
 rm -rf "$APP"

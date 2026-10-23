@@ -109,8 +109,13 @@ enum AgentCatalog {
 
     /// Built-ins, then app-level definitions, then the folder's. A name belongs to the first that defines it, so a
     /// project can't turn `explore` into a writer.
-    static func all(app: [AgentDefinition], folder: URL?) -> [AgentDefinition] {
-        var out = builtIns
+    static func all(app: [AgentDefinition], folder: URL?, instructions: [String: String] = [:]) -> [AgentDefinition] {
+        // A built-in's instructions can be edited in Settings → Instructions (its tools and limits stay the app's).
+        var out = builtIns.map { d -> AgentDefinition in
+            var d = d
+            if let o = instructions[Instructions.Key.subAgent(d.name).raw], !o.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { d.prompt = o }
+            return d
+        }
         for d in app.map({ var d = $0; d.source = .app; return d }) + (folder.map(project) ?? [])
         where !d.name.isEmpty && !out.contains(where: { $0.name == d.name }) { out.append(d) }
         return out

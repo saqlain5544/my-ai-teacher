@@ -80,12 +80,29 @@ struct WriteTool: Tool {
     }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let url = resolvePath(try input.req("path"), workspace: ctx.workspace)
-        let content = input["content"]?.string ?? ""
+        let (content, strayEOF) = HeredocSlip.strip(input["content"]?.string ?? "")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existed = FileManager.default.fileExists(atPath: url.path)
         try Data(content.utf8).write(to: url, options: .atomic)
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
-        return ToolOutput(text: "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines).", meta: ["path": .string(url.path)])
+        return ToolOutput(text: "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines)." + (strayEOF ? " " + HeredocSlip.note : ""),
+                          meta: ["path": .string(url.path)])
+    }
+}
+
+/// Models that usually write files with `cat > f <<'EOF'` sometimes end `write` or `run_code` content with the heredoc's
+/// terminator. A lone `EOF` last line in content with no heredoc of its own is never meant: it broke every file of a Zig
+/// project in a live lesson (`build.zig:50:1: error: file cannot be a tuple`) and two `run_code` compiles. Dropped, and
+/// the model is told, so it stops adding it.
+enum HeredocSlip {
+    static let note = "(A trailing `EOF` line was removed: `write` and `run_code` take the content itself, no heredoc terminator.)"
+    static func strip(_ content: String) -> (String, Bool) {
+        var lines = content.components(separatedBy: "\n")
+        while let l = lines.last, l.trimmingCharacters(in: .whitespaces).isEmpty, lines.count > 1 { lines.removeLast() }
+        guard let last = lines.last?.trimmingCharacters(in: .whitespaces), ["EOF", "'EOF'", "\"EOF\""].contains(last),
+              !content.contains("<<") else { return (content, false) }
+        lines.removeLast()
+        return (lines.joined(separator: "\n") + "\n", true)
     }
 }
 

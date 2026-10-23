@@ -11,18 +11,30 @@ struct AppSettings: Codable, Sendable, Equatable {
     var recentFolders: [WorkspaceRef] = []
     var lastFolder: String?
     var autoMemory = true
+    /// Plan → research → verify for substantial requests (`DeepWork`).
+    var deepWork = true
     var memoryProviderID: String?
     var memoryModel: String?
     var workspacePath: String = AppPaths.workspace.path   // default folder
     var fontSize: Double = 15
     var customProviders: [ProviderConfig] = []
     var disabledTools: [String] = []
-    var maxToolTurns = 40
+    /// Tool steps one reply may take; 0 = no limit (the default). The learner can set one in Settings.
+    var maxToolTurns = 0
+    /// Quizzes and tests. Off: the teacher teaches without testing until the learner turns them back on (toolbar).
+    /// Quiz and Exam prep modes always test.
+    var quizzes = true
+    /// How the teacher keeps long-term state for goals that span many replies: `Experiments.courseBoard` arms
+    /// ("nested": cards with book-style outlines, "shallow": cards only, "off": no board).
+    var courseBoard = "nested"
+    /// The learner's edits to the agents' instructions (`Instructions.Key.raw` → text); absent = the default.
+    var instructions: [String: String] = [:]
     var learnerName: String = ""
     var learnerLevel: String = ""
     var voiceIdentifier: String?
     var speechRate: Double = 0.5
-    var compactAtTokens = 48_000   // context budget (tokens)
+    /// Context budget in tokens; 0 = automatic (half the model's window, up to 400k: `ContextPolicy.budget`).
+    var compactAtTokens = 0
     var showThinking = true
     var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
     var experiments = true              // local A/B experiments (see Experiments)
@@ -46,19 +58,25 @@ struct AppSettings: Codable, Sendable, Equatable {
         recentFolders = (try? c.decode([WorkspaceRef].self, forKey: .recentFolders)) ?? []
         lastFolder = try? c.decode(String.self, forKey: .lastFolder)
         autoMemory = (try? c.decode(Bool.self, forKey: .autoMemory)) ?? d.autoMemory
+        deepWork = (try? c.decode(Bool.self, forKey: .deepWork)) ?? d.deepWork
         memoryProviderID = try? c.decode(String.self, forKey: .memoryProviderID)
         memoryModel = try? c.decode(String.self, forKey: .memoryModel)
         workspacePath = (try? c.decode(String.self, forKey: .workspacePath)) ?? d.workspacePath
         fontSize = (try? c.decode(Double.self, forKey: .fontSize)) ?? d.fontSize
         customProviders = (try? c.decode([ProviderConfig].self, forKey: .customProviders)) ?? []
         disabledTools = (try? c.decode([String].self, forKey: .disabledTools)) ?? []
-        maxToolTurns = (try? c.decode(Int.self, forKey: .maxToolTurns)) ?? d.maxToolTurns
+        // 40 was the old default, saved into every settings file: it means "never chosen", so it becomes no limit.
+        let savedSteps = (try? c.decode(Int.self, forKey: .maxToolTurns)) ?? d.maxToolTurns
+        maxToolTurns = savedSteps == 40 ? 0 : max(0, savedSteps)
+        quizzes = (try? c.decode(Bool.self, forKey: .quizzes)) ?? d.quizzes
+        courseBoard = (try? c.decode(String.self, forKey: .courseBoard)).flatMap { Experiments.courseBoard.arms.contains($0) ? $0 : nil } ?? d.courseBoard
         learnerName = (try? c.decode(String.self, forKey: .learnerName)) ?? ""
         learnerLevel = (try? c.decode(String.self, forKey: .learnerLevel)) ?? ""
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
         let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
-        compactAtTokens = savedBudget == 120_000 ? d.compactAtTokens : min(max(savedBudget, 20_000), 900_000)   // migrate the old default; the stepper's range
+        // The old fixed defaults (120k, then 48k) become automatic; anything else the learner chose stays, within the stepper's range.
+        compactAtTokens = [0, 48_000, 120_000].contains(savedBudget) ? 0 : min(max(savedBudget, 20_000), 900_000)
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
         experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments
@@ -66,6 +84,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
+        instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }
 }
 

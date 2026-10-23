@@ -65,8 +65,17 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   Give it a base URL, an optional key variable and a default model.
 * **Choosing a model.** The model picker in the toolbar lists each provider's live catalogue. Search is forgiving: word order
   doesn't matter and typos are fine ("deepseek nvidia", "nvdia deepsek", "sonet 5.5"), but version numbers must match.
-* **Thinking.** The lightbulb in the toolbar sets reasoning effort for the lesson. **Settings › General › Show the
-  model's thinking** reveals it in the transcript.
+* **Context.** Automatic by default: a lesson keeps up to half the model's window (at most 400k tokens) before older
+  tool output is trimmed and earlier parts are summarised. You can set a fixed budget in Settings › General.
+* **Plan and check substantial answers** (Settings › General, on by default).
+  * A substantial request gets a hidden plan first: what you need, an outline, what to verify with tools, what to research.
+  * A reviewer reads the reply before you do. If it finds a real problem (an error, an unchecked claim, a toy example, a
+    solution you should have attempted), the teacher revises it.
+  * The first draft stays in the transcript, collapsed; click it to see it and the review's notes.
+* **Thinking.** The lightbulb in the toolbar sets reasoning effort for the lesson; **Max** is used where the model takes it
+  (DeepSeek V4, Claude) and means High elsewhere. **Settings › General › Show the
+  model's thinking** reveals it in the transcript in every mode: it opens while the model thinks, then collapses to a
+  “Thought process” line you can toggle open or shut.
 
 ## Lessons
 
@@ -87,11 +96,13 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | Quiz | Graded quizzes that mix difficulty and interleave related concepts |
 | Exam prep | Exam-style problems, mark schemes, timing, a revision plan |
 | Code mentor | Teaches programming by doing: small runnable examples, reviews your code |
+| Language mentor | Teaches a language: placement, glossed sentences, dialogues, dictation, speaking, your own vocabulary deck |
 | ELI5 | Plain words, everyday analogies, one idea at a time |
 | Research | Searches the web, compares sources and cites every claim |
 
 **In the composer and transcript:**
-* **Attach files.** Drop in images, PDFs or files; the teacher reads them.
+* **Attach files.** Drop in images, PDFs or files; the teacher reads them. With a model that cannot see images (some free
+  models are text-only), the picture is passed on as a note and the teacher asks you to describe it instead.
 * **Dictate** with the microphone button.
 * **Stop** a reply with ⌘. or the stop button.
 * **Under each reply:**
@@ -120,12 +131,24 @@ you produce the work.
 
 How help and certainty affect your record:
 
+* **Quizzes on or off.** The **Quizzes** button in the lesson toolbar turns testing off from your next message, and it
+  stays off until you turn it back on. With quizzes off the teacher teaches without questions, problems or practice
+  cards. **Ask for a check** on the course board still works when you want one. Quiz and Exam prep modes always test.
+* **Exam-style questions.** A quiz usually opens with a **Case**: a realistic scenario, piece of code, data set or
+  passage. Its questions all refer to that case and need reading and reasoning, like a real exam.
 * **Hints and certainty in quizzes.** Every graded question can have a hint ladder. Mark how sure you are (**Guessing**,
-  **Unsure** or **Sure**) before submitting.
+  **Unsure** or **Sure**) before submitting. **Don't know yet** tells the teacher to teach the idea rather than grade a
+  guess, and it doesn't count as a mistake.
+* **Skipping says why.** **Skip** asks for a reason, and the teacher acts on it:
+  * **I need more explanation first**: it teaches the idea again from another angle before testing it later;
+  * **Too easy for me**: it skips what you know and raises the level;
+  * **Not now, keep going**: it carries on without testing you this turn;
+  * **A question is unclear or wrong**: it checks the question instead of asking it again.
 * **Only unaided success counts.** A right answer after a hint is logged but doesn't raise mastery. A guess counts for less.
 * **Mistakes are corrected now, and checked again later.**
   * If a wrong option reveals a known misconception, the feedback names it ("Common mix-up: adds the denominators").
-  * The teacher explains why it's tempting and gives you one near-identical retry.
+  * The teacher explains why it's tempting. If the mistake shows a gap, it teaches the idea again instead of asking
+    another question, and checks it later in the lesson in a new context.
   * It also remembers the misconception and schedules a re-check: two days later, or the next day if you were sure.
   * Missing the same idea twice in one lesson gets you a worked example instead of another quiz.
 * **Confident mistakes get the most care.** Being sure and wrong also brings that concept's flashcards forward.
@@ -139,48 +162,72 @@ How help and certainty affect your record:
 
 In **Code mentor** mode, ask for a project ("I know Python classes; stretch me").
 
-* **Setting it up.** The mentor writes a brief, a starter project, hidden tests and a hidden reference solution. The app
-  only hands the project over once it has proved two things: the reference passes the tests, and the starter fails them.
-  A broken or trivial exercise goes back to the mentor.
-* **Your project** appears in `exercises/<name>/` in the lesson's folder (quick questions use `~/AI Teacher Workspace`).
-  It holds the starter files and `BRIEF.md`. The hidden tests and solution live in the app's own data, never in your
-  folder.
-* **The editor** opens in the right panel's **Exercise** tab; the pop-out button gives it its own window. You get a file
-  list (+ to add, double-click to rename, × to delete), and every edit is saved as you type.
-  * **Run** (⌘R) runs the program.
-  * **Test** (⌘↩) runs the hidden tests and shows only their output.
-  * **Submit** (⇧⌘↩) runs the tests and sends your files and the results to the mentor.
-* **The sandbox.** Your code runs on your Mac under macOS's sandbox: no network access, writes only inside a temporary
-  run folder (and your project when you Run), and no access to the app's data, SSH keys or other credential stores. API
-  keys are removed from its environment, and a run is stopped after a time limit.
+* **Setting it up.** The mentor creates the starter files in the lesson's folder and writes the tests to
+  `.teacher/tests` (versioned with your project, listed by `.teacher/.gitignore`). There is no hidden test suite and no
+  reference solution to prove: the tests are yours to read and run.
+* **Lessons come first.** The mentor designs each lesson before teaching it: the real system, the concepts with
+  analogies, research in the real docs and source, and two to four working examples it runs first. A full lesson can take
+  several minutes on a fast model, and longer on free ones.
+* **Your editor.** There is no built-in editor. Open the folder in Helix, VS Code, Zed, Xcode — whatever you use — edit,
+  save, then tell the mentor to check (or just "check my work"). The agent runs the tests with `bash` and reads the files.
 * **The review** is free-form, like a senior engineer's: correctness, design, edge cases, naming and complexity, pointing
   at your lines.
-* **What the mentor can't do.**
-  * It can't change your files: its write, edit and shell-write calls on your project are refused.
-  * It never shows the solution: a reply whose code repeats the hidden solution is withheld before you see it.
-  * It teaches with questions, hints and concepts instead.
-* **Mastery.** Passing the tests counts as unaided practice on the project's concept. When you pass, the next project
-  is harder.
+* **What the mentor won't do.**
+  * It won't write the solution: the starter is scaffolding and TODOs, and it teaches with questions, hints and concepts.
+  * It won't hide tests or solutions from you: the tests are in `.teacher/tests` and you can run them yourself.
+* **Mastery.** A clean test run after your own work is the checkpoint: the mentor records the concept with `mastery` and
+  makes the next project harder.
+
+## Language mentor
+
+In **Language mentor** mode, say which language you want to learn and where you are ("I did two years of Spanish at
+school"). The mentor places you with a few questions, sets your profile, and from then on knows the language, your level
+and which words are due.
+
+* **The keyboard for the script.** A ⌨ button appears next to every answer field in a quiz or form, and in the message
+  box's toolbar, when the language needs one: Japanese (kana, or type romaji and get kana), Korean (jamo join into
+  syllables; backspace removes one jamo), Chinese pinyin with an ā→á key that cycles the tone mark, Arabic, Persian,
+  Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi, Bengali and Thai, plus accent rows for Spanish, French, German,
+  Portuguese, Italian, Vietnamese and many more. The panel's menu switches to any other layout; ✕ hides it until you
+  press ⌨ again. For 汉字 use the Mac's own input source.
+* **In the lesson:** glossed sentences (click a word to see where it lands in the translation; click any foreign
+  word anywhere to hear it), listening cards with **Slowly** and hidden text for dictation, role-play dialogues where
+  your lines stay hidden until you reveal them, conjugation tables with the stem and the ending in different colours,
+  and tone diagrams for Mandarin.
+* **Tests:** **Say it** questions listen through the microphone in the target language (the Mac asks for permission the
+  first time) and show which words it understood; dictation questions play the audio first; where accents matter, the
+  mentor grades them strictly.
+* **Dictation in the target language.** With a target language set, the microphone button in the message box offers to
+  dictate in it as well as in your own language.
+* **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
+  flashcards in a "<Language> vocabulary" deck, reviewed in Flashcards; the mentor opens lessons with the ones due.
+  **Progress › Languages** shows each language's level and how many words are new, learning and known.
 
 ## Practice tools
 
-* **Quizzes and forms** come in 13 question types, graded instantly where possible:
+* **Quizzes and forms** come in 14 question types, graded instantly where possible:
   * choice: single choice, multiple choice, true/false;
   * typed: short text, long text, numeric (units and ranges), fill in the blanks;
   * structured: ordering, matching, scale;
-  * work: code, math (checked symbolically with SymPy, with a live preview) and drawing.
+  * work: code, math (checked symbolically with SymPy, with a live preview), drawing, and **say it** (speech, in the language being learned).
 * **Practice cards** are quick self-checks: try, reveal, then mark **Got it** or **Missed**.
 * **Worked examples** are revealed one step at a time.
 * **Flashcards** (⌥⌘1) use FSRS spaced repetition. Ask the teacher to "make flashcards" from any lesson. While
   reviewing, Space shows the answer and keys 1–4 rate it (Again, Hard, Good, Easy). A card you forget comes back later
   in the same session, and in your next lesson.
-* **Learning plans.** Ask for a plan for a bigger goal ("I want to be ready for my calculus exam in six weeks"). Plans
-  appear in Progress, where **Continue this plan** picks up the next module.
+* **Course board.** Ask for a plan for a bigger goal ("I want to be ready for my calculus exam in six weeks"). The
+  teacher keeps it on a board of cards: one **focus** card with the concrete next action, what comes next, what is
+  done (only with evidence: a quiz, an exercise, an explanation), and **parked** questions. A detour doesn't lose
+  the thread: the teacher answers, parks it if it's worth returning to, and comes back to the focus. The board is
+  the **Plan** tab of the right panel and the one-line strip above the message box; there you can save a question
+  for later or ask for a check on a card. Boards appear in Progress too, where **Continue this course** starts a
+  new lesson that picks up exactly where the board says.
 
 ## Memory
 
 **Memory** (⌥⌘3) is the teacher's model of you. You can edit or delete anything in it.
-
+  Each card can carry an outline of sections and subsections, so the course reads like a book's table of contents; the
+  board marks sections as you finish them and always knows which one you're on, across detours, summaries and lessons.
 * **Overview**:
   * where you stand: concepts that are solid, learning, need work or are fading;
   * what you're ready to learn next (everything it builds on is solid);
@@ -202,7 +249,7 @@ merges duplicates. Turn it off in **Settings › Memory**, where you can also ch
 * **Confidence check**: how often you're right when you're guessing, unsure or sure, and the hints and solutions you've
   used;
 * **Coming back to**: the re-checks and transfer checks that are scheduled;
-* learning plans, recent quizzes and model usage.
+* course boards, recent quizzes and model usage.
 
 ## Code sessions
 
@@ -243,10 +290,11 @@ Stop the agent any time with ⌘. or Esc twice.
 
 | Tab | What's there |
 |---|---|
-| General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), text size, tool steps per turn, context budget, local A/B experiments, Insights telemetry |
+| General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), the course board system (book outlines, cards only, or off; each is explained under the picker), text size, an optional limit on tool steps per reply (none by default: the teacher works until the reply is done; ⌘. stops it), context budget, local A/B experiments, Insights telemetry |
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
 | Agents | Sub-agent defaults, limits and custom agent types |
+| Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide, the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
 | Voice | Read-aloud voice and speed |
 

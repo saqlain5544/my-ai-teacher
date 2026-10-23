@@ -13,9 +13,14 @@ enum APIKind: String, Codable, CaseIterable, Sendable, Identifiable {
 }
 
 enum ThinkingLevel: String, Codable, CaseIterable, Sendable, Identifiable {
-    case off, low, medium, high
+    case off, low, medium, high, max
     var id: String { rawValue }
-    var budget: Int { switch self { case .off: 0; case .low: 2048; case .medium: 8192; case .high: 24576 } }
+    var budget: Int { switch self { case .off: 0; case .low: 2048; case .medium: 8192; case .high: 24576; case .max: 32768 } }
+
+    /// What the model can take: `max` only where the model lists it (DeepSeek V4, Claude); elsewhere `high`.
+    func supported(by info: ModelInfo?) -> ThinkingLevel {
+        self == .max && !(info?.efforts?.contains("max") ?? false) ? .high : self
+    }
 }
 
 struct ToolSpec: Sendable {
@@ -37,6 +42,9 @@ struct LLMRequest: Sendable {
     var thinking: ThinkingLevel = .off
     /// Stable for one lesson (or sub-agent run): providers with a `sessionHeader` route and cache by it.
     var sessionID: String?
+    /// Explicit prompt-cache breakpoints (Anthropic). Off for one-off calls whose prefix no later request can reuse:
+    /// writing a cache entry nobody reads costs more than the tokens it would save.
+    var cache = true
 }
 
 enum StreamEvent: Sendable {

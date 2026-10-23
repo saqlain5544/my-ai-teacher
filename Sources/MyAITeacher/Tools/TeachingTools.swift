@@ -96,76 +96,177 @@ struct MasteryTool: Tool {
     }
 }
 
-// MARK: - Lesson plan
+// MARK: - Lesson plan (the course board)
 
 struct LessonPlanTool: Tool {
     let name = "lesson_plan"
     let description = """
-    Create and maintain a structured learning plan (curriculum) for a goal. action="create" with title, subject, goal and \
-    modules (each with title, objectives, status todo|in_progress|done); action="update" to change module statuses or add modules \
-    (pass the full modules array); action="get"/"list" to read plans. The learner sees plans in the Progress screen.
+    The course board: the plan for a goal that spans more than one reply (a course, an exam, a project), kept across lessons. \
+    Cards have stable ids (C1, C2…) and a lane: backlog | doing (the ONE focus card) | review | done | parked (detours, with a \
+    reason). action="create" (title, subject, goal, deadline, modules → cards; start with 4–8 cards and a concrete `next` on the \
+    first); "add" (title, lane, next, objectives, after, concept); "start" (card, next; replace=true sends the old focus back); \
+    "park" (card, reason); "resume" (card); "complete" (card, evidence — required); "note" (card, text and/or next); "move" (card, \
+    lane, position); "outline" (card, outline: the chapter as sections with points and subsections, like a book's table of \
+    contents — refining it keeps progress); "section" (card, section id or title: done, moving on to the next); "get" (the \
+    whole board); "list" (all boards); "update" (title/goal/deadline, or the legacy full modules list). Mutations return the compact state; the app also appends the live <lesson_state> to each learner message.
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         let module = Schema.object([
-            "title": Schema.string("Module title."),
+            "title": Schema.string("Card title."),
             "objectives": Schema.array(Schema.string("Objective"), "Learning objectives."),
             "status": Schema.string("Status.", enum: ["todo", "in_progress", "done"]),
+            "next": Schema.string("The concrete next action for this card."),
+            "concept": Schema.string("The `mastery` concept this card teaches."),
             "notes": Schema.string("Notes."),
+            "outline": Self.outlineSchema,
         ], required: ["title"])
         return Schema.object([
-            "action": Schema.string("Action.", enum: ["create", "update", "get", "list"]),
-            "id": Schema.string("Plan id (for update/get)."),
-            "title": Schema.string("Plan title."),
+            "action": Schema.string("Action.", enum: ["create", "add", "start", "park", "resume", "complete", "note", "move", "outline", "section", "get", "list", "update"]),
+            "plan": Schema.string("Board id or title (optional: the lesson's board is used)."),
+            "id": Schema.string("Alias: the board id for get/update, or the card for card actions."),
+            "card": Schema.string("Card id (C1) or title, for start/park/resume/complete/note/move."),
+            "title": Schema.string("Board title (create/update) or the new card's title (add)."),
             "subject": Schema.string("Subject."),
-            "goal": Schema.string("What the learner wants to achieve, and by when."),
-            "modules": Schema.array(module, "Ordered modules."),
+            "goal": Schema.string("What the learner wants to achieve, and why."),
+            "deadline": Schema.string("Deadline day, YYYY-MM-DD (the exam, the end of the course)."),
+            "modules": Schema.array(module, "Ordered cards (create, or a legacy full-list update)."),
+            "lane": Schema.string("Lane for add/move.", enum: ["backlog", "doing", "review", "done", "parked"]),
+            "next": Schema.string("The one concrete next action (add/start/note): a task, not a topic."),
+            "objectives": Schema.array(Schema.string("Objective"), "Objectives of the new card (add)."),
+            "after": Schema.array(Schema.string("Card id"), "Prerequisite card ids (add)."),
+            "concept": Schema.string("The `mastery` concept the card teaches (add)."),
+            "text": Schema.string("Note text (note), or the new card's note (add)."),
+            "reason": Schema.string("Why it is parked (park, or add with lane=parked)."),
+            "evidence": Schema.string("What shows the card is done: a quiz score, an exercise pass, a correct explanation (complete)."),
+            "replace": Schema.boolean("start: send the current focus back to the backlog instead of failing."),
+            "position": Schema.integer("Index in the board after add/move (0 = first)."),
+            "outline": Self.outlineSchema,
+            "section": Schema.string("Section id (\"2.3\") or title, for action=section."),
+            "done": Schema.boolean("section: mark it done (default) or reopen it (false)."),
         ], required: ["action"])
     }
-    func summary(_ input: JSON) -> String { "\(input["action"]?.string ?? "") \(input["title"]?.string ?? input["id"]?.string ?? "")" }
+    /// A chapter written out as a book's table of contents: sections, their key points, and subsections.
+    static var outlineSchema: JSON {
+        let leaf = Schema.object(["title": Schema.string("Subsection title."), "points": Schema.array(Schema.string("Point"), "What it covers.")], required: ["title"])
+        let section = Schema.object(["title": Schema.string("Section title."), "points": Schema.array(Schema.string("Point"), "What it covers."),
+                                     "sections": Schema.array(leaf, "Subsections.")], required: ["title"])
+        return Schema.array(section, "The card's outline, as a book chapter: sections with points and subsections (outline/create/add).")
+    }
+    func summary(_ input: JSON) -> String {
+        "\(input["action"]?.string ?? "") \(input["title"]?.string ?? input["card"]?.string ?? input["id"]?.string ?? input["plan"]?.string ?? "")"
+    }
+
+    /// Board changes are read–modify–write on one row: calls in parallel (a model often sends several `add`s at once)
+    /// each read the same board and the last save won — two cards got the same id and one was lost. One at a time.
+    static let writes = NSLock()
+
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        try Self.writes.withLock { try apply(input, ctx) }
+    }
+
+    private func apply(_ input: JSON, _ ctx: ToolContext) throws -> ToolOutput {
         let study = ctx.services.study
-        let notify = { EventBus.publish(.studyDataChanged) }
-        switch input["action"]?.string ?? "list" {
+        let action = input["action"]?.string ?? "list"
+        func finish(_ b: CourseBoard, _ line: String, full: Bool = false) -> ToolOutput {
+            study.save(b, conversationID: ctx.conversationID)
+            EventBus.publish(.studyDataChanged)
+            let text = line + "\n" + (full ? b.markdown() : b.header())
+            return ToolOutput(text: text, meta: ["id": .string(b.id), "plan": b.summaryJSON, "header": .string(b.header())])
+        }
+        switch action {
         case "create":
             let id = "plan-" + UUID().uuidString.prefix(8).lowercased()
-            let p = LessonPlan(id: id, title: input["title"]?.string ?? "Learning plan", subject: input["subject"]?.string,
-                               goal: input["goal"]?.string, data: ["modules": input["modules"] ?? []], updatedAt: Date())
-            study.savePlan(p, conversationID: ctx.conversationID)
-            notify()
-            return ToolOutput(text: "Created plan \(id): \(p.title) with \(input["modules"]?.array?.count ?? 0) modules.\n" + render(p), meta: ["id": .string(id)])
-        case "update":
-            guard let id = input["id"]?.string ?? input["title"]?.string, var p = study.plan(id) else { return .error("Plan not found. Use action=list.") }
-            if let t = input["title"]?.string { p.title = t }
-            if let g = input["goal"]?.string { p.goal = g }
-            if let s = input["subject"]?.string { p.subject = s }
-            if let m = input["modules"] { p.data = ["modules": m] }
-            study.savePlan(p, conversationID: ctx.conversationID)
-            notify()
-            return ToolOutput(text: "Updated plan.\n" + render(p))
-        case "get":
-            guard let id = input["id"]?.string ?? input["title"]?.string, let p = study.plan(id) else { return .error("Plan not found.") }
-            return ToolOutput(text: render(p))
-        default:
+            var b = CourseBoard(plan: LessonPlan(id: id, title: input["title"]?.string ?? "Learning plan", subject: input["subject"]?.string,
+                                                 goal: input["goal"]?.string, data: ["modules": input["modules"] ?? []], updatedAt: Date()))
+            b.deadline = input["deadline"]?.string.flatMap { CourseBoard.day.date(from: $0) }
+            for (i, m) in (input["modules"]?.array ?? []).enumerated() where i < b.cards.count {
+                if let n = m["next"]?.string, !n.isEmpty { b.cards[i].next = n }
+                if let k = m["concept"]?.string, !k.isEmpty { b.cards[i].concept = k }
+            }
+            if b.focusID == nil, let first = b.cards.first(where: { $0.lane == .backlog }) { b.cards[b.cards.firstIndex(of: first)!].lane = .doing; b.focusID = first.id }
+            if let f = b.focusID, let n = input["next"]?.string, !n.isEmpty, let i = b.cards.firstIndex(where: { $0.id == f }) { b.cards[i].next = n }
+            b.revision = 1
+            b.log = [CourseBoard.Entry(rev: 1, at: Date(), actor: "mentor", event: "create", card: nil, note: "\(b.cards.count) cards")]
+            return finish(b, "Created board \(id): \(b.title) with \(b.cards.count) card(s).", full: true)
+        case "list":
             let plans = study.plans()
-            if plans.isEmpty { return ToolOutput(text: "No plans yet.") }
-            return ToolOutput(text: plans.map { "\($0.id): \($0.title)\($0.subject.map { " (\($0))" } ?? "") — \(progress($0))" }.joined(separator: "\n"))
+            if plans.isEmpty { return ToolOutput(text: "No boards yet.") }
+            let linked = study.boardID(forLesson: ctx.conversationID)
+            return ToolOutput(text: plans.map { p in
+                let b = CourseBoard(plan: p)
+                return "\(p.id): \(p.title)\(p.subject.map { " (\($0))" } ?? "") — \(b.doneCount)/\(b.courseCount) done" +
+                    (b.focus.map { "; focus \($0.id.uppercased()) \($0.title)" } ?? "") + (p.id == linked ? " ← this lesson" : "")
+            }.joined(separator: "\n"))
+        default: break
         }
-    }
-    func progress(_ p: LessonPlan) -> String {
-        let mods = p.data["modules"]?.array ?? []
-        let done = mods.filter { $0["status"]?.string == "done" }.count
-        return "\(done)/\(mods.count) modules done"
-    }
-    func render(_ p: LessonPlan) -> String {
-        var s = "# \(p.title) [\(p.id)]\n"
-        if let g = p.goal { s += "Goal: \(g)\n" }
-        for (i, m) in (p.data["modules"]?.array ?? []).enumerated() {
-            let mark = ["done": "✅", "in_progress": "▶️"][m["status"]?.string ?? ""] ?? "⬜️"
-            s += "\(mark) \(i + 1). \(m["title"]?.string ?? "")\n"
-            for o in m["objectives"]?.array?.compactMap(\.string) ?? [] { s += "     - \(o)\n" }
+        // Every other action works on one board: the one named, else this lesson's.
+        let named = input["plan"]?.string ?? (["get", "update"].contains(action) ? input["id"]?.string : nil)
+        let found: CourseBoard? = named.map { study.board($0) } ?? study.board(forLesson: ctx.conversationID)
+        guard var b = found else {
+            return .error(named.map { "No board \"\($0)\". action=list shows them." }
+                          ?? "This lesson has no board yet: action=create one, or name an existing one with plan=<id> (action=list).")
         }
-        return s
+        let cardKey = input["card"]?.string ?? input["id"]?.string ?? ""
+        do {
+            switch action {
+            case "get": return finish(b, "Board \(b.id).", full: true)
+            case "update":
+                if let t = input["title"]?.string, !t.isEmpty { b.title = t }
+                if let g = input["goal"]?.string { b.goal = g }
+                if let s = input["subject"]?.string { b.subject = s }
+                if let d = input["deadline"]?.string { b.deadline = CourseBoard.day.date(from: d) }
+                if let m = input["modules"]?.array { try b.replaceModules(m) }
+                else { b.revision += 1; b.log.append(CourseBoard.Entry(rev: b.revision, at: Date(), actor: "mentor", event: "update", card: nil, note: nil)) }
+                return finish(b, "Updated board.", full: input["modules"] != nil)
+            case "add":
+                let lane = input["lane"]?.string.flatMap(CourseBoard.Lane.init(rawValue:)) ?? .backlog
+                let objectives: [String] = input["objectives"]?.array?.compactMap(\.string) ?? []
+                let after: [String] = input["after"]?.array?.compactMap(\.string) ?? []
+                let note: String? = input["text"]?.string ?? input["notes"]?.string
+                var c = try b.add(title: input["title"]?.string ?? "", lane: lane, next: input["next"]?.string, objectives: objectives, after: after,
+                                  concept: input["concept"]?.string, note: note, reason: input["reason"]?.string, position: input["position"]?.int)
+                if let o = input["outline"]?.array, !o.isEmpty { c = try b.setOutline(c.id, o) }
+                return finish(b, "Added \(c.id.uppercased()) \(c.title) → \(c.lane.rawValue).")
+            case "outline":
+                let c = try b.setOutline(cardKey, input["outline"]?.array ?? [])
+                return finish(b, "Outlined \(c.id.uppercased()) \(c.title): " + (b.position(c) ?? "") + ".")
+            case "section":
+                let c = try b.section(cardKey, input["section"]?.string ?? input["text"]?.string ?? "", done: input["done"]?.bool ?? true)
+                return finish(b, "\(c.id.uppercased()) \(c.title): " + (b.position(c) ?? "") + ".")
+            case "start", "focus":
+                let c = try b.start(cardKey, next: input["next"]?.string, replace: input["replace"]?.bool ?? false)
+                return finish(b, "Focus: \(c.id.uppercased()) \(c.title).")
+            case "park":
+                let c = try b.park(cardKey, reason: input["reason"]?.string ?? input["text"]?.string ?? "")
+                return finish(b, "Parked \(c.id.uppercased()) \(c.title).")
+            case "resume":
+                let c = try b.resume(cardKey)
+                return finish(b, "Resumed \(c.id.uppercased()) \(c.title); it is the focus again.")
+            case "complete":
+                let c = try b.complete(cardKey, evidence: input["evidence"]?.string ?? input["text"]?.string ?? "")
+                var line = "Done: \(c.id.uppercased()) \(c.title)."
+                // Done by evidence while mastery is still low: the gap is surfaced, not hidden, with a review card.
+                if let k = c.concept, let m = study.mastery(subject: b.subject ?? "general", concept: k), m.pKnown < 0.8,
+                   !b.cards.contains(where: { (x: CourseBoard.Card) in x.lane == .review && x.concept?.lowercased() == k.lowercased() }) {
+                    let r = try b.add(title: "Review: \(c.title)", lane: .review, next: "one fresh transfer question on \(k), unaided",
+                                      concept: k, note: "mastery \(Int(m.pKnown * 100))% when \(c.id.uppercased()) was completed", actor: "app")
+                    line += " Mastery of \(k) is \(Int(m.pKnown * 100))%, so \(r.id.uppercased()) was added to Review."
+                }
+                return finish(b, line)
+            case "note":
+                let c = try b.note(cardKey, text: input["text"]?.string, next: input["next"]?.string)
+                return finish(b, "Noted on \(c.id.uppercased()) \(c.title).")
+            case "move":
+                guard let lane = input["lane"]?.string.flatMap(CourseBoard.Lane.init(rawValue:)) else { return .error("move needs a lane: backlog, doing, review, done or parked.") }
+                let c = try b.move(cardKey, to: lane, position: input["position"]?.int, evidence: input["evidence"]?.string, reason: input["reason"]?.string)
+                return finish(b, "Moved \(c.id.uppercased()) \(c.title) → \(lane.rawValue).")
+            default:
+                return .error("Unknown action \"\(action)\". Use create, add, start, park, resume, complete, note, move, get, list or update.")
+            }
+        } catch let e as CourseBoard.Failure {
+            return .error(e.message)
+        }
     }
 }
 

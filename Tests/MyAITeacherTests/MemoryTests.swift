@@ -443,3 +443,14 @@ final class ConceptRoutingTests: XCTestCase {
         XCTAssertNotNil(g.route("what is energy?")[energy])
     }
 }
+
+/// Apple's sentence embedding is English-only in practice: other languages encoded by it were noise (Arabic related and
+/// unrelated sentences both ~0.97 cosine, which the store's thresholds turned into full semantic evidence).
+final class EmbeddingLanguageTests: XCTestCase {
+    func testSemanticVectorsAreEnglishOnlyUntilAMultilingualModelIsBundled() {
+        XCTAssertNotNil(Embedder.shared.vector("The cat sat on the mat"))
+        XCTAssertNil(Embedder.shared.vector("قطة تجلس على السجادة"))
+        XCTAssertNil(Embedder.shared.vector("日本語の文章です。"))
+        XCTAssertNil(Embedder.shared.vector("Кот сидит на коврике"))
+    }
+}
