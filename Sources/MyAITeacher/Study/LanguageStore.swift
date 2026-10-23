@@ -139,6 +139,21 @@ extension StudyStore {
         }
         return s
     }
+    /// Saved Japanese words written with kanji, with their reading in hiragana (from the saved reading, else the system's
+    /// tokenizer): the keyboards offer the kanji when the learner has typed its kana (たべる → 食べる).
+    func kanaWords(lang: String, limit: Int = 600) -> [(term: String, kana: String)] {
+        guard Languages.code(lang) == "ja" else { return [] }
+        return vocab(lang: "ja", limit: limit).compactMap { v in
+            guard v.term.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }) else { return nil }
+            let isKana: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { (0x3041...0x30FC).contains($0.value) } }
+            let saved = (v.reading ?? "").split(whereSeparator: { $0 == " " || $0 == "/" || $0 == "," || $0 == "（" || $0 == "(" })
+                .map(String.init).first { !$0.isEmpty && $0.allSatisfy(isKana) }
+            let kana = saved ?? TextAnalysis.japaneseTokens(v.term).compactMap { t in t.reading?.split(separator: " ").first.map(String.init) ?? (t.text.allSatisfy(isKana) ? t.text : nil) }.joined()
+            guard !kana.isEmpty, kana.allSatisfy(isKana) else { return nil }
+            return (v.term, ScriptComposer.toHiragana(kana))
+        }
+    }
+
     /// Languages with saved words, most recently added first.
     func vocabLanguages() -> [String] {
         ((try? db.query("SELECT lang, MAX(created_at) AS t FROM vocab GROUP BY lang ORDER BY t DESC")) ?? []).compactMap { $0.string("lang") }

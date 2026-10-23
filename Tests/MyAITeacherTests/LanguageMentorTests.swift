@@ -81,7 +81,7 @@ final class LanguageMentorTests: XCTestCase {
         XCTAssertNil(KeyboardLayouts.layout(for: "sw"), "a plain-Latin language shows no panel")
         XCTAssertNil(KeyboardLayouts.layout(for: "xx")); XCTAssertNotNil(KeyboardLayouts.layout(for: "ja-JP"))
         for (code, l) in layouts {
-            for row in l.rows + (l.shift ?? []) { for k in row { if case .fn(let f) = k { XCTAssertTrue(["shift", "bksp", "space", "enter", "dakuten", "handakuten", "small", "kana", "tone", "mode"].contains(f), "\(code): unknown key \(f)") } } }
+            for row in l.rows + (l.shift ?? []) { for k in row { if case .fn(let f) = k { XCTAssertTrue(["shift", "bksp", "space", "enter", "dakuten", "handakuten", "small", "kana", "tone", "tone1", "tone2", "tone3", "tone4", "mode"].contains(f), "\(code): unknown key \(f)") } } }
         }
         XCTAssertTrue(KeyboardLayouts.parse("// x = y\nwindow.TeacherKeyboardLayouts = {\"xx\": {\"name\": \"X\", \"english\": \"X\", \"rows\": [[\"a\", {\"k\": \"bksp\"}]]}};")["xx"]!.rows[0] == [.text("a"), .fn("bksp")])
     }

@@ -10,6 +10,9 @@ struct Composer: View {
     @State private var height: CGFloat = 24
     @State private var focusTick = 0
     @State private var showKeyboard = false
+    /// The learner's saved words with their kana (kanji candidates on the keyboard), for the lesson's target language.
+    @State private var kanaWords: [(term: String, kana: String)] = []
+    @State private var kanaWordsLang: String?
 
     var body: some View {
         VStack(spacing: 6) {
@@ -25,7 +28,13 @@ struct Composer: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
             }
             if showKeyboard, let layout = KeyboardLayouts.layout(for: session.language?.target) {
-                ScriptKeyboardView(layout: layout) { showKeyboard = false }
+                FirstMouse {
+                    ScriptKeyboardView(layout: layout, sessionID: session.id, words: kanaWords, draft: session.draft) {
+                        showKeyboard = false
+                        InputSources.restore()
+                    }
+                }
+                .onAppear { loadKanaWords(layout.code) }
             }
             VStack(alignment: .leading, spacing: 6) {
                 if !session.attachments.isEmpty {
@@ -48,13 +57,29 @@ struct Composer: View {
                                             session.attachments.append(Attachment(name: "Pasted image", block: m.block, thumbnail: img))
                                         }
                                     },
-                                    focusTick: focusTick)
+                                    focusTick: focusTick,
+                                    sessionID: session.id,
+                                    // Learning a language: the spell-checker would underline the target language as misspelt English
+                                    // (and the learner's own mistakes are theirs to find).
+                                    spellCheck: session.conversation.mode != .language && session.language?.target == nil)
                         .frame(height: min(max(height, 24), 220))
                     if let layout = KeyboardLayouts.layout(for: session.language?.target) {
-                        Button { showKeyboard.toggle() } label: {
-                            Image(systemName: showKeyboard ? "keyboard.fill" : "keyboard").foregroundStyle(showKeyboard ? Color.accentColor : .secondary)
+                        // Labelled with the language, so it's found: a bare keyboard icon went unnoticed. The first click works
+                        // even while the window isn't key (a SwiftUI button there only activated the window).
+                        FirstMouse {
+                            Button { showKeyboard.toggle(); UserDefaults.standard.set(true, forKey: "kbd.seen.\(layout.code)") } label: {
+                                HStack(spacing: 3) {
+                                    Image(systemName: showKeyboard ? "keyboard.fill" : "keyboard")
+                                    Text(layout.name.components(separatedBy: " · ").first ?? layout.name).font(.caption)
+                                }
+                                .padding(.horizontal, 7).padding(.vertical, 3)
+                                .background(Capsule().fill(showKeyboard || !UserDefaults.standard.bool(forKey: "kbd.seen.\(layout.code)") ? Color.accentColor.opacity(0.15) : Color.primary.opacity(0.05)))
+                                .foregroundStyle(showKeyboard ? Color.accentColor : .secondary)
+                                .contentShape(Capsule())
+                            }
+                            .buttonStyle(.plain).accessibilityLabel("On-screen \(layout.english) keyboard").help("\(layout.english) keyboard (\(layout.name)), and the Mac's own input source for it")
                         }
-                        .buttonStyle(.borderless).accessibilityLabel("On-screen keyboard").help("\(layout.english) keyboard (\(layout.name))").padding(.bottom, 4)
+                        .fixedSize().padding(.bottom, 2)
                     }
                     if speech.isListening {
                         Button { speech.stopListening() } label: { Image(systemName: "mic.fill").foregroundStyle(.red) }
@@ -104,6 +129,12 @@ struct Composer: View {
         .frame(maxWidth: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: .focusComposer)) { _ in focusTick += 1 }
         .onAppear { focusTick += 1 }
+    }
+
+    private func loadKanaWords(_ lang: String) {
+        guard kanaWordsLang != lang else { return }
+        kanaWordsLang = lang
+        kanaWords = lang == "ja" ? session.services.study.kanaWords(lang: lang) : []
     }
 
     private var placeholder: String {
@@ -225,6 +256,8 @@ struct GrowingTextView: NSViewRepresentable {
     var onPasteFiles: ([URL]) -> Void
     var onPasteImage: (NSImage) -> Void
     var focusTick: Int
+    var sessionID = ""
+    var spellCheck = true
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -246,7 +279,10 @@ struct GrowingTextView: NSViewRepresentable {
         tv.isAutomaticQuoteSubstitutionEnabled = false
         tv.isAutomaticDashSubstitutionEnabled = false
         tv.isAutomaticTextReplacementEnabled = false
-        tv.isContinuousSpellCheckingEnabled = true
+        tv.isContinuousSpellCheckingEnabled = spellCheck
+        tv.isAutomaticSpellingCorrectionEnabled = false   // the learner's spelling is theirs (never silently "fixed")
+        tv.isGrammarCheckingEnabled = false
+        tv.isAutomaticTextCompletionEnabled = false
         tv.isVerticallyResizable = true
         tv.isHorizontallyResizable = false
         tv.autoresizingMask = [.width]
@@ -257,9 +293,9 @@ struct GrowingTextView: NSViewRepresentable {
         context.coordinator.textView = tv
         // Keys from the on-screen keyboard land at this view's caret (composition needs the text before it).
         context.coordinator.keyObserver = NotificationCenter.default.addObserver(forName: .composerKey, object: nil, queue: .main) { [weak tv] n in
-            // Only the composer in the window the key was pressed in (every open lesson has one); a reset goes to all.
-            guard let tv, let w = tv.window, let e = n.object as? KeyboardKeyEvent, e.key == .fn("reset") || w.isKeyWindow else { return }
-            MainActor.assumeIsolated { tv.apply(e) }
+            // Only the composer of the lesson whose keyboard was pressed (every open lesson has one).
+            guard let tv, let e = n.object as? KeyboardKeyEvent else { return }
+            MainActor.assumeIsolated { if e.sessionID == tv.sessionID { tv.apply(e) } }
         }
         return scroll
     }
@@ -270,10 +306,13 @@ struct GrowingTextView: NSViewRepresentable {
         tv.onSubmit = onSubmit
         tv.onPasteFiles = onPasteFiles
         tv.onPasteImage = onPasteImage
+        tv.sessionID = sessionID
+        tv.spellCheck = spellCheck
+        if tv.isContinuousSpellCheckingEnabled && !spellCheck { tv.isContinuousSpellCheckingEnabled = false }
         if tv.placeholder != placeholder { tv.placeholder = placeholder; tv.needsDisplay = true }
         if tv.string != text {
             tv.string = text; context.coordinator.recalc() ; tv.needsDisplay = true
-            if text.isEmpty { tv.isContinuousSpellCheckingEnabled = true }   // sent: back to the learner's own language
+            if text.isEmpty, spellCheck { tv.isContinuousSpellCheckingEnabled = true }   // sent: back to the learner's own language
         }
         if context.coordinator.lastFocus != focusTick {
             context.coordinator.lastFocus = focusTick
@@ -307,11 +346,25 @@ final class ComposerTextView: NSTextView {
     var onPasteFiles: (([URL]) -> Void)?
     var onPasteImage: ((NSImage) -> Void)?
     var placeholder = ""
+    var sessionID = ""
+    /// The lesson allows the spell-checker (not while a language is being learned).
+    var spellCheck = true
 
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36 || event.keyCode == 76
         if isReturn && !hasMarkedText() && !event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.option) {
             onSubmit?(); return
+        }
+        let plain = event.modifierFlags.intersection([.command, .control, .option]).isEmpty && !hasMarkedText()
+        // "Mac keys": the physical key types the script in its standard layout (ЙЦУКЕН, Arabic PC, 2-set Korean…).
+        if plain, mode == "keys", let l = layout, let ch = KeyboardLayouts.physicalChar(l, keyCode: event.keyCode, shift: event.modifierFlags.contains(.shift)) {
+            apply(KeyboardKeyEvent(key: .text(ch), layout: l, shift: false, katakana: katakana, mode: mode, sessionID: sessionID))
+            NotificationCenter.default.post(name: .composerKeyFlash, object: ch)
+            return
+        }
+        // Hangul backspace removes one jamo, as Korean keyboards do.
+        if plain, event.keyCode == 51, let l = layout, l.compose == "hangul", selectedRange().length == 0, let p = before(1).text.first, ScriptComposer.decompose(p) != nil {
+            apply(KeyboardKeyEvent(key: .fn("bksp"), layout: l, shift: false, katakana: false, mode: mode, sessionID: sessionID)); return
         }
         super.keyDown(with: event)
     }
@@ -339,8 +392,11 @@ final class ComposerTextView: NSTextView {
 
     // MARK: On-screen keyboard
 
-    private var romaji = false
+    private var mode = ""
     private var katakana = false
+    /// The keyboard's layout while it is open (nil: plain typing).
+    private var layout: KeyboardLayouts.Layout?
+    private var romaji: Bool { mode == "romaji" }
 
     /// Typing in the language being learned (the on-screen keyboard, or romaji): the Mac's spell-checker underlines it as
     /// misspelt English, so it's off until the message is sent (an empty composer turns it back on).
@@ -349,7 +405,7 @@ final class ComposerTextView: NSTextView {
     }
     override func didChangeText() {
         super.didChangeText()
-        if string.isEmpty, !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
+        if string.isEmpty, spellCheck, !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
     }
 
     /// The character before the caret (a composed character sequence), and the UTF-16 range of the last `n` of them.
@@ -368,15 +424,23 @@ final class ComposerTextView: NSTextView {
 
     func apply(_ e: KeyboardKeyEvent) {
         if e.key == .fn("reset") {   // the keyboard closed: back to plain typing in the learner's own language
-            romaji = false; katakana = false
-            if !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
+            mode = ""; katakana = false; layout = nil
+            if spellCheck, !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
             return
         }
+        layout = e.layout
+        if e.key == .fn("mode") { mode = e.mode; katakana = e.katakana; return }   // a mode change (or the keyboard opening)
         window?.makeFirstResponder(self)
         targetLanguageTyping()
         let prev = before(1).text.first
         switch e.key {
+        case .text(let t) where e.remove > 0:   // a kanji candidate for the kana before the caret
+            replaceBefore(e.remove, with: t)
         case .text(var t):
+            if e.layout.compose == "abugida", selectedRange().length == 0, let m = ScriptComposer.abugida(prev: prev, t) {
+                if !m.isEmpty { replaceBefore(0, with: m) }
+                return
+            }
             if e.layout.compose == "hangul", t.count == 1, ScriptComposer.isJamo(t.first!) { let r = ScriptComposer.hangul(prev: prev, t.first!); replaceBefore(r.remove, with: r.text); return }
             if e.layout.compose == "marks", t.unicodeScalars.allSatisfy({ (0x300...0x36F).contains($0.value) }), let p = prev {
                 let v = (String(p) + t).precomposedStringWithCanonicalMapping
@@ -397,8 +461,9 @@ final class ComposerTextView: NSTextView {
             case "handakuten": if let r = ScriptComposer.voicing(prev: prev, mark: "\u{309A}") { replaceBefore(r.remove, with: r.text) }
             case "small": if let r = ScriptComposer.toggleSmall(prev: prev) { replaceBefore(r.remove, with: r.text) }
             case "tone": if let r = ScriptComposer.cycleTone(before(12).text) { replaceBefore(r.remove, with: r.text) }
+            case "tone1", "tone2", "tone3", "tone4":
+                if let n = Int(f.suffix(1)), let r = ScriptComposer.setTone(before(12).text, n) { replaceBefore(r.remove, with: r.text) }
             case "kana": katakana = e.katakana
-            case "mode": romaji = e.romaji; katakana = e.katakana
             default: break
             }
         }
@@ -406,6 +471,11 @@ final class ComposerTextView: NSTextView {
 
     /// Romaji mode: Latin letters typed on the physical keyboard become kana as soon as a syllable is complete.
     override func insertText(_ string: Any, replacementRange: NSRange) {
+        // Pinyin: a tone digit typed after a syllable marks it (ni3 → nǐ), while the Chinese keyboard is open.
+        if let l = layout, l.compose == "pinyin", let s = string as? String, s.count == 1, let d = Int(s), (0...5).contains(d), selectedRange().length == 0,
+           let p = before(1).text.first, p.isLetter, let r = ScriptComposer.setTone(before(12).text, d) {
+            replaceBefore(r.remove, with: r.text); return
+        }
         super.insertText(string, replacementRange: replacementRange)
         // Punctuation too, as a Japanese input method does: "." → 。, "," → 、, "?" → ？ (the page's keyboard already did).
         guard romaji, let s = string as? String, s.count == 1, let c = s.first, c.isASCII, c.isLetter || "'-.,?!".contains(c), !hasMarkedText() else { return }

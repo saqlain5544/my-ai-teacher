@@ -256,7 +256,13 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func language(_ state: LanguageState?) {
-            run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))")
+            guard let state, let target = state.target, let s = session else { run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))"); return }
+            // The keyboard's extras: the learner's kanji words (candidates while typing kana) and the Mac's own input source.
+            var j = state.json.object ?? [:]
+            let words = s.services.study.kanaWords(lang: target)
+            if !words.isEmpty { j["words"] = .array(words.map { ["term": .string($0.term), "kana": .string($0.kana)] }) }
+            if let src = InputSources.best(for: target) { j["inputSource"] = src.json }
+            run("T.setLanguage(\(JSON.object(j).compact))")
         }
 
         func trimBefore(_ messageID: String, earlier: Int) {
@@ -378,6 +384,15 @@ struct TranscriptView: NSViewRepresentable {
                     EventBus.publish(.studyDataChanged)
                     run("T.notice(\(JSON.string("Saved “\(term)” to your \(Languages.englishName(lang)) vocabulary (reviewed as a flashcard).").compact))")
                 }
+            case "inputSource":
+                // The keyboard panel's "Use Mac input": switch to the language's installed input source, or open Keyboard settings.
+                guard let lang = j["lang"]?.string else { return }
+                switch j["op"]?.string {
+                case "select": InputSources.select(for: lang)
+                case "restore": InputSources.restore()
+                default: InputSources.openSettings()
+                }
+                if let s = session { language(AppModel.shared.extensions.get(LanguageExtension.self)?.state(for: s)) }
             case "memory":
                 app.selection = .memory
             case "older":

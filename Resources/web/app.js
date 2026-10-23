@@ -676,9 +676,11 @@
     processMermaid(node);
   }
   /** A learner's answer is theirs: macOS writing suggestions would otherwise complete it, and its Math Results turn
-   *  "180.156/3=" into "180.156/3=60.052" as they type — the arithmetic an attempt-first problem asks them to do.
+   *  "180.156/3=" into "180.156/3=60.052" as they type — the arithmetic an attempt-first problem asks them to do. The
+   *  spell-checker is off too: a learner's misspelling is theirs to make and the teacher's to find (and its red line
+   *  under every word of a language being learned gave the answer away or was noise).
    *  Every text box the page renders opts out (set on insert, before it can take focus). */
-  const QUIET = { writingsuggestions: 'false', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off' };
+  const QUIET = { writingsuggestions: 'false', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false' };
   function quietInputs(root) {
     const list = root.matches && root.matches('textarea, input') ? [root] : Array.from(root.querySelectorAll('textarea, input'));
     for (const el of list) {

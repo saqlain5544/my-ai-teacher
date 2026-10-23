@@ -1480,6 +1480,56 @@
     T.interaction({ id: 'kb1', kind: 'quiz' }, false); T.status('', false);
   });
 
+  test('language mentor: the keyboard types with the Mac keys, marks tones by digit, offers kanji and the Mac input source', async () => {
+    const QZ = { title: 'Keys', graded: true, questions: [{ type: 'short_text', prompt: 'Write it', answer: 'x', lang: 'ru' }, { type: 'long_text', prompt: 'Essay' }] };
+    const a = A([{ kind: 'toolUse', id: 'kb2', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('quiz me'), a], {});
+    T.interaction({ id: 'kb2', kind: 'quiz', payload: QZ }, true);
+    const card = $('[data-tool-id="kb2"]');
+    for (const f of $$('input.q-text, textarea.q-text', card)) eq(f.getAttribute('spellcheck'), 'false', 'spell-check is off in every answer field');
+    T.setLanguage({ target: 'ru', native: 'en', inputSource: { id: 'com.apple.keylayout.RussianWin', name: 'Russian – PC', enabled: true, selected: false } });
+    const text = $('[data-q-input="0"]', card);
+    ok(/Русский/.test(text.nextElementSibling.textContent), 'the ⌨ toggle names the language: ' + text.nextElementSibling.textContent);
+    text.value = ''; text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    const kbd = $('#kbd'); ok(!kbd.hidden, 'open');
+    ok($('[data-setmode="keys"]', kbd), 'a "Mac keys" mode for a script with a standard layout');
+    click($('[data-setmode="keys"]', kbd));
+    for (const [code, key] of [['KeyG', 'g'], ['KeyH', 'h'], ['KeyB', 'b'], ['KeyD', 'd'], ['KeyT', 't'], ['KeyN', 'n']]) {
+      const ev = new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }); text.dispatchEvent(ev);
+      ok(ev.defaultPrevented, 'the key is taken over');
+    }
+    eq(text.value, 'привет', 'ЙЦУКЕН positions type Russian');
+    const sh = new KeyboardEvent('keydown', { code: 'KeyQ', key: 'Q', shiftKey: true, bubbles: true, cancelable: true }); text.dispatchEvent(sh);
+    eq(text.value.slice(-1), 'Й', 'shifted keys');
+    const cmd = new KeyboardEvent('keydown', { code: 'KeyA', key: 'a', metaKey: true, bubbles: true, cancelable: true }); text.dispatchEvent(cmd);
+    ok(!cmd.defaultPrevented, '⌘-shortcuts are left alone');
+    posts.length = 0; click($('[data-source="select"]', kbd));
+    eq(lastPost('inputSource'), { type: 'inputSource', op: 'select', lang: 'ru' }, 'asks the app to switch the Mac to its Russian input');
+    click($('[data-fn="compact"]', kbd)); ok(document.body.classList.contains('kbd-compact'), 'compact'); click($('[data-fn="compact"]', kbd));
+    // Pinyin: a digit after a syllable marks its tone.
+    T.setLanguage({ target: 'zh', native: 'en' });
+    text.value = ''; text.focus();
+    for (const ch of 'ni3hao3') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'nǐhǎo', 'ni3hao3 → nǐhǎo');
+    click($('[data-fn="tone4"]', kbd)); eq(text.value, 'nǐhào', 'a tone key sets that tone');
+    // Hindi: a vowel letter after a consonant becomes its sign.
+    T.setLanguage({ target: 'hi', native: 'en' });
+    text.value = ''; text.focus();
+    click($('[data-key="क"]', kbd)); click($('[data-key="आ"]', kbd)); click($('[data-key="म"]', kbd));
+    eq(text.value, 'काम', 'क + आ → का');
+    // Japanese: kana that spell a saved word offer its kanji.
+    T.setLanguage({ target: 'ja', native: 'en', words: [{ term: '食べる', kana: 'たべる' }, { term: '担当', kana: 'たんとう' }] });
+    text.value = ''; text.focus();
+    for (const k of ['た', 'へ']) click($('[data-key="' + k + '"]', kbd));
+    click($('[data-fn="dakuten"]', kbd)); click($('[data-key="る"]', kbd));
+    eq(text.value, 'たべる');
+    const cand = $('.kbd-cands [data-cand]', kbd); ok(cand && cand.textContent === '食べる', 'candidate offered: ' + ($('.kbd-cands', kbd) || {}).innerHTML);
+    click(cand); eq(text.value, '食べる', 'the candidate replaces the kana');
+    eq($$('.kbd-grid .kbd-row', kbd).length, 6, 'the kana table is a grid'); ok($('.kbd-gap', kbd), 'with gaps');
+    T.setLanguage(null);
+    T.interaction({ id: 'kb2', kind: 'quiz' }, false); T.status('', false);
+  });
+
   test('language mentor: gloss, listen, dialogue, conjugation and tones render and speak', () => {
     const el = show([
       '```gloss\n{"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]}\n```',
