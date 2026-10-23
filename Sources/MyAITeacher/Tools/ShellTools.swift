@@ -11,22 +11,27 @@ actor ShellState {
     func nextHandle(_ conv: String) -> String { handles[conv, default: 0] += 1; return "B\(handles[conv]!)" }
 
     private var tasks: [String: [String: Task<Void, Never>]] = [:]
-    private var doneEarly: Set<String> = []
+    private var doneEarly: Set<String> = []   // finished before it could be registered
+    private var stopping: Set<String> = []    // cancelled, process not yet gone
     /// Remembers a running background command so Stop can end it.
     func register(_ conv: String, handle: String, task: Task<Void, Never>) {
         if doneEarly.remove("\(conv)/\(handle)") != nil { return }
         tasks[conv, default: [:]][handle] = task
     }
     func finished(_ conv: String, handle: String) {
-        if tasks[conv]?.removeValue(forKey: handle) == nil { doneEarly.insert("\(conv)/\(handle)") }
+        let key = "\(conv)/\(handle)"
+        if stopping.remove(key) != nil { return }
+        if tasks[conv]?.removeValue(forKey: handle) == nil { doneEarly.insert(key) }
         if tasks[conv]?.isEmpty == true { tasks[conv] = nil }
     }
     /// Cancels every background command of the lesson (the processes are terminated) and forgets them.
     func stopAll(_ conv: String) {
-        for t in (tasks[conv] ?? [:]).values { t.cancel() }
+        for (h, t) in tasks[conv] ?? [:] { t.cancel(); stopping.insert("\(conv)/\(h)") }
         tasks[conv] = nil
     }
     func running(_ conv: String) -> [String] { (tasks[conv] ?? [:]).keys.sorted() }
+    /// Stopped commands whose process has not ended yet (tests wait on this).
+    func stillStopping(_ conv: String) -> Int { stopping.filter { $0.hasPrefix(conv + "/") }.count }
 }
 
 struct BashTool: Tool {

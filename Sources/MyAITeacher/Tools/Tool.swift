@@ -194,17 +194,45 @@ enum ProcessRunner {
                     c.resume(returning: ProcessResult(stdout: "", stderr: "Failed to launch \(executable): \(error.localizedDescription)", exitCode: -1, timedOut: false))
                     return
                 }
+                // Cancelled before the launch (Stop right after a background start): the handler had nothing to end.
+                if Task.isCancelled { endTree(p) }
                 if let stdin { inPipe.fileHandleForWriting.write(Data(stdin.utf8)) }
                 try? inPipe.fileHandleForWriting.close()
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                    if p.isRunning { timedOut.value = true; p.interrupt(); p.terminate()
-                        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
-                    }
+                    if p.isRunning { timedOut.value = true; p.interrupt(); endTree(p) }
                 }
             }
         } onCancel: {
-            if p.isRunning { p.terminate() }
+            if p.isRunning { endTree(p) }
         }
+    }
+
+    /// Ends a process and everything it started: SIGTERM to the tree, SIGKILL two seconds later to what is left. A
+    /// shell's children (`zsh -c "sleep 30"`) otherwise outlive it and hold the output pipe open, so the run never
+    /// returns and Stop appears to do nothing.
+    static func endTree(_ p: Process) {
+        let pid = p.processIdentifier
+        killTree(pid, SIGTERM)
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { killTree(pid, SIGKILL) } }
+    }
+    static func killTree(_ root: Int32, _ signal: Int32) {
+        var all = [root], frontier = [root]
+        for _ in 0..<6 {   // depth: a shell, its script, their children…
+            let next = frontier.flatMap(children)
+            if next.isEmpty { break }
+            all += next; frontier = next
+        }
+        for pid in all.reversed() { kill(pid, signal) }
+    }
+    private static func children(of pid: Int32) -> [Int32] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-P", String(pid)]
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return [] }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
     }
 
     /// Finds an executable on the user's PATH.

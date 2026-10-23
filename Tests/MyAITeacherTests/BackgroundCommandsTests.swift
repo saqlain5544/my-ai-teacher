@@ -3,6 +3,8 @@ import XCTest
 
 /// Background shell commands are listed per lesson and end when the lesson is stopped.
 final class BackgroundCommandsTests: XCTestCase {
+    /// Its own shell session: the shell state is app-wide, and other suites use "L" too.
+    let lesson = "bg-" + UUID().uuidString
     var dir: URL!
     var services: Services!
 
@@ -15,7 +17,7 @@ final class BackgroundCommandsTests: XCTestCase {
 
     @MainActor func ctx() -> ToolContext {
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
-        return ToolContext(conversationID: "L", workspace: dir, services: services, interactions: InteractionCenter(), toolCallID: "c",
+        return ToolContext(conversationID: lesson, workspace: dir, services: services, interactions: InteractionCenter(), toolCallID: "c",
                            client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
     }
     func waitEmpty(_ conv: String, seconds: Double) async -> Bool {
@@ -31,17 +33,22 @@ final class BackgroundCommandsTests: XCTestCase {
         let c = await ctx()
         let out = await BashTool.background("sleep 30", input: JSON.object([:]), cwd: dir, ctx: c)
         XCTAssertTrue(out.text.contains("B"), out.text)
-        let running = await ShellState.shared.running("L")
+        let running = await ShellState.shared.running(lesson)
         XCTAssertEqual(running.count, 1)
-        await ShellState.shared.stopAll("L")
-        let empty = await waitEmpty("L", seconds: 2)
+        await ShellState.shared.stopAll(lesson)
+        let empty = await waitEmpty(lesson, seconds: 2)
         XCTAssertTrue(empty)
+        // The process itself ends: the stopped command leaves the "stopping" set once ProcessRunner returns.
+        let end = Date().addingTimeInterval(5)
+        while Date() < end, await ShellState.shared.stillStopping(lesson) > 0 { try? await Task.sleep(nanoseconds: 50_000_000) }
+        let left = await ShellState.shared.stillStopping(lesson)
+        XCTAssertEqual(left, 0, "the sleep was terminated, not left running")
     }
 
     func testAFinishedCommandUnregistersItself() async throws {
         let c = await ctx()
         _ = await BashTool.background("echo hi", input: JSON.object([:]), cwd: dir, ctx: c)
-        let empty = await waitEmpty("L", seconds: 5)
+        let empty = await waitEmpty(lesson, seconds: 5)
         XCTAssertTrue(empty)
     }
 }
