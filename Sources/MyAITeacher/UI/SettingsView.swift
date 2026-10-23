@@ -402,13 +402,17 @@ struct VoiceSettings: View {
                 case .downloadable?, .downloading?:
                     if let p = modelProgress[lang] { ProgressView(value: p).frame(width: 120); Text("\(Int(p * 100))%") }
                     else {
-                        Text(sfOnDevice ? "on device (older recogniser)" : "online (Apple servers) until you download:").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange)
+                        // With Whisper installed the learner is already heard on this Mac: Apple's model is an option, not a fix.
+                        if whisper { Text("on this Mac (Whisper); Apple's model is optional:").foregroundStyle(.green) }
+                        else { Text(sfOnDevice ? "on device (older recogniser)" : "online (Apple servers) until you download:").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
                         Button("Download Apple model") { installModel(lang) }.controlSize(.small)
                     }
-                case .unsupported?: Text(sfOnDevice ? "on device (older recogniser)" : "online only (Apple servers)").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange)
+                case .unsupported?:
+                    if whisper { Text("on this Mac (Whisper)").foregroundStyle(.green) }
+                    else { Text(sfOnDevice ? "on device (older recogniser)" : "online only (Apple servers)").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
                 case nil: Text("checking…").foregroundStyle(.secondary)
                 }
-                if whisper { Text("· Whisper installed").foregroundStyle(.green) }
+                if whisper, case .installed? = models[lang] { Text("· Whisper installed").foregroundStyle(.green) }
                 if let e = modelError[lang] { Text(e).foregroundStyle(.red) }
             }.font(.caption)
         }
@@ -445,6 +449,9 @@ struct VoiceSettings: View {
                     Button("Remove") { open.remove(c.id) }.controlSize(.small)
                 }
             }
+            // One height in every state: a progress bar appearing used to push the rows below it down, so a click aimed
+            // at the next Download button landed on nothing.
+            .frame(height: 34)
             Text(c.detail).font(.caption).foregroundStyle(.secondary)
             if !c.languages.isEmpty {
                 Text("Languages: " + c.languages.prefix(12).map(Languages.englishName).joined(separator: ", ") + (c.languages.count > 12 ? " and \(c.languages.count - 12) more" : ""))

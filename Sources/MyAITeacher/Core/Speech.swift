@@ -330,7 +330,11 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
             let all = samples.all, rate = samples.rate
             Task {
                 var heard = ""
-                if let wav = Self.writeWAV(all, rate: rate) { heard = await OpenSpeech.transcribe(wav, lang: lang) ?? ""; try? FileManager.default.removeItem(at: wav) }
+                // Whisper writes a stock phrase over near-silence ("おめでとうございます", "Thanks for watching"), which
+                // would be graded as what the learner said: no voice in the take, nothing heard.
+                let lv = Self.levels(all, rate: rate), voiced = lv.voiced
+                AppLog.write("whisper take: \(String(format: "%.1f", Double(all.count) / max(rate, 1))) s, voiced \(String(format: "%.2f", voiced)) s, floor \(String(format: "%.4f", lv.floor)), peak \(String(format: "%.4f", lv.peak))")
+                if voiced >= 0.15, let wav = Self.writeWAV(all, rate: rate) { heard = await OpenSpeech.transcribe(wav, lang: lang) ?? ""; try? FileManager.default.removeItem(at: wav) }
                 await MainActor.run { if wasListening { done?(heard) } }
             }
             return
@@ -342,6 +346,32 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         if wasListening { done?(lastText) }
     }
     private var whisperLanguage: String?
+
+    /// Seconds of the recording that stand out as a voice: 30 ms frames well above the take's own noise floor (4×, about
+    /// 12 dB) and above a low absolute floor (-56 dBFS). A denied or muted microphone records zeros; a quiet room records
+    /// a flat floor; both come out near zero. Relative, because a voice heard across a room is quiet but still clear
+    /// above its background (an absolute -42 dB threshold rejected a voice Whisper read perfectly).
+    nonisolated static func voicedSeconds(_ samples: [Float], rate: Double) -> Double {
+        levels(samples, rate: rate).voiced
+    }
+    nonisolated static func levels(_ samples: [Float], rate: Double) -> (voiced: Double, floor: Float, peak: Float) {
+        let frame = max(1, Int(rate * 0.03))
+        var rms: [Float] = []
+        var i = 0
+        while i + frame <= samples.count {
+            var sum: Float = 0
+            for j in i..<(i + frame) { sum += samples[j] * samples[j] }
+            rms.append((sum / Float(frame)).squareRoot())
+            i += frame
+        }
+        guard !rms.isEmpty else { return (0, 0, 0) }
+        let sorted = rms.sorted()
+        let floor = sorted[sorted.count / 10], peak = sorted[sorted.count - 1]
+        // Capped: in a take that is voice from start to end the "floor" is the voice itself.
+        let threshold = max(0.0015, min(floor * 4, 0.004))
+        let voiced = rms.filter { $0 > threshold }.count
+        return (Double(voiced * frame) / max(rate, 1), floor, peak)
+    }
 
     /// The learner's recording as a 16 kHz mono 16-bit WAV (what Whisper reads).
     nonisolated static func writeWAV(_ samples: [Float], rate: Double) -> URL? {

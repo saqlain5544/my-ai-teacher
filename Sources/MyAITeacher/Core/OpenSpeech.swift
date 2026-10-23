@@ -220,13 +220,46 @@ final class OpenSpeech: ObservableObject {
     /// Transcribes a 16 kHz mono WAV with Whisper; nil when it isn't installed or fails.
     nonisolated static func transcribe(_ wav: URL, lang: String?) async -> String? {
         guard recognizer(for: lang), let bin = binary("sherpa-onnx-offline"),
-              let enc = find("whisper", "turbo-encoder.int8.onnx"), let dec = find("whisper", "turbo-decoder.int8.onnx"), let tok = find("whisper", "turbo-tokens.txt") else { return nil }
+              let enc = find("whisper", "turbo-encoder.int8.onnx"), let dec = find("whisper", "turbo-decoder.int8.onnx"), let raw = find("whisper", "turbo-tokens.txt"),
+              let tok = byteSafeTokens(raw) else { return nil }
         var args = ["--whisper-encoder=\(enc.path)", "--whisper-decoder=\(dec.path)", "--tokens=\(tok.path)", "--whisper-task=transcribe", "--num-threads=4"]
         if let lang { args.append("--whisper-language=\(lang)") }
         args.append(wav.path)
         let r = await ProcessRunner.run(bin.path, args, cwd: bin.deletingLastPathComponent(), timeout: 120)
         guard r.exitCode == 0 else { AppLog.write("whisper failed (\(r.exitCode)): \(r.stderr.suffix(300))"); return nil }
-        return parseText(r.stdout)
+        return parseText(r.stdout).map(unescapeBytes)
+    }
+
+    /// Whisper's tokens are byte pieces: a Chinese or Japanese character is often split across two or three of them.
+    /// sherpa-onnx 1.13.8 turns each token into text on its own, so those characters came out empty and were lost
+    /// ("我叫萨姆" → "我叫", 営業部 → 業部). A copy of the tokens file spells every byte above 0x7F (and "%") as an ASCII
+    /// percent-escape, so nothing is lost on the way out; `unescapeBytes` turns the whole text back into UTF-8. Made once,
+    /// next to the verified original.
+    nonisolated static func byteSafeTokens(_ original: URL) -> URL? {
+        let out = original.deletingLastPathComponent().appendingPathComponent("turbo-tokens-bytesafe.txt")
+        if FileManager.default.fileExists(atPath: out.path) { return out }
+        guard let text = try? String(contentsOf: original, encoding: .utf8) else { return original }
+        var lines: [String] = []
+        lines.reserveCapacity(52_000)
+        for line in text.split(separator: "\n", omittingEmptySubsequences: true) {
+            // Not the format we know: use the original as it is (characters may be lost, but recognition still runs).
+            guard let space = line.lastIndex(of: " "), let raw = Data(base64Encoded: String(line[..<space])) else { return original }
+            var esc = ""
+            for b in raw { if b >= 0x80 || b == 0x25 { esc += String(format: "%%%02X", b) } else { esc.unicodeScalars.append(UnicodeScalar(b)) } }
+            lines.append(Data(esc.utf8).base64EncodedString() + String(line[space...]))
+        }
+        do { try (lines.joined(separator: "\n") + "\n").write(to: out, atomically: true, encoding: .utf8) } catch { return original }
+        return out
+    }
+    /// The text from byte-safe tokens back to UTF-8 (invalid sequences become U+FFFD rather than dropping the rest).
+    nonisolated static func unescapeBytes(_ s: String) -> String {
+        guard s.contains("%") else { return s }
+        var bytes: [UInt8] = [], u = Array(s.utf8), i = 0
+        while i < u.count {
+            if u[i] == 0x25, i + 2 < u.count, let v = UInt8(String(decoding: u[(i + 1)...(i + 2)], as: UTF8.self), radix: 16) { bytes.append(v); i += 3 }
+            else { bytes.append(u[i]); i += 1 }
+        }
+        return String(decoding: bytes, as: UTF8.self)
     }
     /// The recognised text from sherpa-onnx-offline's output: a JSON line per file ({"text": …}); parsed leniently (1.13's
     /// JSON can carry raw control characters).

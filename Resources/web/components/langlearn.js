@@ -234,7 +234,8 @@
         if (d && st.final !== false) h += '<div class="sp-diff"><span class="sp-label">Against the sentence:</span> ' + window.TeacherLangWork.diffHTML(d.ops, lang) + '</div>';
         if (st.engine) h += '<div class="sp-engine">' + esc(st.engine) + (st.modelDownload ? ' <button class="btn mini link" data-act="sp-model" data-lang="' + esc(st.modelDownload) + '">Hear me on this Mac instead (download Apple\'s model)</button>' : '') + '</div>';
         if (st.pitch) h += pitchHTML(st.pitch, lang);
-      } else if (active) h += '<div class="q-help">Say the sentence out loud; the Mac listens in ' + (lang ? esc(lang) : 'the target language') + ' and shows what it understood, word by word.</div>';
+      } else if (active && st.silent && !st.recording) h += '<div class="q-help sp-silent">I didn\'t hear anything clear. Speak a little louder or closer to the microphone, then try again.</div>';
+      else if (active) h += '<div class="q-help">Say the sentence out loud; the Mac listens in ' + (lang ? esc(lang) : 'the target language') + ' and shows what it understood, word by word.</div>';
       return h + '</div>';
     },
   });
@@ -244,7 +245,7 @@
     const st = speakState.get(key) || {};
     if (st.recording) { ctx.post({ type: 'dictate', id: key, op: 'stop' }); st.recording = false; }
     else {
-      st.recording = true; st.heard = ''; st.diff = null; st.pitch = null; st.final = false;
+      st.recording = true; st.heard = ''; st.diff = null; st.pitch = null; st.final = false; st.silent = false;
       const q = (questionsFor(card) || [])[qi] || {};
       ctx.post({ type: 'dictate', id: key, lang: el.getAttribute('data-lang') || null, op: 'start', target: String(q.target || q.text || '') });
     }
@@ -257,6 +258,7 @@
     const st = speakState.get(key) || {};
     st.heard = text || st.heard || '';
     st.final = !!final;
+    st.silent = !!final && !st.heard;   // the take had no voice in it: say so instead of resetting without a word
     if (info) { if (info.diff) st.diff = info.diff; if (info.engine) st.engine = info.engine; if (info.pitch) st.pitch = info.pitch; if (info.modelDownload) st.modelDownload = info.modelDownload; }
     if (final) st.recording = false;
     speakState.set(key, st);

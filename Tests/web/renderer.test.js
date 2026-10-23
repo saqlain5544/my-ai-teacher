@@ -1347,6 +1347,17 @@
     const l = $('[data-tool-id="l1"]'); ok(l.textContent.includes('Language') && !/🔧/.test(l.textContent), 'its own card, not the generic one');
   });
 
+  test('a speaking take with no voice says so, instead of resetting without a word', () => {
+    const input = { questions: [{ type: 'speak', prompt: 'Say it', target: 'こんにちは', lang: 'ja' }] };
+    const a = A([{ kind: 'toolUse', id: 'sp9', name: 'ask_learner', input }]);
+    T.reset([U('q'), a], {}); T.interaction({ id: 'sp9', kind: 'ask', payload: input }, true);
+    click($('[data-act="q-speak"]', $('[data-tool-id="sp9"]')));
+    window.TeacherUI.dictation('sp9:0', '', true, {});
+    const card = $('[data-tool-id="sp9"]');
+    ok(card.textContent.includes("didn't hear anything clear") && $('[data-act="q-speak"]', card).textContent.includes('Say it'), card.textContent.slice(0, 200));
+    T.interaction({ id: 'sp9' }, false);
+  });
+
   test('metrics footer expands', () => {
     const a = A('Done', { metrics: { model: 'm', duration: 2, timeToFirstToken: 0.5, usage: { input: 100, output: 300, cacheRead: 900 } }, turn: { duration: 2, steps: 1, usage: { input: 100, output: 300, cacheRead: 900 }, languages: ['en', 'ar'] } });
     T.reset([U('q'), a], {});

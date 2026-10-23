@@ -75,6 +75,39 @@ final class SpeechEngineTests: XCTestCase {
         XCTAssertNil(OpenSpeech.parseText("nothing here"))
     }
 
+    /// Whisper's byte-piece tokens: a character split across tokens must survive (sherpa-onnx 1.13.8 decoded each token
+    /// alone and dropped them: 萨姆 → nothing, 営業部 → 業部).
+    func testWhisperTokensKeepCharactersSplitAcrossTokens() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("wt-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let sa = Array("萨".utf8)   // three bytes: as three tokens, each alone invalid UTF-8
+        let tokens: [[UInt8]] = [Array("我".utf8), [sa[0]], [sa[1]], [sa[2]], Array(" 50%".utf8)]
+        let file = dir.appendingPathComponent("turbo-tokens.txt")
+        try tokens.enumerated().map { Data($1).base64EncodedString() + " \($0)" }.joined(separator: "\n").write(to: file, atomically: true, encoding: .utf8)
+        let safe = try XCTUnwrap(OpenSpeech.byteSafeTokens(file))
+        let decoded = try String(contentsOf: safe, encoding: .utf8).split(separator: "\n").map { line -> String in
+            String(decoding: Data(base64Encoded: String(line.split(separator: " ")[0]))!, as: UTF8.self)
+        }
+        XCTAssertTrue(decoded.allSatisfy { $0.unicodeScalars.allSatisfy(\.isASCII) }, "every token is plain ASCII now: \(decoded)")
+        XCTAssertEqual(OpenSpeech.unescapeBytes(decoded.joined()), "我萨 50%", "the runtime's output, joined, decodes back exactly")
+        XCTAssertEqual(OpenSpeech.unescapeBytes("plain text"), "plain text")
+    }
+
+    /// A take with no voice in it never reaches Whisper (it writes a stock phrase over silence).
+    func testSilentTakesAreNotTranscribed() {
+        let rate = 16_000.0
+        let hiss = (0..<16_000).map { _ in Float.random(in: -0.002...0.002) }
+        XCTAssertLessThan(Speech.voicedSeconds(hiss, rate: rate), 0.1, "room noise isn't a voice")
+        let voice = (0..<16_000).map { i in Float(0.2 * sin(Double(i) * 2 * .pi * 220 / rate)) }
+        XCTAssertGreaterThan(Speech.voicedSeconds(hiss + voice, rate: rate), 0.9, "a second of speech-level sound")
+        let farVoice = (0..<16_000).map { i in Float(0.006 * sin(Double(i) * 2 * .pi * 220 / rate)) }   // about -47 dBFS
+        XCTAssertGreaterThan(Speech.voicedSeconds(hiss + farVoice, rate: rate), 0.9, "a voice across the room, still clear above the hiss")
+        XCTAssertEqual(Speech.voicedSeconds([Float](repeating: 0, count: 16_000), rate: rate), 0, "a denied microphone records zeros")
+        let pausesAround = hiss + (hiss.prefix(8_000).enumerated().map { i, n in n + Float(0.006 * sin(Double(i) * 2 * .pi * 220 / rate)) }) + hiss
+        XCTAssertEqual(Speech.voicedSeconds(pausesAround, rate: rate), 0.5, accuracy: 0.05, "half a second of voice between pauses")
+    }
+
     func testPitchContoursCompareTheMelody() {
         func sweep(_ from: Double, _ to: Double, seconds: Double = 1.2, rate: Double = 16_000) -> [Float] {
             let n = Int(seconds * rate)
