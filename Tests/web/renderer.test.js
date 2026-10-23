@@ -1428,6 +1428,107 @@
     ok(worst < 250, 'worst frame ' + worst.toFixed(0) + ' ms');
   });
 
+
+  // ───────────── Language mentor ─────────────
+  test('language mentor: the on-screen keyboard follows the target language and types into quiz fields', async () => {
+    const QZ = { title: 'かな', graded: true, questions: [{ type: 'short_text', prompt: 'Write "hello"', answer: 'こんにちは', lang: 'ja' }, { type: 'numeric', prompt: 'How many?', answer: 3 }] };
+    const a = A([{ kind: 'toolUse', id: 'kb1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('quiz me'), a], {});
+    T.interaction({ id: 'kb1', kind: 'quiz', payload: QZ }, true);
+    T.setLanguage({ target: 'ja', native: 'en', name: '日本語', english: 'Japanese' });
+    const card = $('[data-tool-id="kb1"]');
+    const text = $('[data-q-input="0"]', card); ok(text, 'text field');
+    ok(text.nextElementSibling && text.nextElementSibling.classList.contains('kbd-toggle'), 'a ⌨ toggle beside the text field');
+    ok(!$('[data-q-input="1"]', card).nextElementSibling || !$('[data-q-input="1"]', card).nextElementSibling.classList.contains('kbd-toggle'), 'none beside the number field');
+    text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    const kbd = $('#kbd'); ok(kbd && !kbd.hidden, 'the panel opens when the field takes focus');
+    ok($('select[data-layout]', kbd).value === 'ja', 'Japanese layout chosen');
+    click($('[data-key="こ"]', kbd)); click($('[data-key="ん"]', kbd)); click($('[data-key="に"]', kbd)); click($('[data-key="ち"]', kbd)); click($('[data-key="は"]', kbd));
+    eq(text.value, 'こんにちは', 'keys type into the focused field');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちば', '゛ voices the last kana');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちは', 'and toggles it off');
+    click($('[data-fn="kana"]', kbd)); click($('[data-key="あ"]', kbd)); eq(text.value, 'こんにちはア', 'katakana mode');
+    click($('[data-fn="bksp"]', kbd)); click($('[data-fn="kana"]', kbd));
+    click($('[data-fn="mode"]', kbd)); ok(/romaji/i.test(kbd.textContent), 'romaji mode hint');
+    for (const ch of 'sekai') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかい', 'romaji typed on the keyboard becomes kana');
+    for (const ch of 'kyo') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかいきょ', 'digraphs');
+    click($('[data-fn="mode"]', kbd));
+    // Another language from the menu; a language without a panel hides it.
+    const sel = $('select[data-layout]', kbd); sel.value = 'ko'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    text.value = ''; text.focus();
+    for (const j of 'ㅎㅏㄴㄱㅡㄹ') click($('[data-key="' + j + '"]', kbd));
+    eq(text.value, '한글', 'Hangul jamo compose into syllables');
+    click($('[data-fn="bksp"]', kbd)); eq(text.value, '한그', 'backspace removes one jamo');
+    T.setLanguage({ target: 'zh', native: 'en' });
+    text.value = ''; text.focus();
+    for (const k of ['n', 'i']) click($('[data-key="' + k + '"]', kbd));
+    click($('[data-fn="tone"]', kbd)); eq(text.value, 'nī'); click($('[data-fn="tone"]', kbd)); click($('[data-fn="tone"]', kbd)); eq(text.value, 'nǐ', 'the tone key cycles pinyin tone marks');
+    T.setLanguage({ target: 'sw', native: 'en' });
+    ok($('#kbd').hidden, 'Swahili needs no panel');
+    T.setLanguage(null);
+    T.interaction({ id: 'kb1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: gloss, listen, dialogue, conjugation and tones render and speak', () => {
+    const el = show([
+      '```gloss\n{"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]}\n```',
+      '```listen\n{"lang":"es","text":"¿Dónde está la estación?","translation":"Where is the station?","hide":true}\n```',
+      '```dialogue\n{"lang":"fr","title":"Au café","lines":[{"who":"Serveur","text":"Bonjour, vous désirez ?","translation":"Hello, what would you like?"},{"who":"Vous","text":"Un café, s\'il vous plaît."}],"you":"Vous"}\n```',
+      '```conjugation\n{"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"tú","form":"hablas"},{"person":"él","form":"es","irregular":true}]}\n```',
+      '```tones\n{"text":"nǐ hǎo ma"}\n```',
+    ].join('\n\n'));
+    noErrors(el, 'language components');
+    const g = $('.gloss', el); ok(g, 'gloss');
+    eq($$('.gl-w', g).length, 3); ok($('.gl-w .gw[lang="ja"]', g), 'words tagged with the language');
+    eq($$('.gl-arcs path', g).length, 3, 'alignment lines drawn'); ok($('.gl-legend', g), 'role legend');
+    click($('.gl-w[data-i="1"]', g)); ok($('.gl-t[data-j="3"]', g).classList.contains('hi'), 'clicking a word highlights its translation');
+    const l = $('.listen', el); ok(l, 'listen'); ok($('.ll-text[hidden]', l), 'dictation hides the text');
+    posts.length = 0; click($('[data-act="ll-play"][data-rate]', l));
+    const sp = lastPost('speak'); ok(sp && sp.lang === 'es' && sp.rate < 1, 'slow playback: ' + JSON.stringify(sp));
+    click($('[data-act="ll-reveal"]', l)); ok(!$('.ll-text[hidden]', l), 'text revealed');
+    const d = $('.dialogue', el); ok(d, 'dialogue'); eq($$('.dl-line', d).length, 2);
+    ok($('.dl-you .dl-text[hidden]', d), 'the learner\'s line is hidden'); click($('.dl-you [data-act="ll-reveal"]', d)); ok(!$('.dl-you .dl-text[hidden]', d), 'revealed');
+    const c = $('.conjugation', el); ok(c, 'conjugation'); eq($$('.cj-stem', c).length, 3, 'stem marked in regular forms and the key'); ok($('tr.irr .cj-irregular', c), 'irregular form flagged');
+    const t = $('.tones', el); ok(t, 'tones'); eq($$('.tn-path', t).length, 3); ok($('.tn-path.t3', t), 'third tone contour');
+    ok(t.textContent.includes('tone 3'), 'tone labels');
+  });
+
+  test('language mentor: a speak question records what the Mac heard and submits it', async () => {
+    const QZ = { title: 'Say it', graded: true, questions: [{ type: 'speak', prompt: 'Say good morning', target: 'Buenos días', lang: 'es', reading: 'BWEH-nos DEE-as' }, { type: 'short_text', prompt: 'Dictation', listen: 'Hasta luego', listen_lang: 'es', answer: 'Hasta luego', accents: 'strict' }] };
+    const a = A([{ kind: 'toolUse', id: 'sp1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('test me'), a], {});
+    T.interaction({ id: 'sp1', kind: 'quiz', payload: QZ }, true);
+    const card = $('[data-tool-id="sp1"]');
+    noErrors(card, 'speak quiz');
+    ok($('.q-speak .sp-target[lang="es"]', card), 'target shown in the language');
+    ok($('.quiz-q[data-qi="1"] .ll-player .ll-text[hidden]', card), 'the dictation question plays audio and hides its text');
+    posts.length = 0; click($('[data-act="q-speak"]', card));
+    const d = lastPost('dictate'); ok(d && d.op === 'start' && d.lang === 'es' && d.id === 'sp1:0', 'asks the app to listen in Spanish: ' + JSON.stringify(d));
+    ok($('.q-speak .btn.recording', $('[data-tool-id="sp1"]')), 'recording state');
+    T.dictation('sp1:0', 'buenos', false);
+    ok($('.q-speak .sp-heard', $('[data-tool-id="sp1"]')).textContent.includes('buenos'), 'partial result shown');
+    T.dictation('sp1:0', 'buenos dias', true);
+    const c2 = $('[data-tool-id="sp1"]');
+    ok(!$('.q-speak .btn.recording', c2), 'recording ended');
+    eq($$('.sp-target .ok', c2).length, 2, 'both words matched: ' + $('.sp-target', c2).innerHTML);
+    const dict = $('[data-q-input="1"]', c2); dict.value = 'Hasta luego'; dict.dispatchEvent(new Event('input', { bubbles: true }));
+    posts.length = 0; click($('[data-act="q-submit"]', c2));
+    const ans = lastPost('answer'); ok(ans, 'submitted');
+    eq(ans.value.answers[0].heard, 'buenos dias', 'the recognised text is the answer'); eq(ans.value.answers[0].target, 'Buenos días');
+    eq(ans.value.answers[1], 'Hasta luego');
+    T.interaction({ id: 'sp1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {
+    const el = show('```vocab\n[{"term":"りんご","lang":"ja","reading":"ringo","meaning":"apple","example":"りんごを食べる"}]\n```');
+    const b = $('.vocab-save', el); ok(b, 'save button');
+    posts.length = 0; click(b);
+    const p = lastPost('vocab'); ok(p && p.op === 'add' && p.word.term === 'りんご' && p.word.lang === 'ja' && p.word.reading === 'ringo', JSON.stringify(p));
+    ok(b.disabled && /Saved/.test(b.textContent), 'marked saved');
+  });
+
   // ───────────── Run ─────────────
   let passed = 0, failed = 0;
   for (const t of tests) {

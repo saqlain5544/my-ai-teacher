@@ -60,7 +60,7 @@ Tutors that make students attempt and explain show large gains. So My AI Teacher
 * **Problem cards.** Problems you bring, or that the teacher sets, come as cards. The teacher's hints and worked solution
   stay hidden until you try. Your attempt goes to the teacher, who gives one hint at a time, from a nudge to a full
   solution. If you're stuck for a while, the first hint opens by itself.
-* **Quizzes with 13 question types**, graded instantly, including symbolic math checked with SymPy. Before seeing the
+* **Quizzes with 14 question types**, graded instantly, including symbolic math checked with SymPy. Before seeing the
   result you mark how sure you were (Guessing, Unsure or Sure). A confident mistake gets extra attention.
 * **Wrong answers name the misconception behind them.** The teacher explains it, gives you one near-identical retry,
   remembers it, and checks it again in a later lesson.
@@ -102,6 +102,28 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
   should add, pointing at your lines — with questions and hints rather than code.
 * **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
   teaches with questions, targeted hints and concepts so you find the fix.
+
+### A language mentor
+In **Language mentor** mode you learn a language the way the research says it sticks: comprehensible input one step
+ahead of you, more output than input, immediate correction, and spaced retrieval of every word you meet.
+
+* **It knows what you're learning.** The target language is detected as the lesson goes (what you asked for, which
+  language the replies are tagged with) or set by the mentor after a quick placement, and every request carries the
+  state: language, level, keyboard, words due.
+* **An on-screen keyboard for the script.** Japanese (kana, or romaji typed as kana), Korean (jamo compose into
+  syllables), Chinese pinyin with a tone-mark key, Arabic, Persian, Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi,
+  Bengali, Thai, and accent rows for Spanish, French, German, Portuguese, Vietnamese and twenty more. It appears under
+  any quiz field and above the message box, so a test can ask for the real script.
+* **Lessons that show the language.** Interlinear glosses with word roles and word-order lines to the translation,
+  listening cards with slow playback and hidden text for dictation, role-play dialogues where your lines stay hidden
+  until you've said them, conjugation tables that separate stem from ending, and Mandarin tone contours.
+* **Tests that use your mouth and ears.** `speak` questions listen on-device in the target language and show which
+  words were heard; dictation questions play first and grade strictly; accents can count.
+* **Your vocabulary.** Words the mentor teaches (or you save from a vocabulary card) become flashcards in that
+  language's deck, and the mentor opens each lesson with the ones that are due, used in new sentences. Progress shows
+  each language's level and how many words are new, learning and known.
+* **Language tools, offline.** Transliteration between scripts, word segmentation with parts of speech (Japanese and
+  Chinese included), and Wiktionary definitions, so the mentor checks readings and forms before teaching them.
 
 ### A coding agent too
 **Code sessions** work in a folder, much like Claude Code:

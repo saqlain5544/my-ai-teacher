@@ -299,6 +299,34 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 * The mentor's shell is an ordinary shell in the folder — no scratch sandbox, no hidden test store, no reference
   solution, no leak detector and no CodeMirror bundle. The folder access grant and approval prompts are the boundary.
 
+## Language mentor
+* **Mode `language`** (`Instructions.mode(.language)`), with `language` and `vocab` as core tools (deferred in every
+  other mode, loadable with `load_tools`). `LanguageTool`: profile (target/native/level in the `languages` table),
+  transliterate (ICU `StringTransform`s; romaji through the keyboard's own table, since ICU reads "nn" as a doubled
+  consonant), analyze (`NLTokenizer` word units + `NLTagger` lexical class and lemma, a Latin reading for other scripts),
+  dictionary (Wiktionary's keyless REST definitions). `VocabTool`: the `vocab` table, each row linked to a flashcard in
+  "<Language> vocabulary" (FSRS review in the Flashcards screen; `LanguageStore.swift`).
+* **Runtime detection.** `LanguageExtension` computes a `LanguageState` per lesson: the language the learner asked for
+  (a trigger-word window over their messages against `Languages.names`), else the most frequent non-native language of
+  the replies (`lang=` tags and scripts, cached per message; replies already carry `meta.languages`), with the profile
+  adding the level; the learner's own language is the dominant language of their messages. The state goes to the page
+  (`T.setLanguage`, on reset and after every turn) and to `ChatSession.language` (the composer), and a one-line
+  `<language_state>` is appended to the last learner message of every request (request copy only, like the board card).
+* **Keyboard.** `Resources/web/keyboard-layouts.js` is the one layouts file: the page (`components/keyboard.js`) and the
+  composer (`KeyboardLayouts`, which parses the JSON after the assignment) both read it. Composition lives in both
+  (`keyboard.js` and `ScriptComposer`, with the same tests): Hangul jamo → syllables with compound vowels and finals and
+  jamo-wise backspace; kana ゛゜ and small forms; romaji → kana syllable by syllable as typed; a tone key that cycles
+  pinyin marks by the placement rule; combining marks (Vietnamese tones, niqqud, harakat) folding into the previous
+  letter. On the page the panel opens when an eligible field takes focus (never numeric, math or code fields) and types
+  with `setRangeText` + an input event, so the forms' own validation runs.
+* **Components** (`components/langlearn.js`): `gloss` (interlinear, role colours, SVG alignment arcs drawn on mount and
+  resize), `listen` (speak messages with a `rate` multiplier), `dialogue`, `conjugation`, `tones`; the `speak` question
+  type posts `dictate` (start/stop) and the app streams `T.dictation(key, text, final)` from `Speech.dictate(language:)`,
+  which picks the recogniser locale for the language; `listen` on any question renders the player first. Grading:
+  `accents: "strict"` keeps diacritics in `Questions.norm`; pinyin tone marks and numbers agree (`pinyinNumbers`, only
+  for `lang: zh`); `speak` answers are `{heard, target}` graded by `speechMatch` (words, or characters for scripts
+  without spaces, as a multiset; ≥ 80% is correct).
+
 ## Depth standard
 Every teaching prompt carries the same standard:
 * no toy or textbook-filler examples: real systems, data, papers and failure modes;

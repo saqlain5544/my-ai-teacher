@@ -45,7 +45,7 @@ enum SystemPrompt {
         case "shallow": s += "\n\n" + Instructions.boardShallow
         default: s += "\n\n" + Instructions.text(.board, settings)
         }
-        s += "\n\n" + Instructions.text(.app, settings).replacingOccurrences(of: "{more_tools}", with: ToolRegistry.deferredIndex(lessonID))
+        s += "\n\n" + Instructions.text(.app, settings).replacingOccurrences(of: "{more_tools}", with: ToolRegistry.deferredIndex(lessonID, mode: mode))
         s += """
 
 

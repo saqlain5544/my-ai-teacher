@@ -1329,6 +1329,10 @@
       more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(n).toLocaleString() + ' more)</button>';
     },
     setFontSize(px) { document.documentElement.style.setProperty('--font-size', px + 'px'); },
+    /** The lesson's languages ({target, native, name, …}): the on-screen keyboard follows the target. */
+    setLanguage(state) { if (R.setLanguage) R.setLanguage(state || null); },
+    /** Recognised speech for a `speak` question ("toolId:qi"), partial until `final`. */
+    dictation(key, text, final) { if (R.dictation) R.dictation(key, text, !!final); },
     card(front, back, show) {
       document.body.classList.add('card-mode');
       unmountTree(thread);

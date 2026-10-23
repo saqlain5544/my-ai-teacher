@@ -279,8 +279,16 @@
         '<div class="vocab-meaning">' + ctx.inline(w.meaning || w.translation || '') + '</div>' +
         (w.example ? '<div class="vocab-example"><span' + (lang ? ' lang="' + ctx.esc(lang) + '"' : '') + (rtl ? ' dir="rtl"' : '') + '>' + ctx.esc(w.example) + '</span>' + say(w.example, lang) +
           (w.example_meaning ? '<div class="vocab-ex-meaning">' + ctx.inline(w.example_meaning) + '</div>' : '') + '</div>' : '') +
-        (w.notes ? '<div class="vocab-notes">' + ctx.inline(w.notes) + '</div>' : '') + '</div>';
+        (w.notes ? '<div class="vocab-notes">' + ctx.inline(w.notes) + '</div>' : '') +
+        // Into the learner's own vocabulary (reviewed as flashcards): the app's `vocab` message.
+        '<button class="vocab-save" data-act="vocab-save" data-word="' + ctx.esc(JSON.stringify({ term: w.term || w.word || '', lang, reading: w.reading || w.transliteration || '', meaning: w.meaning || w.translation || '', pos: w.pos || '', example: w.example || '', example_meaning: w.example_meaning || '', notes: w.notes || '' })) + '" title="Save to my vocabulary">＋ Save</button></div>';
     }).join('')) });
+  R.registerAction('vocab-save', (el, e, ctx) => {
+    e.stopPropagation();
+    let word; try { word = JSON.parse(el.getAttribute('data-word')); } catch (_) { return; }
+    ctx.post({ type: 'vocab', op: 'add', word });
+    el.textContent = 'Saved ✓'; el.disabled = true;
+  });
   R.registerAction('say', (el, e, ctx) => { e.stopPropagation(); ctx.post({ type: 'speak', text: el.getAttribute('data-text'), lang: el.getAttribute('data-lang') || null }); });
   R.registerAction('copy-raw', (el, e, ctx) => { ctx.post({ type: 'copy', text: el.getAttribute('data-raw') }); ctx.flash(el, 'Copied'); });
 

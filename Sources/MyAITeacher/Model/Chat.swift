@@ -103,7 +103,7 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
 }
 
 enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
-    case tutor, socratic, explain, quiz, exam, code, eli5, research, agent
+    case tutor, socratic, explain, quiz, exam, code, language, eli5, research, agent
     var id: String { rawValue }
     /// A coding agent (not a tutor): its own prompt, the full coding toolset, project memory instead of the learner's.
     var isAgent: Bool { self == .agent }
@@ -115,6 +115,7 @@ enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .quiz: "Quiz me"
         case .exam: "Exam prep"
         case .code: "Code mentor"
+        case .language: "Language mentor"
         case .eli5: "ELI5"
         case .research: "Research"
         case .agent: "Code agent"
@@ -128,6 +129,7 @@ enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .quiz: "checklist"
         case .exam: "pencil.and.list.clipboard"
         case .code: "chevron.left.forwardslash.chevron.right"
+        case .language: "character.book.closed"
         case .eli5: "face.smiling"
         case .research: "globe"
         case .agent: "hammer"

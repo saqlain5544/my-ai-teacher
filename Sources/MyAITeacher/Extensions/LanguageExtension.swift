@@ -1,13 +1,36 @@
 import Foundation
 import NaturalLanguage
 
-/// Multilingual teaching: prompt guidance for mixed-language output and per-turn language detection.
+/// Which language a lesson is teaching, and in which language the learner is taught: the mentor's profile when it set
+/// one, otherwise read from the lesson itself (what the learner asked for, the languages the replies are tagged with).
+struct LanguageState: Equatable, Sendable {
+    var target: String?        // the language being learned (ISO 639-1)
+    var native: String?        // the learner's own language
+    var level: String?         // CEFR estimate from the profile
+    var profiled = false       // the mentor set the target with `language` action=profile
+    var source = "none"        // profile | asked | content | none
+
+    var hasKeyboard: Bool { KeyboardLayouts.layout(for: target) != nil }
+    /// What the page needs (T.setLanguage): codes, display names, direction.
+    var json: JSON {
+        ["target": target.map { .string($0) } ?? .null, "native": native.map { .string($0) } ?? .null,
+         "name": target.map { .string(Languages.nativeName($0)) } ?? .null, "english": target.map { .string(Languages.englishName($0)) } ?? .null,
+         "level": level.map { .string($0) } ?? .null, "rtl": .bool(target.map { Languages.rightToLeft.contains($0) } ?? false)]
+    }
+}
+
+/// Multilingual teaching: prompt guidance for mixed-language output, per-turn language detection, and the language
+/// mentor's runtime state — the target language is detected as the lesson goes (or set by the mentor), the page gets
+/// the matching on-screen keyboard, and every request carries a `<language_state>` line.
 @MainActor
 final class LanguageExtension: AgentExtension {
     let id = "language"
+    private var states: [String: LanguageState] = [:]      // lesson id → last computed state
+    private var perMessage: [String: [String]] = [:]       // message id → languages in that reply (computed once)
 
     func systemPromptSections(_ session: ChatSession) -> [String] {
-        ["""
+        let full = session.conversation.mode == .language || state(for: session).target != nil
+        var s = """
         # Languages
         - Reply in the learner's language unless they ask otherwise. When teaching a language, mix languages naturally: \
         explanations in the learner's language, examples in the target language.
@@ -18,13 +41,141 @@ final class LanguageExtension: AgentExtension {
         - Give pronunciation for non-Latin scripts: transliteration in parentheses, or ruby annotations \
         (`<ruby>漢字<rt>かんじ</rt></ruby>`, `<ruby>你好<rt>nǐ hǎo</rt></ruby>`).
         - For vocabulary use a ```vocab block (see Rich output). For conjugations/declensions use tables.
-        """]
+        """
+        if full { s += "\n" + Self.componentGuide }
+        return [s]
+    }
+
+    /// The language-learning components and question fields, sent to lessons that teach a language.
+    static let componentGuide = """
+    - Language-learning components (JSON fences): ```gloss {"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I (topic)","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple (object)","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]} — an interlinear sentence with word roles and word-order lines to the translation; ```listen {"lang":"es","text":"…","translation":"…","hide":true} — play / play slowly, text hidden for dictation; ```dialogue {"lang":"fr","title":"…","lines":[{"who":"Serveur","text":"…","translation":"…"},{"who":"Vous","text":"…"}],"you":"Vous"} — role-play: the learner's lines stay hidden until they say them; ```conjugation {"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"él","form":"es","irregular":true}]} — stem and endings told apart; ```tones {"text":"nǐ hǎo"} — Mandarin pitch contours. ```vocab cards carry a Save button (the learner's vocabulary, reviewed as flashcards).
+    - Questions for language tests: type "speak" {"target":"こんにちは","lang":"ja","reading":"konnichiwa"} — they say it, on-device recognition in that language shows what was heard, graded by words matched; any question may carry "listen":"…" (+ "listen_lang") to play audio first with the text hidden (dictation); "accents":"strict" makes diacritics count in short_text and fill_blanks (default: lenient); "lang" on a question picks the on-screen keyboard. The learner has an on-screen keyboard for the target language's script on every text field, so ask for the script, not romanisation, from A2 on.
+    - `language` (profile, transliterate, analyze, dictionary) and `vocab` (the learner's words: add, due, list, search, stats).
+    """
+
+    func willRequest(_ request: inout LLMRequest, session: ChatSession) {
+        guard !session.conversation.mode.isAgent else { return }
+        let st = state(for: session, push: true)
+        if st.target == nil && session.conversation.mode != .language { return }
+        Self.inject(Self.stateLine(st, study: session.services.study), into: &request)
+    }
+
+    /// Appends the line to the last learner message of the request (request copy only, like the course board's card).
+    nonisolated static func inject(_ line: String, into request: inout LLMRequest) {
+        guard let i = request.messages.indices.last, request.messages[i].role == .user else { return }
+        request.messages[i].blocks.removeAll { $0.meta?["languageState"]?.bool == true }
+        request.messages[i].blocks.append(Block(kind: .text, text: line, meta: ["languageState": true]))
+    }
+
+    nonisolated static func stateLine(_ st: LanguageState, study: StudyStore) -> String {
+        guard let t = st.target else {
+            return "<language_state>No target language yet: find out which language they want to learn and their level, then set it with `language` action=profile.</language_state>"
+        }
+        var parts = ["Target language: \(Languages.englishName(t)) (\(t))" + (st.level.map { ", level \($0)" } ?? ", level unknown") + (st.profiled ? "" : " — detected from the lesson, not set: confirm with `language` action=profile")]
+        if let n = st.native { parts.append("learner's language: \(Languages.englishName(n))") }
+        if let kb = KeyboardLayouts.layout(for: t) {
+            parts.append("keyboard: on-screen \(kb.english) keyboard on every answer field" + (kb.modes.contains("romaji") ? " (kana or romaji)" : kb.compose == "pinyin" ? " (pinyin with tone marks; 汉字 via the Mac's input source)" : ""))
+        }
+        let v = study.vocabStats(lang: t)
+        if v.total > 0 { parts.append("vocabulary: \(v.total) words saved, \(v.due) due, \(v.known) known") }
+        else { parts.append("vocabulary: none saved yet (`vocab` add)") }
+        return "<language_state>" + parts.joined(separator: " · ") + "</language_state>"
     }
 
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {
         let text = session.messages.reversed().prefix { !($0.role == .user && !$0.isToolResultOnly) }
             .filter { $0.role == .assistant }.map(\.plainText).joined(separator: "\n")
         metrics.languages = Self.languages(in: text)
+        for m in session.messages.suffix(8) where m.role == .assistant && perMessage[m.id] == nil { perMessage[m.id] = metrics.languages }
+        _ = state(for: session, push: true)
+    }
+
+    func sessionWillClose(_ session: ChatSession) {
+        states[session.id] = nil; pushed[session.id] = nil
+        for m in session.messages { perMessage[m.id] = nil }
+    }
+
+    /// The lesson's language state, recomputed from its messages and the profile. With `push`, the page gets it as soon
+    /// as it differs from what the page was last given (the keyboard appears mid-turn, before the first quiz).
+    @discardableResult
+    func state(for session: ChatSession, push: Bool = false) -> LanguageState {
+        let st = compute(session)
+        if states[session.id] != st {
+            states[session.id] = st
+            DispatchQueue.main.async { if session.language != st { session.language = st } }
+        }
+        if push, pushed[session.id] != st { pushed[session.id] = st; session.sink?.language(st) }
+        return st
+    }
+    private var pushed: [String: LanguageState] = [:]      // lesson id → what the page was last told
+
+    private func compute(_ session: ChatSession) -> LanguageState {
+        let study = session.services.study
+        let profiles = study.languageProfiles()
+        let targets = profiles.filter { $0.role == "target" }
+        let inferred = Self.infer(session.messages, cache: &perMessage)
+        var st = LanguageState()
+        st.native = profiles.first { $0.role == "native" }?.code ?? inferred.native
+        // What this lesson is about wins; the profile adds the level. A lesson that says nothing yet falls back to the
+        // one language the learner is known to be learning.
+        if let asked = inferred.asked, asked != st.native { st.target = asked; st.source = "asked" }
+        else if let c = inferred.content, c != st.native { st.target = c; st.source = "content" }
+        else if targets.count == 1 || (session.conversation.mode == .language && !targets.isEmpty) { st.target = targets[0].code; st.source = "profile" }
+        if let t = st.target, let p = targets.first(where: { $0.code == t }) { st.level = p.level; st.profiled = true; if st.source != "profile" { st.source = "profile" } }
+        if st.target == st.native { st.target = nil; st.source = "none" }
+        return st
+    }
+
+    /// What the lesson says about its languages: the language the learner asked to learn, the most frequent language
+    /// of the replies other than the learner's, and the learner's own language.
+    nonisolated static func infer(_ messages: [ChatMessage], cache: inout [String: [String]]) -> (asked: String?, content: String?, native: String?) {
+        let learner = messages.filter { $0.role == .user && !$0.isToolResultOnly }
+            .map { $0.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") }
+        let native = nativeLanguage(learner.joined(separator: "\n"))
+        var counts: [String: Int] = [:]
+        for m in messages where m.role == .assistant {
+            let langs: [String]
+            if let saved = m.meta?["languages"]?.array?.compactMap(\.string) { langs = saved }
+            else if let c = cache[m.id] { langs = c }
+            else { langs = languages(in: m.plainText); cache[m.id] = langs }
+            for (i, l) in langs.enumerated() { counts[l, default: 0] += i == 0 ? 1 : 2 }   // a second language in a reply is the one being taught
+        }
+        let content = counts.filter { $0.key != native }.max { a, b in a.value != b.value ? a.value < b.value : a.key > b.key }?.key
+        return (asked(learner), content, native)
+    }
+
+    /// The learner's own language: the dominant language of their messages (the Mac's language until they've written enough).
+    nonisolated static func nativeLanguage(_ text: String) -> String? {
+        let fallback = Locale.preferredLanguages.first.map { String($0.prefix(2)) }
+        let clean = text.replacingOccurrences(of: "<[^>]+>", with: " ", options: .regularExpression)
+        guard clean.count >= 20 else { return fallback }
+        let rec = NLLanguageRecognizer()
+        rec.processString(String(clean.suffix(3000)))
+        guard let (l, p) = rec.languageHypotheses(withMaximum: 1).first, p >= 0.5 else { return fallback }
+        return l.rawValue
+    }
+
+    private static let askPattern = try! NSRegularExpression(pattern: #"(?i)\b(learn(?:ing)?|teach(?:\s+me)?|practi[cs](?:e|ing)|stud(?:y|ying)|speak(?:ing)?|improve(?:\s+my)?|lessons?\s+(?:in|on|of)|tutor(?:\s+me)?\s+in|help\s+me\s+with|my)\b([^.!?\n]{0,50})"#)
+    /// "I want to learn Japanese", "teach me some Spanish", "practise my Arabic" → the language named last.
+    nonisolated static func asked(_ texts: [String]) -> String? {
+        let names = Languages.names.keys.sorted { $0.count > $1.count }
+        var found: String?
+        for t in texts {
+            let ns = t as NSString
+            for m in askPattern.matches(in: t, range: NSRange(location: 0, length: ns.length)) {
+                let window = ns.substring(with: m.range(at: 2)).lowercased()
+                for n in names where window.contains(n) {
+                    // A whole word for Latin names ("thai" must not match "thailand"… nor "lao" in "laos" is tolerated).
+                    if n.first!.isASCII, let r = window.range(of: n) {
+                        let after = r.upperBound < window.endIndex ? window[r.upperBound] : " "
+                        let before = r.lowerBound > window.startIndex ? window[window.index(before: r.lowerBound)] : " "
+                        if after.isLetter || before.isLetter { continue }
+                    }
+                    found = Languages.names[n]; break
+                }
+            }
+        }
+        return found
     }
 
     /// Languages present in a text (most frequent first). Conservative: explicit `lang` markup and non-Latin scripts

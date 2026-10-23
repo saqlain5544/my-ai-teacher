@@ -4,7 +4,7 @@ import Foundation
 /// with a matching component; answers come back in the shapes documented below.
 enum Questions {
     static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
-                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing"]
+                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing", "speak"]
 
     /// Compact schema: per-type fields are documented once in `type` instead of on every property.
     /// The error for a call without questions, with a call that works (models fix a shown example; they repeat a bare error).
@@ -20,14 +20,18 @@ enum Questions {
             "type": ["type": "string", "enum": .array(types.map { .string($0) }), "description": """
                 Fields by type — choice types: options[] (+allow_other, multiple_choice: max_select); fill_blanks: text with {{}} per \
                 blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit, min, max, \
-                integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter. \
+                integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter; \
+                speak: target (the sentence to say aloud), lang, reading (the learner speaks; recognition shows what was heard). \
                 Optional on all: hints[] (a ladder, gentlest first: nudge → targeted hint → one step; shown one at a time), concept, \
-                placeholder. The app enforces these while the learner types.
+                placeholder; language tests: lang (ISO code: picks the on-screen keyboard), listen (text read aloud before the \
+                question, hidden: dictation) + listen_lang, accents "strict" (diacritics must match in short_text/fill_blanks). \
+                The app enforces these while the learner types.
                 """],
             "prompt": ["type": "string", "description": "Markdown/LaTeX question text."],
             "options": strs, "text": str, "blank_options": ["type": "array", "items": strs], "items": strs,
             "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
             "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "hints": strs, "concept": str,
+            "target": str, "lang": str, "reading": str, "listen": str, "listen_lang": str, "accents": str,
             "allow_other": ["type": "boolean"],
             "min_length": ["type": "integer"], "max_length": ["type": "integer"], "pattern": str, "integer": ["type": "boolean"],
         ]
@@ -102,6 +106,8 @@ enum Questions {
             case "fill_blanks":
                 let text = q["text"]?.string ?? q["prompt"]?.string ?? ""
                 if !text.contains("{{}}") { errs.append("Q\(n): fill_blanks needs `text` containing {{}} for each blank.") }
+            case "speak":
+                if (q["target"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): speak needs `target`, the sentence to say.") }
             case "": errs.append("Q\(n): missing `type`.")
             default: break
             }
@@ -151,15 +157,57 @@ enum Questions {
         return nil
     }
 
-    static func norm(_ s: String) -> String {
+    /// `strict` keeps diacritics (é ≠ e, ü ≠ u, harakat and tone marks count): language tests ask for them; everything
+    /// else folds them, so "cafe" passes for "café". Pinyin tone marks and tone numbers are the same answer either way.
+    static func norm(_ s: String, strict: Bool = false, pinyin: Bool = false) -> String {
+        // Pinyin: tone marks become numbers (nǐ → ni3), and without `strict` the numbers go too (ni3, nǐ and ni all agree).
+        let s = pinyin ? (strict ? pinyinNumbers(s) : pinyinNumbers(s).replacingOccurrences(of: "(?<=[A-Za-zü])[1-5]", with: "", options: .regularExpression)) : s
         // Punctuation that changes meaning survives: a leading minus (-5 ≠ 5), # and + (C# ≠ C), a decimal point (3.14).
-        s.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        return s.folding(options: strict ? [.caseInsensitive, .widthInsensitive] : [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
             .replacingOccurrences(of: "−", with: "-")
             .replacingOccurrences(of: #"(?<![\w])-(?=\d)"#, with: "\u{1}", options: .regularExpression)
             .replacingOccurrences(of: #"(?<=\d)\.(?=\d)"#, with: "\u{2}", options: .regularExpression)
             .replacingOccurrences(of: #"[^\p{L}\p{N}#+\x{01}\x{02}]+"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\u{1}", with: "-").replacingOccurrences(of: "\u{2}", with: ".")
             .trimmingCharacters(in: .whitespaces)
+    }
+
+    private static let pinyinTones: [Character: (Character, Int)] = {
+        var m: [Character: (Character, Int)] = [:]
+        for (v, marks) in ["a": "āáǎà", "e": "ēéěè", "i": "īíǐì", "o": "ōóǒò", "u": "ūúǔù", "ü": "ǖǘǚǜ", "A": "ĀÁǍÀ", "E": "ĒÉĚÈ", "I": "ĪÍǏÌ", "O": "ŌÓǑÒ", "U": "ŪÚǓÙ", "Ü": "ǕǗǙǛ"] {
+            for (i, c) in marks.enumerated() { m[c] = (Character(v), i + 1) }
+        }
+        return m
+    }()
+    /// Tone marks become tone numbers after each syllable ("nǐ hǎo" → "ni3 hao3"), so marked and numbered pinyin agree.
+    static func pinyinNumbers(_ s: String) -> String {
+        guard s.contains(where: { pinyinTones[$0] != nil }) else { return s }
+        var out = "", tone = 0
+        func flush() { if tone > 0 { out.append(String(tone)); tone = 0 } }
+        for c in s {
+            if let (base, t) = pinyinTones[c] { out.append(base); tone = t }
+            else if c.isLetter || c == "ü" { out.append(c) }
+            else { flush(); out.append(c) }
+        }
+        flush()
+        return out
+    }
+
+    /// How much of `target` the learner's speech contained: words (characters for scripts without spaces) matched as a multiset.
+    static func speechMatch(target: String, heard: String) -> Double {
+        func tokens(_ s: String) -> [String] {
+            let noSpaces = s.trimmingCharacters(in: .whitespaces).contains(" ") == false
+            let cjk = s.unicodeScalars.contains { [.han, .kana, .hangul, .thai].contains(ScriptRuns.script(of: $0)) }
+            if cjk && noSpaces { return s.filter { $0.isLetter || $0.isNumber }.map(String.init) }
+            return norm(s).split(separator: " ").map(String.init)
+        }
+        let t = tokens(target), h = tokens(heard)
+        guard !t.isEmpty else { return 0 }
+        var pool: [String: Int] = [:]
+        for w in h { pool[w, default: 0] += 1 }
+        var hit = 0
+        for w in t where (pool[w] ?? 0) > 0 { pool[w]! -= 1; hit += 1 }
+        return Double(hit) / Double(t.count)
     }
 
     /// The number in an answer: "12 seconds", "12 m/s" → 12; "1 1/2" → 1.5; "3/4"; "3,5" → 3.5; "1,234" → 1234;
@@ -182,6 +230,14 @@ enum Questions {
     static func grade(_ q: JSON, answer a: JSON) async -> Grade {
         let type = q["type"]?.string ?? "single_choice"
         let ans = q["answer"]
+        let strict = q["accents"]?.string?.lowercased() == "strict"
+        let pinyin = (q["lang"]?.string ?? "").lowercased().hasPrefix("zh")
+        if type == "speak" {
+            let target = q["target"]?.string ?? q["text"]?.string ?? ""
+            guard let heard = a["heard"]?.string ?? a.string, !heard.isEmpty else { return Grade(correct: false, score: 0, expected: target) }
+            let s = speechMatch(target: target, heard: heard)
+            return Grade(correct: s >= 0.8, score: s, expected: target)
+        }
         if a.isNull { return Grade(correct: type == "scale" ? nil : false, score: 0, expected: ans.map(describe)) }
         switch type {
         case "single_choice":
@@ -212,17 +268,20 @@ enum Questions {
             let tol = q["tolerance"]?.double ?? max(1e-9, abs(e) * 1e-3)
             return Grade(correct: abs(e - g) <= tol, score: abs(e - g) <= tol ? 1 : 0, expected: describe(ans!))
         case "short_text":
-            let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map(norm)
+            let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
             guard !alts.isEmpty, let g = a.string else { return Grade(expected: ans.map(describe)) }
-            return alts.contains(norm(g)) ? Grade(correct: true, score: 1, expected: describe(ans!)) : Grade(correct: nil, expected: describe(ans!))
+            if alts.contains(norm(g, strict: strict, pinyin: pinyin)) { return Grade(correct: true, score: 1, expected: describe(ans!)) }
+            // Right but for the accents: a mistake in a language test, not a judgement call.
+            if strict, alts.map({ norm($0, pinyin: pinyin) }).contains(norm(g, pinyin: pinyin)) { return Grade(correct: false, score: 0, expected: describe(ans!)) }
+            return Grade(correct: nil, expected: describe(ans!))
         case "fill_blanks":
             let blanks = ans?.array ?? []
             let given = a.array ?? []
             guard !blanks.isEmpty else { return Grade() }
             var ok = 0
             for (i, b) in blanks.enumerated() {
-                let alts = (b.array?.compactMap(\.string) ?? b.string.map { [$0] } ?? []).map(norm)
-                if i < given.count, let g = given[i].string, alts.contains(norm(g)) { ok += 1 }
+                let alts = (b.array?.compactMap(\.string) ?? b.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
+                if i < given.count, let g = given[i].string, alts.contains(norm(g, strict: strict, pinyin: pinyin)) { ok += 1 }
             }
             return Grade(correct: ok == blanks.count, score: Double(ok) / Double(blanks.count),
                          expected: blanks.map { $0.array?.first?.string ?? $0.string ?? "" }.joined(separator: " | "))
@@ -279,6 +338,7 @@ enum Questions {
             }.joined(separator: "; ")
         case "fill_blanks": return (a.array ?? []).map { "“\($0.string ?? "")”" }.joined(separator: ", ") + (q["text"]?.string.map { "  (in: \($0))" } ?? "")
         case "drawing": return "(drawing attached as an image)"
+        case "speak": return a["heard"]?.string.map { "said “\($0)” (recognised on device; target “\(q["target"]?.string ?? "")”)" } ?? "(nothing was recognised)"
         case "code": return "\n```\(q["language"]?.string ?? "")\n\(a.string ?? "")\n```"
         default: return a.string.map { "“\($0)”" } ?? a.compact
         }

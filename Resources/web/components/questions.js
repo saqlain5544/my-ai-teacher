@@ -1,6 +1,6 @@
 // Interactive question components for the `ask_learner` and `quiz` tools.
 // Types: single_choice, multiple_choice, true_false, short_text, long_text, numeric, fill_blanks,
-//        ordering, matching, scale, code, math, drawing.
+//        ordering, matching, scale, code, math, drawing; `speak` (pronunciation) comes from langlearn.js.
 (function () {
   'use strict';
   const R = window.TeacherUI;
@@ -36,7 +36,7 @@
   const CERTAINTY = [[0, 'Don\'t know yet'], [1, 'Guessing'], [2, 'Unsure'], [3, 'Sure']];
   // Why a quiz was skipped: the teacher reacts differently to each (Testing.SkipReason in the app).
   const SKIP_REASONS = [['need_more', 'I need more explanation first'], ['too_easy', 'Too easy for me'], ['not_now', 'Not now, keep going'], ['unclear', 'A question is unclear or wrong']];
-  const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => x == null || x === '' || x === -1));
+  const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => x == null || x === '' || x === -1)) || (typeof a === 'object' && !Array.isArray(a) && !a.heard && !a.image);
   const dis = a => a ? '' : ' disabled';
 
   // ── Type renderers ────────────────────────────────────────────────────
@@ -222,6 +222,7 @@
       if (g && graded && qs[qi] && g.answer === undefined) g.answer = qs[qi].answer;
       h += '<div class="quiz-q" data-qi="' + qi + '"><div class="qn">' + (qs.length > 1 ? 'Question ' + (qi + 1) : '') + (q.concept ? (qs.length > 1 ? ' · ' : '') + ctx.esc(q.concept) : '') + '</div>' +
         (q.type !== 'fill_blanks' || q.text ? '<div class="prompt md">' + ctx.md(q.prompt || '') + '</div>' : '') +
+        (R.questionAudio ? R.questionAudio(q, ctx) : '') +   // `listen`: audio first, text hidden (dictation)
         impl.render(q, qi, F, ctx, active, g, id);
       // Hints open one at a time, gentlest first; an answer after a hint is logged as helped (no mastery gain).
       const hs = ladder(q), opened = Math.min(+F.hints[qi] || 0, hs.length);

@@ -173,6 +173,7 @@ struct TranscriptView: NSViewRepresentable {
             for (i, p) in parts.enumerated() { if i > 0 { js += "," }; js += p }
             js += tail
             run(js, replaceQueue: true)
+            if let s = session { language(AppModel.shared.extensions.get(LanguageExtension.self)?.state(for: s)) }
             if ready {
                 web?.evaluateJavaScript("document.querySelectorAll('.msg').length + ' rendered / ' + document.body.scrollHeight + 'px'") { r, _ in
                     AppLog.write("reset \(conversation.title.prefix(40)): \(windowCount) messages → \(r ?? "?")")
@@ -252,6 +253,10 @@ struct TranscriptView: NSViewRepresentable {
 
         func notice(_ text: String) {
             run("T.notice(\(JSON.string(text).compact))")
+        }
+
+        func language(_ state: LanguageState?) {
+            run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))")
         }
 
         func trimBefore(_ messageID: String, earlier: Int) {
@@ -353,7 +358,24 @@ struct TranscriptView: NSViewRepresentable {
                 NSPasteboard.general.setString(j["text"]?.string ?? "", forType: .string)
             case "speak":
                 if app.speech.isSpeaking && j["lang"] == nil { app.speech.stop() }
-                else { app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier, rate: app.settings.value.speechRate) }
+                else { app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier,
+                                        rate: app.settings.value.speechRate * min(1.5, max(0.3, j["rate"]?.double ?? 1))) }
+            case "dictate":
+                // A `speak` question: the Mac listens in the target language and the card shows what it heard.
+                guard let key = j["id"]?.string else { return }
+                if j["op"]?.string == "stop" { app.speech.stopListening(); return }
+                app.speech.dictate(language: j["lang"]?.string) { [weak self] text, final in
+                    self?.run("T.dictation(\(JSON.string(key).compact),\(JSON.string(text).compact),\(final))")
+                }
+            case "vocab":
+                // The Save button on a ```vocab card: into the learner's vocabulary and its flashcard deck.
+                guard let s = session, let w = j["word"], let term = w["term"]?.string, let meaning = w["meaning"]?.string else { return }
+                let lang = w["lang"]?.string.flatMap(Languages.code) ?? s.language?.target ?? s.services.study.languageProfiles().first { $0.role == "target" }?.code ?? "und"
+                if s.services.study.addVocab(lang: lang, term: term, reading: w["reading"]?.string, meaning: meaning, pos: w["pos"]?.string, example: w["example"]?.string,
+                                             exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, source: s.id) != nil {
+                    EventBus.publish(.studyDataChanged)
+                    run("T.notice(\(JSON.string("Saved “\(term)” to your \(Languages.englishName(lang)) vocabulary (reviewed as a flashcard).").compact))")
+                }
             case "memory":
                 app.selection = .memory
             case "older":

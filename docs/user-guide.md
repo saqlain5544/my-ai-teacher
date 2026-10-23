@@ -96,6 +96,7 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | Quiz | Graded quizzes that mix difficulty and interleave related concepts |
 | Exam prep | Exam-style problems, mark schemes, timing, a revision plan |
 | Code mentor | Teaches programming by doing: small runnable examples, reviews your code |
+| Language mentor | Teaches a language: placement, glossed sentences, dialogues, dictation, speaking, your own vocabulary deck |
 | ELI5 | Plain words, everyday analogies, one idea at a time |
 | Research | Searches the web, compares sources and cites every claim |
 
@@ -177,13 +178,38 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
 * **Mastery.** A clean test run after your own work is the checkpoint: the mentor records the concept with `mastery` and
   makes the next project harder.
 
+## Language mentor
+
+In **Language mentor** mode, say which language you want to learn and where you are ("I did two years of Spanish at
+school"). The mentor places you with a few questions, sets your profile, and from then on knows the language, your level
+and which words are due.
+
+* **The keyboard for the script.** A ⌨ button appears next to every answer field in a quiz or form, and in the message
+  box's toolbar, when the language needs one: Japanese (kana, or type romaji and get kana), Korean (jamo join into
+  syllables; backspace removes one jamo), Chinese pinyin with an ā→á key that cycles the tone mark, Arabic, Persian,
+  Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi, Bengali and Thai, plus accent rows for Spanish, French, German,
+  Portuguese, Italian, Vietnamese and many more. The panel's menu switches to any other layout; ✕ hides it until you
+  press ⌨ again. For 汉字 use the Mac's own input source.
+* **In the lesson:** glossed sentences (click a word to see where it lands in the translation; click any foreign
+  word anywhere to hear it), listening cards with **Slowly** and hidden text for dictation, role-play dialogues where
+  your lines stay hidden until you reveal them, conjugation tables with the stem and the ending in different colours,
+  and tone diagrams for Mandarin.
+* **Tests:** **Say it** questions listen through the microphone in the target language (the Mac asks for permission the
+  first time) and show which words it understood; dictation questions play the audio first; where accents matter, the
+  mentor grades them strictly.
+* **Dictation in the target language.** With a target language set, the microphone button in the message box offers to
+  dictate in it as well as in your own language.
+* **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
+  flashcards in a "<Language> vocabulary" deck, reviewed in Flashcards; the mentor opens lessons with the ones due.
+  **Progress › Languages** shows each language's level and how many words are new, learning and known.
+
 ## Practice tools
 
-* **Quizzes and forms** come in 13 question types, graded instantly where possible:
+* **Quizzes and forms** come in 14 question types, graded instantly where possible:
   * choice: single choice, multiple choice, true/false;
   * typed: short text, long text, numeric (units and ranges), fill in the blanks;
   * structured: ordering, matching, scale;
-  * work: code, math (checked symbolically with SymPy, with a live preview) and drawing.
+  * work: code, math (checked symbolically with SymPy, with a live preview), drawing, and **say it** (speech, in the language being learned).
 * **Practice cards** are quick self-checks: try, reveal, then mark **Got it** or **Missed**.
 * **Worked examples** are revealed one step at a time.
 * **Flashcards** (⌥⌘1) use FSRS spaced repetition. Ask the teacher to "make flashcards" from any lesson. While

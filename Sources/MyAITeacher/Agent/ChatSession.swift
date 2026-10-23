@@ -13,6 +13,8 @@ protocol TranscriptSink: AnyObject {
     func interaction(_ pending: InteractionCenter.Pending, active: Bool)
     func setStatus(_ status: String?)
     func notice(_ text: String)
+    /// The lesson's languages changed (target language, keyboard): the page follows.
+    func language(_ state: LanguageState?)
 }
 
 /// One lesson: owns the message history and runs the agent loop (stream → tools → repeat).
@@ -35,6 +37,8 @@ final class ChatSession: ObservableObject, Identifiable {
     /// What the learner did in the transcript that the tutor should hear with their next message (e.g. opening a
     /// problem's solution without trying it).
     var studyNotes: [String] = []
+    /// Which language the lesson teaches and in which it is taught (LanguageExtension); the composer's keyboard follows it.
+    @Published var language: LanguageState?
 
     private(set) var messages: [ChatMessage] = []
     unowned let app: AppModel

@@ -356,6 +356,20 @@ final class AppModel: ObservableObject {
                     ],
                     "stats": .array([.string("📁 \(workspace.name) · \(access(for: workspace).title)"), .string(hasMemory ? "🧠 project memory loaded" : "🧠 no project memory yet")])]
         }
+        if mode == .language {
+            let profiles = services.study.languageProfiles().filter { $0.role == "target" }
+            let learning = profiles.map { p in "\(Languages.englishName(p.code))\(p.level.map { " (\($0))" } ?? "")" }.joined(separator: ", ")
+            var sug: [JSON] = [
+                ["title": "Place my level", "subtitle": "A few quick questions, then a plan", "prompt": .string("I want to learn \(profiles.first.map { Languages.englishName($0.code) } ?? "a new language"). Place my level with a short graded test that gets harder, then set my profile and propose where we start.")],
+                ["title": "Conversation practice", "subtitle": "A role-play with my lines hidden", "prompt": "Let's do a role-play dialogue at my level (ordering food, asking the way). Use a dialogue block where I play one role, then quiz me on what we used."],
+                ["title": "Dictation", "subtitle": "Listen, type what you hear", "prompt": "Give me a dictation exercise at my level: a few short sentences I listen to and type, graded strictly, then explain my mistakes."],
+                ["title": "Review my words", "subtitle": "Due vocabulary, used in new sentences", "prompt": "Review the vocabulary that's due, used in new sentences and short questions rather than as a list."],
+            ]
+            if profiles.isEmpty { sug.insert(["title": "Start from zero", "subtitle": "Sounds, script and first phrases", "prompt": "I'm a complete beginner. Ask me which language and why, then start with the sounds, the script (with the on-screen keyboard) and the first useful phrases."], at: 0) }
+            return ["title": .string(profiles.isEmpty ? "Which language are we learning?" : "Back to \(learning)?"),
+                    "subtitle": "Say the language and how far along you are. The mentor places you, shows the keyboard for its script, and keeps the words you learn for review.",
+                    "suggestions": .array(sug), "stats": .array(profiles.map { p in let v = services.study.vocabStats(lang: p.code); return .string("🗣 \(Languages.englishName(p.code)): \(v.total) words, \(v.due) due") })]
+        }
         var stats: [JSON] = []
         let streak = services.study.streakDays()
         if streak > 0 { stats.append(.string("🔥 \(streak)-day streak")) }

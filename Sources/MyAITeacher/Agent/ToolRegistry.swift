@@ -10,8 +10,10 @@ enum ToolRegistry {
     ]
     /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
     static let deferred: [Tool] = [
-        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(),
+        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LanguageTool(), VocabTool(),
     ]
+    /// Always on in Language mentor mode (deferred elsewhere): the mentor must never have to load its own tools.
+    static let languageTools: [Tool] = [LanguageTool(), VocabTool()]
     static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
 
     /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
@@ -22,9 +24,15 @@ enum ToolRegistry {
     ]
 
     /// Core and deferred sets for a lesson, after its experiment arms (stable for the lesson's lifetime).
-    static func layout(_ lessonID: String?) -> (core: [Tool], deferred: [Tool]) {
+    static func layout(_ lessonID: String?, mode: TeachingMode = .tutor) -> (core: [Tool], deferred: [Tool]) {
         let visualInCore = Experiments.arm(Experiments.visualTool, unit: lessonID ?? "") == "core"
-        return visualInCore ? (core.dropLast() + [VisualTool(), LoadToolsTool()], deferred) : (core, deferred + [VisualTool()])
+        var l = visualInCore ? (core: core.dropLast() + [VisualTool(), LoadToolsTool()], deferred: deferred) : (core: core, deferred: deferred + [VisualTool()])
+        if mode == .language {
+            let names = Set(languageTools.map(\.name))
+            l.core += languageTools
+            l.deferred.removeAll { names.contains($0.name) }
+        }
+        return l
     }
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
@@ -38,14 +46,14 @@ enum ToolRegistry {
         if mode.isAgent { return agentTools.filter { !off.contains($0.name) } }
         if settings.python == .off { off.insert("math") }   // SymPy needs Python
         if Experiments.boardOff { off.insert("lesson_plan") }
-        let l = layout(lessonID)
+        let l = layout(lessonID, mode: mode)
         let extra = loaded.compactMap { name in l.deferred.first { $0.name == name } }
         return (l.core + extra).filter { !off.contains($0.name) }
     }
 
     /// One line per deferred tool for the system prompt.
-    static func deferredIndex(_ lessonID: String? = nil) -> String {
-        layout(lessonID).deferred
+    static func deferredIndex(_ lessonID: String? = nil, mode: TeachingMode = .tutor) -> String {
+        layout(lessonID, mode: mode).deferred
             .map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 

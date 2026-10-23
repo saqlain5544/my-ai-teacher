@@ -410,6 +410,10 @@ svg.chart { width: 100%; max-width: 640px; height: auto; font-family: -apple-sys
 .say { border: 0; background: transparent; cursor: pointer; font-size: 0.95em; opacity: .7; padding: 2px 4px; }
 .say:hover { opacity: 1; }
 .vocab-card > .say { position: absolute; top: 10px; right: 8px; }
+.vocab-save { position: absolute; bottom: 8px; right: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 1px 8px; font-size: 0.78em; cursor: pointer; }
+.vocab-save:hover { border-color: var(--accent); color: var(--accent); }
+.vocab-save:disabled { color: var(--good); cursor: default; }
+.vocab-card { padding-bottom: 30px; }
 .comp-error { border: 1px solid var(--bad-soft); border-radius: 10px; padding: 8px 12px; }
 /* A node or component the page could not render: readable, in place, never a blank reply. */
 .node-error { color: var(--muted); font-size: 0.9em; border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; margin: 0.5em 0; }

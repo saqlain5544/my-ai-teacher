@@ -8,6 +8,8 @@ import NaturalLanguage
 final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     @Published private(set) var isSpeaking = false
     @Published private(set) var isListening = false
+    /// The language being dictated (nil: the Mac's).
+    @Published private(set) var listeningLanguage: String?
     @Published var transcript = ""
     private let synth = AVSpeechSynthesizer()
     private var engine: AVAudioEngine?
@@ -105,19 +107,40 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
 
     // MARK: Dictation
 
-    func toggleDictation(onText: @escaping (String) -> Void) {
+    func toggleDictation(language: String? = nil, onText: @escaping (String) -> Void) {
         if isListening { stopListening(); return }
+        dictate(language: language) { text, _ in onText(text) }
+    }
+
+    /// Listens in `language` (an ISO code; nil for the Mac's language) and reports partial results, then the final one.
+    func dictate(language: String?, onText: @escaping (String, Bool) -> Void) {
+        if isListening { stopListening() }
         SFSpeechRecognizer.requestAuthorization { status in
             Task { @MainActor in
-                guard status == .authorized else { return }
-                self.startListening(onText: onText)
+                guard status == .authorized else { onText("", true); return }
+                self.startListening(language: language, onText: onText)
             }
         }
     }
 
-    private func startListening(onText: @escaping (String) -> Void) {
-        guard let recognizer = SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
-              recognizer.isAvailable else { return }
+    /// The best recogniser locale for a language code ("ja" → ja-JP), or nil when the Mac has none for it.
+    nonisolated static func recognizerLocale(_ language: String?) -> Locale? {
+        guard let l = language?.lowercased(), !l.isEmpty else { return nil }
+        let all = SFSpeechRecognizer.supportedLocales()
+        if let exact = all.first(where: { $0.identifier.lowercased().replacingOccurrences(of: "_", with: "-") == l }) { return exact }
+        let base = String(l.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? Substring(l))
+        let region = Locale.current.region?.identifier ?? ""
+        let candidates = all.filter { ($0.language.languageCode?.identifier ?? "") == base }
+        return candidates.first { $0.region?.identifier == region } ?? candidates.sorted { $0.identifier < $1.identifier }.first
+    }
+
+    private func startListening(language: String?, onText: @escaping (String, Bool) -> Void) {
+        let wanted = Self.recognizerLocale(language)
+        guard let recognizer = wanted.flatMap(SFSpeechRecognizer.init(locale:)) ?? SFSpeechRecognizer(locale: Locale.current) ?? SFSpeechRecognizer(locale: Locale(identifier: "en-US")),
+              recognizer.isAvailable else { onText("", true); return }
+        listeningLanguage = wanted == nil ? nil : language
+        lastText = ""
+        onFinal = { [weak self] in onText(self?.lastText ?? "", true) }
         let engine = AVAudioEngine()
         let req = SFSpeechAudioBufferRecognitionRequest()
         req.shouldReportPartialResults = true
@@ -131,11 +154,13 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         isListening = true
         task = recognizer.recognitionTask(with: req) { result, error in
             Task { @MainActor in
-                if let r = result { onText(r.bestTranscription.formattedString) }
+                if let r = result { self.lastText = r.bestTranscription.formattedString; onText(self.lastText, false) }
                 if error != nil || (result?.isFinal ?? false) { self.stopListening() }
             }
         }
     }
+    private var lastText = ""
+    private var onFinal: (() -> Void)?
 
     func stopListening() {
         engine?.stop()
@@ -143,6 +168,10 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         request?.endAudio()
         task?.cancel()
         engine = nil; request = nil; task = nil
+        let wasListening = isListening
         isListening = false
+        listeningLanguage = nil
+        let done = onFinal; onFinal = nil
+        if wasListening { done?() }
     }
 }

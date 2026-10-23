@@ -226,6 +226,7 @@ struct StudyProgressView: View {
     @State private var calibration: [Certainty: (answers: Int, right: Int)] = [:]
     @State private var help = (hints: 0, solutions: 0)
     @State private var followUps: [FollowUp] = []
+    @State private var languages: [(profile: LanguageProfile, stats: VocabStats)] = []
 
     var body: some View {
         ScrollView {
@@ -239,6 +240,27 @@ struct StudyProgressView: View {
                     stat("🧠", "\(app.memoryCount)", "memories")
                 }
                 section("Activity") { heatmap }
+                if !languages.isEmpty {
+                    section("Languages") {
+                        ForEach(languages, id: \.profile.code) { l in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack(spacing: 8) {
+                                    Text(Languages.nativeName(l.profile.code)).font(.headline)
+                                    Text(Languages.englishName(l.profile.code)).foregroundStyle(.secondary)
+                                    if let lv = l.profile.level {
+                                        Text(lv).font(.caption.bold()).padding(.horizontal, 7).padding(.vertical, 2)
+                                            .background(Capsule().fill(Color.accentColor.opacity(0.14)))
+                                    }
+                                    Spacer()
+                                    Text("\(l.stats.total) words · \(l.stats.known) known · \(l.stats.learning) learning · \(l.stats.due) due")
+                                        .font(.callout).monospacedDigit().foregroundStyle(.secondary)
+                                }
+                                ProgressView(value: l.stats.total == 0 ? 0 : Double(l.stats.known) / Double(l.stats.total)).tint(.green)
+                                if let n = l.profile.notes { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                            }
+                        }
+                    }
+                }
                 section("Concept mastery") {
                     if mastery.isEmpty { Text("Mastery appears as you answer quizzes and practice questions.").foregroundStyle(.secondary) }
                     ForEach(Dictionary(grouping: mastery, by: \.subject).sorted(by: { $0.key < $1.key }), id: \.key) { subject, items in
@@ -343,6 +365,7 @@ struct StudyProgressView: View {
         mastery = s.allMastery(); plans = s.plans(); quizzes = s.recentQuizzes(); activity = s.activity(); streak = s.streakDays()
         usage = app.services.usageSummary(days: 30)
         calibration = s.calibration(); help = s.helpUsed(); followUps = s.openFollowUps(limit: 8)
+        languages = s.languageProfiles().filter { $0.role == "target" }.map { ($0, s.vocabStats(lang: $0.code)) }
     }
 
     /// Inline LaTeX as plain text for a label (notes quote the teacher's math): "$\frac{1+3}{6+4}$" → "(1+3)/(6+4)".
