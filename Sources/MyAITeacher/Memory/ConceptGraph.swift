@@ -238,9 +238,9 @@ final class ConceptGraph: @unchecked Sendable {
             db.run("UPDATE concepts SET evidence=evidence+1, updated_at=?, summary=COALESCE(?, summary), status=COALESCE(?, status) WHERE id=?",
                             now, summary.map { MemoryText.clip($0, 240) }, Self.status(status), id)
         } else {
-            db.run("INSERT INTO concepts(name, summary, status, origin, source, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
-                            name, summary.map { MemoryText.clip($0, 240) }, Self.status(status), origin, source, now, now)
-            id = db.lastInsertRowID
+            guard let new = db.insert("INSERT INTO concepts(name, summary, status, origin, source, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+                                      name, summary.map { MemoryText.clip($0, 240) }, Self.status(status), origin, source, now, now) else { return nil }
+            id = new
             db.run("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", key, id)
         }
         for s in subjects.compactMap(MemoryText.subject) where s != "general" {

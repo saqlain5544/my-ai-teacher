@@ -39,7 +39,8 @@ Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
   Visuals run in sandboxed iframes (`allow-scripts` only, CSP `connect-src 'none'`) with libraries from `teacher-lib:`.
 * **Storage writes.** A write whose failure the caller can't act on uses `db.run(…)` (or `db.write("what") { … }` for
   several statements), which logs to `Log.db`; never `try? db.execute`. Statements that must change together go in one
-  `transaction` (a lesson message and its blob references, a lesson delete); transactions nest as savepoints.
+  `transaction` (a lesson message and its blob references, a lesson delete); transactions nest as savepoints. A row id comes from `db.insert(…)` (statement and id under one lock), never a
+  separate `lastInsertRowID` read.
 * **Tool gates compose.** Every extension's `shouldRun` is consulted in registration order: a deny ends it, and an
   approval the learner gives moves on to the next gate (an approval for one gate never skips another).
 * **One HTTP session.** All model streams share `SSEClient`'s `URLSession` (per-task delegates), so steps and parallel

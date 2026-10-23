@@ -144,9 +144,8 @@ final class StudyStore: @unchecked Sendable {
     func addCard(deck: String, front: String, back: String, concept: String?, subject: String?, source: String?) -> Int64? {
         let exists = (try? db.query("SELECT id FROM cards WHERE deck=? AND front=?", deck, front))?.first?.int("id")
         if let exists { return Int64(exists) }
-        db.run("INSERT INTO cards(deck, front, back, concept, subject, source, created_at, due) VALUES(?,?,?,?,?,?,?,?)",
-                        deck, front, back, concept, subject, source, Date(), Date())
-        return db.lastInsertRowID
+        return db.insert("INSERT INTO cards(deck, front, back, concept, subject, source, created_at, due) VALUES(?,?,?,?,?,?,?,?)",
+                         deck, front, back, concept, subject, source, Date(), Date())
     }
 
     func dueCards(deck: String? = nil, limit: Int = 100) -> [Flashcard] {

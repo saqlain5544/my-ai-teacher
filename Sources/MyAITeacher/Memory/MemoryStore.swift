@@ -405,11 +405,11 @@ final class MemoryStore: @unchecked Sendable {
             refresh(old.rowid)
             return WriteOutcome(rowid: old.rowid, status: .merged, reason: nil, similar: [])
         }
-        db.run("""
+        guard let id = db.insert("""
             INSERT INTO memories(kind, subject, content, importance, origin, source, created_at, updated_at, vec, concept_id, norm, evidence)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
             """, kind.rawValue, subject, content, min(1, max(0, importance)), origin, source, now, now, vec.map(Embedder.int8), conceptID, norm)
-        let id = db.lastInsertRowID
+        else { return WriteOutcome(rowid: nil, status: .rejected, reason: "The memory could not be saved.", similar: []) }
         refresh(id)
         return WriteOutcome(rowid: id, status: .added, reason: nil, similar: similar.sorted { $0.1 > $1.1 }.prefix(3).map(\.0))
     }
@@ -446,8 +446,10 @@ final class MemoryStore: @unchecked Sendable {
     }
 
     func delete(_ id: Int64) {
-        db.run("DELETE FROM memories WHERE id=?", id)
-        db.run("DELETE FROM memory_history WHERE memory_id=?", id)
+        db.write("memory delete") {
+            try db.execute("DELETE FROM memories WHERE id=?", id)
+            try db.execute("DELETE FROM memory_history WHERE memory_id=?", id)
+        }
         removed(id)
     }
     private func removed(_ id: Int64) {
@@ -456,14 +458,18 @@ final class MemoryStore: @unchecked Sendable {
         if onDiskPath { loadedVersion = nil }   // fewer memories: the next use checks whether they fit in RAM again
     }
     func deleteAll() {
-        db.run("DELETE FROM memories")
-        db.run("DELETE FROM memory_history")
+        db.write("memory delete all") {
+            try db.execute("DELETE FROM memories")
+            try db.execute("DELETE FROM memory_history")
+        }
         graph?.deleteAll()
         lock.lock(); index = nil; loadedVersion = nil; lock.unlock()
     }
     func markUsed(_ ids: [Int64]) {
         let now = Date()
-        for id in ids { db.run("UPDATE memories SET use_count=use_count+1, last_used_at=? WHERE id=?", now, id) }
+        db.write("memory use") {   // one commit for the recall, not one per memory
+            for id in ids { try db.execute("UPDATE memories SET use_count=use_count+1, last_used_at=? WHERE id=?", now, id) }
+        }
     }
     /// Re-points memories from merged concepts.
     func reassignConcept(from: [Int64], to: Int64?) {

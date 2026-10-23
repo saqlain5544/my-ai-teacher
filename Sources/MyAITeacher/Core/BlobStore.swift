@@ -51,7 +51,43 @@ final class BlobStore: @unchecked Sendable {
         for root in lock.withLock({ roots }) { if let d = try? Data(contentsOf: file(ref, in: root)) { return d } }
         return nil
     }
-    static func base64(_ ref: String) -> String? { data(ref)?.base64EncodedString() }
+    /// The base64 form requests send. Every step resends the recent turns' images, which read the file and encoded it
+    /// again each time; the encoded strings are kept (content-addressed, so never stale) up to `cacheBytes`, oldest out.
+    static func base64(_ ref: String) -> String? {
+        if let hit = encoded.mutate({ $0.get(ref) }) { return hit }
+        guard let s = data(ref)?.base64EncodedString() else { return nil }
+        encoded.mutate { $0.put(ref, s) }
+        return s
+    }
+    static let cacheBytes = 32 << 20
+    private static let encoded = Locked(LRU(limit: cacheBytes))
+    /// Memory pressure (MemoryGovernor): the encoded images go; they are rebuilt from disk on the next request.
+    static func releaseMemory() { encoded.mutate { $0 = LRU(limit: cacheBytes) } }
+
+    /// Strings by key, bounded by total UTF-8 bytes; least recently used out first.
+    struct LRU {
+        let limit: Int
+        private(set) var bytes = 0
+        private var values: [String: String] = [:]
+        private var order: [String] = []   // least recent first; short (a few dozen images fit the limit)
+        init(limit: Int) { self.limit = limit }
+        mutating func get(_ k: String) -> String? {
+            guard let v = values[k] else { return nil }
+            order.removeAll { $0 == k }; order.append(k)
+            return v
+        }
+        mutating func put(_ k: String, _ v: String) {
+            let n = v.utf8.count
+            guard n <= limit else { return }   // bigger than the whole cache: not worth evicting everything for
+            if let old = values.updateValue(v, forKey: k) { bytes -= old.utf8.count; order.removeAll { $0 == k } }
+            order.append(k); bytes += n
+            while bytes > limit, let first = order.first {
+                order.removeFirst()
+                bytes -= values.removeValue(forKey: first)?.utf8.count ?? 0
+            }
+        }
+        var count: Int { values.count }
+    }
 
     /// Deletes the given blobs unless `inUse` says a message still needs them or they're within the grace period.
     func collect(_ refs: some Sequence<String>, inUse: (String) -> Bool) {

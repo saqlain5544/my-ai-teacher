@@ -236,7 +236,16 @@ final class Database: @unchecked Sendable {
         do { try transaction(body) } catch { Log.db.error("\(what, privacy: .public) failed: \(error.localizedDescription, privacy: .public)") }
     }
 
-    var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(db) }
+    /// Runs an INSERT and returns its row id, read under the same lock: reading `lastInsertRowID` as a separate call gave
+    /// another thread's row (the connection is shared), or an earlier row when the insert failed. Nil (logged) on failure.
+    func insert(_ sql: String, _ params: SQLBindable?...) -> Int64? {
+        lock.lock(); defer { lock.unlock() }
+        do { try execute(sql, params: params); return sqlite3_last_insert_rowid(db) }
+        catch { Log.db.error("\(error.localizedDescription, privacy: .public) — in: \(sql.prefix(120), privacy: .public)"); return nil }
+    }
+
+    /// Prefer `insert`, which reads it atomically with the statement.
+    var lastInsertRowID: Int64 { lock.lock(); defer { lock.unlock() }; return sqlite3_last_insert_rowid(db) }
     /// Rows this connection has changed since it opened: with `PRAGMA data_version` (other connections' commits), a key
     /// for "the database as this connection sees it" that a cached aggregate can be checked against.
     var totalChanges: Int { lock.lock(); defer { lock.unlock() }; return Int(sqlite3_total_changes64(db)) }

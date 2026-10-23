@@ -47,6 +47,12 @@ final class ArchitectureTests: XCTestCase {
         XCTAssertEqual(db.run("INSERT INTO t VALUES(?)", 7), 1)
     }
 
+    func testInsertReturnsItsOwnRowOrNil() throws {
+        let a = db.insert("INSERT INTO t VALUES(1)"), b = db.insert("INSERT INTO t VALUES(2)")
+        XCTAssertNotNil(a); XCTAssertEqual(b, a.map { $0 + 1 })
+        XCTAssertNil(db.insert("INSERT INTO missing_table VALUES(1)"), "a failed insert never reports an earlier row's id")
+    }
+
     func testWriteRollsBackAsAWhole() throws {
         db.write("test") {
             try db.execute("INSERT INTO t VALUES(1)")
@@ -218,5 +224,33 @@ final class StreamErrorTests: XCTestCase {
         XCTAssertFalse(transient("invalid_request_error"))
         XCTAssertFalse(transient("authentication_error"))
         XCTAssertFalse(transient("request_too_large"))
+    }
+}
+
+final class BlobCacheTests: XCTestCase {
+    func testLRUIsBoundedByBytesAndKeepsRecentlyUsed() {
+        var c = BlobStore.LRU(limit: 10)
+        c.put("a", "1234"); c.put("b", "1234")
+        XCTAssertEqual(c.get("a"), "1234")          // a is now the most recent
+        c.put("c", "1234")                           // 12 bytes > 10: the least recent (b) goes
+        XCTAssertNil(c.get("b"))
+        XCTAssertNotNil(c.get("a")); XCTAssertNotNil(c.get("c"))
+        XCTAssertLessThanOrEqual(c.bytes, 10)
+        c.put("huge", String(repeating: "x", count: 11))
+        XCTAssertNil(c.get("huge"), "an entry bigger than the cache isn't kept")
+        c.put("a", "12"); XCTAssertEqual(c.bytes, 6, "replacing an entry recounts its size")
+    }
+
+    func testBase64ComesBackFromTheCacheAfterTheFileIsGone() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("blobs-\(UUID().uuidString.prefix(6))")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = BlobStore(dir: dir)
+        let payload = Data((0..<40_000).map { UInt8($0 % 251) }).base64EncodedString()
+        let ref = try XCTUnwrap(store.put(base64: payload))
+        XCTAssertEqual(BlobStore.base64(ref), payload)
+        try FileManager.default.removeItem(at: BlobStore.file(ref, in: dir))
+        XCTAssertEqual(BlobStore.base64(ref), payload, "served from the cache, no disk read")
+        BlobStore.releaseMemory()
+        XCTAssertNil(BlobStore.base64(ref), "after memory pressure it is read from disk again")
     }
 }

@@ -40,6 +40,7 @@ final class MemoryGovernor {
         Task { await FetchCache.shared.clear() }
         MemoryStore.unloadAll()
         Database.releaseAllMemory()
+        BlobStore.releaseMemory()
         URLCache.shared.removeAllCachedResponses()
         NotificationCenter.default.post(name: Self.shedNotification, object: critical)
         malloc_zone_pressure_relief(nil, 0)
