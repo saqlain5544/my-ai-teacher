@@ -10,6 +10,7 @@ window.TeacherManifest = { version: 1, modules: [
   {src: "components/questions.js"},
   {src: "components/visuals.js"},
   {src: "components/tools/agents.js"},
+  {src: "components/tools/code.js"},
   {src: "components/tools/files.js"},
   {src: "components/tools/memory.js"},
   {src: "components/tools/teaching.js"},

@@ -218,6 +218,9 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .q-count { color: var(--faint); margin-left: auto; }
 .q-text.invalid { border-color: var(--bad) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
 .agent-mode .msg-actions .chip { display: none; }
+.turn-undo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 9px; font-size: 0.85em; color: var(--muted); }
+.turn-undo .files { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 0.92em; }
+.tool-card.syntax-errors .tool-head { color: var(--bad); }
 .msg-stopped { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.88em; margin: 4px 0; }
 .earlier { display: flex; justify-content: center; margin: 4px 0 18px; }
 .agent-note { margin: 0.4em 0; }

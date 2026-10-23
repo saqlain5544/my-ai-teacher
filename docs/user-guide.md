@@ -259,9 +259,19 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   *Full access* per folder; grants live in **Settings › Tools**. Writes and commands outside what you granted ask
   first. You can allow once or for the lesson, grant the folder write or full access, or deny.
 * **Tools.**
-  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed).
-  * Commands: bash, and run_code in 12 languages.
+  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed), and `symbols` (a file's outline, or
+    where a name is defined).
+  * Commands: bash (with `background: true` for long builds and test suites, whose output arrives as a message), and
+    run_code in 12 languages.
+  * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
   * Planning: a todo checklist.
+* **It knows your project.** The agent's instructions carry a profile read from your manifests: the build system, how
+  to build, check, test and lint, the languages, the git state. Every file it writes or edits is syntax-checked on the
+  spot, and it is told to run the project's check and tests before it reports.
+* **Undo.** Under each reply that changed files: **Undo this turn's changes** puts every file back as it was before that
+  turn (the app keeps a checkpoint per turn in `.teacher/checkpoints`, no git needed). The agent is told you did.
+* **Your own commands.** A file `.teacher/commands/review.md` becomes `/review`; type `/review src/app.py` and the file's
+  text, with `$ARGUMENTS` filled in, goes to the agent with your message.
   * `project_memory`, which keeps build commands, conventions and gotchas in `.teacher/code-memory.md`. The agent
     also reads `CLAUDE.md` and `AGENTS.md`.
 * **Changes panel.** A git diff of what changed, with checkpoints.

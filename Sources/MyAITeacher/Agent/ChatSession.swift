@@ -145,6 +145,10 @@ final class ChatSession: ObservableObject, Identifiable {
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
+        // A project command (/name args): the user's own prompt from .teacher/commands/name.md rides along, hidden.
+        if conversation.mode.isAgent, let expanded = ProjectCommands.expand(trimmed, folder: services.workspace.url) {
+            blocks.append(Block(kind: .text, text: "<context>\n\(expanded)\n</context>", meta: ["hidden": true]))
+        }
         var msg = ChatMessage(role: .user, blocks: blocks)
         host.willSend(&msg, self)
         if conversation.title == "New lesson" {
@@ -317,7 +321,7 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         let client = provider.client(apiKey: key)
-        if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
+        if conversation.systemPrompt == nil { conversation.systemPrompt = await buildSystemPrompt(model: conversation.model) }
         var steps = 0
         var limitContinues = 0
         // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
@@ -674,6 +678,7 @@ final class ChatSession: ObservableObject, Identifiable {
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         ctx.quizzes = Testing.on(settings, conversation.mode)
+        ctx.codeAgent = conversation.mode.isAgent
         let t0 = Date()
         var result: Block
         do {
@@ -712,10 +717,11 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Context
 
-    private func buildSystemPrompt(model: String) -> String {
+    private func buildSystemPrompt(model: String) async -> String {
         if conversation.mode.isAgent {
+            let profile = await ProjectProfile.detect(services.workspace.url)
             return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
-                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url))
+                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section())
         }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }

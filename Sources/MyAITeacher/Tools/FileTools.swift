@@ -85,8 +85,10 @@ struct WriteTool: Tool {
         let existed = FileManager.default.fileExists(atPath: url.path)
         try Data(content.utf8).write(to: url, options: .atomic)
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
-        return ToolOutput(text: "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines)." + (strayEOF ? " " + HeredocSlip.note : ""),
-                          meta: ["path": .string(url.path)])
+        var text = "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines)." + (strayEOF ? " " + HeredocSlip.note : "")
+        var meta: [String: JSON] = ["path": .string(url.path)]
+        if ctx.codeAgent, let check = await Diagnostics.quickCheck(url, folder: ctx.workspace) { Diagnostics.attach(check, to: &text, meta: &meta) }
+        return ToolOutput(text: text, meta: .object(meta))
     }
 }
 
@@ -129,19 +131,60 @@ struct EditTool: Tool {
         guard old != new else { return .error("old_string and new_string are identical.") }
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return .error("Cannot read \(url.path).") }
         let count = content.components(separatedBy: old).count - 1
-        if count == 0 { return .error("old_string not found in \(url.lastPathComponent). Re-read the file and copy the text exactly.") }
         let all = input["replace_all"]?.bool ?? false
         if count > 1 && !all {
             return .error("old_string occurs \(count) times. Add surrounding context to make it unique, or set replace_all.")
         }
-        let updated: String
-        if all { updated = content.replacingOccurrences(of: old, with: new) }
-        else { let r = content.range(of: old)!; updated = content.replacingCharacters(in: r, with: new) }
+        var updated: String, note = ""
+        var firstRange: Range<String.Index>
+        if count == 0 {
+            // Not found exactly: the same lines with different indentation or trailing spaces is almost always what was meant.
+            guard let (r, replacement) = Self.fuzzyMatch(content, old: old, new: new) else {
+                return .error("old_string not found in \(url.lastPathComponent). Re-read the file and copy the text exactly (whitespace included).")
+            }
+            updated = content.replacingCharacters(in: r, with: replacement)
+            firstRange = r
+            note = " (matched with different indentation/whitespace; the replacement was re-indented to the file's)"
+        } else if all {
+            updated = content.replacingOccurrences(of: old, with: new); firstRange = content.range(of: old)!
+        } else { firstRange = content.range(of: old)!; updated = content.replacingCharacters(in: firstRange, with: new) }
         try Data(updated.utf8).write(to: url, options: .atomic)
         // Small diff preview for the UI.
-        let line = content[..<content.range(of: old)!.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).count
-        return ToolOutput(text: "Edited \(url.path): replaced \(all ? count : 1) occurrence(s) near line \(line).",
-                          meta: ["path": .string(url.path), "old": .string(String(old.prefix(2000))), "new": .string(String(new.prefix(2000)))])
+        let line = content[..<firstRange.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).count
+        var text = "Edited \(url.path): replaced \(all ? count : 1) occurrence(s) near line \(line)\(note)."
+        var meta: [String: JSON] = ["path": .string(url.path), "old": .string(String(old.prefix(2000))), "new": .string(String(new.prefix(2000)))]
+        if ctx.codeAgent, let check = await Diagnostics.quickCheck(url, folder: ctx.workspace) { Diagnostics.attach(check, to: &text, meta: &meta) }
+        return ToolOutput(text: text, meta: .object(meta))
+    }
+
+    /// `old` as a run of lines matched with leading and trailing whitespace ignored, when that run is unique in the
+    /// file; `new` re-indented by the difference between the file's and `old`'s first-line indentation.
+    static func fuzzyMatch(_ content: String, old: String, new: String) -> (Range<String.Index>, String)? {
+        let fileLines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let trim = { (s: String) in s.trimmingCharacters(in: .whitespaces) }
+        let wanted = oldLines.map(trim)
+        guard !wanted.isEmpty, wanted.contains(where: { !$0.isEmpty }), fileLines.count >= wanted.count else { return nil }
+        var starts: [Int] = []
+        for i in 0...(fileLines.count - wanted.count) where (0..<wanted.count).allSatisfy({ trim(fileLines[i + $0]) == wanted[$0] }) { starts.append(i) }
+        guard starts.count == 1 else { return nil }
+        let start = starts[0], end = start + wanted.count - 1
+        let indent = { (s: String) in s.prefix { $0 == " " || $0 == "\t" } }
+        let fileIndent = String(indent(fileLines[start])), oldIndent = String(indent(oldLines[0]))
+        let newLines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let reindented = newLines.map { l -> String in
+            if l.trimmingCharacters(in: .whitespaces).isEmpty { return l }
+            if l.hasPrefix(oldIndent) { return fileIndent + l.dropFirst(oldIndent.count) }
+            if oldIndent.hasPrefix(String(indent(l))) { return String(fileIndent.prefix(max(0, fileIndent.count - (oldIndent.count - indent(l).count)))) + l.drop { $0 == " " || $0 == "\t" } }
+            return l
+        }.joined(separator: "\n")
+        // Character offsets of the matched lines in the file.
+        var offset = 0
+        for i in 0..<start { offset += fileLines[i].count + 1 }
+        let from = content.index(content.startIndex, offsetBy: offset)
+        var length = 0
+        for i in start...end { length += fileLines[i].count + (i < end ? 1 : 0) }
+        return (from..<content.index(from, offsetBy: length), reindented)
     }
 }
 

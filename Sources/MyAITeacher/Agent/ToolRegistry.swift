@@ -14,11 +14,11 @@ enum ToolRegistry {
     ]
     /// Always on in Language mentor mode (deferred elsewhere): the mentor must never have to load its own tools.
     static let languageTools: [Tool] = [LanguageTool(), VocabTool()]
-    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
+    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool(), SymbolsTool(), DiagnosticsTool()]
 
     /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
     static let agentTools: [Tool] = [
-        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), TodoWriteTool(),
+        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), SymbolsTool(), BashTool(), RunCodeTool(), DiagnosticsTool(), TodoWriteTool(),
         TaskTool(), AgentsTool(), WebSearchTool(), WebFetchTool(), ProjectMemoryTool(), AskLearnerTool(),
         BrowserTool(), MacTool(), ComputerTool(),
     ]
@@ -60,8 +60,8 @@ enum ToolRegistry {
     /// Tools a research sub-agent may use without supervision.
     /// Every tool a sub-agent can be given; its type and the `task` call choose from these. Never the interactive or
     /// teaching tools (sub-agents can't wait for the learner), and memory is search-only.
-    static let subagentPool: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemoryTool(readOnly: true),
-                                       WriteTool(), EditTool(), BashTool(), RunCodeTool(), TaskTool(), AgentsTool()]
+    static let subagentPool: [Tool] = [ReadTool(), LsTool(), GlobTool(), GrepTool(), SymbolsTool(), WebSearchTool(), WebFetchTool(), MathTool(), MemoryTool(readOnly: true),
+                                       WriteTool(), EditTool(), BashTool(), RunCodeTool(), DiagnosticsTool(), TaskTool(), AgentsTool()]
 }
 
 /// Delegates a self-contained task to a sub-agent with its own context; only its final report returns.

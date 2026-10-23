@@ -794,6 +794,9 @@
     unmountComponents(root);
   }
   function agentReportHTML(p) {
+    if (p.task) return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">⌘</span><span>Background command <b>' + esc(p.handle || '') + '</b> · ' +
+      esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state)) + (p.seconds != null ? ' in ' + p.seconds + ' s' : '') + '</span></div>' +
+      '<details><summary>Output</summary>' + pre(p.text || '') + '</details></div>';
     return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(p.handle || '') + '</b> · ' +
       esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state || 'finished')) + '</span>' +
       '<button class="btn mini" data-act="agent-open" data-agent="' + esc(p.agent) + '">Open</button></div>' +

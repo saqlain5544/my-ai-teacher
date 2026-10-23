@@ -231,6 +231,30 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 ## Code agent
 * Mode `agent` ("Code agent", ⇧⌘K): a software-engineer prompt, the whole coding toolset up front, and project memory
   in `.teacher/code-memory.md` (plus CLAUDE.md / AGENTS.md) instead of the learner model; `project_memory` tool.
+* **Project profile** (`ProjectProfile.detect`, once per session when the prompt is built): the manifests at the top of
+  the folder (Package.swift, package.json scripts and lockfile, tsconfig, Cargo, go.mod, pyproject, build.zig,
+  Makefile targets, CMake, Gradle, Maven, Gemfile, mix, deno) → build / check / test / lint / format commands, languages
+  by file count (code only; a bounded walk), git branch and dirty count, `.teacher/commands`. It is the `# Project`
+  section of the agent's prompt and the default commands of `diagnostics`.
+* **Verification loop.** `WriteTool`/`EditTool` in agent mode (`ToolContext.codeAgent`) run `Diagnostics.quickCheck`
+  on the file (py_compile, node --check, ruby -c, zig ast-check, swiftc -parse, gofmt -e, zsh -n, JSON; ≤ 10 s) and
+  append the verdict to the result (`meta.syntaxErrors` marks the card). `diagnostics` runs the project's check, test
+  or lint command (or one given) and parses clang/swift/zig/go, tsc, rustc, python and eslint output into
+  `file:line:col severity message`, grouped by file and capped (`Diagnostics.parse` / `summary`). `bash` with
+  `background: true` runs detached (≤ 30 min) and delivers a `<background-task>` message through `ChatSession.deliver`,
+  like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the foreground.
+* **Checkpoints and undo** (`Checkpoints`, `CodeAgentExtension`): registered before `PermissionExtension`, its
+  `shouldRun` copies a file to `.teacher/checkpoints/<turn>/` before the agent's first write or edit to it in the turn
+  (a created file is recorded as absent). `didFinishTurn` keeps only files whose content differs from the backup and
+  stores `checkpoint` and `changedFiles` on the turn's metrics (optional fields, so older messages decode); the page's
+  footer offers **Undo this turn's changes** (`revert` message → `Checkpoints.restore`), the agent hears about an undo
+  with the next message, and the newest 40 checkpoints are kept. No git needed; the Changes panel's git checkpoints
+  are the user's own.
+* `symbols`: a file's outline or the definitions of a name across the folder, by per-language regular expressions
+  (ripgrep for the search) — definitions, not mentions. `edit` matches a block whose lines differ only in indentation
+  or trailing whitespace when that match is unique, and re-indents the replacement. `ProjectCommands`:
+  `.teacher/commands/<name>.md` typed as `/name args` in a code session goes to the agent as hidden context with
+  `$ARGUMENTS` filled in.
 
 ## Browser and computer use (code agent)
 * **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
@@ -587,6 +611,10 @@ The app's footprint must not grow with how much the learner has done: data lives
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
+| — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
+| — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
+| /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
+| /command | `.teacher/commands/*.md` | project slash commands with `$ARGUMENTS` |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |
