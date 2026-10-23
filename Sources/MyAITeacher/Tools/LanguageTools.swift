@@ -125,12 +125,19 @@ struct LanguageTool: Tool {
     sound yourself. action="analyze": segment `text` into words with their readings (Japanese in kana and romaji, \
     Chinese in pinyin, other scripts in Latin), lemma and part of speech where the system knows them, plus sentence \
     count and detected languages. action="dictionary": Wiktionary definitions of `word` (with `lang` to pick the language \
-    section). Use these to check readings and forms before teaching them; the learner never sees the calls.
+    section). action="skills": a CEFR level per skill (`skills`: [{skill: reading|listening|writing|speaking|vocabulary|\
+    grammar, level, evidence}]) — set each from what you saw the learner do (a placement or real work), with that \
+    evidence (a level with no sample of that skill yet is `provisional`, shown as A2?); without `skills` it lists them. action="syllabus": the grammar syllabus — `points` [{name, level, \
+    description}] adds points (draft one per level from the CEFR descriptors once you know the language and level); \
+    without points it shows the syllabus with mastery and what's next. action="grammar": evidence from production — the \
+    learner used a grammar point (`point`, exactly as named in the syllabus) in something they wrote or said, `correct` \
+    true/false, `sentence` their words; this is what moves grammar mastery. Use these to check readings and forms before \
+    teaching them; the learner never sees the calls.
     """
     let risk = ToolRisk.network
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("Action.", enum: ["profile", "transliterate", "analyze", "dictionary"]),
+            "action": Schema.string("Action.", enum: ["profile", "transliterate", "analyze", "dictionary", "skills", "syllabus", "grammar"]),
             "target": Schema.string("profile: the language being learned (name or ISO code)."),
             "native": Schema.string("profile: the learner's own language."),
             "level": Schema.string("profile: CEFR level estimate (A1, A2, B1, B2, C1, C2), optionally with a note (\"A2, strong reading\")."),
@@ -139,6 +146,19 @@ struct LanguageTool: Tool {
             "to": Schema.string("transliterate: target script.", enum: Array(Transliteration.targets.keys).sorted()),
             "lang": Schema.string("analyze/dictionary: the text's language (ISO code or name)."),
             "word": Schema.string("dictionary: the word or phrase to look up."),
+            "skills": Schema.array(Schema.object([
+                "skill": Schema.string("The skill.", enum: StudyStore.skills), "level": Schema.string("CEFR level (A1…C2)."),
+                "evidence": Schema.string("What the learner did that shows it."),
+                "provisional": Schema.boolean("An estimate without a sample of this skill yet (self-report, one sentence): shown as A2?."),
+            ], required: ["skill", "level"]), "skills: levels to set."),
+            "points": Schema.array(Schema.object([
+                "name": Schema.string("The grammar point, short and specific (\"pretérito indefinido: regular verbs\")."),
+                "level": Schema.string("CEFR level (A1…C2)."), "description": Schema.string("One line: form and use."),
+            ], required: ["name", "level"]), "syllabus: points to add."),
+            "point": Schema.string("grammar: the grammar point, as named in the syllabus."),
+            "correct": Schema.boolean("grammar: used correctly?"),
+            "sentence": Schema.string("grammar: the learner's words (the evidence)."),
+            "assisted": Schema.boolean("grammar: they needed a prompt or correction to get it right."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
@@ -174,7 +194,11 @@ struct LanguageTool: Tool {
             }
             lines.append("Profiles: " + all.map { p in
                 let st = p.role == "target" ? study.vocabStats(lang: p.code) : nil
+                let skills = p.role == "target" ? study.skills(lang: p.code) : []
+                let grammar = p.role == "target" ? study.grammarSyllabus(lang: p.code) : []
                 return "\(Languages.englishName(p.code)) (\(p.code), \(p.role)\(p.level.map { ", \($0)" } ?? ""))" + (st.map { " — \($0.total) words saved, \($0.due) due, \($0.known) known" } ?? "")
+                    + (skills.isEmpty ? "" : "; by skill: " + skills.map { "\($0.skill) \($0.level)" }.joined(separator: ", "))
+                    + (grammar.isEmpty ? "" : "; grammar syllabus \(grammar.filter(\.mastered).count)/\(grammar.count) mastered")
             }.joined(separator: "; ") + ".")
             return ToolOutput(text: lines.joined(separator: "\n"), meta: ["profiles": .array(all.map { ["code": .string($0.code), "role": .string($0.role), "level": $0.level.map { .string($0) } ?? .null] })])
         case "transliterate":
@@ -204,8 +228,73 @@ struct LanguageTool: Tool {
         case "dictionary":
             let word = try input.req("word")
             return await Self.dictionary(word, lang: input["lang"]?.string)
+        case "skills", "syllabus", "grammar":
+            guard let lang = input["lang"]?.string.flatMap(Languages.code) ?? study.languageProfiles().first(where: { $0.role == "target" })?.code else {
+                return .error("Which language? Give `lang`, or set the target language with action=profile first.")
+            }
+            return Self.structure(input, lang: lang, study: study)
         default:
-            return .error("Unknown action. Use profile, transliterate, analyze or dictionary.")
+            return .error("Unknown action. Use profile, transliterate, analyze, dictionary, skills, syllabus or grammar.")
+        }
+    }
+
+    /// Levels per skill, the grammar syllabus, and grammar evidence from what the learner produced.
+    static func structure(_ input: JSON, lang: String, study: StudyStore) -> ToolOutput {
+        let name = Languages.englishName(lang)
+        switch input["action"]?.string {
+        case "skills":
+            var set: [String] = [], bad: [String] = []
+            for s in input["skills"]?.array ?? [] {
+                let skill = s["skill"]?.string ?? ""
+                var level = (s["level"]?.string ?? "").trimmingCharacters(in: .whitespaces)
+                // A provisional level carries a "?" until a real sample of the skill replaces it.
+                if s["provisional"]?.bool == true, !level.isEmpty, !level.hasSuffix("?") { level += "?" }
+                if s["provisional"]?.bool == false, level.hasSuffix("?") { level.removeLast() }
+                if study.setSkill(lang: lang, skill: skill, level: level, evidence: s["evidence"]?.string) { set.append("\(skill) \(level)") } else { bad.append(skill) }
+            }
+            if !set.isEmpty { EventBus.publish(.studyDataChanged) }
+            let all = study.skills(lang: lang)
+            var out = set.isEmpty ? "" : "Set: \(set.joined(separator: ", ")).\n"
+            if !bad.isEmpty { out += "Not set (skill must be one of \(StudyStore.skills.joined(separator: ", ")), with a level): \(bad.joined(separator: ", ")).\n" }
+            out += all.isEmpty ? "No skill levels for \(name) yet. Place each from evidence: a short text to read, audio to listen to, a paragraph to write, a spoken answer."
+                : "\(name) by skill: " + all.map { "\($0.skill) \($0.level)" + ($0.evidence.map { " (\($0))" } ?? "") }.joined(separator: "; ") + "."
+            let missing = StudyStore.skills.filter { s in !all.contains { $0.skill == s } }
+            if !all.isEmpty, !missing.isEmpty { out += "\nNot placed yet: \(missing.joined(separator: ", "))." }
+            return ToolOutput(text: out, meta: ["skills": .array(all.map { ["skill": .string($0.skill), "level": .string($0.level), "evidence": $0.evidence.map { .string($0) } ?? .null] })])
+        case "syllabus":
+            let pts = (input["points"]?.array ?? []).compactMap { p -> (String, String, String?)? in
+                guard let n = p["name"]?.string, let l = p["level"]?.string else { return nil }
+                return (n, l, p["description"]?.string)
+            }
+            var out = ""
+            if !pts.isEmpty {
+                let n = study.addGrammarPoints(lang: lang, pts.map { (name: $0.0, level: $0.1, description: $0.2) })
+                out += "Added or updated \(n) grammar point\(n == 1 ? "" : "s").\n"
+                EventBus.publish(.studyDataChanged)
+            }
+            let all = study.grammarSyllabus(lang: lang)
+            guard !all.isEmpty else { return ToolOutput(text: out + "No grammar syllabus for \(name) yet. Draft one: the core points per CEFR level (A1 up to a level above theirs), as `points`.") }
+            for lv in StudyStore.cefr {
+                let at = all.filter { $0.level == lv }
+                guard !at.isEmpty else { continue }
+                out += "\n\(lv) — \(at.filter(\.mastered).count)/\(at.count) mastered\n"
+                out += at.map { g in
+                    "• \(g.name): " + (g.seen ? "\(Int((g.pKnown * 100).rounded()))% (\(g.mastery?.correct ?? 0)/\(g.mastery?.attempts ?? 0) right)" + (g.mastery?.notes.map { ", last: \($0)" } ?? "") : "not seen yet")
+                }.joined(separator: "\n") + "\n"
+            }
+            let next = study.nextGrammar(lang: lang)
+            if !next.isEmpty { out += "\nNext: " + next.map { "\($0.name) (\($0.level)\($0.seen ? ", shaky" : ""))" }.joined(separator: "; ") }
+            return ToolOutput(text: out.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:   // grammar
+            guard let point = input["point"]?.string, !point.isEmpty, let correct = input["correct"]?.bool else {
+                return .error("grammar needs `point` (as named in the syllabus) and `correct`, with `sentence` as the evidence.")
+            }
+            let known = study.grammarSyllabus(lang: lang).contains { $0.name.compare(point, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+            guard let g = study.recordGrammar(lang: lang, point: point, correct: correct, evidence: input["sentence"]?.string, level: input["level"]?.string,
+                                              assisted: input["assisted"]?.bool == true) else { return .error("Couldn't record it.") }
+            EventBus.publish(.studyDataChanged)
+            return ToolOutput(text: "\(g.name) (\(g.level)): \(correct ? "used correctly" : "used wrongly")\(input["assisted"]?.bool == true ? " with help (no gain)" : ""); mastery \(Int((g.pKnown * 100).rounded()))%, \(g.mastery?.correct ?? 0)/\(g.mastery?.attempts ?? 0) right."
+                              + (known ? "" : " It wasn't in the syllabus: added at \(g.level)."))
         }
     }
 

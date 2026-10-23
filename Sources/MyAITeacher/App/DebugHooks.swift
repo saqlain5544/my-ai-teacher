@@ -89,6 +89,13 @@ enum DebugHooks {
                 web?.evaluateJavaScript("T.dictation(\(JSON.string(key).compact),\(JSON.string(cmd["heard"]?.string ?? target).compact),true,\(x.compact))", completionHandler: nil)
                 AppLog.write("speakFile: \(info?["prosody"]?.compact.prefix(300) ?? "no prosody")")
             }
+        case "importVocab":   // {"action":"importVocab","path":"/tmp/words.txt","lang":"es"}: what the Progress screen's Import does
+            guard let p = cmd["path"]?.string, let lang = cmd["lang"]?.string.flatMap(Languages.code) else { return }
+            let study = app.services.study
+            Task { @MainActor in
+                do { AppLog.write("importVocab: " + (try await VocabTransfer.importFile(URL(fileURLWithPath: p), lang: lang, into: study))) }
+                catch { AppLog.write("importVocab: \(error.localizedDescription)") }
+            }
         case "sendDraft":   // sends what the composer holds (text and attachments), once nothing is still being transcribed
             guard let s = session, s.pendingMedia.isEmpty, !s.isRunning else { AppLog.write("sendDraft: not ready"); return }
             let blocks = s.attachments.map(\.block); let text = cmd["text"]?.string ?? s.draft
