@@ -834,7 +834,8 @@ enum SubAgent {
             switch ev {
             case .text(let t), .thinking(let t):
                 let kind: Block.Kind = { if case .text = ev { return .text }; return .thinking }()
-                if assistant.blocks.last?.kind != kind { assistant.blocks.append(Block(kind: kind, text: "")) }
+                // A signed thinking block is finished: new reasoning starts a new block (as in the lesson loop).
+                if assistant.blocks.last?.kind != kind || assistant.blocks.last?.signature != nil { assistant.blocks.append(Block(kind: kind, text: "")) }
                 let i = assistant.blocks.count - 1, id = assistant.id
                 assistant.blocks[i].text = (assistant.blocks[i].text ?? "") + t
                 await w { $0.delta(id, i, kind, t) }
@@ -849,6 +850,14 @@ enum SubAgent {
                 if !t.isEmpty { assistant.blocks.insert(.thinking(t), at: 0) }
                 let m = assistant
                 await w { $0.upsert(m) }
+            case .thinkingSignature(let sig):
+                // Kept so the step's reasoning is replayed with its tool calls: Anthropic requires signed thinking back in
+                // a tool loop, and the client leaves unsigned thinking out of requests.
+                if let i = assistant.blocks.indices.last, assistant.blocks[i].kind == .thinking, assistant.blocks[i].signature == nil {
+                    assistant.blocks[i].signature = sig
+                } else {
+                    assistant.blocks.append(.thinking("", signature: sig))
+                }
             case .usage(let u): metrics.usage = u
             case .stop(let r): metrics.finishReason = r
             default: break
@@ -964,8 +973,20 @@ enum SubAgent {
         // the same request.
         let keepFrom = ContextPolicy.turnStarts(out).last ?? 0
         for i in out.indices where i < keepFrom { out[i].blocks = out[i].blocks.map(ContextPolicy.trim) }
+        // A run usually has one brief, so the rule above alone never trimmed inside it. Within the current brief, tool
+        // results older than the latest `recentResultsKept` steps are stubbed too — except with signed thinking in play,
+        // where editing an earlier tool result invalidates the later thinking blocks.
+        let signed = out.contains { $0.blocks.contains { $0.kind == .thinking && $0.signature != nil } }
+        if !signed {
+            let results = out.indices.filter { $0 >= keepFrom && out[$0].isToolResultOnly }
+            for i in results.dropLast(recentResultsKept) {
+                out[i].blocks = out[i].blocks.map { $0.kind == .toolResult ? ContextPolicy.trim($0) : $0 }
+            }
+        }
         return out
     }
+    /// Steps of tool results a run keeps verbatim inside its current brief.
+    static let recentResultsKept = 4
 
     static func check(_ text: String, _ schema: JSON) -> (JSON?, [String]) {
         guard let j = JSONSchemaCheck.extract(text) else { return (nil, ["the reply is not JSON"]) }

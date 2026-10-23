@@ -56,7 +56,10 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
 3. **Microcompaction epochs.** Past 70% of the budget, bulky tool results/inputs and images older than the last 3
    turns become head+tail stubs. The cut point jumps (epochs), so the prefix stays cacheable between jumps.
 4. **Summary compaction** only if still over budget; keeps ~30% of the budget verbatim, counted in tokens (script-aware).
-   `compactIfNeeded` returns the request-ready history, so a step prepares it once.
+   `compactIfNeeded` returns the request-ready history, so a step prepares it once. Token estimates are cached per
+   message (id + size), so the two or three estimates a step makes don't rescan a long lesson.
+6. **Sub-agents** stub tool results older than their last 4 steps inside the current brief too (a research run has one
+   brief), except when signed thinking is in the history; they keep thinking signatures so reasoning replays with tool calls.
 5. **Budget** = min(Settings → Context budget, half the model's context window from provider metadata).
 
 Model metadata (context window, max output, reasoning, vision, tools, free/pricing) comes from each provider's

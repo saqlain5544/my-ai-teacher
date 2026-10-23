@@ -18,7 +18,7 @@ struct Composer: View {
                     Image(systemName: "exclamationmark.triangle.fill").foregroundStyle(.orange)
                     Text(err).font(.callout).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     Spacer()
-                    Button { session.errorMessage = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless)
+                    Button { session.errorMessage = nil } label: { Image(systemName: "xmark") }.buttonStyle(.borderless).accessibilityLabel("Dismiss error").help("Dismiss")
                 }
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
@@ -118,7 +118,7 @@ struct Composer: View {
             }
             Text(a.name).font(.caption).lineLimit(1).frame(maxWidth: 160, alignment: .leading)
             Button { session.attachments.removeAll { $0.id == a.id } } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                .buttonStyle(.borderless)
+                .buttonStyle(.borderless).accessibilityLabel("Remove \(a.name)").help("Remove attachment")
         }
         .padding(4).padding(.trailing, 4)
         .background(RoundedRectangle(cornerRadius: 9).fill(Color.primary.opacity(0.06)))

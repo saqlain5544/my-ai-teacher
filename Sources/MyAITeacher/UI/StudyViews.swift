@@ -110,7 +110,7 @@ struct FlashcardsView: View {
                                     Text("\(c.reps) reviews").font(.caption2).foregroundStyle(.tertiary)
                                 }
                                 Button { app.services.study.deleteCard(c.id); reload(); app.refreshCounts() } label: { Image(systemName: "trash") }
-                                    .buttonStyle(.borderless).foregroundStyle(.secondary)
+                                    .buttonStyle(.borderless).foregroundStyle(.secondary).accessibilityLabel("Delete card").help("Delete card")
                             }
                             .padding(.vertical, 8)
                             Divider()
@@ -415,7 +415,7 @@ struct StudyProgressView: View {
                 Text(p.title).font(.headline)
                 Spacer()
                 Text("\(b.doneCount)/\(b.courseCount)").foregroundStyle(.secondary)
-                Button { app.services.study.deletePlan(p.id); reload() } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+                Button { app.services.study.deletePlan(p.id); reload() } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Delete plan").help("Delete plan")
             }
             if let g = p.goal { Text(g).font(.callout).foregroundStyle(.secondary) }
             ProgressView(value: b.courseCount == 0 ? 0 : Double(b.doneCount) / Double(b.courseCount))

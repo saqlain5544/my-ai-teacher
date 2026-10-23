@@ -60,7 +60,10 @@ struct OpenAIClient: LLMClient {
                         if ev.data == "[DONE]" { break }
                         guard let j = JSON.parse(ev.data) else { continue }
                         if let err = j["error"], !err.isNull {
-                            throw HTTPError(status: 500, body: ev.data)
+                            // The provider's own code when it gives one (OpenRouter sends {"error":{"code":400,…}}): a 500
+                            // for everything made a context-length or bad-request error look transient and retried 3×.
+                            let code = err["code"]?.int ?? err["status"]?.int ?? Int(err["code"]?.string ?? "")
+                            throw HTTPError(status: code.flatMap { (400...599).contains($0) ? $0 : nil } ?? 500, body: ev.data)
                         }
                         if let u = j["usage"], !u.isNull { usage = Self.usage(u) }
                         guard let choice = j["choices"]?[0] else { continue }

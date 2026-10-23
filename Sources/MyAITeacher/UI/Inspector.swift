@@ -98,7 +98,7 @@ struct FileExplorer: View {
                     Image(systemName: "folder").foregroundStyle(.secondary)
                     Text(app.workspace.name).font(.callout.weight(.semibold)).lineLimit(1).truncationMode(.middle)
                     Spacer()
-                    Button { tree.root?.refresh() } label: { Image(systemName: "arrow.clockwise") }
+                    Button { tree.root?.refresh() } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh files")
                         .buttonStyle(.borderless).help("Refresh")
                 }
                 .padding(.horizontal, 10).padding(.vertical, 6)
@@ -285,9 +285,11 @@ struct PageViewer: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 6) {
-                Button { page.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!page.canGoBack)
-                Button { page.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!page.canGoForward)
-                Button { page.web.reload() } label: { Image(systemName: page.loading ? "xmark" : "arrow.clockwise") }
+                Button { page.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!page.canGoBack).accessibilityLabel("Back").help("Back")
+                Button { page.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!page.canGoForward).accessibilityLabel("Forward").help("Forward")
+                // While loading the icon is a stop sign, so the button stops (it used to reload again).
+                Button { if page.loading { page.web.stopLoading() } else { page.web.reload() } } label: { Image(systemName: page.loading ? "xmark" : "arrow.clockwise") }
+                    .accessibilityLabel(page.loading ? "Stop loading" : "Reload").help(page.loading ? "Stop loading" : "Reload")
                 Text(page.url?.host() ?? "No page").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
                     .frame(maxWidth: .infinity, alignment: .leading).help(page.url?.absoluteString ?? "")
                 Button {

@@ -324,13 +324,13 @@ struct MemoryView: View {
             }
             Spacer()
             if !compact { importanceDots(m.importance) }
-            Button { provenance = m } label: { Image(systemName: "info.circle") }.buttonStyle(.borderless).help("Where this came from")
-            Button { editing = m.id; draft = m.content } label: { Image(systemName: "pencil") }.buttonStyle(.borderless)
+            Button { provenance = m } label: { Image(systemName: "info.circle") }.buttonStyle(.borderless).accessibilityLabel("Where this came from").help("Where this came from")
+            Button { editing = m.id; draft = m.content } label: { Image(systemName: "pencil") }.buttonStyle(.borderless).accessibilityLabel("Edit memory").help("Edit")
             if m.kind == .misconception || m.kind == .goal {
-                Button { hub.resolveItem(m.id); reload(); app.refreshCounts() } label: { Image(systemName: "checkmark.circle") }
+                Button { hub.resolveItem(m.id); reload(); app.refreshCounts() } label: { Image(systemName: "checkmark.circle") }.accessibilityLabel(m.kind == .goal ? "Goal reached" : "No longer a problem")
                     .buttonStyle(.borderless).help(m.kind == .goal ? "Goal reached" : "No longer a problem")
             }
-            Button { hub.delete(m.id); reload(); app.refreshCounts() } label: { Image(systemName: "trash") }.buttonStyle(.borderless)
+            Button { hub.delete(m.id); reload(); app.refreshCounts() } label: { Image(systemName: "trash") }.buttonStyle(.borderless).accessibilityLabel("Delete memory").help("Delete")
         }
     }
 

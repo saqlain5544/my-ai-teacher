@@ -13,14 +13,30 @@ enum ContextPolicy {
 
     static func estimateTokens(_ msgs: [ChatMessage]) -> Int {
         var units = 0.0
-        for m in msgs {
-            for b in m.blocks {
-                if let t = b.text { units += tokens(t) }
-                if let i = b.input { units += tokens(i.compact) }
-                if b.hasPayload { units += 1_500 }   // ~1.5k tokens per image
-            }
-        }
+        for m in msgs { units += messageTokens(m) }
         return Int(units)
+    }
+
+    /// Per-message estimates, keyed by id and size: a step estimates the whole history two or three times (budget check,
+    /// squeeze, compaction), and scanning every scalar of a long lesson each time cost tens of milliseconds on the main
+    /// thread. A trimmed, merged or edited copy changes size, so it misses and is counted afresh. Bounded: cleared whole.
+    private static let tokenCache = Locked<[String: Double]>([:])
+    static let tokenCacheLimit = 20_000
+
+    private static func messageTokens(_ m: ChatMessage) -> Double {
+        let key = "\(m.id)#\(m.blocks.count)#\(m.approxBytes)"
+        if let hit = tokenCache.mutate({ $0[key] }) { return hit }
+        var units = 0.0
+        for b in m.blocks {
+            if let t = b.text { units += tokens(t) }
+            if let i = b.input { units += tokens(i.compact) }
+            if b.hasPayload { units += 1_500 }   // ~1.5k tokens per image
+        }
+        tokenCache.mutate { c in
+            if c.count >= tokenCacheLimit { c.removeAll(keepingCapacity: true) }
+            c[key] = units
+        }
+        return units
     }
 
     /// A cheap, script-aware estimate: Latin text is ~4 characters per token, but CJK, kana and Hangul are ~1 per

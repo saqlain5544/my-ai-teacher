@@ -235,7 +235,7 @@ struct ModelPickerPopover: View {
                             .help("Couldn't load \(p.name)'s live model list (\(err.prefix(120))). Showing the built-in list.")
                     }
                     if hasKey {
-                        Button { app.loadModels(p, force: true) } label: { Image(systemName: "arrow.clockwise").font(.caption2) }
+                        Button { app.loadModels(p, force: true) } label: { Image(systemName: "arrow.clockwise").font(.caption2) }.accessibilityLabel("Reload \(p.name)'s models")
                             .buttonStyle(.borderless).help("Reload \(p.name)'s models")
                         Circle().fill(.green).frame(width: 6, height: 6)
                     }

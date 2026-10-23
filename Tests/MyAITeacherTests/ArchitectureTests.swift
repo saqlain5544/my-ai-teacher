@@ -103,3 +103,28 @@ final class ArchitectureTests: XCTestCase {
         XCTAssertEqual(c.dropped, 9)
     }
 }
+
+/// Sub-agent context: older tool results inside one brief are stubbed, the latest kept; never with signed thinking.
+final class SubAgentLeanTests: XCTestCase {
+    private func run(signed: Bool) -> [ChatMessage] {
+        var msgs = [ChatMessage(role: .user, blocks: [.text("brief")])]
+        for i in 0..<6 {
+            var a = ChatMessage(role: .assistant, blocks: [.toolUse(id: "c\(i)", name: "web_fetch", input: ["url": "u"])])
+            if signed { a.blocks.insert(.thinking("why", signature: "sig"), at: 0) }
+            msgs.append(a)
+            msgs.append(ChatMessage(role: .user, blocks: [.toolResult(id: "c\(i)", name: "web_fetch", content: String(repeating: "x", count: 40_000))]))
+        }
+        return SubAgent.lean(msgs)
+    }
+
+    func testOlderResultsInsideOneBriefAreStubbed() {
+        let sizes = run(signed: false).filter(\.isToolResultOnly).map { $0.blocks[0].text?.count ?? 0 }
+        XCTAssertEqual(sizes.count, 6)
+        XCTAssertTrue(sizes.prefix(2).allSatisfy { $0 < 2_000 }, "older results stubbed: \(sizes)")
+        XCTAssertTrue(sizes.suffix(SubAgent.recentResultsKept).allSatisfy { $0 == 40_000 }, "latest kept verbatim")
+    }
+
+    func testSignedThinkingKeepsResultsIntact() {
+        XCTAssertTrue(run(signed: true).filter(\.isToolResultOnly).allSatisfy { $0.blocks[0].text?.count == 40_000 })
+    }
+}

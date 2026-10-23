@@ -190,7 +190,7 @@ struct InsightsView: View {
                 }
             }
             .frame(width: 230).labelsHidden()
-            Button { Task { await reload() } } label: { Image(systemName: "arrow.clockwise") }.help("Refresh")
+            Button { Task { await reload() } } label: { Image(systemName: "arrow.clockwise") }.accessibilityLabel("Refresh insights").help("Refresh")
         }
     }
 

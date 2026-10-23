@@ -60,7 +60,7 @@ struct ChangesPanel: View {
         HStack(spacing: 8) {
             Text(model.files.isEmpty ? "Up to date" : "\(model.files.count) changed file\(model.files.count == 1 ? "" : "s")").font(.headline)
             Spacer()
-            Button { Task { await model.reload(folder) } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless).help("Refresh")
+            Button { Task { await model.reload(folder) } } label: { Image(systemName: "arrow.clockwise") }.buttonStyle(.borderless).accessibilityLabel("Refresh changes").help("Refresh")
             Button("Save checkpoint") { Task { await model.checkpoint(folder) } }
                 .disabled(!canWrite || model.files.isEmpty)
                 .help(canWrite ? "Record the current state of every file (git commit)" : "Needs write access to this folder")

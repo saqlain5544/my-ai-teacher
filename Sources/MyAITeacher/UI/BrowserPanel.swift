@@ -29,7 +29,7 @@ struct BrowserPanel: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 4) {
                 ForEach(browser.tabs) { t in TabChip(tab: t, active: t.id == browser.active?.id) { browser.activeID = t.id } close: { browser.close(t) } }
-                Button { browser.newTab() } label: { Image(systemName: "plus") }.buttonStyle(.borderless).help("New tab")
+                Button { browser.newTab() } label: { Image(systemName: "plus") }.accessibilityLabel("New tab").buttonStyle(.borderless).help("New tab")
             }.padding(.horizontal, 8).padding(.vertical, 5)
         }
     }
@@ -70,9 +70,10 @@ private struct AddressBar: View {
 private struct NavButtons: View {
     @ObservedObject var tab: BrowserTab
     var body: some View {
-        Button { tab.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!tab.canGoBack)
-        Button { tab.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!tab.canGoForward)
+        Button { tab.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!tab.canGoBack).accessibilityLabel("Back").help("Back")
+        Button { tab.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!tab.canGoForward).accessibilityLabel("Forward").help("Forward")
         Button { if tab.loading { tab.web.stopLoading() } else { tab.web.reload() } } label: { Image(systemName: tab.loading ? "xmark" : "arrow.clockwise") }
+            .accessibilityLabel(tab.loading ? "Stop loading" : "Reload").help(tab.loading ? "Stop loading" : "Reload")
     }
 }
 
@@ -85,7 +86,7 @@ private struct TabChip: View {
         HStack(spacing: 4) {
             if tab.loading { ProgressView().controlSize(.mini) }
             Text(tab.title.isEmpty ? (tab.url?.host() ?? "New tab") : tab.title).font(.caption).lineLimit(1).frame(maxWidth: 120)
-            Button(action: close) { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.borderless)
+            Button(action: close) { Image(systemName: "xmark").font(.caption2) }.buttonStyle(.borderless).accessibilityLabel("Close tab").help("Close tab")
         }
         .padding(.horizontal, 8).padding(.vertical, 3)
         .background(active ? Color.accentColor.opacity(0.18) : Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 6))
