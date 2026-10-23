@@ -60,7 +60,8 @@ struct ScriptKeyboardView: View {
                 HStack(spacing: 5) {
                     ForEach(Array(row.enumerated()), id: \.offset) { _, key in button(key) }
                 }
-                .environment(\.layoutDirection, layout.rtl ? .rightToLeft : .leftToRight)
+                // Keys sit where they are on the Mac's keyboard (ض top left on Arabic PC), even for right-to-left scripts.
+                .environment(\.layoutDirection, .leftToRight)
             }
         }
         .padding(8)
@@ -175,7 +176,7 @@ struct ScriptKeyboardView: View {
 
     @ViewBuilder private func button(_ key: KeyboardLayouts.Key) -> some View {
         if key == .text("") {
-            Color.clear.frame(width: 34, height: 32)   // a gap in the kana table
+            Color.clear.frame(width: 42, height: 32)   // a gap in the kana table (a key's width: 34 + its padding)
         } else {
             let isFn: Bool = { if case .fn = key { return true }; return false }()
             let on: Bool = { if case .fn(let f) = key { return (f == "shift" && shift) || (f == "kana" && katakana) }; return false }()
@@ -192,7 +193,7 @@ struct ScriptKeyboardView: View {
                 if case .text = key, shift { shift = false }   // one shifted key at a time, as on the page
             } label: {
                 Text(label(key))
-                    .font(.system(size: isFn ? 12 : 17))
+                    .font(.system(size: key == .fn("dakuten") || key == .fn("handakuten") ? 22 : isFn ? 12 : 17))
                     .frame(minWidth: key == .fn("space") ? 150 : 34, minHeight: 32)
                     .padding(.horizontal, 4)
                     .background(RoundedRectangle(cornerRadius: 7).fill(on || hit ? Color.accentColor.opacity(0.28) : isFn ? Color.primary.opacity(0.07) : Color(nsColor: .controlBackgroundColor)))

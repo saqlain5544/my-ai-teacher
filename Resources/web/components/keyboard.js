@@ -429,7 +429,7 @@
       '<button data-fn="compact" class="kbd-fn" title="' + (K.compact ? 'Show every key' : 'Only the helper keys') + '">' + (K.compact ? '▴ Full' : '▾ Compact') + '</button>' +
       '<button data-fn="close" class="kbd-fn" title="Hide (the ⌨ beside a field brings it back)">✕</button></div>';
     h += '<div class="kbd-cands" hidden aria-label="Kanji from your words"></div>';
-    h += '<div class="kbd-rows' + (l.compose === 'kana' && K.mode !== 'romaji' && !K.compact ? ' kbd-grid' : '') + '"' + (l.rtl ? ' dir="rtl"' : '') + '>';
+    h += '<div class="kbd-rows' + (l.compose === 'kana' && K.mode !== 'romaji' && !K.compact ? ' kbd-grid' : '') + '" dir="ltr">';   // keys where they are on the Mac's keyboard, even for right-to-left scripts
     for (const row of rows) {
       h += '<div class="kbd-row">';
       for (const key of row) {
