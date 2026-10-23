@@ -146,9 +146,9 @@ final class AnalyzerStream: @unchecked Sendable {
 /// compares the melody — rises, falls, Mandarin tones, a Japanese accent drop — and nothing else.
 enum Pitch {
     /// F0 per 10 ms frame (Hz) by the YIN method between 70 and 450 Hz; nil for unvoiced or quiet frames.
-    static func track(_ samples: [Float], sampleRate: Double) -> [Double?] {
-        // Work at ~8 kHz: enough for voices up to 450 Hz, and four times less work than 16 kHz.
-        let factor = max(1, Int((sampleRate / 8_000).rounded()))
+    static func track(_ samples: [Float], sampleRate: Double, workRate: Double = 8_000, threshold: Float = 0.15) -> [Double?] {
+        // Work at ~8 kHz: enough for voices up to 450 Hz, and four times less work than 16 kHz (tones use 16 kHz).
+        let factor = max(1, Int((sampleRate / workRate).rounded()))
         let sr = sampleRate / Double(factor)
         var x = [Float](); x.reserveCapacity(samples.count / factor + 1)
         var i = 0
@@ -176,10 +176,16 @@ enum Pitch {
             for tau in 1...maxLag { running += d[tau]; cmnd[tau] = running > 0 ? d[tau] * Float(tau) / running : 1 }
             var tau = minLag
             while tau < maxLag {
-                if cmnd[tau] < 0.15 { while tau + 1 < maxLag && cmnd[tau + 1] < cmnd[tau] { tau += 1 }; best = tau; break }
+                if cmnd[tau] < threshold { while tau + 1 < maxLag && cmnd[tau + 1] < cmnd[tau] { tau += 1 }; best = tau; break }
                 tau += 1
             }
-            out.append(best.map { sr / Double($0) })
+            // The dip between samples (parabolic interpolation): whole-sample lags step pitch in ~0.4-semitone jumps.
+            out.append(best.map { t in
+                guard t > 1, t < maxLag else { return sr / Double(t) }
+                let a = Double(cmnd[t - 1]), b = Double(cmnd[t]), c = Double(cmnd[t + 1]), den = a - 2 * b + c
+                let shift = den != 0 ? max(-0.5, min(0.5, (a - c) / (2 * den))) : 0
+                return sr / (Double(t) + shift)
+            })
         }
         return out
     }

@@ -82,7 +82,9 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
     private var finish: (@MainActor () -> Void)?
 
     nonisolated static func bestVoice(_ lang: String) -> AVSpeechSynthesisVoice? {
-        let all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.lowercased().hasPrefix(lang.lowercased()) }
+        var all = AVSpeechSynthesisVoice.speechVoices().filter { $0.language.lowercased().hasPrefix(lang.lowercased()) }
+        // "zh" is Mandarin: a Hong Kong voice speaks Cantonese, with other tones (asked for only as zh-HK / yue).
+        if lang.lowercased() == "zh" { all.removeAll { $0.language.uppercased().hasSuffix("HK") } }
         let preferredRegion = Locale.current.region?.identifier ?? ""
         return all.sorted { a, b in
             if a.quality != b.quality { return a.quality.rawValue > b.quality.rawValue }
@@ -431,7 +433,10 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         let rendered: ([Float], Double)? = try? await withDeadline(seconds: 8, { await synthesize(target, lang: lang) })
         guard let (ref, refRate) = rendered else { return nil }
         let reference = Pitch.contour(Pitch.track(ref, sampleRate: refRate))
-        return Pitch.json(learner: learner, target: reference)
+        guard var j = Pitch.json(learner: learner, target: reference)?.object else { return nil }
+        // Tones, accent drop or stress, where this language and target allow (see Prosody).
+        if let p = Prosody.analyse(target: target, lang: lang, learner: samples, learnerRate: rate, reference: ref, refRate: refRate) { j["prosody"] = p }
+        return .object(j)
     }
 
     /// The target sentence spoken by the best installed voice into memory (AVSpeechSynthesizer.write), as mono samples.

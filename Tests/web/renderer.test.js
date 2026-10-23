@@ -1347,6 +1347,34 @@
     const l = $('[data-tool-id="l1"]'); ok(l.textContent.includes('Language') && !/🔧/.test(l.textContent), 'its own card, not the generic one');
   });
 
+  test('pronunciation: tones per syllable and the accent drop, each saying what was measured', () => {
+    const input = { questions: [{ type: 'speak', prompt: 'Say it', target: '妈麻马骂', lang: 'zh' }, { type: 'speak', prompt: 'Say it', target: '雨', lang: 'ja' }] };
+    const a = A([{ kind: 'toolUse', id: 'pr1', name: 'ask_learner', input }]);
+    T.reset([U('q'), a], {}); T.interaction({ id: 'pr1', kind: 'ask', payload: input }, true);
+    click($('[data-act="q-speak"]', $('[data-tool-id="pr1"]')));
+    const tones = { kind: 'tones', judged: 3, right: 2, syllables: [
+      { char: '妈', pinyin: 'mā', expected: 1, heard: 1, ok: true, measurable: true },
+      { char: '麻', pinyin: 'má', expected: 2, heard: 3, ok: false, measurable: true },
+      { char: '马', pinyin: 'mǎ', expected: 3, heard: 3, ok: false, measurable: false },
+      { char: '骂', pinyin: 'mà', expected: 4, heard: 4, ok: true, measurable: true }] };
+    window.TeacherUI.dictation('pr1:0', '妈麻马骂', true, { pitch: { learner: [0, 1, null, -1], target: [0, 1, 0, -1], similarity: 0.7, prosody: tones } });
+    let card = $('[data-tool-id="pr1"]');
+    noErrors(card, 'tones');
+    eq($$('.pr-syl', card).length, 4, 'a cell per syllable');
+    ok($('.pr-syl.miss', card).textContent.includes('2 → 3'), 'the miss says expected and heard');
+    ok($$('.pr-syl', card)[2].classList.contains('na'), 'a tone the synthetic voice does not show is not judged');
+    ok(/2 of 3 judged/.test(card.textContent) && /synthetic voice/.test(card.textContent), 'says what was judged, against what');
+    click($$('[data-act="q-speak"]', card)[1]);
+    window.TeacherUI.dictation('pr1:1', '雨', true, { pitch: { learner: [1, -2], target: [1, -2], prosody: { kind: 'accent', morae: ['あ', 'め'], learner: 0, reference: 1 } } });
+    card = $('[data-tool-id="pr1"]');
+    const acc = $$('.sp-prosody', card)[1];
+    ok(acc && /no fall/.test(acc.textContent) && /differs from the synthetic voice/.test(acc.textContent), acc && acc.textContent);
+    eq($$('.pr-drop', acc).length, 1, 'the synthetic voice falls after あ');
+    const F = window.TeacherForms.state('pr1');
+    eq(F.answers[0].prosody.kind, 'tones', 'the measurement goes with the answer to the lesson');
+    T.interaction({ id: 'pr1' }, false);
+  });
+
   test('a speaking take with no voice says so, instead of resetting without a word', () => {
     const input = { questions: [{ type: 'speak', prompt: 'Say it', target: 'こんにちは', lang: 'ja' }] };
     const a = A([{ kind: 'toolUse', id: 'sp9', name: 'ask_learner', input }]);

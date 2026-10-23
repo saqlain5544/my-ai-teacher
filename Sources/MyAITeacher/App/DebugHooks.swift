@@ -79,6 +79,16 @@ enum DebugHooks {
             case "end": s.talk.end()
             default: AppLog.write("talk: phase \(s.talk.phase) turns \(s.talk.turns) heard \(s.talk.heard)")
             }
+        case "speakFile":   // {"action":"speakFile","key":"toolId:qi","path":"/tmp/take.aiff","target":"…","lang":"zh"}: a speak take from a file
+            guard let key = cmd["key"]?.string, let p = cmd["path"]?.string, let target = cmd["target"]?.string, let lang = cmd["lang"]?.string else { return }
+            let web = transcript
+            Task { @MainActor in
+                guard let s = try? await MediaTranscript.samples(URL(fileURLWithPath: p)) else { AppLog.write("speakFile: unreadable"); return }
+                let info = await Speech.pitchInfo(samples: s, rate: 16_000, target: target, lang: lang)
+                let x: JSON = ["engine": "audio file (debug)", "pitch": info ?? .null]
+                web?.evaluateJavaScript("T.dictation(\(JSON.string(key).compact),\(JSON.string(cmd["heard"]?.string ?? target).compact),true,\(x.compact))", completionHandler: nil)
+                AppLog.write("speakFile: \(info?["prosody"]?.compact.prefix(300) ?? "no prosody")")
+            }
         case "sendDraft":   // sends what the composer holds (text and attachments), once nothing is still being transcribed
             guard let s = session, s.pendingMedia.isEmpty, !s.isRunning else { AppLog.write("sendDraft: not ready"); return }
             let blocks = s.attachments.map(\.block); let text = cmd["text"]?.string ?? s.draft

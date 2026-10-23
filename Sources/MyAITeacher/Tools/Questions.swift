@@ -411,7 +411,8 @@ enum Questions {
             guard let heard = a["heard"]?.string else { return "(nothing was recognised)" }
             let target = q["target"]?.string ?? q["text"]?.string ?? ""
             let engine = a["engine"]?.string.map { ", \($0)" } ?? ""
-            return "said “\(heard)” (speech recognition\(engine); target “\(target)”: \(TextDiff.align(target: target, given: heard, lang: q["lang"]?.string).summary))"
+            let prosody = a["prosody"].flatMap(Prosody.summary).map { "; \($0)" } ?? ""
+            return "said “\(heard)” (speech recognition\(engine); target “\(target)”: \(TextDiff.align(target: target, given: heard, lang: q["lang"]?.string).summary)\(prosody))"
         case "dictation":
             guard let g = a.string else { return "(no answer)" }
             let target = q["listen"]?.string ?? q["text"]?.string ?? ""
