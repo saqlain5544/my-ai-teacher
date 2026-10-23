@@ -115,7 +115,8 @@ struct AnthropicClient: LLMClient {
                             }
                         case "error":
                             let msg = j["error"]?["message"]?.string ?? ev.data
-                            throw HTTPError(status: 500, body: "{\"error\":{\"message\":\(JSON.string(msg).compact)}}")
+                            throw HTTPError(status: HTTPError.status(errorType: j["error"]?["type"]?.string),
+                                            body: "{\"error\":{\"message\":\(JSON.string(msg).compact)}}")
                         default: break
                         }
                     }

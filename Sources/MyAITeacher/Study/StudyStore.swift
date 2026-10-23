@@ -175,10 +175,13 @@ final class StudyStore: @unchecked Sendable {
         let (s, days) = FSRS.review(.init(stability: c.stability, difficulty: c.difficulty, reps: c.reps, lapses: c.lapses, lastReview: c.lastReview), rating: rating, now: now)
         let due = now.addingTimeInterval(days * 86400)
         let elapsed = c.lastReview.map { now.timeIntervalSince($0) / 86400 } ?? 0
-        db.run("UPDATE cards SET due=?, stability=?, difficulty=?, reps=?, lapses=?, last_review=?, state=? WHERE id=?",
-                        due, s.stability, s.difficulty, s.reps, s.lapses, now, rating == .again ? 3 : 2, c.id)
-        db.run("INSERT INTO reviews(card_id, rating, reviewed_at, elapsed_days, scheduled_days) VALUES(?,?,?,?,?)",
-                        c.id, rating.rawValue, now, elapsed, days)
+        // The schedule and its review log change together (apart, a crash left a rescheduled card with no review, or one).
+        db.write("card review") {
+            try db.execute("UPDATE cards SET due=?, stability=?, difficulty=?, reps=?, lapses=?, last_review=?, state=? WHERE id=?",
+                           due, s.stability, s.difficulty, s.reps, s.lapses, now, rating == .again ? 3 : 2, c.id)
+            try db.execute("INSERT INTO reviews(card_id, rating, reviewed_at, elapsed_days, scheduled_days) VALUES(?,?,?,?,?)",
+                           c.id, rating.rawValue, now, elapsed, days)
+        }
         logActivity(reviews: 1)
         if let concept = c.concept { recordAttempt(subject: c.subject ?? c.deck, concept: concept, correct: rating != .again, note: nil) }
         // A forgotten card is the next lesson's business: the tutor sees it and can teach it another way.
@@ -204,6 +207,7 @@ final class StudyStore: @unchecked Sendable {
         return out
     }
 
+    /// Its reviews stay: they are the learner's study history (Insights counts them by day).
     func deleteCard(_ id: Int64) { db.run("DELETE FROM cards WHERE id=?", id) }
     func updateCard(_ id: Int64, front: String, back: String) { db.run("UPDATE cards SET front=?, back=? WHERE id=?", front, back, id) }
 

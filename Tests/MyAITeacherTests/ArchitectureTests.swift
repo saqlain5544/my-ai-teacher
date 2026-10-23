@@ -207,3 +207,16 @@ final class ToolRegistryTests: XCTestCase {
         }
     }
 }
+
+final class StreamErrorTests: XCTestCase {
+    /// In-stream errors keep their meaning: only overload and rate limits are transient.
+    func testTypedStreamErrorsAreRetriedOnlyWhenTransient() {
+        let transient = { (t: String) in ChatSession.isTransient(HTTPError(status: HTTPError.status(errorType: t), body: "")) }
+        XCTAssertTrue(transient("overloaded_error"))
+        XCTAssertTrue(transient("rate_limit_error"))
+        XCTAssertTrue(transient("api_error"))
+        XCTAssertFalse(transient("invalid_request_error"))
+        XCTAssertFalse(transient("authentication_error"))
+        XCTAssertFalse(transient("request_too_large"))
+    }
+}

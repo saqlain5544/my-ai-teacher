@@ -8,6 +8,21 @@ struct SSEEvent: Sendable {
 struct HTTPError: LocalizedError, Sendable {
     let status: Int
     let body: String
+
+    /// The HTTP status an error sent inside a 200 stream stands for (Anthropic's typed `error` events), so retry logic
+    /// tells an overloaded server (retry) from a bad request (don't): all of them used to become a 500 and were retried.
+    static func status(errorType: String?) -> Int {
+        switch errorType {
+        case "invalid_request_error": 400
+        case "authentication_error": 401
+        case "permission_error": 403
+        case "not_found_error": 404
+        case "request_too_large": 413
+        case "rate_limit_error": 429
+        case "overloaded_error": 529
+        default: 500
+        }
+    }
     var errorDescription: String? {
         let msg = JSON.parse(body).flatMap { j -> String? in
             j["error"]?["message"]?.string ?? j["error"]?.string ?? j["message"]?.string
