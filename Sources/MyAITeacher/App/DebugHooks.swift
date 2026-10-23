@@ -71,6 +71,14 @@ enum DebugHooks {
             guard let s = session, let p = cmd["path"]?.string else { return }
             Composer.attach([URL(fileURLWithPath: p)], to: s)
             AppLog.write("attach: \(p)")
+        case "talk":   // {"action":"talk","op":"start"|"heard"|"end","text":"…"}: the spoken conversation, a turn as if heard
+            guard let s = session else { return }
+            switch cmd["op"]?.string {
+            case "start": s.talk.quiet = cmd["quiet"]?.bool == true; s.talk.start(s, listenNow: !s.talk.quiet)
+            case "heard": s.talk.simulateHeard(cmd["text"]?.string ?? "")
+            case "end": s.talk.end()
+            default: AppLog.write("talk: phase \(s.talk.phase) turns \(s.talk.turns) heard \(s.talk.heard)")
+            }
         case "sendDraft":   // sends what the composer holds (text and attachments), once nothing is still being transcribed
             guard let s = session, s.pendingMedia.isEmpty, !s.isRunning else { AppLog.write("sendDraft: not ready"); return }
             let blocks = s.attachments.map(\.block); let text = cmd["text"]?.string ?? s.draft

@@ -27,6 +27,7 @@ struct Composer: View {
                 .padding(10)
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
             }
+            if let lang = session.language?.target { TalkArea(talk: session.talk, language: lang) }
             if showKeyboard, let layout = KeyboardLayouts.layout(for: session.language?.target) {
                 FirstMouse {
                     ScriptKeyboardView(layout: layout, sessionID: session.id, words: kanaWords, draft: session.draft) {
@@ -89,6 +90,7 @@ struct Composer: View {
                         }
                         .fixedSize().padding(.bottom, 2)
                     }
+                    if let lang = session.language?.target, !session.isRunning { TalkButton(talk: session.talk, session: session, language: lang) }
                     if speech.isListening {
                         Button { speech.stopListening() } label: { Image(systemName: "mic.fill").foregroundStyle(.red) }
                             .buttonStyle(.borderless).accessibilityLabel("Stop dictation").help("Stop dictation").padding(.bottom, 4)
@@ -308,6 +310,35 @@ struct Composer: View {
                 }
             }
         }
+    }
+}
+
+/// Starts a spoken conversation (hidden while one is on).
+private struct TalkButton: View {
+    @ObservedObject var talk: ConversationController
+    let session: ChatSession
+    let language: String
+    var body: some View {
+        if talk.phase == .off {
+            FirstMouse {
+                Button { talk.start(session) } label: {
+                    Label("Talk", systemImage: "bubble.left.and.text.bubble.right").font(.caption)
+                        .padding(.horizontal, 7).padding(.vertical, 3)
+                        .background(Capsule().fill(Color.primary.opacity(0.05)))
+                }
+                .buttonStyle(.plain).help("A spoken conversation in \(Languages.englishName(language)): you speak, your teacher answers aloud; corrections at the end")
+            }
+            .fixedSize().padding(.bottom, 2)
+        }
+    }
+}
+
+/// The conversation bar, shown while a spoken conversation is on.
+private struct TalkArea: View {
+    @ObservedObject var talk: ConversationController
+    let language: String
+    var body: some View {
+        if talk.phase != .off { ConversationBar(talk: talk, language: language) }
     }
 }
 

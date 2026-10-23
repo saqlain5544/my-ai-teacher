@@ -526,10 +526,14 @@
     const el = document.getElementById('m-' + msgId);
     if (el) mountOwn(el, id, props);
   }
-  // A re-rendered message gets its open passages back.
+  // A re-rendered message gets its open passages back; a turn of a spoken conversation is marked as spoken.
   R.registerProcessor(root => {
     const els = (root.matches && root.matches('.msg.user') ? [root] : []).concat(Array.from(root.querySelectorAll ? root.querySelectorAll('.msg.user') : []));
-    for (const el of els) for (const o of ownReads.get(el.id.slice(2)) || []) if (!el.querySelector('.own-read[data-own="' + o.id + '"]')) mountOwn(el, o.id, o.props);
+    for (const el of els) {
+      for (const o of ownReads.get(el.id.slice(2)) || []) if (!el.querySelector('.own-read[data-own="' + o.id + '"]')) mountOwn(el, o.id, o.props);
+      const m = R._ctx && R._ctx.message(el.id.slice(2));
+      if (m && (m.blocks || []).some(b => b.meta && b.meta.spoken)) el.classList.add('spoken');
+    }
   });
   const pendingPages = new Map();   // key -> { msgId, id, url }
   R.registerAction('read-own', (el, e, ctx) => {
@@ -746,6 +750,7 @@
     .ls-dict input { flex: 1; min-width: 200px; }
     .ls-result { width: 100%; }
     .ls-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: .82em; flex-wrap: wrap; }
+    .msg.user.spoken .bubble > .md > :first-child::before { content: '🎤 '; }
     .sel-lookup { position: absolute; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
     .msg.user .own-read { align-self: stretch; margin-top: 8px; position: relative; }
     .own-read .own-close { position: absolute; right: 8px; top: -2px; z-index: 1; }

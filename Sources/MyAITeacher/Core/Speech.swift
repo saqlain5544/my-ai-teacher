@@ -167,10 +167,11 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
     /// the synthetic voice saying it. The engine is the best this Mac has for the language: Apple's on-device
     /// SpeechAnalyzer when its model is installed, else Whisper when the learner installed it (and the Mac would
     /// otherwise send the audio to Apple), else SFSpeechRecognizer (on device for English, Apple's servers otherwise).
-    func dictate(language: String?, target: String? = nil, onText: @escaping (String, Bool, JSON?) -> Void) {
+    func dictate(language: String?, target: String? = nil, stopAfterSilence: Double? = nil, onText: @escaping (String, Bool, JSON?) -> Void) {
         if isListening { stopListening() }
         generation += 1
         let gen = generation
+        silenceStop = stopAfterSilence
         SFSpeechRecognizer.requestAuthorization { status in
             Task { @MainActor in
                 guard status == .authorized else { onText("", true, ["engine": "Speech recognition isn't allowed: System Settings › Privacy & Security › Speech Recognition"]); return }
@@ -293,9 +294,15 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
             }
         }
         let feed = append
-        input.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in
+        // A spoken conversation ends the learner's turn by itself: some voice, then `silenceStop` seconds of quiet.
+        let watch = silenceStop.map { SilenceWatch(after: $0, rate: format.sampleRate) }
+        input.installTap(onBus: 0, bufferSize: 1024, format: format) { [weak self] buf, _ in
             feed?(buf)
-            if let ch = buf.floatChannelData?[0] { take.append(UnsafeBufferPointer(start: ch, count: Int(buf.frameLength))) }
+            if let ch = buf.floatChannelData?[0] {
+                let p = UnsafeBufferPointer(start: ch, count: Int(buf.frameLength))
+                take.append(p)
+                if let watch, watch.feed(p) { DispatchQueue.main.async { MainActor.assumeIsolated { if gen == self?.generation { self?.stopListening() } } } }
+            }
         }
         // No microphone, or one held by another app: the caller hears a final empty result instead of waiting forever.
         do { engine.prepare(); try engine.start() } catch {
@@ -346,6 +353,28 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         if wasListening { done?(lastText) }
     }
     private var whisperLanguage: String?
+    private var silenceStop: Double?
+
+    /// Voice then quiet: true once (the turn is over). The floor is the quietest tenth of what it has heard; voice is
+    /// four times that (and above -54 dBFS); a turn needs at least 0.4 s of voice before quiet can end it.
+    final class SilenceWatch: @unchecked Sendable {
+        private let after: Double, rate: Double
+        private var levels: [Float] = [], voiced = 0.0, quiet = 0.0, fired = false
+        init(after: Double, rate: Double) { self.after = after; self.rate = rate }
+        func feed(_ p: UnsafeBufferPointer<Float>) -> Bool {
+            guard !fired, !p.isEmpty else { return false }
+            var sum: Float = 0
+            for v in p { sum += v * v }
+            let rms = (sum / Float(p.count)).squareRoot()
+            levels.append(rms); if levels.count > 400 { levels.removeFirst(levels.count - 400) }
+            let floor = levels.sorted()[levels.count / 10]
+            let secs = Double(p.count) / rate
+            // Capped: in steady speech the floor is the voice itself.
+            if rms > max(0.002, min(floor * 4, 0.006)) { voiced += secs; quiet = 0 } else if voiced > 0 { quiet += secs }
+            if voiced >= 0.4 && quiet >= after { fired = true; return true }
+            return false
+        }
+    }
 
     /// Seconds of the recording that stand out as a voice: 30 ms frames well above the take's own noise floor (4×, about
     /// 12 dB) and above a low absolute floor (-56 dBFS). A denied or muted microphone records zeros; a quiet room records
