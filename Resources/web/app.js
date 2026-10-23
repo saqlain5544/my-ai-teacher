@@ -867,7 +867,7 @@
     el.hidden = !text && !imgs.length && !files.length;
     if (imgs.length || files.length) {
       html += '<div class="attachments">' + imgs.map(imageSrc).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
-        files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
+        files.map(b => (R.fileView && R.fileView(b, m)) || '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
     if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button>' + (R.userActions ? R.userActions(m) : '') + '</div>';

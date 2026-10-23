@@ -67,6 +67,16 @@ enum DebugHooks {
                 s.send(t, attachments: img.map { [$0.block] } ?? [])
                 AppLog.write("sent: \(t.prefix(80))\(img == nil ? "" : " + image")")
             }
+        case "attach":   // {"action":"attach","path":"/tmp/clip.mp3"}: into the composer, as a learner's drop (audio is transcribed)
+            guard let s = session, let p = cmd["path"]?.string else { return }
+            Composer.attach([URL(fileURLWithPath: p)], to: s)
+            AppLog.write("attach: \(p)")
+        case "sendDraft":   // sends what the composer holds (text and attachments), once nothing is still being transcribed
+            guard let s = session, s.pendingMedia.isEmpty, !s.isRunning else { AppLog.write("sendDraft: not ready"); return }
+            let blocks = s.attachments.map(\.block); let text = cmd["text"]?.string ?? s.draft
+            s.attachments = []; s.draft = ""
+            s.send(text, attachments: blocks)
+            AppLog.write("sent draft with \(blocks.count) attachment(s)")
         case "answer":
             // Only answers an interaction named explicitly (by tool-call id or title), never the learner's own.
             let match = app.interactions.pending.values.first { p in

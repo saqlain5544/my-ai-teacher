@@ -476,6 +476,7 @@
       return;
     }
     if (kind === 'page') { if (R.pageEvent) R.pageEvent(key, data); return; }
+    if (kind === 'mediaDone') { if (R.mediaDone) R.mediaDone(key); return; }
     const L = lookups.get(key); if (!L) return;
     const pop = popover(); const showing = currentLookup === L && !pop.hidden;
     if (kind === 'lookup') { L.result = data || {}; if (showing) pop.innerHTML = popHTML(L, L.result); }
@@ -504,8 +505,9 @@
     (m.blocks || []).forEach((b, i) => {
       if (b.kind === 'file' && String(b.text || '').trim().length >= 20) h += '<button data-act="read-own" data-kind="file" data-i="' + i + '">📖 Read ' + esc(b.name || 'the file') + '</button>';
     });
-    const t = ownText(m);
-    if (URL_RE.test(t)) h += '<button data-act="read-own" data-kind="url">📖 Read this page</button>';
+    const t = ownText(m), url = (URL_RE.exec(t) || [])[0] || '';
+    if (/\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|mov)(\?|#|$)/i.test(url)) h += '<button data-act="read-own" data-kind="audio">🎧 Listen with a transcript</button>';
+    else if (url) h += '<button data-act="read-own" data-kind="url">📖 Read this page</button>';
     else if (t.replace(/\s+/g, '').length >= 40) h += '<button data-act="read-own" data-kind="text">📖 Read as a passage</button>';
     return h;
   };
@@ -539,6 +541,10 @@
       addOwn(msgId, 'f' + el.getAttribute('data-i'), { lang, title: b.name || 'Your file', text: String(b.text).slice(0, 12000) });
     } else if (kind === 'text') {
       addOwn(msgId, 't', { lang, title: 'Your text', text: ownText(m).slice(0, 12000) });
+    } else if (kind === 'audio') {
+      const url = (URL_RE.exec(ownText(m)) || [])[0]; if (!url) return;
+      el.disabled = true; el.textContent = 'Downloading the audio…';
+      ctx.post({ type: 'langwork', op: 'mediaURL', key: nextKey('au'), url, lang });
     } else if (kind === 'url') {
       const url = (URL_RE.exec(ownText(m)) || [])[0]; if (!url) return;
       const key = nextKey('pg');
@@ -562,6 +568,104 @@
     if (btn) { btn.disabled = false; btn.textContent = '📖 Read this page'; }
     if (!data || !data.text) { if (window.TeacherToast) window.TeacherToast((data && data.note) || 'The page has no text to read.'); return; }
     addOwn(p.msgId, p.id, { lang: targetLang(), title: data.title || p.url, text: data.text, note: data.truncated ? 'The first part of the page (' + data.shown + ' of ' + data.total + ' characters).' : '' });
+  };
+
+
+  // ── Real audio: the listening player on a learner's audio or video ──────────────
+  // The app transcribed the file sentence by sentence with times (block.meta: media, segments [[start, end, text]],
+  // duration, engine). Each sentence plays on its own (slowed without changing pitch, looped), the whole recording
+  // plays sentence by sentence (with pauses to shadow), the text is hidden or shown, and each sentence can be written
+  // from hearing and checked against the transcript.
+  const players = new Map();   // key -> { file, segs, lang, hidden, rate, loop, i, all, shadow, tries }
+  const fmtTime = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
+  R.fileView = function (b) {
+    const m = b && b.meta;
+    if (!m || !m.media || !Array.isArray(m.segments)) return '';
+    const key = 'ls-' + m.media;
+    let st = players.get(key);
+    if (!st) { st = { key, file: m.media, segs: m.segments, lang: m.lang || '', hidden: true, rate: 1, loop: false, i: -1, all: false, shadow: false, tries: {} }; players.set(key, st); }
+    return '<div class="lw-listen" data-ls="' + esc(key) + '">' + playerInner(st, b.name || 'Audio', m) + '</div>';
+  };
+  function playerInner(st, name, m) {
+    const rates = [[0.6, 'Slow'], [0.8, '0.8×'], [1, '1×']];
+    let h = '<div class="ls-head"><span class="ls-title">' + esc(name) + '</span><span class="ls-meta">' + fmtTime(m ? m.duration || 0 : 0) + ' · ' + st.segs.length + ' sentences</span><span style="flex:1"></span>' +
+      '<span class="lw-views">' + rates.map(([r, t]) => '<button data-act="ls-rate" data-v="' + r + '" class="' + (st.rate === r ? 'on' : '') + '">' + t + '</button>').join('') + '</span>' +
+      '<button class="btn mini' + (st.loop ? ' on' : '') + '" data-act="ls-loop" title="Repeat the sentence">🔁 Loop</button>' +
+      '<button class="btn mini" data-act="ls-text">' + (st.hidden ? 'Show text' : 'Hide text') + '</button>' +
+      '<button class="btn mini" data-act="ls-all">' + (st.all && !st.shadow ? '■ Stop' : '▶ Play all') + '</button>' +
+      '<button class="btn mini" data-act="ls-all" data-shadow="1" title="Pauses after each sentence for you to repeat it">' + (st.all && st.shadow ? '■ Stop' : '🗣 Shadow') + '</button></div>';
+    h += '<div class="ls-rows">' + st.segs.map((s, i) => {
+      const t = st.tries[i];
+      return '<div class="ls-row' + (st.i === i ? ' playing' : '') + '" data-i="' + i + '"><button class="btn mini" data-act="ls-play" data-i="' + i + '" aria-label="Play this sentence">▶</button>' +
+        '<span class="ls-time">' + fmtTime(s[0]) + '</span>' +
+        '<span class="ls-text' + (st.hidden && !(t && t.shown) ? ' hidden' : '') + '"' + langAttr(st.lang) + '>' + (st.hidden && !(t && t.shown) ? '<button class="btn mini link" data-act="ls-reveal" data-i="' + i + '">show</button>' : esc(s[2])) + '</span>' +
+        '<button class="btn mini link" data-act="ls-write" data-i="' + i + '">✎ Write it</button>' +
+        (t && t.open ? '<div class="ls-dict"><input type="text" class="q-text" data-kbd data-ls-input="' + i + '" value="' + esc(t.value || '') + '" placeholder="Write what you hear…" spellcheck="false"' + langAttr(st.lang) + '>' +
+          '<button class="btn mini" data-act="ls-check" data-i="' + i + '">Check</button>' + (t.result ? '<div class="ls-result">' + t.result + '</div>' : '') + '</div>' : '') + '</div>';
+    }).join('') + '</div>';
+    const tried = Object.values(st.tries).filter(t => t.score != null);
+    h += '<div class="ls-foot"><span class="muted">' + esc((m && m.engine) || '') + ' · times are approximate within each stretch</span>' +
+      (tried.length ? '<button class="btn mini primary" data-act="ls-report">Tell my teacher how the dictation went</button>' : '') + '</div>';
+    return h;
+  }
+  function refreshPlayer(st) {
+    document.querySelectorAll('.lw-listen[data-ls="' + CSS.escape(st.key) + '"]').forEach(el => {
+      const msgEl = el.closest('.msg'), m = msgEl && R._ctx.message(msgEl.id.slice(2));
+      const b = m && (m.blocks || []).find(x => x.meta && x.meta.media === st.file);
+      const focus = document.activeElement && document.activeElement.getAttribute && document.activeElement.getAttribute('data-ls-input');
+      el.innerHTML = playerInner(st, (b && b.name) || 'Audio', b && b.meta);
+      if (focus != null) { const f = el.querySelector('[data-ls-input="' + focus + '"]'); if (f) { f.focus(); f.setSelectionRange(f.value.length, f.value.length); } }
+    });
+  }
+  const stOf = el => { const c = el.closest('.lw-listen'); return c ? players.get(c.getAttribute('data-ls')) : null; };
+  function playSeg(st, i) {
+    const s = st.segs[i]; if (!s) return;
+    st.i = i; refreshPlayer(st);
+    post({ type: 'media', op: 'play', file: st.file, start: s[0], end: s[1], rate: st.rate, key: st.key + ':' + i });
+  }
+  function stopPlayer(st) { st.all = false; st.i = -1; clearTimeout(st.timer); post({ type: 'media', op: 'stop' }); refreshPlayer(st); }
+  R.registerAction('ls-play', el => { const st = stOf(el); if (!st) return; st.all = false; playSeg(st, +el.getAttribute('data-i')); });
+  R.registerAction('ls-rate', el => { const st = stOf(el); if (!st) return; st.rate = +el.getAttribute('data-v'); refreshPlayer(st); });
+  R.registerAction('ls-loop', el => { const st = stOf(el); if (!st) return; st.loop = !st.loop; refreshPlayer(st); });
+  R.registerAction('ls-text', el => { const st = stOf(el); if (!st) return; st.hidden = !st.hidden; refreshPlayer(st); });
+  R.registerAction('ls-reveal', el => { const st = stOf(el); if (!st) return; const i = +el.getAttribute('data-i'); (st.tries[i] = st.tries[i] || {}).shown = true; refreshPlayer(st); });
+  R.registerAction('ls-all', el => {
+    const st = stOf(el); if (!st) return;
+    if (st.all) { stopPlayer(st); return; }
+    st.all = true; st.shadow = el.hasAttribute('data-shadow'); st.loop = false;
+    playSeg(st, Math.max(0, st.i));
+  });
+  R.registerAction('ls-write', el => {
+    const st = stOf(el); if (!st) return; const i = +el.getAttribute('data-i');
+    const t = st.tries[i] = st.tries[i] || {}; t.open = !t.open; refreshPlayer(st);
+    const f = document.querySelector('.lw-listen[data-ls="' + CSS.escape(st.key) + '"] [data-ls-input="' + i + '"]'); if (f) f.focus();
+  });
+  document.addEventListener('input', e => {
+    const f = e.target; if (!f || !f.getAttribute || f.getAttribute('data-ls-input') == null) return;
+    const st = stOf(f); if (st) (st.tries[+f.getAttribute('data-ls-input')] = st.tries[+f.getAttribute('data-ls-input')] || {}).value = f.value;
+  });
+  R.registerAction('ls-check', el => {
+    const st = stOf(el); if (!st) return; const i = +el.getAttribute('data-i'), t = st.tries[i] = st.tries[i] || {};
+    const d = align(st.segs[i][2], t.value || '', false);
+    t.score = d.score; t.shown = true;
+    t.result = (d.score >= 0.999 && d.ops.every(o => o.k === 'same') ? '<span class="lw-score good">✓ Every word</span> ' : '') + diffHTML(d.ops, st.lang) + ' ' + scoreLine(d);
+    refreshPlayer(st);
+  });
+  R.registerAction('ls-report', (el, e, ctx) => {
+    const st = stOf(el); if (!st) return;
+    const lines = Object.keys(st.tries).filter(i => st.tries[i].score != null).map(i => '- [' + fmtTime(st.segs[i][0]) + '] “' + st.segs[i][2] + '” — I wrote “' + (st.tries[i].value || '') + '” (' + Math.round(st.tries[i].score * 100) + '%)');
+    ctx.post({ type: 'suggest', text: 'My dictation from the audio:\n' + lines.join('\n') + '\nWhat should I work on?' });
+  });
+  /** The player's stretch finished: loop it, go on to the next (after a shadowing pause), or stop. */
+  R.mediaDone = function (key) {
+    const cut = key.lastIndexOf(':'), st = players.get(key.slice(0, cut)), i = +key.slice(cut + 1);
+    if (!st || st.i !== i) return;
+    if (st.loop) { st.timer = setTimeout(() => playSeg(st, i), 600); return; }
+    if (st.all && i + 1 < st.segs.length) {
+      const s = st.segs[i], wait = st.shadow ? Math.min(12000, 500 + (s[1] - s[0]) * 1000 / st.rate) : 250;
+      st.timer = setTimeout(() => { if (st.all) playSeg(st, i + 1); }, wait); return;
+    }
+    st.all = false; st.i = -1; refreshPlayer(st);
   };
 
   R.injectStyles('langwork', `
@@ -628,6 +732,20 @@
     .rd-s.speaking { background: color-mix(in srgb, var(--warn-soft) 70%, transparent); border-radius: 4px; }
     .rd-play { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: .7em; padding: 0 3px; opacity: 0; vertical-align: middle; }
     .rd-s:hover .rd-play, .rd-s.speaking .rd-play { opacity: 1; }
+    .lw-listen { border: 1px solid var(--border); border-radius: 12px; padding: 10px 14px; margin-top: 6px; text-align: left; width: 100%; box-sizing: border-box; }
+    .msg.user .attachments:has(.lw-listen) { align-self: stretch; }
+    .ls-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+    .ls-title { font-weight: 600; } .ls-meta { color: var(--muted); font-size: .85em; }
+    .ls-head .btn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
+    .ls-rows { display: flex; flex-direction: column; gap: 2px; max-height: 420px; overflow-y: auto; }
+    .ls-row { display: grid; grid-template-columns: auto 3.2em 1fr auto; gap: 8px; align-items: baseline; padding: 4px 6px; border-radius: 8px; }
+    .ls-row.playing { background: var(--warn-soft); }
+    .ls-time { color: var(--faint); font-size: .8em; font-variant-numeric: tabular-nums; }
+    .ls-text { font-size: 1.08em; } .ls-text.hidden { color: var(--faint); }
+    .ls-dict { grid-column: 2 / -1; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+    .ls-dict input { flex: 1; min-width: 200px; }
+    .ls-result { width: 100%; }
+    .ls-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: .82em; flex-wrap: wrap; }
     .sel-lookup { position: absolute; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
     .msg.user .own-read { align-self: stretch; margin-top: 8px; position: relative; }
     .own-read .own-close { position: absolute; right: 8px; top: -2px; z-index: 1; }

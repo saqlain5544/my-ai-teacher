@@ -37,6 +37,13 @@ struct Composer: View {
                 .onAppear { loadKanaWords(layout.code) }
             }
             VStack(alignment: .leading, spacing: 6) {
+                ForEach(session.pendingMedia.keys.sorted(), id: \.self) { name in
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("🎧 \(name)").font(.caption.bold())
+                        Text(session.pendingMedia[name] ?? "").font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 if !session.attachments.isEmpty {
                     ScrollView(.horizontal, showsIndicators: false) {
                         HStack(spacing: 6) {
@@ -144,7 +151,7 @@ struct Composer: View {
             : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
     }
     private var canSend: Bool {
-        !session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.attachments.isEmpty
+        session.pendingMedia.isEmpty && (!session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.attachments.isEmpty)
     }
     private var visionWarning: Bool {
         guard session.attachments.contains(where: { $0.block.kind == .image }) else { return false }
@@ -203,6 +210,8 @@ struct Composer: View {
                     session.attachments.append(Attachment(name: name, block: m.block, thumbnail: NSImage(contentsOf: url)))
                     if let img = NSImage(contentsOf: url) { readText(in: img, name: name, for: session) }
                 }
+            } else if MediaTranscript.audioExtensions.contains(ext) {
+                attachMedia(url, to: session)
             } else if ext == "pdf", let doc = PDFDocument(url: url) {
                 var text = ""
                 for i in 0..<min(doc.pageCount, 300) { text += "\n--- Page \(i + 1) ---\n" + (doc.page(at: i)?.string ?? "") }
@@ -222,6 +231,43 @@ struct Composer: View {
                 session.attachments.append(Attachment(name: name, block: .file(name: name, content: String(decoding: data, as: UTF8.self)), thumbnail: nil))
             } else {
                 session.errorMessage = "Can't attach \(name): unsupported or too large."
+            }
+        }
+    }
+
+    /// Audio or video for listening: copied into the lesson (.teacher/attachments/media), transcribed sentence by
+    /// sentence with times, and attached as its transcript (the page plays it from the player on the message).
+    @MainActor
+    static func attachMedia(_ url: URL, to session: ChatSession) {
+        let name = url.lastPathComponent
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? NSNumber)?.int64Value ?? 0
+        guard size < 2_000_000_000 else { session.errorMessage = "\(name) is too large (2 GB at most)."; return }
+        let dir = session.services.workspace.attachmentsDir.appendingPathComponent("media", isDirectory: true)
+        let file = "\(UUID().uuidString.prefix(12)).\(url.pathExtension.lowercased())"
+        let dest = dir.appendingPathComponent(file)
+        do {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try FileManager.default.copyItem(at: url, to: dest)
+        } catch { session.errorMessage = "Couldn't keep \(name) with the lesson: \(error.localizedDescription)"; return }
+        let lang = session.language?.target
+        session.pendingMedia[name] = "Reading the audio…"
+        Task {
+            do {
+                let t = try await MediaTranscript.transcribe(dest, lang: lang) { done, total in
+                    Task { @MainActor in session.pendingMedia[name] = "Transcribing \(done) of \(total) stretches…" }
+                }
+                await MainActor.run {
+                    var block = Block.file(name: "🎧 \(name)", content: MediaTranscript.text(t, name: name))
+                    block.meta = MediaTranscript.json(t, file: file)
+                    session.attachments.append(Attachment(name: "🎧 \(name)", block: block, thumbnail: nil))
+                    session.pendingMedia[name] = nil
+                }
+            } catch {
+                await MainActor.run {
+                    session.pendingMedia[name] = nil
+                    try? FileManager.default.removeItem(at: dest)
+                    session.errorMessage = "\(name): \(error.localizedDescription)"
+                }
             }
         }
     }

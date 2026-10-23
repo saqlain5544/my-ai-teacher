@@ -1728,6 +1728,37 @@
     T.setLanguage(null);
   });
 
+  test('language work: real audio — a transcribed recording plays sentence by sentence, hidden or shown, looped, and checked as dictation', async () => {
+    T.setLanguage({ target: 'es', native: 'en' });
+    const meta = { media: 'abc123.mp3', duration: 12.4, engine: 'Whisper large-v3-turbo, on this Mac', lang: 'es',
+      segments: [[0.4, 2.1, 'Hola, me llamo Marta.'], [3.5, 6.2, 'Trabajo en una oficina en Madrid.'], [7.6, 10.9, 'Los viernes trabajo desde casa.']] };
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Escucha esto' }, { kind: 'file', name: '🎧 clip.mp3', text: 'Audio “clip.mp3”…', meta }] };
+    T.status('', false); T.reset([u, A('¡Vamos!')], {});
+    const p = $('#m-' + u.id + ' .lw-listen'); ok(p, 'the player is on the message');
+    eq($$('.ls-row', p).length, 3); ok(/0:12/.test(p.textContent), 'duration');
+    ok(!/Marta/.test($('.ls-rows', p).textContent), 'text hidden at first (listen before you read)');
+    posts.length = 0; click($('[data-act="ls-play"][data-i="1"]', p));
+    const m = lastPost('media'); ok(m && m.file === 'abc123.mp3' && m.start === 3.5 && m.end === 6.2 && m.rate === 1, JSON.stringify(m));
+    let p2 = $('#m-' + u.id + ' .lw-listen'); ok($('.ls-row[data-i="1"]', p2).classList.contains('playing'), 'the sentence playing is marked');
+    click($('[data-act="ls-rate"][data-v="0.6"]', p2)); click($('[data-act="ls-loop"]', $('#m-' + u.id + ' .lw-listen')));
+    posts.length = 0; T.lang('mediaDone', m.key, null); await sleep(700);
+    const again = lastPost('media'); ok(again && again.start === 3.5 && again.rate === 0.6, 'looped, slowed: ' + JSON.stringify(again));
+    click($('[data-act="ls-loop"]', $('#m-' + u.id + ' .lw-listen')));
+    posts.length = 0; click($('[data-act="ls-all"]', $('#m-' + u.id + ' .lw-listen')));
+    const first = lastPost('media'); posts.length = 0; T.lang('mediaDone', first.key, null); await sleep(400);
+    ok(lastPost('media') && lastPost('media').start > first.start, 'play all goes on to the next sentence: ' + JSON.stringify(lastPost('media')));
+    click($('[data-act="ls-all"]', $('#m-' + u.id + ' .lw-listen'))); ok(lastPost('media').op === 'stop', 'and stops');
+    click($('[data-act="ls-write"][data-i="2"]', $('#m-' + u.id + ' .lw-listen')));
+    const f = $('#m-' + u.id + ' [data-ls-input="2"]'); ok(f, 'a dictation field'); f.value = 'Los viernes trabajo de casa'; f.dispatchEvent(new Event('input', { bubbles: true }));
+    click($('[data-act="ls-check"][data-i="2"]', $('#m-' + u.id + ' .lw-listen')));
+    const res = $('#m-' + u.id + ' .ls-result'); ok(res && $('.d-wrong', res) && /de/.test($('.d-wrong del', res).textContent), 'checked word by word: ' + (res && res.innerHTML));
+    ok(/viernes/.test($('#m-' + u.id + ' .ls-row[data-i="2"] .ls-text').textContent), 'the sentence is shown once checked');
+    posts.length = 0; click($('[data-act="ls-report"]', $('#m-' + u.id + ' .lw-listen')));
+    ok(/My dictation from the audio/.test(lastPost('suggest').text) && /de casa/.test(lastPost('suggest').text), 'results go to the teacher on request');
+    click($('[data-act="ls-text"]', $('#m-' + u.id + ' .lw-listen'))); ok(/Marta/.test($('#m-' + u.id + ' .ls-rows').textContent), 'text shown');
+    T.setLanguage(null);
+  });
+
   test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {
     const el = show('```vocab\n[{"term":"りんご","lang":"ja","reading":"ringo","meaning":"apple","example":"りんごを食べる"}]\n```');
     const b = $('.vocab-save', el); ok(b, 'save button');

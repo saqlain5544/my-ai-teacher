@@ -388,6 +388,23 @@ struct TranscriptView: NSViewRepresentable {
                     let to = s.language?.native ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")
                     let text = j["text"]?.string ?? ""
                     Task { reply("translation", await LanguageWork.translate(text, from: lang, to: to)) }
+                case "mediaURL":
+                    // An audio file on the web the learner wants to listen to (an openly licensed podcast, a news clip):
+                    // downloaded at their click, then transcribed and attached like a file they dropped in.
+                    guard let url = URL(string: j["url"]?.string ?? ""), ["http", "https"].contains(url.scheme ?? "") else { return }
+                    Task { @MainActor in
+                        do {
+                            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-audio-\(UUID().uuidString.prefix(8))", isDirectory: true)
+                            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                            let dest = dir.appendingPathComponent(url.lastPathComponent.isEmpty ? "audio.mp3" : url.lastPathComponent)
+                            try await Downloader.fetch(url, to: dest) { _ in }
+                            let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
+                            guard size < 500_000_000 else { self.run("T.notice('That audio is over 500 MB.')"); return }
+                            Composer.attachMedia(dest, to: s)
+                            try? FileManager.default.removeItem(at: dir)
+                            self.run("T.notice(\(JSON.string("Transcribing \(url.lastPathComponent)… it will be attached to your next message.").compact))")
+                        } catch { self.run("T.notice(\(JSON.string("The audio didn't download: \(error.localizedDescription)").compact))") }
+                    }
                 case "page":
                     let url = j["url"]?.string ?? ""
                     Task { reply("page", await LanguageWork.page(url)) }
@@ -431,6 +448,18 @@ struct TranscriptView: NSViewRepresentable {
                                              exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: s.id) != nil {
                     EventBus.publish(.studyDataChanged)
                     run("T.notice(\(JSON.string("Saved “\(term)” to your \(Languages.englishName(lang)) vocabulary (reviewed as a flashcard).").compact))")
+                }
+            case "media":
+                // The listening player: a stretch of the learner's audio, from the lesson's media folder only.
+                guard let s = session else { return }
+                if j["op"]?.string == "stop" { MediaPlayer.shared.stop(); return }
+                guard let name = j["file"]?.string, !name.contains("/"), !name.hasPrefix(".") else { return }
+                let url = s.services.workspace.attachmentsDir.appendingPathComponent("media").appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: url.path) else { run("T.notice('The audio file is no longer with this lesson.')"); return }
+                let key = j["key"]?.string ?? ""
+                app.speech.stop()
+                MediaPlayer.shared.play(url, from: j["start"]?.double ?? 0, to: j["end"]?.double ?? 0, rate: j["rate"]?.double ?? 1) { [weak self] in
+                    self?.run("T.lang('mediaDone', \(JSON.string(key).compact), null)")
                 }
             case "speechModel":
                 // "Hear me on this Mac": Apple's on-device recognition model for the language, from the speak card.
