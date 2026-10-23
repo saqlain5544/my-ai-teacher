@@ -92,6 +92,47 @@ final class LearningFirstTests: XCTestCase {
         XCTAssertNotNil(Questions.schema(graded: false)["properties"]?["hints"])
     }
 
+    func testQuizzesOffDontKnowAndReasonedSkips() async throws {
+        let interactions = await MainActor.run { InteractionCenter() }
+        let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
+        func ctx(_ id: String, quizzes: Bool = true) -> ToolContext {
+            var c = ToolContext(conversationID: "lesson-2", workspace: dir, services: services, interactions: interactions, toolCallID: id,
+                                client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
+            c.quizzes = quizzes
+            return c
+        }
+        let input: JSON = ["title": "Latency", "case": "p99 jumps from 40 ms to 900 ms after a deploy.", "questions": [
+            ["type": "single_choice", "prompt": "First suspect?", "options": ["GC", "Locks"], "answer": 1, "concept": "lock contention"],
+            ["type": "true_false", "prompt": "p99 hides the tail", "answer": false, "concept": "percentiles"]]]
+        // Off: the quiz is refused, graded or through ask_learner, before anything reaches the learner.
+        let off = try await QuizTool().run(input, ctx("q0", quizzes: false))
+        XCTAssertTrue(off.isError == true && off.text.contains("Quizzes are off"), off.text)
+        var viaAsk = input.object ?? [:]; viaAsk["graded"] = true
+        let refused = try await AskLearnerTool().run(.object(viaAsk), ctx("q0b", quizzes: false)).text
+        XCTAssertTrue(refused.contains("Quizzes are off"), refused)
+        // "Don't know yet": a gap to teach, not graded, not a mistake.
+        let run = Task { try await QuizTool().run(input, ctx("q1")) }
+        for _ in 0..<200 where await MainActor.run(body: { interactions.pending["q1"] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
+        let payload = await MainActor.run { interactions.pending["q1"]?.payload }
+        XCTAssertEqual(payload?["case"]?.string, "p99 jumps from 40 ms to 900 ms after a deploy.", "the case reaches the page")
+        await MainActor.run { interactions.resolve("q1", ["answers": [.null, false], "certainty": [0, 3]]) }
+        let out = try await run.value
+        XCTAssertTrue(out.text.contains("Auto-graded score: 1/1"), out.text)
+        XCTAssertTrue(out.text.contains("doesn't know this yet") && out.text.contains("a gap to teach, not a mistake"), out.text)
+        XCTAssertEqual(out.meta?["graded"]?[0]?["unknown"]?.bool, true)
+        XCTAssertNil(study.mastery(subject: "general", concept: "lock contention"), "nothing recorded for an unknown")
+        // A skip says why, and the teacher is told what to do about it.
+        let skip = Task { try await QuizTool().run(input, ctx("q2")) }
+        for _ in 0..<200 where await MainActor.run(body: { interactions.pending["q2"] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
+        await MainActor.run { interactions.resolve("q2", ["cancelled": true, "reason": "need_more"]) }
+        let skipped = try await skip.value.text
+        XCTAssertTrue(skipped.contains("needs more explanation first") && skipped.contains("Teach the idea more deeply"), skipped)
+        XCTAssertTrue(Testing.skipped("quiz", reason: nil).contains("Don't ask it again right away"))
+        XCTAssertTrue(Testing.on(AppSettings(), .tutor))
+        var s = AppSettings(); s.quizzes = false
+        XCTAssertFalse(Testing.on(s, .tutor)); XCTAssertTrue(Testing.on(s, .quiz), "Quiz mode always tests")
+    }
+
     func testQuizUsesHintsCertaintyAndMisconceptions() async throws {
         let interactions = await MainActor.run { InteractionCenter() }
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
@@ -115,7 +156,7 @@ final class LearningFirstTests: XCTestCase {
         XCTAssertTrue(out.text.contains("misconception: multiplies the exponents"), out.text)
         XCTAssertTrue(out.text.contains("Q1: wrong although the learner was sure"), out.text)
         XCTAssertTrue(out.text.contains("Q3: right but guessed"), out.text)
-        XCTAssertTrue(out.text.contains("after 1 hint") && out.text.contains("near-identical retry"), out.text)
+        XCTAssertTrue(out.text.contains("after 1 hint") && out.text.contains("never quiz the same point twice in a row"), out.text)
         XCTAssertTrue(out.text.contains("Auto-graded score: 2/4"), "a tagged wrong short answer is graded, not left to the teacher: \(out.text)")
         XCTAssertEqual(out.meta?["graded"]?[0]?["misconception"]?.string, "multiplies the exponents instead of adding them")
         XCTAssertEqual(out.meta?["graded"]?[0]?["certainty"]?.int, 3)
@@ -152,10 +193,10 @@ final class LearningFirstTests: XCTestCase {
             return try await run.value.text
         }
         let first = try await quiz("q1", lesson: "lesson-a")
-        XCTAssertTrue(first.contains("near-identical retry") && !first.contains("missed again"), first)
+        XCTAssertTrue(first.contains("never quiz the same point twice in a row") && !first.contains("missed again"), first)
         let second = try await quiz("q2", lesson: "lesson-a")
         XCTAssertTrue(second.contains("Q1 (adding fractions): missed again in this lesson") && second.contains("worked example"), second)
-        XCTAssertFalse(second.contains("near-identical retry"), "no third quiz on it in this turn")
+        XCTAssertFalse(second.contains("never quiz the same point twice"), "only the worked-example step for a repeat miss")
         let other = try await quiz("q3", lesson: "lesson-b")
         XCTAssertFalse(other.contains("missed again"), "another lesson starts fresh")
     }

@@ -29,7 +29,7 @@
 
   // ───────────────────────── State ─────────────────────────
   const S = {
-    messages: [], byId: new Map(), results: new Map(), pending: new Map(), progress: new Map(), cards: new Map(),
+    messages: [], byId: new Map(), results: new Map(), pending: new Map(), armedAt: new Map(), armMs: 700, progress: new Map(), cards: new Map(),
     openTools: new Set(), codeOutputs: new Map(), codeEpoch: 0, dirty: new Set(), streamingId: null, welcome: null,
     running: false, showThinking: true,
   };
@@ -319,6 +319,9 @@
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;
     // A stray or mid-line fence leaves an empty block: show nothing rather than an empty code box.
     if (!code.trim() && !isLastOpen) return '';
+    // Reasoning drafts components (```visual, ```mermaid, quizzes): in a thinking block they are text, never live widgets
+    // (a draft visual rendered there as a blank full-height frame where the reasoning should be).
+    if (env.plain) return '<pre class="thinking-code"><code>' + esc(code.replace(/\n$/, '')) + '</code></pre>';
     // The reply ended inside this fence: a forgotten closing fence on complete content renders as usual, but content cut
     // off mid-way (stopped, or the token limit) shows what arrived instead of a parse error.
     const unclosed = !env.streaming && env.openFence && idx === env.lastFenceIdx;
@@ -546,6 +549,22 @@
     const natural = svg.viewBox.baseVal.width;
     if (natural) svg.style.minWidth = Math.round(natural * 0.9) + 'px';
   }
+  // A diagram, chart or plot that fails in the latest finished reply is reported once to the app, which passes it to the
+  // teacher with the learner's next message (a broken visual does the same from components/visuals.js).
+  const reported = new Set();
+  function reportRenderErrors() {
+    if (S.running) return;
+    const msgs = document.querySelectorAll('.msg.assistant'), last = msgs[msgs.length - 1];
+    if (!last) return;
+    last.querySelectorAll('.diagram-error').forEach(e => {
+      const text = (e.firstChild && e.firstChild.textContent || e.textContent || '').trim().slice(0, 300);
+      const kind = e.closest('.mermaid-block') ? 'mermaid' : e.closest('.plot-block') ? 'plot' : 'chart';
+      const k = last.id + '|' + text;
+      if (!text || reported.has(k)) return;
+      reported.add(k);
+      post({ type: 'visualError', kind, title: kind + ' block', msg: text });
+    });
+  }
   let fillSeq = 0;
   function fillMermaid(el, key) {
     const r = mermaidSvg.get(key), code = mermaidSrc.get(key) || '';
@@ -585,18 +604,18 @@
   // Finished markdown is cached by content, so re-rendering a lesson (paging, a theme change, a card refresh) parses each
   // block once. The key carries the run outputs' count: a block's HTML gains its output when the learner runs it.
   const mdCache = new Cache(600, 6e6);
-  function markdown(text, streaming) {
+  function markdown(text, streaming, plain) {
     text = String(text == null ? '' : text);
-    if (streaming || text.length > 20000) return renderMarkdown(text, streaming);
-    const key = S.codeEpoch + '\u0000' + text;
+    if (streaming || text.length > 20000) return renderMarkdown(text, streaming, plain);
+    const key = (plain ? 'p' : '') + S.codeEpoch + '\u0000' + text;
     const hit = mdCache.get(key);
     if (hit !== undefined) return hit;
-    const html = renderMarkdown(text, false);
+    const html = renderMarkdown(text, false, plain);
     mdCache.set(key, html);
     return html;
   }
-  function renderMarkdown(text, streaming) {
-    const env = { streaming };
+  function renderMarkdown(text, streaming, plain) {
+    const env = { streaming, plain: !!plain };
     // An odd number of fence markers: the last fence is still open (streaming), or the reply ended inside it (stopped).
     if (text.indexOf('```') >= 0 || text.indexOf('~~~') >= 0) { const f = text.match(/^\s{0,3}(```|~~~)/gm); env.openFence = !!(f && f.length % 2 === 1); }
     try {
@@ -638,22 +657,34 @@
     return segs;
   }
   /** The reply's HTML as a list of segments (see `morph`): finished ones come from the cache as the same strings. */
-  function markdownLive(text) {
-    if (text.length < 3000 || /\[\^|^\s{0,3}\[[^\]]+\]:/m.test(text)) return [markdown(text, true)];
-    const segs = segments(text), html = [];
+  function markdownLive(text, plain) {
+    if (text.length < 3000 || /\[\^|^\s{0,3}\[[^\]]+\]:/m.test(text)) return [markdown(text, true, plain)];
+    const segs = segments(text), html = [], tag = plain ? '\u0002' : '';
     for (let i = 0; i < segs.length - 1; i++) {
-      let h = segCache.get(segs[i]);
-      if (h === undefined) { h = markdown(segs[i], false); segCache.set(segs[i], h); }
+      let h = segCache.get(tag + segs[i]);
+      if (h === undefined) { h = markdown(segs[i], false, plain); segCache.set(tag + segs[i], h); }
       html.push(h);
     }
-    html.push(markdown(segs[segs.length - 1], true));
+    html.push(markdown(segs[segs.length - 1], true, plain));
     return html;
   }
   /** Run component processors (language, tables, canvases…) on freshly inserted DOM. */
   function processNode(node) {
     if (node.nodeType !== 1) return;
+    quietInputs(node);
     for (const p of R.processors) { try { p(node, ctx); } catch (e) { console.log('processor', e); } }
     processMermaid(node);
+  }
+  /** A learner's answer is theirs: macOS writing suggestions would otherwise complete it, and its Math Results turn
+   *  "180.156/3=" into "180.156/3=60.052" as they type — the arithmetic an attempt-first problem asks them to do.
+   *  Every text box the page renders opts out (set on insert, before it can take focus). */
+  const QUIET = { writingsuggestions: 'false', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off' };
+  function quietInputs(root) {
+    const list = root.matches && root.matches('textarea, input') ? [root] : Array.from(root.querySelectorAll('textarea, input'));
+    for (const el of list) {
+      if (el.type && !/^(text|search|number|)$/.test(el.type) && el.tagName === 'INPUT') continue;
+      for (const k in QUIET) if (el.getAttribute(k) !== QUIET[k]) el.setAttribute(k, QUIET[k]);
+    }
   }
   /** Replace children of `el` with new HTML, keeping unchanged top-level nodes so diagrams, selection and processed DOM survive streaming.
    *  `html` may be a list of segments (a streaming reply): segments unchanged since the last frame keep their nodes without being
@@ -922,8 +953,9 @@
     return (text.match(/^\s*```/gm) || []).length % 2 ? text + '\n```' : text;
   }
 
-  /** Thinking streams as plain text — one text node, updated per frame — and becomes markdown once it finishes (or the
-   *  learner opens a finished block). Parsing all the reasoning on every frame is what made long thoughts stutter. */
+  /** Thinking streams the way the reply does: markdown rendered by segments (finished ones cached, so a frame costs only
+   *  the tail), fences as plain code. It reads the same while it streams and after; it stays pinned to its newest line
+   *  unless the learner scrolls up in it. */
   function renderThinking(node, b, live) {
     node.className = '';
     let d = node.querySelector('details');
@@ -947,14 +979,12 @@
     if (!live) d.classList.remove('raw');
     if (!d.open) return;
     if (live) {
-      const t = b.text || '';
-      d.classList.add('raw');
-      if (body._plain !== t) {
-        const n = body.firstChild;
-        if (n && n.nodeType === 3 && body.childNodes.length === 1) n.nodeValue = t;
-        else body.textContent = t;
-        body._plain = t; body._src = null;
-        body.scrollTop = body.scrollHeight;
+      const t = (b.text || '').replace(/\s+$/, '');   // trailing blank lines would scroll the text out of view
+      if (body._live !== t) {
+        const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+        morph(body, markdownLive(t, true));
+        body._live = t; body._src = null; body._plain = null;
+        if (pinned) body.scrollTop = body.scrollHeight;
       }
     } else {
       renderThinkingMarkdown(d, b);
@@ -965,8 +995,8 @@
     const body = d.querySelector('.thinking-body');
     const text = closedFences(b.text || '');
     if (body._src === text) return;
-    morph(body, markdown(text, false));
-    body._src = text; body._plain = null;
+    morph(body, markdown(text, false, true));
+    body._src = text; body._plain = null; body._live = null;
   }
 
   // Large images live on disk (Swift's blob store) and load by reference; small ones may still be inline.
@@ -1084,6 +1114,10 @@
     if (!el) return;
     const act = el.getAttribute('data-act');
     if (!act) return;
+    // A question that has just appeared (and scrolled into view) ignores clicks for a moment: a click aimed at the card
+    // it replaced must not answer, submit or dismiss it unseen.
+    const qcard = el.closest('[data-tool-id]'), armed = qcard && S.armedAt.get(qcard.getAttribute('data-tool-id'));
+    if (armed && performance.now() - armed < S.armMs) { e.preventDefault(); return; }
     if (R.actions[act]) { R.actions[act](el, e, ctx); return; }
     const msgEl = el.closest('.msg');
     const msgId = msgEl ? msgEl.id.slice(2) : null;
@@ -1106,12 +1140,13 @@
       case 'regenerate': post({ type: 'regenerate' }); break;
       case 'retry': post({ type: 'retry' }); break;
       case 'quick': post({ type: 'quick', q: el.getAttribute('data-q'), id: msgId }); break;
-      case 'suggest': post({ type: 'suggest', text: el.getAttribute('data-text') }); break;
+      case 'suggest': post(Object.assign({ type: 'suggest', text: el.getAttribute('data-text') }, el.getAttribute('data-board') ? { board: el.getAttribute('data-board') } : {})); break;
       case 'edit': startEdit(msgId); break;
       case 'edit-save': { const ta = msgEl.querySelector('textarea'); msgEl._editing = false; post({ type: 'edit', id: msgId, text: ta.value }); break; }
       case 'edit-cancel': { msgEl._editing = false; msgEl._html = null; renderMessage(S.byId.get(msgId).msg); break; }
       case 'approve': post({ type: 'answer', id: toolId, value: { decision: el.getAttribute('data-v') } }); break;
       case 'older': el.disabled = true; el.textContent = 'Loading…'; post({ type: 'older' }); break;
+      case 'newer': el.disabled = true; el.textContent = 'Loading…'; post({ type: 'newer' }); break;
       case 'agent-open': post({ type: 'agent', op: 'open', id: el.getAttribute('data-agent') || toolId }); break;
       case 'agent-stop': post({ type: 'agent', op: 'stop', id: el.getAttribute('data-agent') || toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
     }
@@ -1134,6 +1169,7 @@
     const rec = S.byId.get(id); if (!rec || S.running) return;
     const el = rec.el; el._editing = true; el._html = null;
     el.innerHTML = '<div class="edit-box"><textarea>' + esc(visibleText(rec.msg)) + '</textarea><div class="row"><button class="btn" data-act="edit-cancel">Cancel</button><button class="btn primary" data-act="edit-save">Send</button></div></div>';
+    quietInputs(el);
     const ta = el.querySelector('textarea'); ta.focus(); ta.setSelectionRange(ta.value.length, ta.value.length);
   }
 
@@ -1170,9 +1206,18 @@
 
   function renderWelcome() {
     const w = S.welcome || {};
-    const sug = (w.suggestions || []).map(s => '<div class="suggestion" data-act="suggest" data-text="' + esc(s.prompt) + '"><div class="t">' + esc(s.title) + '</div><div class="d">' + esc(s.subtitle || '') + '</div></div>').join('');
+    const sug = (w.suggestions || []).map(s => '<div class="suggestion' + (s.board ? ' continue' : '') + '" data-act="suggest" data-text="' + esc(s.prompt) + '"' + (s.board ? ' data-board="' + esc(s.board) + '"' : '') + '><div class="t">' + esc(s.title) + '</div><div class="d">' + esc(s.subtitle || '') + '</div></div>').join('');
     const stats = (w.stats || []).map(s => '<span class="pill">' + esc(s) + '</span>').join('');
     thread.innerHTML = '<div class="welcome"><div class="logo">🎓</div><h1>' + esc(w.title || 'What would you like to learn?') + '</h1><p>' + esc(w.subtitle || '') + '</p><div class="suggestions">' + sug + '</div>' + (stats ? '<div class="stats">' + stats + '</div>' : '') + '</div>';
+  }
+
+  /** The reply now streaming. When a new step starts in a new message, the previous one renders once more as finished:
+   *  otherwise its thinking stayed open in live mode, scrolled to its end — often just trailing blank lines, so the
+   *  learner saw a tall empty box with a border. */
+  function streamTo(id) {
+    const prev = S.streamingId;
+    S.streamingId = id;
+    if (prev && prev !== id) schedule(prev);
   }
 
   // ───────────────────────── API for Swift ─────────────────────────
@@ -1197,9 +1242,17 @@
         thread.appendChild(more);
       }
       for (const m of messages) renderMessage(m);
+      // Reading back through a long lesson: newer messages are on disk, a click away (the page holds a bounded window).
+      if (opts && opts.newer > 0) {
+        const nb = document.createElement('div');
+        nb.className = 'earlier newer';
+        nb.innerHTML = '<button class="btn" data-act="newer">Show newer messages (' + Number(opts.newer).toLocaleString() + ' more)</button>';
+        thread.appendChild(nb);
+      }
       markLast();
       const anchor = opts && opts.anchor && document.getElementById('m-' + opts.anchor);
       if (anchor) { stick = false; anchor.scrollIntoView({ block: 'start' }); return; }
+      if (opts && opts.newer > 0) { stick = false; window.scrollTo(0, 0); return; }
       stick = true; scrollBottom(false);
       requestAnimationFrame(() => scrollBottom(false));
     },
@@ -1209,7 +1262,7 @@
       if (rec) { const i = S.messages.findIndex(x => x.id === m.id); if (i >= 0) S.messages[i] = m; rec.msg = m; }
       else {
         S.messages.push(m); S.byId.set(m.id, { msg: m, el: null });
-        if (m.role === 'assistant') S.streamingId = m.id;
+        if (m.role === 'assistant') streamTo(m.id);
         if (m.role === 'user' && !isToolResultOnly(m)) stick = true;
       }
       if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.set(b.id, b));
@@ -1221,7 +1274,7 @@
       while (blocks.length <= index) blocks.push({ kind, text: '' });
       if (blocks[index].kind !== kind) blocks[index] = { kind, text: '' };
       blocks[index].text = (blocks[index].text || '') + text;
-      S.streamingId = id;
+      streamTo(id);
       schedule(id);
     },
     toolProgress(toolId, text) {
@@ -1229,12 +1282,14 @@
       const el = document.querySelector('[data-tool-id="' + CSS.escape(toolId) + '"]');
       if (el && S.openTools.has(toolId)) renderToolCard(el, el._block);
     },
+    armDelay(ms) { S.armMs = ms; },   // tests click instantly
     interaction(p, active) {
-      if (active) S.pending.set(p.id, p); else S.pending.delete(p.id);
+      if (active) { if (!S.pending.has(p.id)) S.armedAt.set(p.id, performance.now()); S.pending.set(p.id, p); } else { S.pending.delete(p.id); S.armedAt.delete(p.id); }
       const el = document.querySelector('[data-tool-id="' + CSS.escape(p.id) + '"]');
       if (el) { el._html = null; renderToolCard(el, el._block, true); if (active) el.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }
     },
     status(text, running) {
+      if (S.running && !running) setTimeout(reportRenderErrors, 1500);   // after async diagrams have drawn
       S.running = !!running;
       if (!running) { const sid = S.streamingId; S.streamingId = null; if (sid) schedule(sid); }
       statusEl.hidden = !text;

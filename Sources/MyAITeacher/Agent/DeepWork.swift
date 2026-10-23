@@ -24,6 +24,8 @@ enum DeepWork {
     static let planRequest = """
         Before you reply, plan it. Write the plan only (the learner never sees it, and don't call tools now), in this form:
         Learner needs: what they are really asking, their level, what would make this answer excellent for them.
+        Scope: exactly what this reply covers. Only what they asked for now: "start part 1" is part 1, "a few lines" is a \
+        few lines; the rest waits for them. Depth, not breadth.
         Outline: the parts of the reply, in order, each with the concrete real-world example, data or problem it uses.
         Check before teaching: each fact, number, derivation or code claim that must be verified, and how (math, run_code, a source).
         Research: questions that need current or precise sources (none if none).
@@ -32,7 +34,7 @@ enum DeepWork {
         """
 
     /// A code mentor designs a lesson before teaching it: the real system it comes from, concepts with analogies, what to
-    /// research, working examples to build and run first, and exercises that build real subsystems.
+    /// research, working examples to build and run first, and projects that build real subsystems.
     static let lessonDesignRequest = """
         Before you teach, design the lesson. Write the design only (the learner never sees it, and don't call tools now):
         Goal: what the learner will be able to build or reason about afterwards, at their level.
@@ -41,8 +43,8 @@ enum DeepWork {
         Concepts: in order, each with an analogy and where the analogy breaks.
         Research: what to read first (official docs, the real project's source or design docs, papers), as precise questions.
         Working examples: the pieces of the real subsystem you will build and run before teaching, and what each shows.
-        Exercises: one to three that build a real subsystem, harder each time: starter skeleton, hidden tests on behaviour, \
-        edge cases, failure modes, performance where it matters.
+        Projects: one to three that build a real subsystem, harder each time: the starter files (structure, interfaces, \
+        TODOs — no solution), and the tests in `.teacher/tests` that check behaviour: edge cases, failure modes, performance.
         Pitfalls: the misconceptions and bugs learners hit here.
         Keep it under 350 words.
         """
@@ -63,8 +65,9 @@ enum DeepWork {
             run each until it works; show its real output in the lesson.
             3. Write the lesson: the goal; the real system and why it is built this way; each concept with its analogy and \
             where the analogy breaks; the working examples, explained line by line where it matters; the pitfalls.
-            4. Set the exercises with `exercise` (draft, add starter/tests/solution, publish). The learner solves them in their \
-            own editor (Helix) and asks you to check them: then use `exercise` check and read, and review. Never show solutions.
+            4. Set up the project: starter files in the lesson folder (structure, interfaces, TODOs — no solution) and its \
+            tests in `.teacher/tests`; run them with `bash`. The learner edits in their own editor and asks you to check: \
+            run the tests, read their changes, and review. Never show solutions.
             </context>
             """
     }
@@ -86,7 +89,7 @@ enum DeepWork {
         You review a tutor's reply before the learner reads it. Be demanding and fair. Ask for a revision only for \
         substantive problems: a factual, numerical or logical error; an important claim stated without checking when it \
         could have been checked; toy or textbook-filler examples where a real one was needed; an essential part of the \
-        plan missing; a full solution handed to a learner who should attempt it first; structure so confused it blocks \
+        plan missing; far more than they asked for now (the next part, an unrequested project) at the cost of focus; a full solution handed to a learner who should attempt it first; structure so confused it blocks \
         understanding. Never for style, length or tone preferences.
         Answer in exactly this form:
         VERDICT: OK
@@ -122,17 +125,24 @@ enum DeepWork {
         """
     }
 
-    /// The text of one model call (no streaming to the learner).
-    static func collect(_ client: LLMClient, _ request: LLMRequest) async -> String? {
-        var text = ""
+    struct Collected { var text: String?; var usage = Usage() }
+
+    /// The output and token usage of one model call (no streaming to the learner). Usage matters: plan, review and
+    /// summary calls are billed like any other, and leaving them out under-reports a lesson by a third or more.
+    static func collect(_ client: LLMClient, _ request: LLMRequest) async -> Collected {
+        var text = "", usage = Usage()
         do {
             for try await ev in client.stream(request) {
-                if Task.isCancelled { return nil }
-                if case .text(let t) = ev { text += t }
+                if Task.isCancelled { break }
+                switch ev {
+                case .text(let t): text += t
+                case .usage(let u): usage = usage + u
+                default: break
+                }
             }
-        } catch { return nil }
+        } catch { return Collected(text: nil, usage: usage) }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        return t.isEmpty ? nil : t
+        return Collected(text: t.isEmpty ? nil : t, usage: usage)
     }
 
     /// What the turn's tools returned, briefly (the reviewer's evidence).

@@ -58,7 +58,9 @@ enum ContextPolicy {
         var bytes = msgs.reduce(0) { $0 + $1.approxBytes }, want = 0
         while want < min(cut, msgs.count), msgs.count - want > window || bytes > maxBytes { bytes -= msgs[want].approxBytes; want += 1 }
         guard want > 0 else { return 0 }
-        return turnStarts(msgs).first { $0 >= want && $0 <= cut } ?? 0
+        // A whole turn is nicer to page back to, but never at the cost of an unbounded window: when the post-compaction
+        // region alone exceeds it, drop everything that is display-only (it is already summarised for requests).
+        return turnStarts(msgs).first { $0 >= want && $0 <= cut } ?? cut
     }
 
     /// Request-ready history.
@@ -158,8 +160,9 @@ enum ContextPolicy {
         for (i, j, n) in big.sorted(by: { $0.2 > $1.2 }) where total > budget {
             let t = out[i].blocks[j].text!
             let head = String(t.prefix(3000)), tail = String(t.suffix(1500))
-            out[i].blocks[j].text = head + "\n[… \(n - 4500) characters trimmed to fit the context …]\n" + tail
-            total -= (n - 4600) / 4
+            let cut = head + "\n[… \(n - 4500) characters trimmed to fit the context …]\n" + tail
+            out[i].blocks[j].text = cut
+            total -= max(0, estimate(t) - estimate(cut))
         }
         return out
     }
@@ -201,6 +204,10 @@ enum ContextPolicy {
         case .toolResult:
             if let t = b.text, t.count > stubLimit { b.text = stub(t) }
             b.data = nil; b.blob = nil; b.mime = nil
+        case .text:
+            // Per-turn context (memory recall, a plan, a revision note) has been read by the model; older copies are dead
+            // weight in every later request. The transcript keeps the full text.
+            if b.meta?["ephemeral"]?.bool == true, let t = b.text, t.count > stubLimit { b.text = stub(t) }
         case .toolUse:
             if case .object(var o) = b.input ?? .null {
                 for (k, v) in o { if let s = v.string, s.count > stubLimit { o[k] = .string(stub(s)) } }

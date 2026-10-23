@@ -24,6 +24,8 @@ final class ChatSession: ObservableObject, Identifiable {
     @Published var conversation: Conversation
     @Published private(set) var isRunning = false
     @Published private(set) var status: String?
+    /// The last status/running pair handed to the transcript page.
+    private var sentStatus: (String?, Bool)?
     @Published private(set) var revision = 0
     @Published private(set) var todos: [JSON] = []
     @Published var errorMessage: String?
@@ -67,6 +69,7 @@ final class ChatSession: ObservableObject, Identifiable {
         if let t = messages.last(where: { $0.toolUses.contains { $0.name == "todo_write" } })?.toolUses.last(where: { $0.name == "todo_write" }) {
             todos = t.input?["todos"]?.array ?? []
         }
+        trimWindow()   // the load window can be the whole compaction range, not just the display window
     }
 
     /// Absolute position (seq) of `messages[0]`; earlier messages stay on disk until asked for.
@@ -120,7 +123,7 @@ final class ChatSession: ObservableObject, Identifiable {
         if mode.isAgent != conversation.mode.isAgent { conversation.systemPrompt = nil }
         conversation.mode = mode
         if messages.isEmpty { sink?.reset(messages, conversation: conversation) }   // the welcome fits the mode
-        if !messages.isEmpty { pendingModeNote = "[The learner switched the teaching mode to \(mode.title).]\n" + SystemPrompt.modeInstructions(mode) }
+        if !messages.isEmpty { pendingModeNote = "[The learner switched the teaching mode to \(mode.title).]\n" + Instructions.text(.mode(mode), settings) }
         save()
     }
 
@@ -135,7 +138,7 @@ final class ChatSession: ObservableObject, Identifiable {
         guard !isRunning, !(trimmed.isEmpty && attachments.isEmpty) else { return }
         trimWindow()
         var blocks: [Block] = []
-        if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true])); pendingModeNote = nil }
+        if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
         var msg = ChatMessage(role: .user, blocks: blocks)
@@ -256,6 +259,7 @@ final class ChatSession: ObservableObject, Identifiable {
     private func start() {
         errorMessage = nil
         isRunning = true
+        beginActivity()
         turn = TurnMetrics(startedAt: Date())
         EventBus.publish(.turnStarted(conversationID: id))
         runTask = Task { [weak self] in
@@ -266,9 +270,17 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private func finishTurn() {
         isRunning = false
+        endActivity()
         setStatus(nil)
         turn.duration = Date().timeIntervalSince(turn.startedAt)
         turn.cancelled = Task.isCancelled || turn.cancelled
+        // Stopped before any reply existed (during the hidden planning step): the learner's question would sit there with
+        // no answer, no note and no way to try again. A stopped placeholder gives them both; requests leave it out.
+        if turn.cancelled, let last = messages.last, last.role == .user, !last.isToolResultOnly {
+            var stopped = ChatMessage(role: .assistant, blocks: [], model: conversation.model)
+            stopped.error = "Stopped."
+            append(stopped)
+        }
         host.didFinishTurn(&turn, self)
         // Attach turn metrics to the last assistant message of the turn.
         if let i = messages.lastIndex(where: { $0.role == .assistant }), (messages[i].metrics?.startedAt ?? .distantPast) >= turn.startedAt {
@@ -319,19 +331,25 @@ final class ChatSession: ObservableObject, Identifiable {
             if msgs.last?.role == .user { msgs[msgs.count - 1].blocks.append(.text(ask)) }
             else { msgs.append(ChatMessage(role: .user, blocks: [.text(ask)])) }
             let rq = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "", messages: msgs, maxTokens: 4_000,
-                                thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id)
-            if let p = await DeepWork.collect(client, rq) {
+                                thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id, cache: false)
+            let planned = await DeepWork.collect(client, rq)
+            recordAuxiliary(planned.usage)
+            if let p = planned.text {
                 plan = p
-                messages[i].blocks.insert(Block(kind: .text, text: DeepWork.planNote(p, mode: conversation.mode), meta: ["hidden": true, "deepPlan": true]), at: 0)
+                messages[i].blocks.insert(Block(kind: .text, text: DeepWork.planNote(p, mode: conversation.mode), meta: ["hidden": true, "deepPlan": true, "ephemeral": true]), at: 0)
                 persist(i)
                 sink?.upsert(messages[i])
             }
         }
-        while !Task.isCancelled && steps < settings.maxToolTurns {
+        // The last step of a turn that used all its tool steps: no tools are offered, so the model writes the reply. Without
+        // it a long turn (a mentor researching, building and testing a project) ended on a tool call with no reply at all.
+        var wrapping = false
+        let stepCap = settings.maxToolTurns   // 0: no limit (the default)
+        while !Task.isCancelled && (stepCap <= 0 || steps < stepCap || wrapping) {
             steps += 1
             await compactIfNeeded(client: client)
-            setStatus(steps == 1 ? "Thinking…" : "Continuing…")
-            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
+            setStatus(wrapping ? "Writing it up…" : steps == 1 ? "Thinking…" : "Continuing…")
+            let tools = wrapping ? [] : ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: requestMessages(),
@@ -390,7 +408,8 @@ final class ChatSession: ObservableObject, Identifiable {
             // Cut off at the output limit without asking for a tool (often a long plan, or one huge tool call that never
             // finished): carry on by itself, twice at most, before handing it to the learner.
             let cutOff = step.finishReason == "max_tokens" && assistant.toolUses.isEmpty && !Task.isCancelled && assistant.error == nil
-            let carryOn = cutOff && limitContinues < 2
+            // Without a step limit, a reply cut off at the output limit carries on as often as it needs to.
+            let carryOn = cutOff && (stepCap <= 0 || limitContinues < 2)
             if step.finishReason == "max_tokens" && !carryOn { assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*")) }
             step.toolCalls = assistant.toolUses.count
             assistant.metrics = step
@@ -414,7 +433,7 @@ final class ChatSession: ObservableObject, Identifiable {
                     yourself. Do large work in several smaller steps: think less before acting, and split big tool calls (one with \
                     a whole project, say) into several calls.
                     </context>
-                    """, meta: ["hidden": true])]))
+                    """, meta: ["hidden": true, "ephemeral": true])]))
                 continue
             }
             if calls.isEmpty, !reviewed, !Task.isCancelled, assistant.error == nil {
@@ -425,8 +444,10 @@ final class ChatSession: ObservableObject, Identifiable {
                     let from = asked ?? 0
                     let input = DeepWork.reviewInput(request: askedText, plan: plan, reply: reply, evidence: DeepWork.evidence(Array(messages[min(from, messages.count)...])))
                     let rq = LLMRequest(model: conversation.model, system: DeepWork.reviewerSystem, messages: [ChatMessage(role: .user, blocks: [.text(input)])],
-                                        maxTokens: 2_000, thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id + "-review")
-                    if let out = await DeepWork.collect(client, rq), !Task.isCancelled {
+                                        maxTokens: 2_000, thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id + "-review", cache: false)
+                    let checked = await DeepWork.collect(client, rq)
+                    recordAuxiliary(checked.usage)
+                    if let out = checked.text, !Task.isCancelled {
                         let v = DeepWork.verdict(out)
                         if v.revise {
                             // The draft stays, collapsed; the corrected reply follows it.
@@ -436,7 +457,7 @@ final class ChatSession: ObservableObject, Identifiable {
                             messages[idx].meta = .object(meta)
                             persist(idx)
                             sink?.upsert(messages[idx])
-                            append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: DeepWork.revisionNote(v.issues), meta: ["hidden": true])]))
+                            append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: DeepWork.revisionNote(v.issues), meta: ["hidden": true, "ephemeral": true])]))
                             continue
                         }
                     }
@@ -455,9 +476,36 @@ final class ChatSession: ObservableObject, Identifiable {
                 }))
                 break
             }
+            if wrapping {
+                // Asked for tools when none were offered (some providers parse them out of the text): they don't run, and
+                // the learner is told why the reply stops here.
+                append(ChatMessage(role: .user, blocks: calls.map {
+                    .toolResult(id: $0.id ?? "", name: $0.name ?? "", content: "Not run: this reply used all its tool steps.", isError: true)
+                }))
+                messages[idx].blocks.append(.text("\n\n*(This reply used all \(stepCap) of its tool steps — say “continue” to carry on, or raise the limit in Settings.)*"))
+                persist(idx); sink?.upsert(messages[idx])
+                break
+            }
             await runTools(calls, client: client)
             drainInbox()
+            if stepCap > 0, steps >= stepCap, !Task.isCancelled {
+                wrapping = true
+                append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: Self.wrapUpNote(settings.maxToolTurns),
+                                                               meta: ["hidden": true, "ephemeral": true])]))
+            }
         }
+    }
+
+    /// Hidden note for the last step of a turn that used all its tool steps.
+    static func wrapUpNote(_ limit: Int) -> String {
+        """
+        <context>
+        This reply has used all \(limit) of its tool steps, so no tools are available for the rest of it. Write the reply \
+        to the learner now, from what you have already done: what you built or found and where it is, what you verified \
+        and how, what is not done yet, and the learner's next step. Say they can reply "continue" for you to carry on. \
+        Do not pretend unfinished work is finished.
+        </context>
+        """
     }
 
     private static func isContent(_ ev: StreamEvent) -> Bool {
@@ -621,10 +669,7 @@ final class ChatSession: ObservableObject, Identifiable {
         var ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
-        if conversation.mode == .code {
-            ctx.scratch = FileManager.default.temporaryDirectory.appendingPathComponent("teacher-mentor-\(id.prefix(8))", isDirectory: true)
-            ctx.readOnly = [services.workspace.url, AppPaths.workspace] + ExerciseStore.list(conversationID: id).map(\.dir)
-        }
+        ctx.quizzes = Testing.on(settings, conversation.mode)
         let t0 = Date()
         var result: Block
         do {
@@ -687,9 +732,8 @@ final class ChatSession: ObservableObject, Identifiable {
         return (m.contains("image") || m.contains("vision") || m.contains("multimodal")) && !m.contains("rate limit")
     }
 
-    private func estimateTokens() -> Int {
-        ContextPolicy.estimateTokens(requestMessages()) + (conversation.systemPrompt?.count ?? 0) / 4
-    }
+    /// The system prompt's own weight, counted with the same script-aware estimate as the messages.
+    private var systemTokens: Int { ContextPolicy.estimateTokens([ChatMessage(role: .user, blocks: [.text(conversation.systemPrompt ?? "")])]) }
 
     private var contextBudget: Int {
         ContextPolicy.budget(setting: settings.compactAtTokens,
@@ -698,13 +742,18 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private func compactIfNeeded(client: LLMClient) async {
         let budget = contextBudget
+        // Build the request-ready history once: preparing it copies messages and blocks, and the step would build it again.
+        var prepared = requestMessages()
+        var tokens = ContextPolicy.estimateTokens(prepared) + systemTokens
         // Tier 2 first: free and cheap. Advance the trim epoch when we pass 70% of the budget.
-        if estimateTokens() > budget * 7 / 10, let next = ContextPolicy.nextTrimPoint(messages, current: conversation.trimmedThrough) {
+        if tokens > budget * 7 / 10, let next = ContextPolicy.nextTrimPoint(messages, current: conversation.trimmedThrough) {
             conversation.trimmedThrough = next
             EventBus.publish(.notice(conversationID: id, text: "Trimmed bulky earlier tool output to keep the lesson fast."))
+            prepared = requestMessages()
+            tokens = ContextPolicy.estimateTokens(prepared) + systemTokens
         }
         // Tier 3 only if still over budget.
-        guard estimateTokens() > budget, messages.count > 8 else { return }
+        guard tokens > budget, messages.count > 8 else { return }
         setStatus("Summarising earlier parts of the lesson…")
         let sp = Signposts.begin("compaction", "\(messages.count) messages"); defer { Signposts.end("compaction", sp) }
         var keepChars = 0
@@ -728,7 +777,7 @@ final class ChatSession: ObservableObject, Identifiable {
             let prompt = """
             Summarise this part of a tutoring session so the lesson can continue seamlessly. \
             \(summary.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
-            Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Exercises & results / \
+            Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Tests & results / \
             Decisions & preferences / Files & artifacts / Course state / Next steps. Be specific (formulas, examples, scores).\
             \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)
 
@@ -737,14 +786,21 @@ final class ChatSession: ObservableObject, Identifiable {
             </transcript>
             """
             let req = LLMRequest(model: conversation.model, system: "You write precise, dense summaries of tutoring sessions.",
-                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096, sessionID: conversation.id)
+                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt)])], maxTokens: 4096, sessionID: conversation.id, cache: false)
             // A supervised job (Runtime › jobs): a failed call, or one silent for 120 s (every streamed event is a heartbeat),
             // is retried with backoff, then the digest below.
-            var text = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 120) { beat in
-                var t = ""
-                for try await ev in BeatingClient(inner: client, beat: beat).stream(req) { if case .text(let s) = ev { t += s } }
-                return t
-            }) ?? ""
+            let part = (try? await Runtime.call("lesson.compact", limit: Intensity(maxRestarts: 1, period: 300), watchdog: 120) { beat -> SummaryCall in
+                var out = SummaryCall()
+                for try await ev in BeatingClient(inner: client, beat: beat).stream(req) {
+                    switch ev { case .text(let s): out.text += s; case .usage(let u): out.usage = out.usage + u; default: break }
+                }
+                return out
+            }) ?? SummaryCall()
+            recordAuxiliary(part.usage)
+            // Stopped mid-summary: keep the lesson as it was. The fallback digest below is for a summary call that failed,
+            // not one the learner cancelled; saving it would replace the lesson's history with a rough digest for good.
+            if Task.isCancelled { return }
+            var text = part.text
             if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
             // A failed summary must not leave the request oversized: fall back to a deterministic digest.
             summary = text.count > 100 ? text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -792,8 +848,37 @@ final class ChatSession: ObservableObject, Identifiable {
         if !detached { app.conversationDidChange(conversation) }
     }
 
+    /// A running turn is user-initiated work, but the learner now leaves for their own editor mid-turn: App Nap would
+    /// throttle the stream, timers and tool processes once the window is in the background. Hold the activity for the turn.
+    private var activity: NSObjectProtocol?
+    private func beginActivity() {
+        guard activity == nil else { return }
+        activity = ProcessInfo.processInfo.beginActivity(options: [.userInitiatedAllowingIdleSystemSleep, .suddenTerminationDisabled],
+                                                         reason: "Lesson turn in progress")
+    }
+    private func endActivity() {
+        if let activity { ProcessInfo.processInfo.endActivity(activity); self.activity = nil }
+    }
+
+    /// Plan, review and summary calls are billed too: count them in the turn and the lesson, and log them for Insights.
+    private func recordAuxiliary(_ u: Usage) {
+        guard u.promptTotal > 0 || u.output > 0 else { return }
+        turn.usage = turn.usage + u
+        turn.steps += 1
+        conversation.usage = Usage(input: max(conversation.usage?.input ?? 0, u.promptTotal),
+                                   output: (conversation.usage?.output ?? 0) + u.output,
+                                   cacheRead: conversation.usage?.cacheRead ?? 0, cacheWrite: conversation.usage?.cacheWrite ?? 0,
+                                   reasoningTokens: (conversation.usage?.reasoningTokens ?? 0) + u.reasoning)
+        services.logUsage(provider: conversation.providerID, model: conversation.model, usage: u)
+    }
+
     private func setStatus(_ s: String?) {
-        status = s
+        let running = isRunning
+        if status != s { status = s }
+        // Thinking calls this on every token: republishing the same status would invalidate every SwiftUI view that
+        // observes the lesson, and pushing the same status to the page costs a JS call per token. Only real changes go out.
+        if let sent = sentStatus, sent.0 == s, sent.1 == running { return }
+        sentStatus = (s, running)
         sink?.setStatus(s)
     }
 
@@ -839,6 +924,11 @@ final class ChatSession: ObservableObject, Identifiable {
 }
 
 /// Coalesces streamed tool output to ≤ 10 UI updates per second.
+private struct SummaryCall: Sendable {
+    var text = ""
+    var usage = Usage()
+}
+
 final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = ""

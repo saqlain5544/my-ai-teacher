@@ -13,6 +13,35 @@ enum Experiments {
     static let visualTool = Experiment(name: "visual_tool", arms: ["deferred", "core"])
     static let all = [visualTool]
 
+    /// The course board system: book-style outlines, cards only, or no board. The learner picks one in Settings
+    /// (`AppSettings.courseBoard`, mirrored into `chosen`); an evaluation run forces one with
+    /// `MYAITEACHER_EXP=course_board=off` (or the CLI's `--exp`). Never randomised.
+    static let courseBoard = Experiment(name: "course_board", arms: ["nested", "shallow", "off"])
+    static func evaluationArm(_ e: Experiment) -> String {
+        if let f = forced[e.name], e.arms.contains(f) { return f }
+        if let c = choice(e.name), e.arms.contains(c) { return c }
+        return e.arms[0]
+    }
+    /// The learner's choices from Settings (forced arms win over them). Written on the main thread when Settings change,
+    /// read from tool calls on any thread: behind a lock.
+    private static let choices = NSLock()
+    nonisolated(unsafe) private static var _chosen: [String: String] = [:]
+    static var chosen: [String: String] {
+        get { choices.withLock { _chosen } }
+        set { choices.withLock { _chosen = newValue } }
+    }
+    static func choose(_ arm: String, for name: String) { choices.withLock { _chosen[name] = arm } }
+    private static func choice(_ name: String) -> String? { choices.withLock { _chosen[name] } }
+    static var boardOff: Bool { evaluationArm(courseBoard) == "off" }
+
+    /// `MYAITEACHER_EXP="name=arm,name=arm"` from the environment (evaluation runs launch the app with it).
+    static func loadForced(_ env: [String: String] = ProcessInfo.processInfo.environment) {
+        for pair in (env["MYAITEACHER_EXP"] ?? "").split(separator: ",") {
+            let kv = pair.split(separator: "=", maxSplits: 1).map { $0.trimmingCharacters(in: .whitespaces) }
+            if kv.count == 2 { forced[kv[0]] = kv[1] }
+        }
+    }
+
     /// Forced arms (CLI `--exp name=arm`, tests). Read-mostly; set before any lesson runs.
     nonisolated(unsafe) static var forced: [String: String] = [:]
     nonisolated(unsafe) static var enabled = true

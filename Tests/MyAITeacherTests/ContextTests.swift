@@ -24,6 +24,31 @@ final class ContextTests: XCTestCase {
         XCTAssertNil(ContextPolicy.nextTrimPoint(msgs, current: c.trimmedThrough))
     }
 
+    func testScriptAwareTokenEstimate() {
+        let english = ChatMessage(role: .user, blocks: [.text(String(repeating: "word ", count: 100))])
+        let japanese = ChatMessage(role: .user, blocks: [.text(String(repeating: "日本語の文章です。", count: 50))])
+        let e = ContextPolicy.estimateTokens([english]), j = ContextPolicy.estimateTokens([japanese])
+        XCTAssertGreaterThan(Double(j) / Double(e), 2.0, "CJK characters are not a quarter of a token")
+        XCTAssertGreaterThan(j, 300)
+    }
+
+    func testEphemeralContextIsStubbedForLaterRequestsButKeptInTheTranscript() {
+        let big = String(repeating: "recalled context line\n", count: 300)
+        let ephemeral = Block(kind: .text, text: big, meta: ["hidden": true, "ephemeral": true])
+        let trimmed = ContextPolicy.trim(ephemeral)
+        XCTAssertLessThan(trimmed.text!.count, 2_000, "old per-turn context is dead weight in every later request")
+        XCTAssertTrue(trimmed.text!.contains("chars trimmed"))
+        XCTAssertEqual(ContextPolicy.trim(Block(kind: .text, text: big)).text!.count, big.count, "ordinary text is never cut here")
+    }
+
+    func testWindowTrimAlwaysMakesProgress() {
+        let msgs = [ChatMessage(role: .user, blocks: [.text("start")])]
+            + (0..<600).map { ChatMessage(role: .assistant, blocks: [.text("answer \($0)")]) }
+        let drop = ContextPolicy.windowTrim(msgs, cut: 600, window: 400, maxBytes: 100_000)
+        XCTAssertGreaterThan(drop, 0, "one long turn must not make the window unbounded")
+        XCTAssertLessThanOrEqual(msgs.count - drop, 600)
+    }
+
     func testOldThinkingDroppedExceptAdaptiveClaude() {
         let msgs = (0..<2).flatMap { turn($0) }
         let c = Conversation(providerID: "x", model: "x")
@@ -94,6 +119,9 @@ final class ContextTests: XCTestCase {
         let base = ToolRegistry.active(s, loaded: []).map(\.name)
         XCTAssertFalse(base.contains("grep")); XCTAssertTrue(base.contains("load_tools"))
         XCTAssertEqual(ToolRegistry.active(s, loaded: ["grep", "nope"]).map(\.name), base + ["grep"])
+        // The course board never waits on another tool being loaded (it used to come in with `mastery`, so a lesson
+        // with quizzes off had no board).
+        XCTAssertTrue(base.contains("lesson_plan")); XCTAssertFalse(ToolRegistry.deferredIndex().contains("lesson_plan"))
     }
 }
 
@@ -144,6 +172,45 @@ final class PolicyTests: XCTestCase {
         XCTAssertTrue(out[2].blocks[0].text!.contains("trimmed to fit"))
         XCTAssertEqual(out[3].plainText, "what failed?")
         XCTAssertEqual(ContextPolicy.squeeze(msgs, budget: 1_000_000).map(\.plainText), msgs.map(\.plainText), "under budget: untouched")
+    }
+
+    func testNoToolStepLimitByDefault() throws {
+        let dec = { (json: String) in try JSONDecoder().decode(AppSettings.self, from: Data(json.utf8)).maxToolTurns }
+        XCTAssertEqual(AppSettings().maxToolTurns, 0, "no limit unless the learner sets one")
+        XCTAssertEqual(try dec("{}"), 0)
+        XCTAssertEqual(try dec(#"{"maxToolTurns": 40}"#), 0, "the old default, saved in every settings file, means never chosen")
+        XCTAssertEqual(try dec(#"{"maxToolTurns": 25}"#), 25, "a limit the learner chose is kept")
+        XCTAssertEqual(try dec(#"{"maxToolTurns": -3}"#), 0)
+    }
+
+    func testStrayHeredocTerminatorIsDropped() {
+        XCTAssertEqual(HeredocSlip.strip("const x = 1;\nEOF").0, "const x = 1;\n")
+        XCTAssertTrue(HeredocSlip.strip("}\nEOF\n\n").1)
+        XCTAssertEqual(HeredocSlip.strip("}\n'EOF'").0, "}\n")
+        XCTAssertFalse(HeredocSlip.strip("cat <<EOF\nhi\nEOF\n").1, "a real heredoc in a shell script keeps its terminator")
+        XCTAssertFalse(HeredocSlip.strip("const EOF = 0;\n").1)
+        XCTAssertFalse(HeredocSlip.strip("hello\n").1)
+        XCTAssertEqual(HeredocSlip.strip("hello").0, "hello", "untouched content is byte-identical")
+    }
+
+    func testToolchainsAnchorCodeLessonsToInstalledVersions() {
+        let zon = ".{\n    .zig_exe = \"/u/zig/zig\",\n    .lib_dir = \"/u/zig/lib\",\n    .std_dir = \"/u/zig/lib/std\",\n    .version = \"0.17.0\",\n}"
+        XCTAssertEqual(Toolchains.stdlib("zig", output: zon), "/u/zig/lib/std")
+        XCTAssertEqual(Toolchains.stdlib("zig", output: ".{ .lib_dir = \"/old/lib\" }"), "/old/lib/std", "older zig: lib_dir + std")
+        XCTAssertNil(Toolchains.stdlib("zig", output: "garbage"))
+        XCTAssertEqual(Toolchains.stdlib("go", output: "/usr/local/go\n"), "/usr/local/go/src")
+        XCTAssertEqual(Toolchains.firstLine("\nPython 3.12.1\nmore"), "Python 3.12.1")
+        XCTAssertNil(Toolchains.section([]))
+        let s = Toolchains.section([.init(name: "zig", path: "/u/zig/zig", version: "0.17.0", stdlib: "/u/zig/lib/std")]) ?? ""
+        XCTAssertTrue(s.contains("- zig: 0.17.0 — /u/zig/zig; standard library source: /u/zig/lib/std") && s.contains("find /"), s)
+    }
+
+    @MainActor func testStudyTimeCountsActiveTimeNotJustReplies() {
+        let t0 = Date()
+        XCTAssertEqual(ActivityExtension.credit(since: nil, now: t0), 0, "the first action starts the clock")
+        XCTAssertEqual(ActivityExtension.credit(since: t0, now: t0.addingTimeInterval(240)), 240, "reading and working between actions counts")
+        XCTAssertEqual(ActivityExtension.credit(since: t0, now: t0.addingTimeInterval(ActivityExtension.idleGap + 1)), 0, "a long gap is time away")
+        XCTAssertEqual(ActivityExtension.credit(since: t0, now: t0.addingTimeInterval(-5)), 0, "clock skew never subtracts")
     }
 
     func testTextOnlyModelsGetImagesAsNotes() {

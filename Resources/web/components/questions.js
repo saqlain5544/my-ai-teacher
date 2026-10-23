@@ -32,7 +32,10 @@
   }
   /** A question's hints, gentlest first (`hints`, or the older single `hint`). */
   const ladder = q => (Array.isArray(q.hints) ? q.hints : []).concat(q.hint && !(q.hints || []).includes(q.hint) ? [q.hint] : []).filter(Boolean);
-  const CERTAINTY = [[1, 'Guessing'], [2, 'Unsure'], [3, 'Sure']];
+  // 0 = "don't know yet": not an answer to grade but a gap to teach (the question needs no answer then).
+  const CERTAINTY = [[0, 'Don\'t know yet'], [1, 'Guessing'], [2, 'Unsure'], [3, 'Sure']];
+  // Why a quiz was skipped: the teacher reacts differently to each (Testing.SkipReason in the app).
+  const SKIP_REASONS = [['need_more', 'I need more explanation first'], ['too_easy', 'Too easy for me'], ['not_now', 'Not now, keep going'], ['unclear', 'A question is unclear or wrong']];
   const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => x == null || x === '' || x === -1));
   const dis = a => a ? '' : ' disabled';
 
@@ -210,6 +213,8 @@
     const answeredList = r && r.meta && r.meta.answers;
     let h = '<div class="quiz' + (graded ? '' : ' askform') + '" data-form="' + ctx.esc(id) + '"><div class="quiz-head"><span class="title">' + (graded ? '📝 ' : '💬 ') + ctx.esc(input.title || (graded ? 'Quiz' : 'A few questions')) + '</span>' +
       '<span class="meta">' + qs.length + ' question' + (qs.length === 1 ? '' : 's') + (input.subject ? ' · ' + ctx.esc(input.subject) : '') + '</span></div>';
+    const kase = input.case || (pend && pend.payload && pend.payload.case);
+    if (kase) h += '<div class="quiz-case"><div class="qc-label">Case</div><div class="md">' + ctx.md(String(kase)) + '</div></div>';
     qs.forEach((q, qi) => {
       const impl = R.questionTypes[q.type] || R.questionTypes.short_text;
       let g = gradedList ? gradedList[qi] : null;
@@ -232,7 +237,7 @@
       if (g && graded) {
         const ok = g.correct;
         const cls = ok === true ? 'good' : ok === false ? 'bad' : 'neutral';
-        const label = ok === true ? '✅ Correct' : ok === false ? (g.score > 0 ? '🟡 Partly right (' + Math.round(g.score * 100) + '%)' : '❌ Not quite') : '📝 Your teacher will review this';
+        const label = g.unknown ? '🤷 Not known yet — your teacher will explain it' : ok === true ? '✅ Correct' : ok === false ? (g.score > 0 ? '🟡 Partly right (' + Math.round(g.score * 100) + '%)' : '❌ Not quite') : '📝 Your teacher will review this';
         let expl = g.explanation ? '<div class="md">' + ctx.md(g.explanation) + '</div>' : '';
         if (ok === false && g.expected && !['single_choice', 'multiple_choice', 'true_false', 'ordering', 'matching', 'fill_blanks'].includes(q.type)) expl = '<div>Expected: <b>' + (q.type === 'math' ? ctx.tex(g.expected, false) : ctx.esc(g.expected)) + '</b></div>' + expl;
         if (ok === false && g.misconception) expl = '<div class="mis">Common mix-up: ' + ctx.inline(g.misconception) + '</div>' + expl;
@@ -247,12 +252,17 @@
     if (active) {
       h += '<div class="quiz-foot"><span></span>' +
         (locked(F, pend) ? '<div class="btn-row"><span class="answered"><span class="spinner"></span> Sent</span></div></div>'
+          : F.skipAsk ? '<div class="skip-why" role="group" aria-label="Why skip?"><span class="c-label">Why skip?</span>' +
+              SKIP_REASONS.map(([v, t]) => '<button class="btn" data-act="q-skip-why" data-v="' + v + '">' + t + '</button>').join('') +
+              '<button class="btn link" data-act="q-skip-back">Back</button></div></div>'
           : '<div class="btn-row"><button class="btn" data-act="q-skip">' + (graded ? 'Skip' : 'Dismiss') + '</button><button class="btn primary" data-act="q-submit">' + ctx.esc(input.submit_label || (graded ? 'Submit answers' : 'Send')) + '</button></div></div>');
     } else if (gradedList) {
       const score = r.meta.score, total = r.meta.total;
-      h += '<div class="quiz-foot"><span class="score' + (total && score / total >= 0.8 ? ' great' : '') + '">Score: ' + score + ' / ' + total + '</span><span class="meta">' + (total && score === total ? '🎉 Perfect!' : 'Mistakes are how we learn.') + '</span></div>';
+      if (!total) h += '<div class="quiz-foot"><span class="answered">Sent — your teacher will review your answers.</span></div>';
+      else h += '<div class="quiz-foot"><span class="score' + (total && score / total >= 0.8 ? ' great' : '') + '">Score: ' + score + ' / ' + total + '</span><span class="meta">' + (total && score === total ? '🎉 Perfect!' : 'Mistakes are how we learn.') + '</span></div>';
     } else if (r && r.isError) {
-      h += '<div class="quiz-foot"><span class="answered">' + (/Interrupted/.test(r.text || '') ? 'Interrupted — the app closed before this was answered.' : 'Skipped.') + '</span></div>';
+      const why = /skipped the (?:quiz|question) — ([^.]+)\./.exec(r.text || '');
+      h += '<div class="quiz-foot"><span class="answered">' + (/Interrupted/.test(r.text || '') ? 'Interrupted — the app closed before this was answered.' : why ? 'Skipped — ' + ctx.esc(why[1]) + '.' : 'Skipped.') + '</span></div>';
     } else if (r) {
       h += '<div class="quiz-foot"><span class="answered">✓ Sent</span></div>';
     } else {
@@ -327,10 +337,18 @@
     F.answers[q] = order.slice();
     ctx.refreshCard(id);
   });
+  // A form's Skip asks why first (the teacher teaches more, raises the bar or moves on accordingly); a quick question skips at once.
   R.registerAction('q-skip', (el, e, ctx) => {
     const id = toolOf(el), F = state(id); if (locked(F, ctx.pending(id))) return;
+    if (el.closest('.quiz')) { F.skipAsk = true; ctx.refreshCard(id); return; }
     lock(F, ctx, id); el.disabled = true;
     ctx.post({ type: 'answer', id, value: { cancelled: true } });
+  });
+  R.registerAction('q-skip-back', (el, e, ctx) => { const id = toolOf(el); state(id).skipAsk = false; ctx.refreshCard(id); });
+  R.registerAction('q-skip-why', (el, e, ctx) => {
+    const id = toolOf(el), F = state(id); if (locked(F, ctx.pending(id))) return;
+    lock(F, ctx, id); F.skipAsk = false; ctx.refreshCard(id);
+    ctx.post({ type: 'answer', id, value: { cancelled: true, reason: el.getAttribute('data-v') } });
   });
   R.registerAction('q-submit', (el, e, ctx) => {
     const id = toolOf(el), F = state(id);
@@ -346,7 +364,7 @@
     if (locked(F, ctx.pending(id))) return;
     lock(F, ctx, id); el.disabled = true; el.textContent = 'Sent';
     ctx.post({ type: 'answer', id, value: { answers, hints: Array.from({ length: n }, (_, i) => +F.hints[i] || 0),
-      certainty: Array.from({ length: n }, (_, i) => F.certainty[i] || null), seconds: (Date.now() - F.started) / 1000 } });
+      certainty: Array.from({ length: n }, (_, i) => F.certainty[i] ?? null), seconds: (Date.now() - F.started) / 1000 } });
   });
 
   // ── Stuck: after a quiet spell the first hint opens by itself (once per form), on the first unanswered question that has one ──
@@ -449,7 +467,7 @@
     card.querySelectorAll('[data-q-input]').forEach(inp => { const msg = showProblem(card, inp, true); if (msg && msg !== FORMAT_HINT && !first) first = inp; });
     if (first) { first.focus(); return false; }
     // Nothing answered at all: say so instead of sending an empty form (Skip is the way to pass).
-    const answered = (qs || []).some((q, i) => q.type !== 'ordering' && q.type !== 'scale' && !blank(F.answers[i]))
+    const answered = (qs || []).some((q, i) => F.certainty[i] === 0 || (q.type !== 'ordering' && q.type !== 'scale' && !blank(F.answers[i])))
       || (qs || []).every(q => q.type === 'ordering' || q.type === 'scale');
     const foot = card.querySelector('.quiz-foot');
     let note = card.querySelector('.q-empty');

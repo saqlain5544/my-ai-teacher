@@ -28,6 +28,19 @@ struct CourseBoard: Sendable, Equatable {
         /// mentor | learner | app
         var source = "mentor"
         var updatedAt = Date()
+        /// The chapter's outline: numbered sections, each with its points and subsections — the board as a book.
+        var outline: [Section] = []
+        /// The section being taught now ("2.3"), when the card has an outline.
+        var at: String?
+    }
+
+    /// One section of a card's outline. Ids are positional ("2", "2.3", "2.3.1") and assigned by the board.
+    struct Section: Sendable, Equatable {
+        var id: String
+        var title: String
+        var points: [String] = []
+        var done = false
+        var sections: [Section] = []
     }
 
     struct Entry: Sendable, Equatable {
@@ -69,6 +82,22 @@ struct CourseBoard: Sendable, Equatable {
     var doneCount: Int { lane(.done).count }
     /// Cards that count towards progress (parked detours don't).
     var courseCount: Int { cards.filter { $0.lane != .parked }.count }
+    /// Course progress 0…1: a finished card counts whole, one in progress by the share of its outline already done (so
+    /// progress shows while a long chapter is being worked through, not only when a card completes).
+    var progress: Double {
+        let course = cards.filter { $0.lane != .parked }
+        guard !course.isEmpty else { return 0 }
+        return course.reduce(0.0) { sum, c in
+            if c.lane == .done { return sum + 1 }
+            let ls = Self.leaves(c.outline)
+            return sum + (ls.isEmpty ? 0 : Double(ls.filter(\.done).count) / Double(ls.count))
+        } / Double(course.count)
+    }
+    /// Sections done and in all, across the course's outlines (nil when no card has one).
+    var sectionCounts: (done: Int, total: Int)? {
+        let ls = cards.filter { $0.lane != .parked }.flatMap { c in Self.leaves(c.outline).map { c.lane == .done ? true : $0.done } }
+        return ls.isEmpty ? nil : (ls.filter { $0 }.count, ls.count)
+    }
 
     /// A card by id ("c1", "C1") or, failing that, by title (exact, then prefix, case-insensitive).
     func card(_ key: String) -> Card? {
@@ -182,6 +211,10 @@ struct CourseBoard: Sendable, Equatable {
         let i = try index(key)
         cards[i].lane = .done
         cards[i].parkedReason = nil
+        // A finished chapter has finished sections: teachers often complete a card without ticking each one, and the
+        // panel then showed "done" next to "0 of 4 sections".
+        for j in cards[i].outline.indices { Self.setAll(&cards[i].outline[j], true) }
+        cards[i].at = nil
         addEvidence(at: i, e)
         cards[i].updatedAt = Date()
         if focusID == cards[i].id { focusID = nil }
@@ -244,6 +277,142 @@ struct CourseBoard: Sendable, Equatable {
         if cards[i].evidence.count > Self.evidenceCap { cards[i].evidence.removeFirst(cards[i].evidence.count - Self.evidenceCap) }
     }
 
+    // MARK: Outlines
+
+    /// Sections from the model's JSON (`[{title, points?, sections?}]`, or plain strings), numbered by position. A section
+    /// whose title matches one in `old` keeps its done mark, so refining an outline never loses progress.
+    static func sections(from items: [JSON], prefix: String, old: [Section], depth: Int = 0) -> [Section] {
+        guard depth < 4 else { return [] }
+        let doneTitles = Set(flatten(old).filter(\.done).map { $0.title.lowercased() })
+        var out: [Section] = []
+        for item in normalizedItems(items) {
+            let id = prefix.isEmpty ? "\(out.count + 1)" : "\(prefix).\(out.count + 1)"
+            var s = Section(id: id, title: String(unnumbered(item.title).prefix(200)))
+            s.points = item.points.map { String($0.prefix(300)) }
+            s.done = item.done || doneTitles.contains(s.title.lowercased())
+            s.sections = sections(from: item.children, prefix: id, old: old, depth: depth + 1)
+            out.append(s)
+        }
+        return out
+    }
+
+    /// A title without the model's own numbering ("2.1 Left and right", "§3. Types"): the board numbers sections by
+    /// position, so a kept number shows twice ("2.1 2.1 Left and right") and goes stale when sections move.
+    static func unnumbered(_ title: String) -> String {
+        guard let r = title.range(of: #"^\s*(§\s*)?\d+(\.\d+)*[.):]?\s+"#, options: .regularExpression) else { return title }
+        let rest = title[r.upperBound...].trimmingCharacters(in: .whitespaces)
+        return rest.isEmpty ? title : rest
+    }
+
+    /// Models write outlines in many shapes; all of them mean sections. Accepted: plain strings; `title`, `name`,
+    /// `heading`, `label`, `topic` or `section` for the title; `points`/`bullets`/`items` as a list, a string or an
+    /// `{"item": …}` wrapper (a tool-call serialisation artefact); `sections`/`subsections`/`children` likewise, or one
+    /// object instead of a list. An untitled item is a grouping: its subsections take its place, or, with only points,
+    /// its first point becomes the title. Rejecting these used to make the teacher give up on detail and send a flat
+    /// one-line outline instead.
+    private struct RawSection { var title: String; var points: [String]; var children: [JSON]; var done: Bool }
+    private static func list(_ j: JSON?) -> [JSON] {
+        guard var j else { return [] }
+        while case .object(let o) = j, o.count == 1, let inner = o["item"] ?? o["items"] ?? o["list"] { j = inner }
+        if let a = j.array { return a.flatMap { e -> [JSON] in
+            if case .object(let o) = e, o.count == 1, let inner = o["item"] ?? o["items"] { return list(inner) }
+            return [e]
+        } }
+        if j.object != nil || j.string != nil { return [j] }
+        return []
+    }
+    private static func normalizedItems(_ items: [JSON]) -> [RawSection] {
+        var out: [RawSection] = []
+        for item in items.flatMap({ list($0) }) {
+            if let s = item.string?.trimmingCharacters(in: .whitespacesAndNewlines) { if !s.isEmpty { out.append(.init(title: s, points: [], children: [], done: false)) }; continue }
+            guard item.object != nil else { continue }
+            let title = ["title", "name", "heading", "label", "topic", "section"].lazy.compactMap { item[$0]?.string }.first?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let points = ["points", "bullets", "items", "key_points"].flatMap { list(item[$0]) }.compactMap { $0.string ?? $0["text"]?.string }
+                .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+            let children = ["sections", "subsections", "children"].flatMap { list(item[$0]) }
+            let done = item["done"]?.bool == true
+            if !title.isEmpty { out.append(.init(title: title, points: points, children: children, done: done)); continue }
+            if !children.isEmpty {
+                // A grouping with no title of its own: its subsections stand in its place (its points open the first).
+                var kids = normalizedItems(children)
+                if !points.isEmpty, !kids.isEmpty { kids[0].points = points + kids[0].points }
+                out += kids
+            } else if let first = points.first {
+                out.append(.init(title: first, points: Array(points.dropFirst()), children: [], done: done))
+            }
+        }
+        return out
+    }
+    /// Every section in reading order.
+    static func flatten(_ s: [Section]) -> [Section] { s.flatMap { [$0] + flatten($0.sections) } }
+    /// The leaves: what is actually taught (a section with subsections is done when they all are).
+    static func leaves(_ s: [Section]) -> [Section] { s.flatMap { $0.sections.isEmpty ? [$0] : leaves($0.sections) } }
+    private static func mark(_ s: inout [Section], id: String, done: Bool) -> Bool {
+        for i in s.indices {
+            if s[i].id == id { s[i].done = done; for j in s[i].sections.indices { setAll(&s[i].sections[j], done) }; return true }
+            if mark(&s[i].sections, id: id, done: done) { s[i].done = !s[i].sections.isEmpty && s[i].sections.allSatisfy(\.done); return true }
+        }
+        return false
+    }
+    private static func setAll(_ s: inout Section, _ done: Bool) { s.done = done; for j in s.sections.indices { setAll(&s.sections[j], done) } }
+
+    /// Where the "now" pointer goes when an outline is rewritten: to the same section by title (ids renumber when sections
+    /// are added or moved), unless it is finished or gone — then the first unfinished leaf.
+    static func follow(_ at: String?, from old: [Section], to new: [Section]) -> String? {
+        let title = at.flatMap { id in flatten(old).first { $0.id == id }?.title.lowercased() }
+        if let title, let s = flatten(new).first(where: { $0.title.lowercased() == title }), !s.done {
+            return s.sections.isEmpty ? s.id : (leaves(s.sections).first { !$0.done }?.id ?? s.id)
+        }
+        return leaves(new).first { !$0.done }?.id
+    }
+
+    /// Sets a card's outline (the chapter, written out as sections and subsections).
+    @discardableResult
+    mutating func setOutline(_ key: String, _ items: [JSON], actor: String = "mentor") throws -> Card {
+        let i = try index(key)
+        let outline = Self.sections(from: items, prefix: "", old: cards[i].outline)
+        guard !outline.isEmpty else { throw Failure(message: "An outline needs sections: [{\"title\": …, \"points\": […], \"sections\": […]}].") }
+        cards[i].at = Self.follow(cards[i].at, from: cards[i].outline, to: outline)
+        cards[i].outline = outline
+        cards[i].updatedAt = Date()
+        touch("outline", card: cards[i].id, note: "\(Self.leaves(outline).count) sections", actor: actor)
+        return cards[i]
+    }
+
+    /// Marks a section done (or not) and moves the card on to the next unfinished one.
+    @discardableResult
+    mutating func section(_ key: String, _ section: String, done: Bool = true, actor: String = "mentor") throws -> Card {
+        let i = try index(key)
+        guard !cards[i].outline.isEmpty else { throw Failure(message: "\(cards[i].id.uppercased()) has no outline yet (action=outline).") }
+        let all = Self.flatten(cards[i].outline)
+        let k = section.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: "§"))
+        // By id ("2.1"), by title, or as the board shows it ("2.1 Left and right", which models copy back verbatim).
+        let bare = Self.unnumbered(k).lowercased()
+        let head = k.split(separator: " ", maxSplits: 1).first.map { $0.trimmingCharacters(in: CharacterSet(charactersIn: ".):")) }
+        guard let target = all.first(where: { $0.id == k }) ?? all.first(where: { $0.title.lowercased() == k.lowercased() })
+                ?? all.first(where: { Self.unnumbered($0.title).lowercased() == bare })
+                ?? all.first(where: { $0.id == head && k.contains(" ") })
+                ?? { let hits = all.filter { Self.unnumbered($0.title).lowercased().hasPrefix(bare) }; return hits.count == 1 ? hits[0] : nil }() else {
+            throw Failure(message: "No section \"\(section)\" in \(cards[i].id.uppercased()). Sections: " + all.prefix(40).map { "\($0.id) \($0.title)" }.joined(separator: "; "))
+        }
+        _ = Self.mark(&cards[i].outline, id: target.id, done: done)
+        let leaves = Self.leaves(cards[i].outline)
+        cards[i].at = done ? (leaves.drop { $0.id != target.id }.dropFirst().first { !$0.done } ?? leaves.first { !$0.done })?.id : target.id
+        cards[i].updatedAt = Date()
+        touch(done ? "section" : "reopen", card: cards[i].id, note: "\(target.id) \(target.title)", actor: actor)
+        return cards[i]
+    }
+
+    /// "§2.3 Arena allocators (5/14)" for a card with an outline.
+    func position(_ c: Card) -> String? {
+        let leaves = Self.leaves(c.outline)
+        guard !leaves.isEmpty else { return nil }
+        let done = leaves.filter(\.done).count
+        let here = c.at.flatMap { id in Self.flatten(c.outline).first { $0.id == id } }
+        return (here.map { "§\($0.id) \(MemoryText.clip(Self.unnumbered($0.title), 60))" } ?? "outline done") + " (\(done)/\(leaves.count) sections)"
+    }
+
     // MARK: Legacy plans
 
     /// Replaces the course with a modules list (the pre-board tool contract). Ids are kept for modules whose title still
@@ -260,6 +429,11 @@ struct CourseBoard: Sendable, Equatable {
             if let s = m["status"]?.string { c.lane = Self.lane(forStatus: s, current: c.lane) }
             if let n = m["notes"]?.string ?? m["note"]?.string, !n.isEmpty { c.note = n }
             if let n = m["next"]?.string, !n.isEmpty { c.next = n }
+            if let o = m["outline"]?.array, !o.isEmpty {
+                let outline = Self.sections(from: o, prefix: "", old: c.outline)
+                c.at = Self.follow(c.at, from: c.outline, to: outline)
+                c.outline = outline
+            }
             if let k = m["concept"]?.string, !k.isEmpty { c.concept = k }
             c.updatedAt = Date()
             fresh.append(c)
@@ -323,6 +497,8 @@ struct CourseBoard: Sendable, Equatable {
                 var c = Card(id: "c\(n)", title: t)
                 c.objectives = m["objectives"]?.array?.compactMap(\.string) ?? []
                 c.note = m["notes"]?.string
+                c.outline = Self.sections(from: m["outline"]?.array ?? [], prefix: "", old: [])
+                c.at = Self.leaves(c.outline).first { !$0.done }?.id
                 c.lane = Self.lane(forStatus: m["status"]?.string ?? "todo", current: .backlog)
                 if c.lane == .doing { if focusID == nil { focusID = c.id } else { c.lane = .backlog } }
                 if c.lane == .done { c.evidence = ["marked done before the board existed"] }
@@ -343,6 +519,8 @@ struct CourseBoard: Sendable, Equatable {
         c.parkedReason = j["parked_reason"]?.string
         c.source = j["source"]?.string ?? "mentor"
         c.updatedAt = j["updated_at"]?.double.map { Date(timeIntervalSince1970: $0) } ?? Date()
+        c.outline = Self.sections(from: j["outline"]?.array ?? [], prefix: "", old: [])
+        c.at = j["at"]?.string
         return c
     }
 
@@ -371,6 +549,15 @@ struct CourseBoard: Sendable, Equatable {
         if !c.evidence.isEmpty { o["evidence"] = .array(c.evidence.map { .string($0) }) }
         if let n = c.note { o["note"] = .string(n) }
         if let r = c.parkedReason { o["parked_reason"] = .string(r) }
+        if !c.outline.isEmpty { o["outline"] = .array(c.outline.map(Self.json)) }
+        if let a = c.at { o["at"] = .string(a) }
+        return .object(o)
+    }
+    static func json(_ s: Section) -> JSON {
+        var o: [String: JSON] = ["id": .string(s.id), "title": .string(s.title)]
+        if !s.points.isEmpty { o["points"] = .array(s.points.map { .string($0) }) }
+        if s.done { o["done"] = .bool(true) }
+        if !s.sections.isEmpty { o["sections"] = .array(s.sections.map(Self.json)) }
         return .object(o)
     }
 
@@ -406,7 +593,7 @@ struct CourseBoard: Sendable, Equatable {
     func header(now: Date = Date(), openLoop: String? = nil, watch: String? = nil, mode: String? = nil) -> String {
         var lines = [courseLine(now: now)]
         if let f = focus {
-            lines.append("Focus: \(f.id.uppercased()) \(f.title) (doing)" + (f.note.map { " — \(MemoryText.clip($0, 120))" } ?? ""))
+            lines.append("Focus: \(f.id.uppercased()) \(f.title) (doing)" + (position(f).map { " — \($0)" } ?? "") + (f.note.map { " — \(MemoryText.clip($0, 120))" } ?? ""))
             lines.append("Next: " + (f.next.map { MemoryText.clip($0, 160) } ?? "choose the next concrete action (lesson_plan note, next=…)"))
         } else if cards.contains(where: { $0.lane == .backlog || $0.lane == .review }) {
             lines.append("Focus: none — pick the next card (lesson_plan start) before teaching")
@@ -468,6 +655,15 @@ struct CourseBoard: Sendable, Equatable {
                 if let n = c.note { line += " — \(n)" }
                 s += line + "\n"
                 for o in c.objectives { s += "  - \(o)\n" }
+                func outline(_ secs: [Section], _ depth: Int) {
+                    for sec in secs {
+                        let pad = String(repeating: "  ", count: depth + 1)
+                        s += "\(pad)- [\(sec.done ? "x" : " ")] \(sec.id) \(sec.title)" + (sec.id == c.at ? "  ← now" : "") + "\n"
+                        for p in sec.points { s += "\(pad)    · \(p)\n" }
+                        outline(sec.sections, depth + 1)
+                    }
+                }
+                outline(c.outline, 0)
                 if !c.evidence.isEmpty { s += "  - evidence: \(c.evidence.joined(separator: "; "))\n" }
             }
         }

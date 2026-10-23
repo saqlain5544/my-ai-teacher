@@ -8,10 +8,23 @@ struct SettingsView: View {
             ProvidersSettings().tabItem { Label("Providers", systemImage: "key") }
             ToolsSettings().tabItem { Label("Tools", systemImage: "hammer") }
             AgentsSettings().tabItem { Label("Agents", systemImage: "person.2") }
+            InstructionsSettings().tabItem { Label("Instructions", systemImage: "text.alignleft") }
             MemorySettings().tabItem { Label("Memory", systemImage: "brain.head.profile") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }
         }
         .frame(width: 660, height: 520)
+    }
+
+    /// What each course board system does, in the learner's terms.
+    static func boardHelp(_ choice: String) -> String {
+        switch choice {
+        case "shallow":
+            return "Cards only: a goal that spans many replies gets 4–8 cards (one in focus, with its next step), kept across detours, summaries and lessons. Lighter, without chapter outlines."
+        case "off":
+            return "Off: no board. The teacher follows the conversation and its memory of you. Fine for one-off questions; long courses can lose their thread after a summary or in a new lesson."
+        default:
+            return "Book outlines: a course is a set of cards, each with an outline of sections the teacher ticks off as it teaches, so it reads like a book and picks up exactly where you left off, across detours, summaries and lessons."
+        }
     }
 }
 
@@ -35,9 +48,23 @@ struct GeneralSettings: View {
                     ForEach(PythonPolicy.allCases) { Text($0.title).tag($0) }
                 }
                 Text("The teacher can never install packages.").font(.caption).foregroundStyle(.secondary)
+                Picker("Course board", selection: $settings.value.courseBoard) {
+                    Text("Book outlines").tag("nested")
+                    Text("Cards only").tag("shallow")
+                    Text("Off").tag("off")
+                }
+                Text(SettingsView.boardHelp(settings.value.courseBoard)).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
                 Toggle("Run local A/B experiments to tune the teacher (results stay on this Mac)", isOn: $settings.value.experiments)
                 Stepper("Text size: \(Int(settings.value.fontSize)) pt", value: $settings.value.fontSize, in: 11...24)
-                Stepper("Max tool steps per turn: \(settings.value.maxToolTurns)", value: $settings.value.maxToolTurns, in: 5...200, step: 5)
+                Toggle("Limit tool steps per reply", isOn: Binding(
+                    get: { settings.value.maxToolTurns > 0 },
+                    set: { settings.value.maxToolTurns = $0 ? 100 : 0 }))
+                if settings.value.maxToolTurns > 0 {
+                    Stepper("At most \(settings.value.maxToolTurns) tool steps per reply", value: $settings.value.maxToolTurns, in: 5...1000, step: 5)
+                } else {
+                    Text("No limit: the teacher works until the reply is done (earlier parts of a long lesson are summarised as it goes). Stop it any time with ⌘.").font(.caption).foregroundStyle(.secondary)
+                }
                 Toggle("Automatic context (half the model's window, up to 400k tokens)", isOn: Binding(
                     get: { settings.value.compactAtTokens == 0 },
                     set: { settings.value.compactAtTokens = $0 ? 0 : 120_000 }))

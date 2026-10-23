@@ -1,14 +1,16 @@
 import Foundation
 
 enum ToolRegistry {
-    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage).
+    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage), and the course
+    /// board — the long-term state manager must never depend on another tool having been loaded (it once came in only
+    /// alongside `mastery`, so switching quizzes off silently switched the board off too).
     static let core: [Tool] = [
         AskLearnerTool(), MathTool(), RunCodeTool(), ReadTool(), WriteTool(), EditTool(), LsTool(), BashTool(),
-        WebSearchTool(), WebFetchTool(), MemoryTool(), LoadToolsTool(),
+        WebSearchTool(), WebFetchTool(), MemoryTool(), LessonPlanTool(), LoadToolsTool(),
     ]
     /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
     static let deferred: [Tool] = [
-        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(), ExerciseTool(),
+        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(),
     ]
     static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
 
@@ -35,17 +37,16 @@ enum ToolRegistry {
         var off = Set(settings.disabledTools)
         if mode.isAgent { return agentTools.filter { !off.contains($0.name) } }
         if settings.python == .off { off.insert("math") }   // SymPy needs Python
+        if Experiments.boardOff { off.insert("lesson_plan") }
         let l = layout(lessonID)
-        // Code mentor sets projects from the first reply: its exercise tool needs no load step.
-        let extra = (mode == .code ? ["exercise"] : []) + loaded.filter { !(mode == .code && $0 == "exercise") }
-        // The code mentor never writes code files: projects come through `exercise`, demonstrations through `run_code`.
-        if mode == .code { off.formUnion(["write", "edit", "bash"]) }
-        return (l.core + extra.compactMap { name in l.deferred.first { $0.name == name } }).filter { !off.contains($0.name) }
+        let extra = loaded.compactMap { name in l.deferred.first { $0.name == name } }
+        return (l.core + extra).filter { !off.contains($0.name) }
     }
 
     /// One line per deferred tool for the system prompt.
     static func deferredIndex(_ lessonID: String? = nil) -> String {
-        layout(lessonID).deferred.map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
+        layout(lessonID).deferred
+            .map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 
     /// Tools a research sub-agent may use without supervision.

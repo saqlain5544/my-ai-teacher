@@ -69,11 +69,11 @@ struct RunCodeTool: Tool {
     func summary(_ input: JSON) -> String { "\(input["language"]?.string ?? "code") snippet" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        if let s = ctx.scratch { try? FileManager.default.createDirectory(at: s, withIntermediateDirectories: true) }
-        let r = try await Self.execute(language: try input.req("language"), code: try input.req("code"),
+        let (code, strayEOF) = HeredocSlip.strip(try input.req("code"))
+        let r = try await Self.execute(language: try input.req("language"), code: code,
                                        stdin: input["stdin"]?.string, timeout: TimeInterval(min(300, input["timeout"]?.int ?? 30)),
-                                       workingDirectory: ctx.scratch ?? ctx.workspace, sandboxed: ctx.scratch != nil, readOnly: ctx.readOnly, progress: ctx.progress)
-        return ToolOutput(text: r.text, isError: r.failed)
+                                       workingDirectory: ctx.workspace, progress: ctx.progress)
+        return ToolOutput(text: r.text + (strayEOF ? "\n" + HeredocSlip.note : ""), isError: r.failed)
     }
 
     struct RunResult: Sendable { var text: String; var failed: Bool }
@@ -96,9 +96,8 @@ struct RunCodeTool: Tool {
 
     /// Sources/binaries live in a scratch dir; the program runs in `workingDirectory` (the lesson's folder)
     /// so relative paths like open("notes.txt") work.
-    /// `sandboxed`: under `Sandbox`'s profile, writing only in the working folder and temp (a code mentor's own runs).
     static func execute(language: String, code: String, stdin: String?, timeout: TimeInterval,
-                        workingDirectory: URL? = nil, sandboxed: Bool = false, readOnly: [URL] = [], progress: (@Sendable (String) -> Void)? = nil) async throws -> RunResult {
+                        workingDirectory: URL? = nil, progress: (@Sendable (String) -> Void)? = nil) async throws -> RunResult {
         let lang = normalize(language)
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-run-\(UUID().uuidString.prefix(8))")
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -145,8 +144,7 @@ struct RunCodeTool: Tool {
         for (i, step) in steps.enumerated() {
             let isLast = i == steps.count - 1
             let cwd = isLast ? (workingDirectory ?? dir) : dir
-            let (exe, args) = sandboxed ? ("/usr/bin/sandbox-exec", ["-p", Sandbox.profile(writable: [cwd, dir], readOnly: readOnly), step.0] + step.1) : (step.0, step.1)
-            let r = await ProcessRunner.run(exe, args, cwd: cwd, stdin: isLast ? stdin : nil, timeout: timeout, onOutput: isLast ? progress : nil)
+            let r = await ProcessRunner.run(step.0, step.1, cwd: cwd, stdin: isLast ? stdin : nil, timeout: timeout, onOutput: isLast ? progress : nil)
             if !isLast {
                 if r.exitCode != 0 { return RunResult(text: "Compilation failed:\n" + truncateMiddle(r.combined, max: 20_000), failed: true) }
                 continue

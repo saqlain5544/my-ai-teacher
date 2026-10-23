@@ -148,6 +148,15 @@
       const f = own(d.visualError);
       const box = f && f.closest('.visual') && f.closest('.visual').querySelector('.visual-error');
       if (box) { box.hidden = false; box.querySelector('.visual-error-msg').textContent = '⚠︎ ' + d.msg; }
+      // A visual in the latest reply that breaks is reported to the teacher with the learner's next message, so it gets
+      // fixed without anyone pressing Fix (older replies stay quiet: their errors were reported when they were new).
+      const msgs = document.querySelectorAll('.msg.assistant'), mine = f && f.closest('.msg');
+      if (box && mine && mine === msgs[msgs.length - 1]) {
+        const title = (f.closest('.visual').querySelector('.visual-title') || {}).textContent || 'visual';
+        const m = { type: 'visualError', kind: 'visual', title: title.replace(/^◈\s*/, ''), msg: String(d.msg || '').slice(0, 300) };
+        if (window.__onPost) window.__onPost(m);
+        try { window.webkit.messageHandlers.bridge.postMessage(m); } catch (err) { /* no app (tests) */ }
+      }
     }
   });
 

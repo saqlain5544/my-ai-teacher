@@ -163,6 +163,8 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .thinking > summary::before { content: "›"; display: inline-block; transition: transform .15s; font-size: 1.2em; line-height: 1; }
 .thinking[open] > summary::before { transform: rotate(90deg); }
 .thinking .thinking-body { margin-top: 6px; max-height: 340px; overflow-y: auto; }
+.thinking.raw .thinking-body { white-space: pre-wrap; overflow-wrap: anywhere; }
+.thinking .thinking-code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.92em; max-height: none; }
 .thinking.live > summary { animation: pulse 1.6s ease-in-out infinite; }
 
 /* Tool cards */
@@ -268,6 +270,12 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .certainty button:hover { border-color: var(--accent); }
 .certainty button.sel { background: var(--accent); color: #fff; border-color: var(--accent); }
 .hint .nudge { color: var(--accent); font-weight: 600; }
+.quiz-case { padding: 12px 15px; border-bottom: 1px solid var(--border); background: var(--card); }
+.quiz-case .qc-label { font-size: 0.72em; letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); margin-bottom: 4px; font-weight: 600; }
+.quiz-case .md > :first-child { margin-top: 0; }
+.quiz-case .md > :last-child { margin-bottom: 0; }
+.skip-why { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-left: auto; color: var(--muted); font-size: 0.88em; }
+.skip-why .btn { font-size: 1em; }
 .feedback .mis { margin: 3px 0; }
 .feedback .fb-note { margin-top: 4px; color: var(--muted); font-size: 0.92em; }
 .score { font-weight: 700; font-size: 1.05em; }
@@ -317,6 +325,16 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .board-parked summary { cursor: pointer; font-size: 0.74em; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: var(--faint); }
 .board-parked-list { margin: 6px 0 0; padding-left: 1.1em; color: var(--muted); font-size: 0.94em; line-height: 1.5; }
 .board-reason { color: var(--faint); }
+.board-outline-wrap { margin-top: 6px; font-size: 0.92em; }
+.board-outline-wrap > summary { cursor: pointer; color: var(--faint); font-size: 0.85em; }
+.board-outline { list-style: none; margin: 4px 0 0; padding-left: 0; }
+.board-outline .board-outline { padding-left: 14px; margin-top: 2px; }
+.board-outline li { margin: 2px 0; line-height: 1.45; }
+.board-outline li.done > .bo-id::before { content: "✓ "; color: var(--good); }
+.board-outline li.now { font-weight: 600; }
+.board-outline li.now > .bo-id::before { content: "▸ "; color: var(--accent); }
+.bo-id { color: var(--faint); font-variant-numeric: tabular-nums; margin-right: 6px; font-size: 0.9em; }
+.bo-points { color: var(--muted); font-size: 0.9em; font-weight: 400; }
 
 /* Welcome */
 .welcome { text-align: center; padding: 9vh 10px 20px; }
@@ -326,6 +344,7 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .suggestions { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; text-align: left; max-width: 700px; margin: 0 auto; }
 .suggestion { border: 1px solid var(--border); border-radius: 12px; padding: 12px 14px; cursor: pointer; background: var(--bg); transition: border-color .12s, transform .12s; }
 .suggestion:hover { border-color: var(--accent); transform: translateY(-1px); }
+.suggestion.continue { border-color: var(--accent); background: var(--accent-soft); }
 .suggestion .t { font-weight: 600; font-size: 0.95em; }
 .suggestion .d { color: var(--muted); font-size: 0.85em; }
 .welcome .stats { display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
@@ -579,16 +598,6 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .pb-hint[hidden], .pb-solution[hidden], .pb-sent[hidden], .problem .nudge[hidden], .problem .btn[hidden] { display: none; }
 .steps-more { margin-top: 4px; }
 
-/* Exercise (code project) card */
-.exercise-card { border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
-.ex-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px; background: var(--accent-soft); }
-.ex-title { font-weight: 650; }
-.ex-lang { font-family: var(--mono); font-size: 0.8em; color: var(--muted); }
-.ex-body { padding: 8px 14px; }
-.ex-foot { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 8px 14px 12px; }
-.ex-folder { font-family: var(--mono); font-size: 0.8em; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.exercise-line { color: var(--muted); font-size: 0.9em; padding: 2px 0; }
-
 /* A draft revised after the self-check: collapsed, openable */
 .msg.superseded > .blocks, .msg.superseded > .msg-foot, .msg.superseded > .draft-note .draft-issues { display: none; }
 .msg.superseded.open > .blocks { display: block; opacity: 0.6; }
@@ -596,4 +605,3 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .draft-note { color: var(--muted); font-size: 0.88em; }
 .draft-issues { margin: 4px 0 8px 18px; padding: 0; }
 
-.ex-actions { display: inline-flex; gap: 6px; flex-wrap: wrap; }

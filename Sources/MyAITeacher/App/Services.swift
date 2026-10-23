@@ -19,7 +19,16 @@ struct AppSettings: Codable, Sendable, Equatable {
     var fontSize: Double = 15
     var customProviders: [ProviderConfig] = []
     var disabledTools: [String] = []
-    var maxToolTurns = 40
+    /// Tool steps one reply may take; 0 = no limit (the default). The learner can set one in Settings.
+    var maxToolTurns = 0
+    /// Quizzes and tests. Off: the teacher teaches without testing until the learner turns them back on (toolbar).
+    /// Quiz and Exam prep modes always test.
+    var quizzes = true
+    /// How the teacher keeps long-term state for goals that span many replies: `Experiments.courseBoard` arms
+    /// ("nested": cards with book-style outlines, "shallow": cards only, "off": no board).
+    var courseBoard = "nested"
+    /// The learner's edits to the agents' instructions (`Instructions.Key.raw` → text); absent = the default.
+    var instructions: [String: String] = [:]
     var learnerName: String = ""
     var learnerLevel: String = ""
     var voiceIdentifier: String?
@@ -56,7 +65,11 @@ struct AppSettings: Codable, Sendable, Equatable {
         fontSize = (try? c.decode(Double.self, forKey: .fontSize)) ?? d.fontSize
         customProviders = (try? c.decode([ProviderConfig].self, forKey: .customProviders)) ?? []
         disabledTools = (try? c.decode([String].self, forKey: .disabledTools)) ?? []
-        maxToolTurns = (try? c.decode(Int.self, forKey: .maxToolTurns)) ?? d.maxToolTurns
+        // 40 was the old default, saved into every settings file: it means "never chosen", so it becomes no limit.
+        let savedSteps = (try? c.decode(Int.self, forKey: .maxToolTurns)) ?? d.maxToolTurns
+        maxToolTurns = savedSteps == 40 ? 0 : max(0, savedSteps)
+        quizzes = (try? c.decode(Bool.self, forKey: .quizzes)) ?? d.quizzes
+        courseBoard = (try? c.decode(String.self, forKey: .courseBoard)).flatMap { Experiments.courseBoard.arms.contains($0) ? $0 : nil } ?? d.courseBoard
         learnerName = (try? c.decode(String.self, forKey: .learnerName)) ?? ""
         learnerLevel = (try? c.decode(String.self, forKey: .learnerLevel)) ?? ""
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
@@ -71,6 +84,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
+        instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }
 }
 

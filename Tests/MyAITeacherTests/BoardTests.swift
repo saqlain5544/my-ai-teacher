@@ -129,6 +129,140 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(b.card("c1")?.evidence.count, CourseBoard.evidenceCap)
     }
 
+    func testCardsCarryABookStyleOutlineWithProgress() throws {
+        var b = try sample()
+        let outline: [JSON] = [
+            ["title": "What a limit is", "points": ["epsilon-delta idea", "limits that fail to exist"], "sections": [["title": "Graphical limits"], ["title": "Numerical tables"]]],
+            ["title": "One-sided limits", "sections": [["title": "Left and right"], ["title": "Jump discontinuities"]]],
+            ["title": "Continuity"],
+        ]
+        var c = try b.setOutline("c1", outline)
+        XCTAssertEqual(CourseBoard.flatten(c.outline).map(\.id), ["1", "1.1", "1.2", "2", "2.1", "2.2", "3"])
+        XCTAssertEqual(CourseBoard.leaves(c.outline).count, 5); XCTAssertEqual(c.at, "1.1")
+        XCTAssertEqual(c.outline[0].points, ["epsilon-delta idea", "limits that fail to exist"])
+        c = try b.section("c1", "1.1"); XCTAssertEqual(c.at, "1.2")
+        c = try b.section("c1", "Numerical tables"); XCTAssertEqual(c.at, "2.1")
+        XCTAssertTrue(c.outline[0].done, "a section is done when its subsections are")
+        XCTAssertEqual(b.position(c), "§2.1 Left and right (2/5 sections)")
+        XCTAssertTrue(b.header().contains("Focus: C1 Limits and continuity (doing) — §2.1 Left and right (2/5 sections)"), b.header())
+        // Refining the outline (renumbered, a section added) keeps what was done.
+        c = try b.setOutline("c1", [["title": "Why limits"]] + outline)
+        XCTAssertEqual(CourseBoard.leaves(c.outline).filter(\.done).map(\.title), ["Graphical limits", "Numerical tables"])
+        XCTAssertEqual(c.at, "3.1", "the pointer follows the renumbered section")
+        c = try b.section("c1", "§2.2", done: false); XCTAssertEqual(c.at, "2.2", "reopening goes back to it")
+        XCTAssertThrowsError(try b.section("c1", "Quantum gravity")) { XCTAssertTrue("\($0)".contains("2.1 Graphical limits"), "\($0)") }
+        XCTAssertThrowsError(try b.section("c2", "1")) { XCTAssertTrue("\($0)".contains("no outline"), "\($0)") }
+        XCTAssertThrowsError(try b.setOutline("c1", []))
+        // Round-trips, and the full board reads as a table of contents.
+        let again = CourseBoard(plan: b.plan)
+        XCTAssertEqual(again.card("c1")?.outline, b.card("c1")?.outline); XCTAssertEqual(again.card("c1")?.at, "2.2")
+        let md = b.markdown()
+        XCTAssertTrue(md.contains("- [x] 2.1 Graphical limits") && md.contains("2.2 Numerical tables  ← now") && md.contains("· epsilon-delta idea"), md)
+        // A whole book stays out of the per-request header.
+        var big = CourseBoard(plan: LessonPlan(id: "p", title: "Book", subject: nil, goal: nil, data: [:], updatedAt: Date()))
+        try big.add(title: "Chapter 1", lane: .doing, next: "read 1.1")
+        _ = try big.setOutline("c1", (1...30).map { i in ["title": .string("Section \(i) with a long descriptive title"), "sections": .array((1...10).map { j in ["title": .string("Subsection \(i).\(j)"), "points": ["a", "b"]] })] })
+        XCTAssertLessThanOrEqual(ContextPolicy.estimate(big.header()), CourseBoard.headerTokenCap)
+        XCTAssertTrue(big.header().contains("§1.1 Subsection 1.1 (0/300 sections)"), big.header())
+    }
+
+    func testSectionTitlesLoseTheModelsOwnNumbers() {
+        XCTAssertEqual(CourseBoard.unnumbered("1. The execution model"), "The execution model")
+        XCTAssertEqual(CourseBoard.unnumbered("2.1 Left and right"), "Left and right")
+        XCTAssertEqual(CourseBoard.unnumbered("§3) Types"), "Types")
+        XCTAssertEqual(CourseBoard.unnumbered("64-bit atomics"), "64-bit atomics")
+        XCTAssertEqual(CourseBoard.unnumbered("2"), "2")
+    }
+
+    @MainActor func testANewLessonIsPointedAtTheLearnersExistingBoards() throws {
+        let b = try sample()
+        let note = CourseBoardExtension.noBoard(existing: [b])
+        XCTAssertTrue(note.contains(b.id) && note.contains("action=get plan=") && note.contains("don't create a duplicate"), note)
+        XCTAssertFalse(CourseBoardExtension.noBoard(existing: []).contains("plan="), "no boards: just the reminder")
+    }
+
+    func testTheLearnerChoosesTheBoardSystem() throws {
+        defer { Experiments.chosen = [:]; Experiments.forced = [:] }
+        XCTAssertEqual(Experiments.evaluationArm(Experiments.courseBoard), "nested", "book outlines by default")
+        Experiments.choose("shallow", for: "course_board")
+        XCTAssertEqual(Experiments.evaluationArm(Experiments.courseBoard), "shallow")
+        Experiments.choose("off", for: "course_board")
+        XCTAssertTrue(Experiments.boardOff)
+        Experiments.forced["course_board"] = "nested"
+        XCTAssertFalse(Experiments.boardOff, "an evaluation run's forced arm wins")
+        let saved = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"courseBoard":"bogus"}"#.utf8))
+        XCTAssertEqual(saved.courseBoard, "nested", "an unknown value falls back to the default")
+    }
+
+    func testProgressCountsSectionsOfTheCardInProgress() throws {
+        var b = try sample()
+        let before = b.progress
+        _ = try b.setOutline("c1", [["title": "A"], ["title": "B"], ["title": "C"], ["title": "D"]])
+        _ = try b.section("c1", "1"); _ = try b.section("c1", "2")
+        XCTAssertGreaterThan(b.progress, before, "half a chapter done shows as progress")
+        XCTAssertEqual(b.sectionCounts?.done, 2); XCTAssertEqual(b.sectionCounts?.total, 4)
+        let done = try b.complete("c1", evidence: "explained the cubic function unaided")
+        XCTAssertTrue(CourseBoard.leaves(done.outline).allSatisfy(\.done), "a completed card's sections are all ticked")
+        XCTAssertNil(done.at)
+    }
+
+    func testSectionsFoundTheWayTheBoardShowsThem() throws {
+        var b = try sample()
+        let outline: [JSON] = [["title": "1. The execution model"], ["title": "Type functions"], ["title": "Reflection"]]
+        XCTAssertEqual(try b.setOutline("c1", outline).outline[0].title, "The execution model")
+        XCTAssertEqual(try b.section("c1", "1 The execution model").outline[0].done, true)   // as displayed
+        XCTAssertEqual(try b.section("c1", "2 2. Type functions").outline[1].done, true)    // the old doubled label
+        XCTAssertEqual(try b.section("c1", "3. Reflection").outline[2].done, true)
+    }
+
+    func testOutlinesInTheShapesModelsActuallySend() throws {
+        // Recorded from MiniMax-M3.1-Flash in a live lesson (rejected by the first parser, three times, until the teacher
+        // gave up and sent a one-line outline): untitled groupings, {"item": …} wrappers, a section object instead of a list.
+        let sent = JSON.parse(#"""
+        [{"sections": [{"title": "Memtable, WAL, SST files", "points": ["Write buffer, WAL before memtable flush", "SST: blocks, index, filters, block cache"]},
+          {"points": ["Leveled compaction", "Universal compaction", "T and L"], "sections": {"item": [
+            {"points": {"item": ["WA ≈ T×L ideal vs observed", "Read path: bloom filters, block cache, L0 overlap"]}, "title": "Compaction strategies and their cost model"},
+            {"sections": {"item": {"title": "Read path in detail", "points": {"item": ["Point lookups", "Range scans"]}}}}]}}]},
+         "Space amplification", {"name": "Tombstones", "bullets": "Deletes are writes"}]
+        """#)!.array!
+        let secs = CourseBoard.sections(from: sent, prefix: "", old: [])
+        XCTAssertEqual(CourseBoard.flatten(secs).map { "\($0.id) \($0.title)" }, [
+            "1 Memtable, WAL, SST files", "2 Compaction strategies and their cost model", "3 Read path in detail",
+            "4 Space amplification", "5 Tombstones"])
+        XCTAssertEqual(secs[1].points, ["Leveled compaction", "Universal compaction", "T and L", "WA ≈ T×L ideal vs observed", "Read path: bloom filters, block cache, L0 overlap"])
+        XCTAssertEqual(secs[2].points, ["Point lookups", "Range scans"]); XCTAssertEqual(secs[4].points, ["Deletes are writes"])
+        // Nesting that is spelled out is kept.
+        let nested = CourseBoard.sections(from: [["heading": "B-trees", "subsections": [["label": "Fanout"], ["topic": "Splits", "children": ["item": ["Fill factor"]]]]]], prefix: "", old: [])
+        XCTAssertEqual(CourseBoard.flatten(nested).map(\.id), ["1", "1.1", "1.2", "1.2.1"])
+        XCTAssertEqual(CourseBoard.sections(from: [["points": []], .null, 3], prefix: "", old: []), [], "nothing usable is still nothing")
+    }
+
+    func testParallelBoardWritesNeverLoseACard() async throws {
+        _ = try await plan(["action": "create", "title": "Parallel", "modules": [["title": "First"]]])
+        let c = ctx!
+        try await withThrowingTaskGroup(of: ToolOutput.self) { group in
+            for i in 0..<20 { group.addTask { try await LessonPlanTool().run(["action": "add", "title": .string("Card \(i)")], c) } }
+            for try await o in group { XCTAssertFalse(o.isError, o.text) }
+        }
+        let b = try XCTUnwrap(study.board(forLesson: "lesson-a"))
+        XCTAssertEqual(b.cards.count, 21, "every parallel add landed")
+        XCTAssertEqual(Set(b.cards.map(\.id)).count, 21, "ids are unique")
+        XCTAssertEqual(b.revision, 21)
+    }
+
+    func testToolOutlinesACourseLikeABook() async throws {
+        var o = try await plan(["action": "create", "title": "Zig systems", "modules": [
+            ["title": "RESP key-value server", "next": "parse a RESP array", "outline": [["title": "RESP framing", "sections": [["title": "Simple strings"], ["title": "Bulk strings"]]], ["title": "The store"]]],
+            ["title": "Event loop"]]])
+        XCTAssertFalse(o.isError, o.text)
+        XCTAssertTrue(o.text.contains("- [ ] 1.1 Simple strings  ← now"), o.text)
+        o = try await plan(["action": "outline", "card": "c2", "outline": [["title": "kqueue"], ["title": "io_uring"]]])
+        XCTAssertTrue(o.text.contains("Outlined C2 Event loop: §1 kqueue (0/2 sections)"), o.text)
+        o = try await plan(["action": "section", "card": "c1", "section": "1.1"])
+        XCTAssertTrue(o.text.contains("§1.2 Bulk strings (1/3 sections)") && o.text.contains("<lesson_state"), o.text)
+        XCTAssertEqual(o.meta?["plan"]?["cards"]?[0]?["at"]?.string, "1.2")
+    }
+
     // MARK: Tool
 
     func testToolWalksACourseAndLinksTheLesson() async throws {
@@ -229,10 +363,48 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(b.resumeBrief().contains("mode=\"resume\"") && b.resumeBrief().contains("Last time: evidence Limits and continuity: quiz"), b.resumeBrief())
     }
 
+    func testEveryMentorIsToldToVisualise() {
+        for mode in TeachingMode.allCases where !mode.isAgent {
+            let p = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: "", model: "m")
+            XCTAssertTrue(p.contains("```mermaid") && p.contains("```visual") && p.contains("3D") && p.contains("Show it as well as say it"), "\(mode)")
+            XCTAssertFalse(p.contains("lightest form"), "nothing discourages visuals")
+        }
+        let agent = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "")
+        XCTAssertTrue(agent.contains("```mermaid") && agent.contains("```visual") && agent.contains("three"), "the code agent can draw too")
+    }
+
+    func testInstructionsAreLeanAndEditable() {
+        var settings = AppSettings()
+        let lean = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: "", model: "m")
+        XCTAssertLessThan(ContextPolicy.estimate(SystemPrompt.split(lean)[0]), 2_200, "the shared instructions stay lean")
+        XCTAssertFalse(lean.contains("{learner}") || lean.contains("{more_tools}"), "placeholders are filled")
+        // An edit replaces the default for new lessons; clearing it brings the default back.
+        settings.instructions[Instructions.Key.teacher.raw] = "You are a terse physics coach for {learner}."
+        settings.learnerName = "Ada"
+        let edited = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: "", model: "m")
+        XCTAssertTrue(edited.hasPrefix("You are a terse physics coach for Ada."), String(edited.prefix(80)))
+        XCTAssertTrue(Instructions.isEdited(.teacher, settings))
+        settings.instructions[Instructions.Key.mode(.code).raw] = "Mentor in Zig only."
+        XCTAssertTrue(SystemPrompt.build(settings: settings, mode: .code, coreMemory: "", model: "m").contains("Mentor in Zig only."))
+        settings.instructions[Instructions.Key.codeAgent.raw] = "Ship it carefully."
+        XCTAssertTrue(SystemPrompt.buildAgent(settings: settings, folder: dir, model: "m", projectMemory: "").hasPrefix("Ship it carefully."))
+        settings.instructions[Instructions.Key.teacher.raw] = "   "
+        XCTAssertFalse(Instructions.isEdited(.teacher, settings), "a blank edit is no edit")
+        XCTAssertTrue(SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: "", model: "m").hasPrefix("You are Teacher"))
+        // A built-in sub-agent's instructions can be edited; its tools and read-only status stay the app's.
+        let types = AgentCatalog.all(app: [], folder: nil, instructions: [Instructions.Key.subAgent("explore").raw: "Research like a librarian."])
+        let explore = try! XCTUnwrap(AgentCatalog.find("explore", in: types))
+        XCTAssertEqual(explore.prompt, "Research like a librarian."); XCTAssertTrue(explore.readOnly)
+        XCTAssertEqual(Instructions.all.count, Set(Instructions.all.map(\.raw)).count, "every agent once")
+        // Settings round-trip.
+        let back = try! JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
+        XCTAssertEqual(back.instructions[Instructions.Key.codeAgent.raw], "Ship it carefully.")
+    }
+
     func testPromptCarriesTheBoardRulesOnce() {
         let p = SystemPrompt.build(settings: AppSettings(), mode: .tutor, coreMemory: "", model: "m")
         XCTAssertEqual(p.components(separatedBy: "# Course board").count, 2)
-        XCTAssertTrue(p.contains("<lesson_state>") && p.contains("Never mark a card done without evidence"))
+        XCTAssertTrue(p.contains("<lesson_state>") && p.contains("complete a card only with evidence") && p.contains("not a script"))
         XCTAssertTrue(SystemPrompt.split(p)[0].contains("# Course board"), "the rules sit in the cached, lesson-independent part")
         XCTAssertFalse(SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "").contains("lesson_state"))
     }

@@ -53,7 +53,7 @@ struct BoardPanel: View {
                 }
             } else {
                 ContentUnavailableView("No course board yet", systemImage: "rectangle.3.group",
-                                       description: Text("Ask your teacher for a learning plan for a bigger goal, or continue one from the Progress screen."))
+                                       description: Text("Ask your teacher for a course board for a bigger goal, like an exam or a project, or continue one from the Progress screen."))
             }
         }
         .onAppear { if let s = session { model.bind(s) } }
@@ -68,8 +68,12 @@ struct BoardPanel: View {
             Text(b.title).font(.headline)
             if let g = b.goal, !g.isEmpty { Text(g).font(.callout).foregroundStyle(.secondary) }
             HStack(spacing: 8) {
-                ProgressView(value: b.courseCount == 0 ? 0 : Double(b.doneCount) / Double(b.courseCount))
+                ProgressView(value: b.progress)
                 Text("\(b.doneCount)/\(b.courseCount)").font(.caption).foregroundStyle(.secondary).monospacedDigit()
+                    .help("Cards done")
+            }
+            if let s = b.sectionCounts {
+                Text("\(s.done) of \(s.total) sections · \(b.doneCount) of \(b.courseCount) cards").font(.caption).foregroundStyle(.secondary)
             }
             if let d = b.daysLeft() {
                 Text(d < 0 ? "Deadline passed" : d == 0 ? "Deadline today" : "\(d) day\(d == 1 ? "" : "s") left").font(.caption).foregroundStyle(d <= 3 ? .orange : .secondary)
@@ -88,8 +92,21 @@ struct BoardPanel: View {
                     }
                     Text(f.next.map { "Next: \($0)" } ?? "Next action not set yet.").font(.callout)
                         .foregroundStyle(f.next == nil ? .secondary : .primary).fixedSize(horizontal: false, vertical: true)
+                    // With an outline the objectives mostly repeat it: folded away, one click to see them.
                     if !f.objectives.isEmpty {
-                        ForEach(f.objectives, id: \.self) { o in Label(o, systemImage: "circle").font(.caption).foregroundStyle(.secondary) }
+                        if f.outline.isEmpty {
+                            ForEach(f.objectives, id: \.self) { o in Label(o, systemImage: "target").font(.caption).foregroundStyle(.secondary) }
+                        } else {
+                            DisclosureGroup("Objectives · \(f.objectives.count)") {
+                                VStack(alignment: .leading, spacing: 3) {
+                                    ForEach(f.objectives, id: \.self) { o in Label(o, systemImage: "target").font(.caption).foregroundStyle(.secondary) }
+                                }.padding(.top, 2)
+                            }.font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if !f.outline.isEmpty {
+                        if let p = b.position(f) { Text(p).font(.caption.weight(.semibold)).foregroundStyle(.secondary) }
+                        OutlineView(sections: f.outline, at: f.at)
                     }
                     if !f.evidence.isEmpty {
                         Text("Evidence: " + f.evidence.suffix(3).joined(separator: "; ")).font(.caption).foregroundStyle(.secondary)
@@ -131,6 +148,11 @@ struct BoardPanel: View {
                     Text(c.title).font(.callout).strikethrough(c.lane == .done, color: .secondary).foregroundStyle(c.lane == .done ? .secondary : .primary)
                 }
                 if let n = c.next, c.lane != .done { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                if !c.outline.isEmpty {
+                    let leaves = CourseBoard.leaves(c.outline)
+                    DisclosureGroup("\(leaves.filter(\.done).count)/\(leaves.count) sections") { OutlineView(sections: c.outline, at: c.at) }
+                        .font(.caption2).foregroundStyle(.secondary)
+                }
                 if !c.after.isEmpty, c.lane != .done { Text("after " + c.after.map { $0.uppercased() }.joined(separator: ", ")).font(.caption2).foregroundStyle(.tertiary) }
                 if c.lane == .done, let e = c.evidence.last { Text(e).font(.caption2).foregroundStyle(.tertiary).lineLimit(1) }
             }
@@ -190,6 +212,29 @@ struct BoardPanel: View {
     }
 }
 
+/// A card's outline as a nested table of contents: finished sections ticked, the current one highlighted.
+struct OutlineView: View {
+    let sections: [CourseBoard.Section]
+    let at: String?
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(CourseBoard.flatten(sections), id: \.id) { s in
+                let depth = s.id.split(separator: ".").count - 1
+                HStack(alignment: .firstTextBaseline, spacing: 5) {
+                    Image(systemName: s.done ? "checkmark.circle.fill" : (s.id == at ? "play.circle.fill" : "circle"))
+                        .foregroundStyle(s.done ? Color.green : (s.id == at ? Color.accentColor : Color.secondary)).font(.caption2)
+                        .accessibilityLabel(s.done ? "done" : (s.id == at ? "now" : "to do"))
+                    Text(s.id).font(.caption2.monospacedDigit()).foregroundStyle(.tertiary)
+                    Text(CourseBoard.unnumbered(s.title)).font(depth == 0 ? .caption.weight(.semibold) : .caption)
+                        .foregroundStyle(s.done ? .secondary : .primary).lineLimit(2)
+                        .fontWeight(s.id == at ? .semibold : nil)
+                }
+                .padding(.leading, CGFloat(depth) * 12)
+            }
+        }
+    }
+}
+
 /// One line above the composer: where the lesson is, at a glance. Click opens the board.
 struct BoardStrip: View {
     @EnvironmentObject var app: AppModel
@@ -230,7 +275,7 @@ struct BoardStrip: View {
 
     static func line(_ b: CourseBoard) -> String {
         var parts: [String] = []
-        if let f = b.focus { parts.append("Focus: \(f.title)" + (f.next.map { " — next: \(MemoryText.clip($0, 70))" } ?? "")) }
+        if let f = b.focus { parts.append("Focus: \(f.title)" + (b.position(f).map { " · \($0)" } ?? "") + (f.next.map { " — next: \(MemoryText.clip($0, 70))" } ?? "")) }
         else { parts.append(b.cards.isEmpty ? "Board empty" : "No focus card") }
         let parked = b.lane(.parked).count
         if parked > 0 { parts.append("\(parked) parked") }

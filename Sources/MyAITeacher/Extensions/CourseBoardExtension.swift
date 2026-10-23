@@ -8,8 +8,8 @@ final class CourseBoardExtension: AgentExtension {
     let id = "course-board"
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        guard !session.conversation.mode.isAgent, let header = Self.stateBlock(session) else { return }
-        Self.inject(header, into: &request)
+        guard !session.conversation.mode.isAgent, !Experiments.boardOff else { return }
+        Self.inject(Self.stateBlock(session) ?? Self.noBoard(existing: session.services.study.plans().prefix(3).map { CourseBoard(plan: $0) }), into: &request)
     }
 
     func summaryContext(_ session: ChatSession) -> [String] {
@@ -51,6 +51,20 @@ final class CourseBoardExtension: AgentExtension {
     }
 
     // MARK: The state card
+
+    /// Sent while the lesson has no board. In live runs teachers skipped the board for multi-part courses when nothing
+    /// mentioned it; one line keeps the long-term state manager in view without forcing it on a single question.
+    /// Existing boards are named so a learner who says "let's continue my course" gets their board back (`get` with
+    /// `plan` links it to this lesson) instead of a fresh duplicate.
+    static func noBoard(existing: [CourseBoard]) -> String {
+        var s = "<lesson_state>No course board in this lesson."
+        if !existing.isEmpty {
+            s += " The learner's boards: " + existing.map { b in
+                "\(b.id) “\(MemoryText.clip(b.title, 60))” (\(b.doneCount)/\(b.courseCount) done" + (b.focus.map { "; focus \($0.id.uppercased()) \(MemoryText.clip($0.title, 50))" } ?? "") + ")"
+            }.joined(separator: "; ") + ". If they are continuing one, open it with `lesson_plan` action=get plan=<id> (that links it to this lesson); don't create a duplicate."
+        }
+        return s + " If their goal spans more than one reply and no board fits, create one with `lesson_plan`.</lesson_state>"
+    }
 
     /// The board's header enriched with what the app observed: the problem awaiting an attempt, the focus concept's mastery.
     static func stateBlock(_ session: ChatSession) -> String? {

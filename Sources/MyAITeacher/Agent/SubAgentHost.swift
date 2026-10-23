@@ -31,6 +31,11 @@ protocol AgentHost: Sendable {
 }
 
 extension AgentHost {
+    /// The learner's edits to built-in agents' instructions (Settings → Instructions); none by default.
+    func instructions() async -> [String: String] { [:] }
+}
+
+extension AgentHost {
     func currentModel(_ providerID: String, _ model: String) async -> String { model }
     var lessonFree: Bool { false }
 }
@@ -60,6 +65,7 @@ struct AppAgentHost: AgentHost {
     let isCodeMode: Bool
 
     func limits() async -> SubAgentSettings { await MainActor.run { AppModel.shared.settings.value.agents } }
+    func instructions() async -> [String: String] { await MainActor.run { AppModel.shared.settings.value.instructions } }
 
     func grants() async -> LessonGrants {
         await MainActor.run {
@@ -114,7 +120,7 @@ extension ChatSession {
     /// The sub-agent host for this lesson's tool calls.
     var agentHost: AppAgentHost {
         // TaskTool.timeout reads the limits and the types' budgets before the call runs.
-        SubAgent.remember(settings.agents, types: AgentCatalog.all(app: settings.agents.definitions, folder: services.workspace.url))
+        SubAgent.remember(settings.agents, types: AgentCatalog.all(app: settings.agents.definitions, folder: services.workspace.url, instructions: settings.instructions))
         let info = app.modelInfo(conversation.providerID, conversation.model)
         return AppAgentHost(conversationID: id, lessonProvider: conversation.providerID,
                             lessonFree: info?.free == true || conversation.model.hasSuffix(":free"),
@@ -127,7 +133,7 @@ extension ChatSession {
         let limits = settings.agents
         let others = limits.otherProviders ? app.availableProviders.filter { $0.id != conversation.providerID }.map(\.id) : []
         return TaskTool.spec(models: subAgentModels(), current: conversation.model, provider: conversation.providerID, others: others,
-                             types: AgentCatalog.all(app: limits.definitions, folder: services.workspace.url), limits: limits,
+                             types: AgentCatalog.all(app: limits.definitions, folder: services.workspace.url, instructions: settings.instructions), limits: limits,
                              codeMode: conversation.mode.isAgent)
     }
 }

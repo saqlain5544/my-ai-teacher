@@ -28,6 +28,7 @@ struct ChatView: View {
                 ModePicker(session: session)
                 ModelPickerButton(session: session)
                 ThinkingPicker(session: session)
+                QuizToggle(session: session)
                 LessonInfoButton(session: session)
             }
         }
@@ -68,6 +69,28 @@ struct ModePicker: View {
         }
         .help("Teaching mode")
         .fixedSize()
+    }
+}
+
+/// Quizzes on or off. Sticky (off stays off until turned back on) and effective from the learner's next message; Quiz and
+/// Exam prep modes always test.
+struct QuizToggle: View {
+    @EnvironmentObject var settings: SettingsStore
+    @ObservedObject var session: ChatSession
+    var body: some View {
+        let mode = session.conversation.mode
+        if !mode.isAgent {
+            let forced = mode == .quiz || mode == .exam
+            let on = forced || settings.value.quizzes
+            Button { settings.value.quizzes.toggle() } label: {
+                Label("Quizzes: \(on ? "On" : "Off")", systemImage: on ? "checklist.checked" : "checklist.unchecked")
+            }
+            .disabled(forced)
+            .help(forced ? "\(mode.title) mode always tests you."
+                  : on ? "Quizzes on: the teacher checks your understanding with questions. Click to turn them off from your next message."
+                       : "Quizzes off: the teacher teaches without testing you until you turn them back on.")
+            .accessibilityIdentifier("quiz-toggle")
+        }
     }
 }
 
