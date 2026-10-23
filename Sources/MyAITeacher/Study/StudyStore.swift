@@ -144,7 +144,7 @@ final class StudyStore: @unchecked Sendable {
     func addCard(deck: String, front: String, back: String, concept: String?, subject: String?, source: String?) -> Int64? {
         let exists = (try? db.query("SELECT id FROM cards WHERE deck=? AND front=?", deck, front))?.first?.int("id")
         if let exists { return Int64(exists) }
-        try? db.execute("INSERT INTO cards(deck, front, back, concept, subject, source, created_at, due) VALUES(?,?,?,?,?,?,?,?)",
+        db.run("INSERT INTO cards(deck, front, back, concept, subject, source, created_at, due) VALUES(?,?,?,?,?,?,?,?)",
                         deck, front, back, concept, subject, source, Date(), Date())
         return db.lastInsertRowID
     }
@@ -175,9 +175,9 @@ final class StudyStore: @unchecked Sendable {
         let (s, days) = FSRS.review(.init(stability: c.stability, difficulty: c.difficulty, reps: c.reps, lapses: c.lapses, lastReview: c.lastReview), rating: rating, now: now)
         let due = now.addingTimeInterval(days * 86400)
         let elapsed = c.lastReview.map { now.timeIntervalSince($0) / 86400 } ?? 0
-        try? db.execute("UPDATE cards SET due=?, stability=?, difficulty=?, reps=?, lapses=?, last_review=?, state=? WHERE id=?",
+        db.run("UPDATE cards SET due=?, stability=?, difficulty=?, reps=?, lapses=?, last_review=?, state=? WHERE id=?",
                         due, s.stability, s.difficulty, s.reps, s.lapses, now, rating == .again ? 3 : 2, c.id)
-        try? db.execute("INSERT INTO reviews(card_id, rating, reviewed_at, elapsed_days, scheduled_days) VALUES(?,?,?,?,?)",
+        db.run("INSERT INTO reviews(card_id, rating, reviewed_at, elapsed_days, scheduled_days) VALUES(?,?,?,?,?)",
                         c.id, rating.rawValue, now, elapsed, days)
         logActivity(reviews: 1)
         if let concept = c.concept { recordAttempt(subject: c.subject ?? c.deck, concept: concept, correct: rating != .again, note: nil) }
@@ -204,8 +204,8 @@ final class StudyStore: @unchecked Sendable {
         return out
     }
 
-    func deleteCard(_ id: Int64) { try? db.execute("DELETE FROM cards WHERE id=?", id) }
-    func updateCard(_ id: Int64, front: String, back: String) { try? db.execute("UPDATE cards SET front=?, back=? WHERE id=?", front, back, id) }
+    func deleteCard(_ id: Int64) { db.run("DELETE FROM cards WHERE id=?", id) }
+    func updateCard(_ id: Int64, front: String, back: String) { db.run("UPDATE cards SET front=?, back=? WHERE id=?", front, back, id) }
 
     // MARK: Mastery
     /// One answer on a concept. A wrong answer always counts; a right one raises mastery only without help (with help it is
@@ -223,7 +223,7 @@ final class StudyStore: @unchecked Sendable {
         let p = correct && help != .none ? before
             : BKT.update(before, correct: correct, guess: earned && certainty == .guess ? 0.5 : BKT.guess)
         let streak = earned ? (cur?.streak ?? 0) + 1 : (correct ? cur?.streak ?? 0 : 0)
-        try? db.execute("""
+        db.run("""
             INSERT INTO mastery(subject, concept, p_known, attempts, correct, streak, notes, updated_at) VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(subject, concept) DO UPDATE SET p_known=excluded.p_known, attempts=excluded.attempts, correct=excluded.correct,
             streak=excluded.streak, notes=COALESCE(excluded.notes, mastery.notes), updated_at=excluded.updated_at
@@ -239,7 +239,7 @@ final class StudyStore: @unchecked Sendable {
 
     func setMastery(subject: String, concept: String, level: Double, note: String?) {
         let s = subject.lowercased()
-        try? db.execute("""
+        db.run("""
             INSERT INTO mastery(subject, concept, p_known, notes, updated_at) VALUES(?,?,?,?,?)
             ON CONFLICT(subject, concept) DO UPDATE SET p_known=excluded.p_known, notes=COALESCE(excluded.notes, mastery.notes), updated_at=excluded.updated_at
             """, s, concept, min(0.999, max(0, level)), note, Date())
@@ -274,7 +274,7 @@ final class StudyStore: @unchecked Sendable {
     /// Logs one graded answer (with or without a concept): how sure the learner was and how much help they had.
     func recordResponse(subject: String?, concept: String?, correct: Bool?, certainty: Certainty?, help: Help,
                         source: String, conversationID: String?, now: Date = Date()) {
-        try? db.execute("INSERT INTO responses(at, subject, concept, correct, certainty, help, source, conversation_id) VALUES(?,?,?,?,?,?,?,?)",
+        db.run("INSERT INTO responses(at, subject, concept, correct, certainty, help, source, conversation_id) VALUES(?,?,?,?,?,?,?,?)",
                         now, subject?.lowercased(), concept, correct, certainty?.rawValue, help.rawValue, source, conversationID)
     }
 
@@ -313,16 +313,16 @@ final class StudyStore: @unchecked Sendable {
                           conversationID: String? = nil, now: Date = Date()) {
         let due = now.addingTimeInterval(days * 86400)
         if let id = open([kind], concept: concept).first?.id {
-            try? db.execute("UPDATE followups SET due=MIN(due, ?), note=COALESCE(?, note) WHERE id=?", due, note, id)
+            db.run("UPDATE followups SET due=MIN(due, ?), note=COALESCE(?, note) WHERE id=?", due, note, id)
         } else {
-            try? db.execute("INSERT INTO followups(subject, concept, kind, note, due, created_at, conversation_id) VALUES(?,?,?,?,?,?,?)",
+            db.run("INSERT INTO followups(subject, concept, kind, note, due, created_at, conversation_id) VALUES(?,?,?,?,?,?,?)",
                             subject.lowercased(), concept, kind.rawValue, note, due, now, conversationID)
         }
     }
 
     /// Open follow-ups that are due, oldest first. Forgotten-card notes that nobody took up expire after a week.
     func dueFollowUps(limit: Int = 6, now: Date = Date()) -> [FollowUp] {
-        try? db.execute("UPDATE followups SET resolved_at=?, outcome='expired' WHERE resolved_at IS NULL AND kind='missed' AND created_at<?",
+        db.run("UPDATE followups SET resolved_at=?, outcome='expired' WHERE resolved_at IS NULL AND kind='missed' AND created_at<?",
                         now, now.addingTimeInterval(-7 * 86400))
         return ((try? db.query("SELECT * FROM followups WHERE resolved_at IS NULL AND due<=? ORDER BY due LIMIT ?", now, limit)) ?? []).compactMap(followUp)
     }
@@ -333,7 +333,7 @@ final class StudyStore: @unchecked Sendable {
     }
 
     func resolveFollowUps(concept: String, kinds: [FollowUp.Kind], outcome: String, now: Date = Date()) {
-        for f in open(kinds, concept: concept) { try? db.execute("UPDATE followups SET resolved_at=?, outcome=? WHERE id=?", now, outcome, f.id) }
+        for f in open(kinds, concept: concept) { db.run("UPDATE followups SET resolved_at=?, outcome=? WHERE id=?", now, outcome, f.id) }
     }
 
     /// An answer without help settles the concept's due re-check and transfer checks: right closes them; a missed transfer
@@ -343,12 +343,12 @@ final class StudyStore: @unchecked Sendable {
         for f in open([.recheck, .transfer], concept: concept) where f.due <= now {
             let id = f.id
             if correct {
-                try? db.execute("UPDATE followups SET resolved_at=?, outcome='passed' WHERE id=?", now, id)
+                db.run("UPDATE followups SET resolved_at=?, outcome='passed' WHERE id=?", now, id)
             } else if f.kind == .transfer {
-                try? db.execute("UPDATE followups SET resolved_at=?, outcome='failed' WHERE id=?", now, id)
+                db.run("UPDATE followups SET resolved_at=?, outcome='failed' WHERE id=?", now, id)
                 scheduleFollowUp(subject: subject, concept: concept, kind: .recheck, note: "missed the transfer check: it didn't carry over to a new context", after: 1, now: now)
             } else {
-                try? db.execute("UPDATE followups SET due=? WHERE id=?", now.addingTimeInterval(86400), id)
+                db.run("UPDATE followups SET due=? WHERE id=?", now.addingTimeInterval(86400), id)
             }
         }
     }
@@ -361,12 +361,12 @@ final class StudyStore: @unchecked Sendable {
 
     /// Brings the concept's flashcards forward to tomorrow at the latest (after a confident mistake).
     func reviewSoon(concept: String, now: Date = Date()) {
-        try? db.execute("UPDATE cards SET due=MIN(due, ?) WHERE suspended=0 AND concept=? COLLATE NOCASE", now.addingTimeInterval(86400), concept)
+        db.run("UPDATE cards SET due=MIN(due, ?) WHERE suspended=0 AND concept=? COLLATE NOCASE", now.addingTimeInterval(86400), concept)
     }
 
     // MARK: Plans
     func savePlan(_ p: LessonPlan, conversationID: String?) {
-        try? db.execute("""
+        db.run("""
             INSERT INTO plans(id, title, subject, goal, data, conversation_id, created_at, updated_at) VALUES(?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET title=excluded.title, subject=excluded.subject, goal=excluded.goal, data=excluded.data, updated_at=excluded.updated_at
             """, p.id, p.title, p.subject, p.goal, p.data.compact, conversationID, Date(), Date())
@@ -379,11 +379,11 @@ final class StudyStore: @unchecked Sendable {
         }
     }
     func plan(_ id: String) -> LessonPlan? { plans().first { $0.id == id || $0.title.lowercased() == id.lowercased() } }
-    func deletePlan(_ id: String) { try? db.execute("DELETE FROM plans WHERE id=?", id) }
+    func deletePlan(_ id: String) { db.run("DELETE FROM plans WHERE id=?", id) }
 
     // MARK: Quizzes & activity
     func recordQuiz(conversationID: String, title: String, topic: String?, score: Double, total: Int, data: JSON) {
-        try? db.execute("INSERT INTO quiz_attempts(conversation_id, title, topic, score, total, data, created_at) VALUES(?,?,?,?,?,?,?)",
+        db.run("INSERT INTO quiz_attempts(conversation_id, title, topic, score, total, data, created_at) VALUES(?,?,?,?,?,?,?)",
                         conversationID, title, topic, score, total, data.compact, Date())
     }
     func recentQuizzes(limit: Int = 20) -> [(title: String, topic: String?, score: Double, total: Int, date: Date)] {
@@ -396,7 +396,7 @@ final class StudyStore: @unchecked Sendable {
 
     func logActivity(seconds: Double = 0, messages: Int = 0, reviews: Int = 0) {
         let day = Self.dayFormatter.string(from: Date())
-        try? db.execute("""
+        db.run("""
             INSERT INTO study_log(day, seconds, messages, reviews) VALUES(?,?,?,?)
             ON CONFLICT(day) DO UPDATE SET seconds=seconds+excluded.seconds, messages=messages+excluded.messages, reviews=reviews+excluded.reviews
             """, day, seconds, messages, reviews)

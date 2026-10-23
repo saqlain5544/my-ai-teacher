@@ -135,8 +135,10 @@ final class OutputCollector: @unchecked Sendable {
     init(limit: Int) { self.limit = limit }
     func append(_ d: Data) {
         lock.lock(); defer { lock.unlock() }
-        if data.count < limit { data.append(d.prefix(limit - data.count)); dropped += max(0, d.count - (limit - data.count)) }
-        else { dropped += d.count }
+        // Room is measured before appending (measured after, every byte of a chunk that filled the buffer counted as dropped).
+        let room = max(0, limit - data.count)
+        data.append(d.prefix(room))
+        dropped += max(0, d.count - room)
     }
     var string: String { lock.lock(); defer { lock.unlock() }; return String(decoding: data, as: UTF8.self) }
 }

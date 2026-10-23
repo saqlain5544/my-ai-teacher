@@ -79,7 +79,7 @@ protocol AgentExtension: AnyObject {
     func willRequest(_ request: inout LLMRequest, session: ChatSession)
     /// State the summary of a compacted lesson must carry (it is written from the transcript, which may not hold it).
     func summaryContext(_ session: ChatSession) -> [String]
-    /// Gate a tool call. The first non-`allow` decision wins.
+    /// Gate a tool call. A deny wins; an `ask` the learner approves moves on to the next extension's gate.
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision
     /// Observe or rewrite a tool result.
     func didRun(_ call: Block, result: inout Block, session: ChatSession)
@@ -118,10 +118,26 @@ final class ExtensionHost {
     func willRequest(_ r: inout LLMRequest, _ s: ChatSession) { for e in extensions { e.willRequest(&r, session: s) } }
     func summaryContext(_ s: ChatSession) -> [String] { extensions.flatMap { $0.summaryContext(s) } }
     func shouldRun(_ c: Block, _ t: Tool, _ s: ChatSession) -> ToolDecision {
-        for e in extensions {
-            let d = e.shouldRun(c, tool: t, session: s)
-            if case .allow = d { continue }
-            return Self.observed(d, tool: t.name, conversationID: s.id)
+        let gates: [@MainActor () -> ToolDecision] = extensions.map { e in { e.shouldRun(c, tool: t, session: s) } }
+        return Self.observed(Self.chain(gates[...]), tool: t.name, conversationID: s.id)
+    }
+
+    /// Runs gates in registration order: a deny ends it; an approval the learner gives goes on to the remaining gates.
+    /// (Returning the first `.ask` as final let an approval for one gate skip every gate after it.)
+    static func chain(_ gates: ArraySlice<@MainActor () -> ToolDecision>) -> ToolDecision {
+        for i in gates.indices {
+            let d = gates[i]()
+            switch d {
+            case .allow: continue
+            case .deny: return d
+            case .ask(let req, let resolve):
+                let rest = gates[(i + 1)...]
+                return .ask(req, resolve: { choice in
+                    let r = resolve(choice)
+                    guard case .allow = r else { return r }
+                    return chain(rest)
+                })
+            }
         }
         return .allow
     }
@@ -136,7 +152,8 @@ final class ExtensionHost {
         case .ask(let req, let resolve):
             return .ask(req, resolve: { choice in
                 let r = resolve(choice)
-                let allowed: Bool = { if case .allow = r { return true }; return false }()
+                // The learner's answer allowed it unless it ended in a deny (a later gate may still ask).
+                let allowed: Bool = { if case .deny = r { return false }; return true }()
                 EventBus.publish(.approval(conversationID: conversationID, tool: tool, choice: choice, allowed: allowed,
                                            waited: Date().timeIntervalSince(askedAt)))
                 return observed(r, tool: tool, conversationID: conversationID, resolved: true)

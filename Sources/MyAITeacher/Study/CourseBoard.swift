@@ -689,7 +689,7 @@ extension StudyStore {
     func board(forLesson lesson: String) -> CourseBoard? { boardID(forLesson: lesson).flatMap { board($0) } }
 
     func link(board: String, lesson: String) {
-        try? db.execute("INSERT INTO board_links(conversation_id, plan_id, updated_at) VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET plan_id=excluded.plan_id, updated_at=excluded.updated_at",
+        db.run("INSERT INTO board_links(conversation_id, plan_id, updated_at) VALUES(?,?,?) ON CONFLICT(conversation_id) DO UPDATE SET plan_id=excluded.plan_id, updated_at=excluded.updated_at",
                         lesson, board, Date())
     }
 }

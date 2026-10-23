@@ -74,7 +74,7 @@ final class Database: @unchecked Sendable {
 
     private static let live = WeakRegistry<Database>()
     /// Returns every open database's page cache to the system (memory pressure: see MemoryGovernor).
-    static func releaseAllMemory() { for d in live.all { _ = try? d.execute("PRAGMA shrink_memory") } }
+    static func releaseAllMemory() { for d in live.all { d.run("PRAGMA shrink_memory") } }
 
     deinit {
         for (_, s) in cache { sqlite3_finalize(s) }
@@ -136,6 +136,14 @@ final class Database: @unchecked Sendable {
         defer { sqlite3_reset(stmt) }
         guard rc == SQLITE_DONE else { throw SQLiteError(message: errorMessage) }
         return Int(sqlite3_changes(db))
+    }
+
+    /// `execute` for writes the caller can't act on a failure of (a usage counter, a cache row): the error goes to the
+    /// log (`Log.db`) instead of disappearing in a `try?`. Returns the rows changed, or nil when it failed.
+    @discardableResult
+    func run(_ sql: String, _ params: SQLBindable?...) -> Int? {
+        do { return try execute(sql, params: params) }
+        catch { Log.db.error("\(error.localizedDescription, privacy: .public) — in: \(sql.prefix(120), privacy: .public)"); return nil }
     }
 
     func query(_ sql: String, _ params: SQLBindable?...) throws -> [Row] {
@@ -201,11 +209,31 @@ final class Database: @unchecked Sendable {
         }
     }
 
+    /// Savepoints open on this connection (guarded by `lock`), for unique names.
+    private var depth = 0
+
+    /// Runs `body` atomically. Inside a transaction already open on this connection (another `transaction`, or a raw
+    /// BEGIN) it becomes a savepoint, so a store method can be atomic on its own and still compose into a larger one.
     func transaction<T>(_ body: () throws -> T) throws -> T {
         lock.lock(); defer { lock.unlock() }
-        try script("BEGIN IMMEDIATE")
-        do { let r = try body(); try script("COMMIT"); return r }
-        catch { try? script("ROLLBACK"); throw error }
+        let nested = sqlite3_get_autocommit(db) == 0
+        let name = "sp\(depth)"
+        try script(nested ? "SAVEPOINT \(name)" : "BEGIN IMMEDIATE")
+        depth += 1
+        defer { depth -= 1 }
+        do {
+            let r = try body()
+            try script(nested ? "RELEASE \(name)" : "COMMIT")
+            return r
+        } catch {
+            if nested { try? script("ROLLBACK TO \(name)"); try? script("RELEASE \(name)") } else { try? script("ROLLBACK") }
+            throw error
+        }
+    }
+
+    /// `transaction` for writes whose failure the caller can't act on: logged, and rolled back as a whole.
+    func write(_ what: StaticString, _ body: () throws -> Void) {
+        do { try transaction(body) } catch { Log.db.error("\(what, privacy: .public) failed: \(error.localizedDescription, privacy: .public)") }
     }
 
     var lastInsertRowID: Int64 { sqlite3_last_insert_rowid(db) }

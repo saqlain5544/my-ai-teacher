@@ -347,12 +347,12 @@ final class ChatSession: ObservableObject, Identifiable {
         let stepCap = settings.maxToolTurns   // 0: no limit (the default)
         while !Task.isCancelled && (stepCap <= 0 || steps < stepCap || wrapping) {
             steps += 1
-            await compactIfNeeded(client: client)
+            let history = await compactIfNeeded(client: client)
             setStatus(wrapping ? "Writing it up…" : steps == 1 ? "Thinking…" : "Continuing…")
             let tools = wrapping ? [] : ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
-                                     messages: requestMessages(),
+                                     messages: history,
                                      tools: tools.map { $0.name == "task" ? taskSpec() : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
                                      thinking: info?.reasoning == false ? .off : settings.thinking.supported(by: info), sessionID: conversation.id)
@@ -389,6 +389,7 @@ final class ChatSession: ObservableObject, Identifiable {
                         attempt += 1; step.retries = attempt
                         setStatus("Provider busy — retrying (\(attempt)/3)…")
                         try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt)) * 1_000_000_000))
+                        if Task.isCancelled { break }   // stopped while waiting: no new request
                         continue
                     }
                     assistant.error = error.localizedDescription
@@ -399,8 +400,7 @@ final class ChatSession: ObservableObject, Identifiable {
             }
             step.duration = Date().timeIntervalSince(step.startedAt)
             if !sawUsage {
-                let chars = assistant.blocks.reduce(0) { $0 + ($1.text?.count ?? 0) + ($1.input?.compact.count ?? 0) }
-                step.usage.output = chars / 4
+                step.usage.output = ContextPolicy.estimateTokens([assistant])   // script-aware, like the budget
                 step.usageEstimated = true
             }
             if Task.isCancelled && assistant.blocks.isEmpty { assistant.error = "Stopped." }
@@ -722,7 +722,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     private func requestMessages() -> [ChatMessage] {
         let prepared = ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
-                                             budget: contextBudget - (conversation.systemPrompt?.count ?? 0) / 4)
+                                             budget: contextBudget - systemTokens)
         return conversation.imagesUnsupported == true ? ContextPolicy.describeImages(prepared) : prepared
     }
 
@@ -734,15 +734,25 @@ final class ChatSession: ObservableObject, Identifiable {
         return (m.contains("image") || m.contains("vision") || m.contains("multimodal")) && !m.contains("rate limit")
     }
 
-    /// The system prompt's own weight, counted with the same script-aware estimate as the messages.
-    private var systemTokens: Int { ContextPolicy.estimateTokens([ChatMessage(role: .user, blocks: [.text(conversation.systemPrompt ?? "")])]) }
+    /// The system prompt's own weight, counted with the same script-aware estimate as the messages. The prompt is frozen
+    /// for the lesson, so the count is kept until the prompt changes (it was rescanned several times per step).
+    private var systemTokenCache: (prompt: String, tokens: Int)?
+    private var systemTokens: Int {
+        let prompt = conversation.systemPrompt ?? ""
+        if let c = systemTokenCache, c.prompt == prompt { return c.tokens }
+        let n = ContextPolicy.estimate(prompt)
+        systemTokenCache = (prompt, n)
+        return n
+    }
 
     private var contextBudget: Int {
         ContextPolicy.budget(setting: settings.compactAtTokens,
                              contextWindow: app.modelInfo(conversation.providerID, conversation.model)?.contextWindow)
     }
 
-    private func compactIfNeeded(client: LLMClient) async {
+    /// Keeps the request within the budget (trim epochs, then a summary) and returns the request-ready history, so a
+    /// step prepares it once rather than once here and again for the request.
+    private func compactIfNeeded(client: LLMClient) async -> [ChatMessage] {
         let budget = contextBudget
         // Build the request-ready history once: preparing it copies messages and blocks, and the step would build it again.
         var prepared = requestMessages()
@@ -755,19 +765,21 @@ final class ChatSession: ObservableObject, Identifiable {
             tokens = ContextPolicy.estimateTokens(prepared) + systemTokens
         }
         // Tier 3 only if still over budget.
-        guard tokens > budget, messages.count > 8 else { return }
+        guard tokens > budget, messages.count > 8 else { return prepared }
         setStatus("Summarising earlier parts of the lesson…")
         let sp = Signposts.begin("compaction", "\(messages.count) messages"); defer { Signposts.end("compaction", sp) }
-        var keepChars = 0
+        // Keep ~30% of the budget verbatim, counted in tokens: counting characters (÷4) kept 4× too much of a CJK lesson,
+        // so the summary could never bring it back under the budget.
+        var keepTokens = 0
         var cut = messages.count
         for i in stride(from: messages.count - 1, through: 0, by: -1) {
-            keepChars += messages[i].blocks.reduce(0) { $0 + ($1.text?.count ?? 0) + ($1.input?.compact.count ?? 0) }
-            if keepChars > budget * 4 * 3 / 10 { cut = i; break }   // keep ~30% of the budget verbatim
+            keepTokens += ContextPolicy.estimateTokens([messages[i]])
+            if keepTokens > budget * 3 / 10 { cut = i; break }
         }
         while cut < messages.count && (messages[cut].role != .user || messages[cut].isToolResultOnly) { cut += 1 }
-        guard cut > 1, cut < messages.count else { return }
+        guard cut > 1, cut < messages.count else { return prepared }
         let startIdx = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }.map { $0 + 1 } ?? 0
-        guard startIdx < cut else { return }
+        guard startIdx < cut else { return prepared }
         // Rolling summary: the range is folded in chunk by chunk (previous summary + next chunk), so nothing is silently
         // dropped however long the range is; usually it is one chunk, since compaction runs incrementally.
         var summary = conversation.compactSummary
@@ -801,7 +813,7 @@ final class ChatSession: ObservableObject, Identifiable {
             recordAuxiliary(part.usage)
             // Stopped mid-summary: keep the lesson as it was. The fallback digest below is for a summary call that failed,
             // not one the learner cancelled; saving it would replace the lesson's history with a rough digest for good.
-            if Task.isCancelled { return }
+            if Task.isCancelled { return prepared }
             var text = part.text
             if let r = text.range(of: "</think>") { text = String(text[r.upperBound...]) }
             // A failed summary must not leave the request oversized: fall back to a deterministic digest.
@@ -814,6 +826,7 @@ final class ChatSession: ObservableObject, Identifiable {
         conversation.usage?.input = 0
         sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
         save()
+        return requestMessages()
     }
 
     // MARK: Persistence helpers
@@ -925,12 +938,13 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 }
 
-/// Coalesces streamed tool output to ≤ 10 UI updates per second.
+/// One compaction summary call's text and usage.
 private struct SummaryCall: Sendable {
     var text = ""
     var usage = Usage()
 }
 
+/// Coalesces streamed tool output to ≤ 10 UI updates per second.
 final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = ""

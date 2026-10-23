@@ -29,6 +29,11 @@ final class AppModel: ObservableObject {
     @Published var models: [String: [String]] = [:]
     @Published var modelErrors: [String: String] = [:]
     private var modelAttempts: [String: Date] = [:]
+    /// Providers with a model-list request in flight (a second `loadModels` meanwhile sent a duplicate request).
+    private var modelLoads: Set<String> = []
+    /// Providers with no cached model list on disk: `modelInfo` runs several times per step, and re-read the missing
+    /// file on every call. Cleared when a list arrives.
+    private var modelCacheMisses: Set<String> = []
     /// Provider metadata per model (context window, max output, reasoning, vision, pricing), from the provider's /models.
     @Published var modelMeta: [String: [String: ModelInfo]] = [:]
     // Right-side inspector (files + in-app page viewer).
@@ -303,10 +308,12 @@ final class AppModel: ObservableObject {
         let failedLongAgo = modelErrors[p.id] != nil && Date().timeIntervalSince(modelAttempts[p.id] ?? .distantPast) > 30
         if !force, models[p.id] != nil, !failedLongAgo { return }
         if !force, let cached = ModelCache.load(p.id) { apply(p, cached); return }
-        guard hasKey(p) else { return }
+        guard hasKey(p), !modelLoads.contains(p.id) else { return }
         let key = KeyStore.shared.key(for: p)
         modelAttempts[p.id] = Date()
+        modelLoads.insert(p.id)
         Task {
+            defer { modelLoads.remove(p.id) }
             do {
                 let list = try await ProviderCatalog.fetchModels(p, apiKey: key)
                 if !list.isEmpty { ModelCache.save(p.id, list) }
@@ -322,13 +329,18 @@ final class AppModel: ObservableObject {
 
     func apply(_ p: ProviderConfig, _ list: [ModelInfo]) {
         models[p.id] = list.isEmpty ? p.suggestedModels : list.map(\.id)
+        modelCacheMisses.remove(p.id)
         modelMeta[p.id] = Dictionary(list.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
     }
 
     /// Metadata for a model, loading the provider's cached list on first use (no network when cached).
     func modelInfo(_ providerID: String, _ model: String) -> ModelInfo? {
-        if modelMeta[providerID] == nil, let cached = ModelCache.load(providerID, maxAge: .infinity) {
-            modelMeta[providerID] = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+        if modelMeta[providerID] == nil, !modelCacheMisses.contains(providerID) {
+            if let cached = ModelCache.load(providerID, maxAge: .infinity) {
+                modelMeta[providerID] = Dictionary(cached.map { ($0.id, $0) }, uniquingKeysWith: { a, _ in a })
+            } else {
+                modelCacheMisses.insert(providerID)
+            }
         }
         return modelMeta[providerID]?[model]
     }

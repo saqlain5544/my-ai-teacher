@@ -46,22 +46,28 @@ final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
         return out
     }
 
+    /// One session for every stream, so a lesson's steps (and parallel sub-agents) reuse the provider's warm HTTP/2
+    /// connection instead of paying a new TCP + TLS handshake on each request. Each task carries its own `SSEClient` as
+    /// its task delegate; the session has none.
+    private static let session: URLSession = {
+        let config = URLSessionConfiguration.default
+        config.timeoutIntervalForRequest = 120   // silence limit; providers send keep-alives while thinking
+        config.timeoutIntervalForResource = 3600
+        config.requestCachePolicy = .reloadIgnoringLocalCacheData
+        config.urlCache = nil
+        config.httpMaximumConnectionsPerHost = 8
+        let queue = OperationQueue()
+        queue.maxConcurrentOperationCount = 1   // a task's callbacks arrive in order; parsing a chunk takes microseconds
+        queue.qualityOfService = .userInitiated
+        return URLSession(configuration: config, delegate: nil, delegateQueue: queue)
+    }()
+
     static func stream(_ request: URLRequest) -> AsyncThrowingStream<SSEEvent, Error> {
         AsyncThrowingStream { continuation in
             let client = SSEClient(continuation: continuation)
-            let config = URLSessionConfiguration.default
-            config.timeoutIntervalForRequest = 120   // silence limit; providers send keep-alives while thinking
-            config.timeoutIntervalForResource = 3600
-            config.requestCachePolicy = .reloadIgnoringLocalCacheData
-            let queue = OperationQueue()
-            queue.maxConcurrentOperationCount = 1
-            queue.qualityOfService = .userInitiated
-            let session = URLSession(configuration: config, delegate: client, delegateQueue: queue)
             let task = session.dataTask(with: request)
-            continuation.onTermination = { _ in
-                task.cancel()
-                session.invalidateAndCancel()
-            }
+            task.delegate = client
+            continuation.onTermination = { _ in task.cancel() }
             task.resume()
         }
     }
@@ -82,7 +88,6 @@ final class SSEClient: NSObject, URLSessionDataDelegate, @unchecked Sendable {
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        defer { session.finishTasksAndInvalidate() }
         if let error {
             if (error as NSError).code == NSURLErrorCancelled { continuation.finish(); return }
             continuation.finish(throwing: error); return

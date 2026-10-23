@@ -235,16 +235,16 @@ final class ConceptGraph: @unchecked Sendable {
         let id: Int64
         if let existing = find(name) {
             id = existing
-            try? db.execute("UPDATE concepts SET evidence=evidence+1, updated_at=?, summary=COALESCE(?, summary), status=COALESCE(?, status) WHERE id=?",
+            db.run("UPDATE concepts SET evidence=evidence+1, updated_at=?, summary=COALESCE(?, summary), status=COALESCE(?, status) WHERE id=?",
                             now, summary.map { MemoryText.clip($0, 240) }, Self.status(status), id)
         } else {
-            try? db.execute("INSERT INTO concepts(name, summary, status, origin, source, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
+            db.run("INSERT INTO concepts(name, summary, status, origin, source, created_at, updated_at) VALUES(?,?,?,?,?,?,?)",
                             name, summary.map { MemoryText.clip($0, 240) }, Self.status(status), origin, source, now, now)
             id = db.lastInsertRowID
-            try? db.execute("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", key, id)
+            db.run("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", key, id)
         }
         for s in subjects.compactMap(MemoryText.subject) where s != "general" {
-            try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s)
+            db.run("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s)
         }
         refresh([id])
         return id
@@ -261,7 +261,7 @@ final class ConceptGraph: @unchecked Sendable {
     func addAlias(_ id: Int64, _ name: String) {
         let k = MemoryText.conceptKey(name)
         guard !k.isEmpty else { return }
-        try? db.execute("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", k, id)
+        db.run("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", k, id)
         refresh([id])
     }
 
@@ -270,38 +270,38 @@ final class ConceptGraph: @unchecked Sendable {
         // Prerequisite edges must not form a 2-cycle (A needs B and B needs A): keep the newest claim. A longer cycle
         // (A→B→C→A) is refused: prerequisites are a DAG.
         if rel == .prerequisite {
-            try? db.execute("DELETE FROM concept_edges WHERE src=? AND dst=? AND rel='prereq'", dst, src)
+            db.run("DELETE FROM concept_edges WHERE src=? AND dst=? AND rel='prereq'", dst, src)
             if reachesByPrereq(dst, src) { return }
         }
-        try? db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) VALUES(?,?,?,?)", src, dst, rel.rawValue, Date())
+        db.run("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) VALUES(?,?,?,?)", src, dst, rel.rawValue, Date())
     }
-    func unlink(_ src: Int64, _ dst: Int64) { try? db.execute("DELETE FROM concept_edges WHERE (src=? AND dst=?) OR (src=? AND dst=?)", src, dst, dst, src) }
+    func unlink(_ src: Int64, _ dst: Int64) { db.run("DELETE FROM concept_edges WHERE (src=? AND dst=?) OR (src=? AND dst=?)", src, dst, dst, src) }
 
     func update(_ id: Int64, name: String? = nil, summary: String? = nil, status: String? = nil, subjects: [String]? = nil) {
         if let name, !name.trimmingCharacters(in: .whitespaces).isEmpty, name.count <= 80 {   // a name, not a sentence
-            try? db.execute("UPDATE concepts SET name=? WHERE id=?", name.trimmingCharacters(in: .whitespaces), id)
-            try? db.execute("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", MemoryText.conceptKey(name), id)
+            db.run("UPDATE concepts SET name=? WHERE id=?", name.trimmingCharacters(in: .whitespaces), id)
+            db.run("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", MemoryText.conceptKey(name), id)
         }
-        if let summary { try? db.execute("UPDATE concepts SET summary=? WHERE id=?", summary.isEmpty ? nil : summary, id) }
-        if let s = Self.status(status) { try? db.execute("UPDATE concepts SET status=? WHERE id=?", s, id) }
+        if let summary { db.run("UPDATE concepts SET summary=? WHERE id=?", summary.isEmpty ? nil : summary, id) }
+        if let s = Self.status(status) { db.run("UPDATE concepts SET status=? WHERE id=?", s, id) }
         if let subjects {
-            try? db.execute("DELETE FROM concept_subjects WHERE concept_id=?", id)
-            for s in subjects.compactMap(MemoryText.subject) { try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s) }
+            db.run("DELETE FROM concept_subjects WHERE concept_id=?", id)
+            for s in subjects.compactMap(MemoryText.subject) { db.run("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s) }
         }
-        try? db.execute("UPDATE concepts SET updated_at=? WHERE id=?", Date(), id)
+        db.run("UPDATE concepts SET updated_at=? WHERE id=?", Date(), id)
         refresh([id])
     }
 
     /// Merges `from` concepts into `into`: aliases, subjects, edges and evidence move; memories are re-pointed by the caller.
     func merge(into: Int64, from: [Int64]) {
         for f in from where f != into {
-            try? db.execute("UPDATE OR IGNORE concept_aliases SET concept_id=? WHERE concept_id=?", into, f)
-            try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) SELECT ?, subject FROM concept_subjects WHERE concept_id=?", into, f)
-            try? db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT ?, dst, rel, created_at FROM concept_edges WHERE src=? AND dst!=?", into, f, into)
-            try? db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT src, ?, rel, created_at FROM concept_edges WHERE dst=? AND src!=?", into, f, into)
-            try? db.execute("UPDATE concepts SET evidence=evidence+(SELECT evidence FROM concepts WHERE id=?) WHERE id=?", f, into)
+            db.run("UPDATE OR IGNORE concept_aliases SET concept_id=? WHERE concept_id=?", into, f)
+            db.run("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) SELECT ?, subject FROM concept_subjects WHERE concept_id=?", into, f)
+            db.run("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT ?, dst, rel, created_at FROM concept_edges WHERE src=? AND dst!=?", into, f, into)
+            db.run("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT src, ?, rel, created_at FROM concept_edges WHERE dst=? AND src!=?", into, f, into)
+            db.run("UPDATE concepts SET evidence=evidence+(SELECT evidence FROM concepts WHERE id=?) WHERE id=?", f, into)
             // Keep the better mastery evidence.
-            try? db.execute("""
+            db.run("""
                 UPDATE concepts SET p_known=(SELECT p_known FROM concepts WHERE id=?), attempts=(SELECT attempts FROM concepts WHERE id=?),
                 correct=(SELECT correct FROM concepts WHERE id=?), mastery_at=(SELECT mastery_at FROM concepts WHERE id=?)
                 WHERE id=? AND COALESCE((SELECT mastery_at FROM concepts WHERE id=?), 0) > COALESCE(mastery_at, 0)
@@ -312,14 +312,14 @@ final class ConceptGraph: @unchecked Sendable {
     }
 
     private func deleteRow(_ id: Int64) {
-        try? db.execute("DELETE FROM concept_aliases WHERE concept_id=?", id)
-        try? db.execute("DELETE FROM concept_subjects WHERE concept_id=?", id)
-        try? db.execute("DELETE FROM concept_edges WHERE src=? OR dst=?", id, id)
-        try? db.execute("DELETE FROM concepts WHERE id=?", id)
+        db.run("DELETE FROM concept_aliases WHERE concept_id=?", id)
+        db.run("DELETE FROM concept_subjects WHERE concept_id=?", id)
+        db.run("DELETE FROM concept_edges WHERE src=? OR dst=?", id, id)
+        db.run("DELETE FROM concepts WHERE id=?", id)
     }
     func delete(_ id: Int64) {
         deleteRow(id)
-        try? db.execute("UPDATE memories SET concept_id=NULL WHERE concept_id=?", id)
+        db.run("UPDATE memories SET concept_id=NULL WHERE concept_id=?", id)
         refresh([id])
     }
     func deleteAll() {
@@ -344,8 +344,8 @@ final class ConceptGraph: @unchecked Sendable {
             let subject = r.string("subject")
             let id = find(name) ?? upsert(name: name, subjects: subject.map { [$0] } ?? [], origin: "mastery")
             guard let id else { continue }
-            if let s = subject, s != "general" { try? db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s) }
-            try? db.execute("""
+            if let s = subject, s != "general" { db.run("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) VALUES(?,?)", id, s) }
+            db.run("""
                 UPDATE concepts SET p_known=?, attempts=?, correct=?, mastery_at=?, updated_at=MAX(updated_at, ?)
                 WHERE id=? AND COALESCE(mastery_at, 0) <= ?
                 """, r.double("p_known"), r.int("attempts") ?? 0, r.int("correct") ?? 0, at, at, id, at)

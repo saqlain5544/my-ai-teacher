@@ -109,7 +109,7 @@ enum MemorySchema {
         var added = 0
         do {
             try db.execute("ATTACH DATABASE ? AS backup", file.path)
-            defer { _ = try? db.execute("DETACH DATABASE backup") }
+            defer { _ = db.run("DETACH DATABASE backup") }
             try db.execute("PRAGMA backup.page_size=16384")   // a new file only: 2 KB rows would leave half of each 4 KB page empty
             try db.execute("CREATE TABLE IF NOT EXISTS backup.memories(id INTEGER PRIMARY KEY, embedding BLOB, norm TEXT)")
             added = try db.execute("INSERT OR IGNORE INTO backup.memories(id, embedding, norm) SELECT id, embedding, norm FROM main.memories WHERE \(legacy)")
@@ -159,7 +159,7 @@ enum MemorySchema {
         (try? db.query("SELECT value FROM memory_meta WHERE key=?", key))?.first?.string("value")
     }
     static func setMeta(_ db: Database, _ key: String, _ value: String) {
-        try? db.execute("INSERT INTO memory_meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
+        db.run("INSERT INTO memory_meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", key, value)
     }
     static func dataVersion(_ db: Database) -> Int { (try? db.query("PRAGMA data_version"))?.first?.int("data_version") ?? 0 }
 }
@@ -398,14 +398,14 @@ final class MemoryStore: @unchecked Sendable {
             let newContent = takeNew ? content : old.content, blob = takeNew ? vec.map(Embedder.int8) : nil
             if takeNew { recordHistory(old.rowid, content: old.content, change: "merged", source: source) }
             // A new vector replaces an older build's Float32 one, which would otherwise win over it (see Embedder.decode).
-            try? db.execute("""
+            db.run("""
                 UPDATE memories SET content=?, importance=?, updated_at=?, evidence=evidence+1, concept_id=COALESCE(?, concept_id),
                 subject=COALESCE(subject, ?), norm=?, vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
                 """, newContent, max(importance, old.importance), now, conceptID, subject, MemoryText.norm(newContent), blob, blob, old.rowid)
             refresh(old.rowid)
             return WriteOutcome(rowid: old.rowid, status: .merged, reason: nil, similar: [])
         }
-        try? db.execute("""
+        db.run("""
             INSERT INTO memories(kind, subject, content, importance, origin, source, created_at, updated_at, vec, concept_id, norm, evidence)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,1)
             """, kind.rawValue, subject, content, min(1, max(0, importance)), origin, source, now, now, vec.map(Embedder.int8), conceptID, norm)
@@ -415,7 +415,7 @@ final class MemoryStore: @unchecked Sendable {
     }
 
     private func recordHistory(_ id: Int64, content: String, change: String, source: String?) {
-        try? db.execute("INSERT INTO memory_history(memory_id, content, change, source, changed_at) VALUES(?,?,?,?,?)", id, content, change, source, Date())
+        db.run("INSERT INTO memory_history(memory_id, content, change, source, changed_at) VALUES(?,?,?,?,?)", id, content, change, source, Date())
     }
 
     func update(_ id: Int64, content: String? = nil, importance: Double? = nil, kind: MemoryKind? = nil, subject: String? = nil,
@@ -431,7 +431,7 @@ final class MemoryStore: @unchecked Sendable {
         if let kind { m.kind = kind }
         if let subject { m.subject = MemoryText.subject(subject) }
         if let conceptID { m.conceptID = conceptID }
-        try? db.execute("""
+        db.run("""
             UPDATE memories SET content=?, importance=?, kind=?, subject=?, concept_id=?, updated_at=?, norm=?, vec=COALESCE(?, vec),
             embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
             """, m.content, m.importance, m.kind.rawValue, m.subject, m.conceptID, Date(), MemoryText.norm(m.content), blob, blob, id)
@@ -441,13 +441,13 @@ final class MemoryStore: @unchecked Sendable {
     /// Soft-removes a memory (kept with its history for provenance, excluded everywhere else).
     func archive(_ id: Int64, status: String, source: String? = nil) {
         if let m = get(id) { recordHistory(id, content: m.content, change: status, source: source) }
-        try? db.execute("UPDATE memories SET archived=1, status=?, updated_at=? WHERE id=?", status, Date(), id)
+        db.run("UPDATE memories SET archived=1, status=?, updated_at=? WHERE id=?", status, Date(), id)
         removed(id)
     }
 
     func delete(_ id: Int64) {
-        try? db.execute("DELETE FROM memories WHERE id=?", id)
-        try? db.execute("DELETE FROM memory_history WHERE memory_id=?", id)
+        db.run("DELETE FROM memories WHERE id=?", id)
+        db.run("DELETE FROM memory_history WHERE memory_id=?", id)
         removed(id)
     }
     private func removed(_ id: Int64) {
@@ -456,18 +456,18 @@ final class MemoryStore: @unchecked Sendable {
         if onDiskPath { loadedVersion = nil }   // fewer memories: the next use checks whether they fit in RAM again
     }
     func deleteAll() {
-        try? db.execute("DELETE FROM memories")
-        try? db.execute("DELETE FROM memory_history")
+        db.run("DELETE FROM memories")
+        db.run("DELETE FROM memory_history")
         graph?.deleteAll()
         lock.lock(); index = nil; loadedVersion = nil; lock.unlock()
     }
     func markUsed(_ ids: [Int64]) {
         let now = Date()
-        for id in ids { try? db.execute("UPDATE memories SET use_count=use_count+1, last_used_at=? WHERE id=?", now, id) }
+        for id in ids { db.run("UPDATE memories SET use_count=use_count+1, last_used_at=? WHERE id=?", now, id) }
     }
     /// Re-points memories from merged concepts.
     func reassignConcept(from: [Int64], to: Int64?) {
-        for f in from { try? db.execute("UPDATE memories SET concept_id=? WHERE concept_id=?", to, f) }
+        for f in from { db.run("UPDATE memories SET concept_id=? WHERE concept_id=?", to, f) }
     }
 
     // MARK: Retrieval
@@ -778,7 +778,7 @@ final class MemoryStore: @unchecked Sendable {
     func maintenance(now: Date = Date()) -> MaintenanceReport {
         var rep = MaintenanceReport()
         let t = now.timeIntervalSince1970
-        rep.decayed = (try? db.execute("""
+        rep.decayed = (db.run("""
             UPDATE memories SET importance = MAX(0.05, importance * 0.9) WHERE archived=0 AND origin != 'explicit'
             AND kind IN ('fact','knowledge','misconception','episode') AND COALESCE(last_used_at, updated_at) < ?
             """, t - 90 * 86400)) ?? 0
@@ -840,11 +840,11 @@ final class MemoryStore: @unchecked Sendable {
                 let newer = x.updatedAt > k.updatedAt ? x : k, older = newer.rowid == x.rowid ? k : x
                 let keepNew = MemoryText.isUpdate(newer.content, of: older.content) ? newer.rowid == drop : x.content.count > k.content.count
                 if keepNew {
-                    try? db.execute("""
+                    db.run("""
                         UPDATE memories SET content=?, norm=?, vec=(SELECT vec FROM memories WHERE id=?), embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?
                         """, x.content, MemoryText.norm(x.content), drop, drop, keep)
                 }
-                try? db.execute("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", x.evidence, x.importance, keep)
+                db.run("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", x.evidence, x.importance, keep)
                 archive(drop, status: "merged into #\(keep)")
                 if keepNew { refresh(keep) }
                 gone.insert(drop); rep.merged += 1

@@ -15,8 +15,15 @@
   // oldest out first; `T.dropCaches` empties them all when the app is short of memory.
   const caches = [];
   class Cache extends Map {
-    constructor(maxEntries, maxChars) { super(); this.maxEntries = maxEntries; this.maxChars = maxChars; this.chars = 0; caches.push(this); }
-    static size(v) { return typeof v === 'string' ? v.length : v && typeof v.svg === 'string' ? v.svg.length : 64; }
+    /** `keep`: state rather than a rendering (a code block's run output) — bounded, but not dropped under memory pressure. */
+    constructor(maxEntries, maxChars, keep) {
+      super(); this.maxEntries = maxEntries; this.maxChars = maxChars; this.chars = 0;
+      if (!keep) caches.push(this);
+    }
+    static size(v) {
+      if (typeof v === 'string') return v.length;
+      return v && typeof v.svg === 'string' ? v.svg.length : v && typeof v.text === 'string' ? v.text.length : 64;
+    }
     set(k, v) {
       this.delete(k);
       super.set(k, v); this.chars += Cache.size(v);
@@ -30,7 +37,7 @@
   // ───────────────────────── State ─────────────────────────
   const S = {
     messages: [], byId: new Map(), results: new Map(), pending: new Map(), armedAt: new Map(), armMs: 700, progress: new Map(), cards: new Map(),
-    openTools: new Set(), codeOutputs: new Map(), codeEpoch: 0, dirty: new Set(), streamingId: null, welcome: null,
+    openTools: new Set(), codeOutputs: new Cache(400, 4e6, true), codeEpoch: 0, dirty: new Set(), streamingId: null, welcome: null,
     running: false, showThinking: true,
   };
 

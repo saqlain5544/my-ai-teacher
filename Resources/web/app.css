@@ -620,3 +620,15 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .tests-cases, .tests-time { color: var(--muted); font-size: .85em; }
 .tests-time { margin-left: auto; }
 .tests-error { color: var(--danger, #e5534b); }
+
+/* ───── Accessibility ───── */
+/* Keyboard users see where they are; a mouse click shows no ring. The reply's action row also appears on focus, not
+   only on hover, so it can be reached with Tab. */
+button:focus-visible, .btn:focus-visible, summary:focus-visible, a:focus-visible, [tabindex]:focus-visible {
+  outline: 2px solid var(--accent); outline-offset: 2px;
+}
+.msg:focus-within .msg-actions { opacity: 1; }
+/* macOS "Reduce motion": spinners, pulses and slides stop; state changes stay visible as plain changes. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
+}

@@ -37,6 +37,13 @@ Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
 * **Everything stays in the app.** Links open in the inspector's page viewer (ephemeral storage, no downloads, popups
   load in place), files preview in the inspector, mailto copies the address. Nothing launches Safari, Mail or Finder.
   Visuals run in sandboxed iframes (`allow-scripts` only, CSP `connect-src 'none'`) with libraries from `teacher-lib:`.
+* **Storage writes.** A write whose failure the caller can't act on uses `db.run(…)` (or `db.write("what") { … }` for
+  several statements), which logs to `Log.db`; never `try? db.execute`. Statements that must change together go in one
+  `transaction` (a lesson message and its blob references, a lesson delete); transactions nest as savepoints.
+* **Tool gates compose.** Every extension's `shouldRun` is consulted in registration order: a deny ends it, and an
+  approval the learner gives moves on to the next gate (an approval for one gate never skips another).
+* **One HTTP session.** All model streams share `SSEClient`'s `URLSession` (per-task delegates), so steps and parallel
+  sub-agents reuse the provider's warm connection instead of a new TLS handshake per request.
 * **Quick questions** live in `~/.teacher/no-dir-conversations` (full access by default, no folder prompt).
 * **Python** (`run_code` python and `math`/SymPy) follows Settings → Python: run without asking (default), ask, or off.
   Package installs (pip/uv/conda/brew/npm -g, also from inside code) are always refused.
@@ -48,7 +55,8 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
 2. **Old reasoning** is not resent (except Claude adaptive thinking, which must replay).
 3. **Microcompaction epochs.** Past 70% of the budget, bulky tool results/inputs and images older than the last 3
    turns become head+tail stubs. The cut point jumps (epochs), so the prefix stays cacheable between jumps.
-4. **Summary compaction** only if still over budget; keeps ~30% verbatim.
+4. **Summary compaction** only if still over budget; keeps ~30% of the budget verbatim, counted in tokens (script-aware).
+   `compactIfNeeded` returns the request-ready history, so a step prepares it once.
 5. **Budget** = min(Settings → Context budget, half the model's context window from provider metadata).
 
 Model metadata (context window, max output, reasoning, vision, tools, free/pricing) comes from each provider's

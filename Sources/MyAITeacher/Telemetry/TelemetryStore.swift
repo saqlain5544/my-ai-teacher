@@ -114,8 +114,8 @@ final class TelemetryStore: @unchecked Sendable {
     @discardableResult
     func prune(now: Double = Date().timeIntervalSince1970, retentionDays: Int = TelemetryStore.rawRetentionDays) -> Int {
         let cutoff = now - Double(retentionDays) * 86400
-        let n = (try? db.execute("DELETE FROM tm_events WHERE ts < ?", cutoff)) ?? 0
-        try? db.execute("INSERT INTO tm_meta(key, value) VALUES('last_prune', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", String(now))
+        let n = (db.run("DELETE FROM tm_events WHERE ts < ?", cutoff)) ?? 0
+        db.run("INSERT INTO tm_meta(key, value) VALUES('last_prune', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", String(now))
         return n
     }
 

@@ -88,15 +88,17 @@ final class ConversationStore: @unchecked Sendable {
 
     func save(_ c: Conversation) {
         guard let data = try? enc.encode(c) else { return }
-        try? db.execute("INSERT INTO conversations(id, data, updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at",
+        db.run("INSERT INTO conversations(id, data, updated_at) VALUES(?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data, updated_at=excluded.updated_at",
                         c.id, String(decoding: data, as: UTF8.self), c.updatedAt)
     }
 
     func delete(_ id: String) {
         let refs = ((try? db.query("SELECT DISTINCT ref FROM blob_refs WHERE conversation_id=?", id)) ?? []).compactMap { $0.string("ref") }
-        try? db.execute("DELETE FROM messages WHERE conversation_id=?", id)
-        try? db.execute("DELETE FROM conversations WHERE id=?", id)
-        try? db.execute("DELETE FROM blob_refs WHERE conversation_id=?", id)
+        db.write("lesson delete") {
+            try db.execute("DELETE FROM messages WHERE conversation_id=?", id)
+            try db.execute("DELETE FROM conversations WHERE id=?", id)
+            try db.execute("DELETE FROM blob_refs WHERE conversation_id=?", id)
+        }
         blobs.collect(refs, inUse: inUse)
     }
 
@@ -128,19 +130,25 @@ final class ConversationStore: @unchecked Sendable {
         let text = m.blocks.compactMap { b -> String? in
             switch b.kind { case .text, .file: return b.text; default: return nil }
         }.joined(separator: "\n")
-        try? db.execute("""
-            INSERT INTO messages(id, conversation_id, seq, data, text, created_at) VALUES(?,?,?,?,?,?)
-            ON CONFLICT(id) DO UPDATE SET data=excluded.data, text=excluded.text, seq=excluded.seq
-            """, m.id, conversationID, seq, String(decoding: data, as: UTF8.self), text, m.createdAt)
-        try? db.execute("DELETE FROM blob_refs WHERE message_id=?", m.id)
-        for ref in Set(m.blobRefs) { try? db.execute("INSERT OR IGNORE INTO blob_refs(ref, message_id, conversation_id) VALUES(?,?,?)", ref, m.id, conversationID) }
+        // One transaction: the row and its blob references change together. Apart, a crash between the DELETE and the
+        // re-INSERT of the references left the message's images unreferenced, and the launch-time sweep deleted them.
+        db.write("message save") {
+            try db.execute("""
+                INSERT INTO messages(id, conversation_id, seq, data, text, created_at) VALUES(?,?,?,?,?,?)
+                ON CONFLICT(id) DO UPDATE SET data=excluded.data, text=excluded.text, seq=excluded.seq
+                """, m.id, conversationID, seq, String(decoding: data, as: UTF8.self), text, m.createdAt)
+            try db.execute("DELETE FROM blob_refs WHERE message_id=?", m.id)
+            for ref in Set(m.blobRefs) { try db.execute("INSERT OR IGNORE INTO blob_refs(ref, message_id, conversation_id) VALUES(?,?,?)", ref, m.id, conversationID) }
+        }
     }
 
     func deleteMessages(_ conversationID: String, fromSeq: Int) {
         let gone = "SELECT id FROM messages WHERE conversation_id=? AND seq>=?"
         let refs = ((try? db.query("SELECT DISTINCT ref FROM blob_refs WHERE message_id IN (\(gone))", conversationID, fromSeq)) ?? []).compactMap { $0.string("ref") }
-        try? db.execute("DELETE FROM blob_refs WHERE message_id IN (\(gone))", conversationID, fromSeq)
-        try? db.execute("DELETE FROM messages WHERE conversation_id=? AND seq>=?", conversationID, fromSeq)
+        db.write("message truncate") {
+            try db.execute("DELETE FROM blob_refs WHERE message_id IN (\(gone))", conversationID, fromSeq)
+            try db.execute("DELETE FROM messages WHERE conversation_id=? AND seq>=?", conversationID, fromSeq)
+        }
         blobs.collect(refs, inUse: inUse)   // a regenerated turn's screenshots; the grace period covers ones about to be re-saved
     }
 

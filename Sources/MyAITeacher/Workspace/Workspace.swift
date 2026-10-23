@@ -151,8 +151,8 @@ final class GlobalStore: @unchecked Sendable {
                                   m.string("id"), m.string("conversation_id"), m.int("seq"), m.string("data"), m.string("text"), m.double("created_at"))
             }
         }
-        try? db.execute("DELETE FROM messages")
-        try? db.execute("DELETE FROM conversations")
+        db.run("DELETE FROM messages")
+        db.run("DELETE FROM conversations")
     }
 }
 
@@ -173,7 +173,7 @@ final class Services: @unchecked Sendable {
 
     func logUsage(provider: String, model: String, usage: Usage) {
         let day = StudyStore.dayFormatter.string(from: Date())
-        try? global.db.execute("""
+        global.db.run("""
             INSERT INTO usage_log(day, provider, model, requests, input, output, cache_read, cache_write, reasoning) VALUES(?,?,?,1,?,?,?,?,?)
             ON CONFLICT(day, provider, model) DO UPDATE SET requests=requests+1, input=input+excluded.input, output=output+excluded.output,
             cache_read=cache_read+excluded.cache_read, cache_write=cache_write+excluded.cache_write, reasoning=reasoning+excluded.reasoning
