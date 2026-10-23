@@ -24,7 +24,7 @@
   // ── Alignment (as TextDiff.swift) ─────────────────────────────────────
   const norm = (s, strict) => {
     let t = String(s).toLowerCase().normalize('NFD');
-    if (!strict) t = t.replace(/[̀-ͯ]/g, '');
+    if (!strict) t = t.replace(/[\u0300-\u036f\u064B-\u065F\u0670\u0640\u0591-\u05C7]/g, '');   // accents; harakat and niqqud are optional too
     return t.normalize('NFC').replace(/[^\p{L}\p{N}#+]+/gu, ' ').trim();
   };
   function tokens(s, strict) {

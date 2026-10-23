@@ -60,6 +60,20 @@ enum LanguageWork {
                 return true
             }
         }
+        // Clock times: the tokenizer splits 七時 into 七 (なな) and 時 (じ), and 七時 is しちじ, 四時 よじ, 九時 くじ.
+        if code == "ja" {
+            var merged: [JSON] = []
+            for t in tokens {
+                if let prev = merged.last, let ps = prev["s"]?.int, let pe = prev["e"]?.int, let s = t["s"]?.int, let e = t["e"]?.int, pe == s,
+                   ns.substring(with: NSRange(location: s, length: e - s)) == "時",
+                   let r = hours[ns.substring(with: NSRange(location: ps, length: pe - ps))] {
+                    merged[merged.count - 1] = ["s": .number(Double(ps)), "e": .number(Double(e)), "r": .string(r)]
+                    continue
+                }
+                merged.append(t)
+            }
+            tokens = merged
+        }
         var sentences: [JSON] = []
         let st = NLTokenizer(unit: .sentence)
         st.string = text
@@ -71,6 +85,9 @@ enum LanguageWork {
         }
         return ["tokens": .array(tokens), "sentences": .array(sentences)]
     }
+
+    static let hours: [String: String] = ["一": "いちじ", "二": "にじ", "三": "さんじ", "四": "よじ", "五": "ごじ", "六": "ろくじ", "七": "しちじ", "八": "はちじ",
+                                          "九": "くじ", "十": "じゅうじ", "十一": "じゅういちじ", "十二": "じゅうにじ", "何": "なんじ"]
 
     // MARK: Lookup
 
@@ -145,6 +162,14 @@ enum LanguageWork {
     /// Settings › General › Language & Region › Translation Languages). Returns {text, source} or {note}.
     static func translate(_ text: String, from: String?, to: String) async -> JSON {
         guard let from = from.flatMap(Languages.code) else { return ["note": "Which language is this? Set the lesson's language first."] }
+        let apple = await translateWithTranslation(text, from: from, to: to)
+        // No installed Translation pair: Apple's on-device language model, when it knows both languages (said as such).
+        if apple["text"] == nil, let t = try? await withDeadline(seconds: 20, { await OnDevice.translate(text, from: from, to: to) }) {
+            return ["text": .string(t), "source": "On-device Apple Intelligence model (not a translation engine: may be loose)"]
+        }
+        return apple
+    }
+    static func translateWithTranslation(_ text: String, from: String, to: String) async -> JSON {
         #if canImport(Translation)
         if #available(macOS 26.0, *) {
             do {

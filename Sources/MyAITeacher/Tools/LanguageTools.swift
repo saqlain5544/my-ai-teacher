@@ -76,12 +76,15 @@ enum TextAnalysis {
         let ns = text as NSString
         guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
                                                 Locale(identifier: "ja") as CFLocale) else { return text }
-        var out = ""
+        var out = "", lastWord = "", lastKana = 0
         while CFStringTokenizerAdvanceToNextToken(tok) != [] {
             let r = CFStringTokenizerGetCurrentTokenRange(tok)
             let w = ns.substring(with: NSRange(location: r.location, length: r.length))
             guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
             let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            if w == "時", let r = LanguageWork.hours[lastWord] { out.removeLast(lastKana); out += r; lastWord = ""; continue }   // 七時 しちじ
+            let before = out.count
+            defer { lastWord = w; lastKana = out.count - before }
             if let common = commonReadings[w] { out += common; continue }
             if hasKanji, let latin = CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String,
                let kana = latin.lowercased().applyingTransform(.latinToHiragana, reverse: false), !kana.unicodeScalars.contains(where: { $0.isASCII && $0.properties.isAlphabetic }) {
@@ -278,6 +281,31 @@ struct VocabTool: Tool {
     }
     func summary(_ input: JSON) -> String { (input["action"]?.string ?? "") + (input["words"]?.array.map { " · \($0.count) words" } ?? "") + (input["query"]?.string.map { " \($0)" } ?? "") }
 
+    /// The saved reading against the system's for a Japanese word with kanji, or a Chinese word's pinyin; nil when they
+    /// agree (or there is nothing to compare). Some words have more than one reading, so it is a question, not an error.
+    static func readingMismatch(_ v: VocabItem, lang: String) -> String? {
+        guard let reading = v.reading, !reading.isEmpty else { return nil }
+        let isKana: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { (0x3041...0x30FC).contains($0.value) } }
+        if lang == "ja", v.term.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }) {
+            guard let given = reading.split(whereSeparator: { " /,(（・".contains($0) }).map(String.init).first(where: { !$0.isEmpty && $0.allSatisfy(isKana) }) else { return nil }
+            let expected = TextAnalysis.japaneseKana(v.term)
+            guard !expected.isEmpty, ScriptComposer.toHiragana(given) != expected else { return nil }
+            return "“\(v.term)”: the reading “\(given)” isn't the dictionary's (“\(expected)”) — check it; if the word has two readings, say which in notes"
+        }
+        if lang == "zh", let expected = v.term.applyingTransform(.mandarinToLatin, reverse: false) {
+            // Letters and the sequence of tones, however they are written (marks or numbers, spaced or not).
+            func parts(_ p: String) -> (String, [Int]) {
+                let spaced = p.lowercased().replacingOccurrences(of: "([āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ])", with: "$1 ", options: .regularExpression)
+                let n = Questions.pinyinNumbers(spaced)
+                return (n.filter(\.isLetter), n.compactMap { $0.wholeNumberValue }.filter { (1...4).contains($0) })
+            }
+            let (la, ta) = parts(reading), (lb, tb) = parts(expected)
+            guard !la.isEmpty, la != lb || (!ta.isEmpty && ta != tb) else { return nil }
+            return "“\(v.term)”: the pinyin “\(reading)” isn't the dictionary's (“\(expected)”) — check it (tone sandhi aside)"
+        }
+        return nil
+    }
+
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let study = ctx.services.study
         let lang = input["lang"]?.string.flatMap(Languages.code) ?? study.languageProfiles().first { $0.role == "target" }?.code ?? study.vocabLanguages().first
@@ -298,12 +326,14 @@ struct VocabTool: Tool {
             EventBus.publish(.studyDataChanged)
             let st = study.vocabStats(lang: lang)
             // A slip into another script (a Korean word in a Japanese example) is easy to miss in a long list: name it.
-            let slips = added.compactMap { v -> String? in
+            var slips = added.compactMap { v -> String? in
                 for (field, text) in [("term", v.term), ("example", v.example ?? "")] {
-                    if let s = ScriptCheck.foreign(text, lang: lang) { return "“\(v.term)”: its \(field) contains \(s), which \(Languages.englishName(lang)) isn't written in" }
+                    if let s = ScriptCheck.slip(text, lang: lang) { return "“\(v.term)”: its \(field) \(s)" }
                 }
                 return nil
             }
+            // A reading that isn't the dictionary's (出社 saved as しゅくしゃ): readings are what the learner memorises.
+            slips += added.compactMap { v in VocabTool.readingMismatch(v, lang: lang) }
             let check = slips.isEmpty ? "" : "\nCheck and re-add (adding again updates the word):\n" + slips.map { "- " + $0 }.joined(separator: "\n")
             return ToolOutput(text: "Saved \(added.count) word(s) to \(Languages.englishName(lang)) (\(st.total) in all, \(st.due) due for review):\n" + added.map(line).joined(separator: "\n") + check,
                               meta: ["count": .number(Double(added.count)), "lang": .string(lang)])

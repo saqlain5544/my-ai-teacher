@@ -139,6 +139,11 @@ enum Questions {
             default: break
             }
             if (q["prompt"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): missing `prompt`.") }
+            // Garbled text (a Chinese word inside Japanese, a stray script) shown to a learner would teach the error.
+            if let lang = q["lang"]?.string.flatMap(Languages.code) {
+                let fields = ["prompt", "text", "target", "listen", "instruction"].compactMap { q[$0]?.string } + (q["options"]?.array?.compactMap(\.string) ?? []) + (q["words"]?.array?.compactMap(\.string) ?? [])
+                if let slip = fields.lazy.compactMap({ ScriptCheck.slip($0, lang: lang) }).first { errs.append("Q\(n): \(slip) — rewrite that text.") }
+            }
         }
         return errs
     }
@@ -188,7 +193,10 @@ enum Questions {
     /// else folds them, so "cafe" passes for "café". Pinyin tone marks and tone numbers are the same answer either way.
     static func norm(_ s: String, strict: Bool = false, pinyin: Bool = false) -> String {
         // Pinyin: tone marks become numbers (nǐ → ni3), and without `strict` the numbers go too (ni3, nǐ and ni all agree).
-        let s = pinyin ? (strict ? pinyinNumbers(s) : pinyinNumbers(s).replacingOccurrences(of: "(?<=[A-Za-zü])[1-5]", with: "", options: .regularExpression)) : s
+        var s = pinyin ? (strict ? pinyinNumbers(s) : pinyinNumbers(s).replacingOccurrences(of: "(?<=[A-Za-zü])[1-5]", with: "", options: .regularExpression)) : s
+        // Arabic harakat and tatweel, Hebrew niqqud: optional in ordinary writing, so they count only when strict (the
+        // system's diacritic folding leaves them in).
+        if !strict { s.unicodeScalars.removeAll { (0x064B...0x065F).contains($0.value) || $0.value == 0x0670 || $0.value == 0x0640 || (0x0591...0x05C7).contains($0.value) } }
         // Punctuation that changes meaning survives: a leading minus (-5 ≠ 5), # and + (C# ≠ C), a decimal point (3.14).
         return s.folding(options: strict ? [.caseInsensitive, .widthInsensitive] : [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
             .replacingOccurrences(of: "−", with: "-")
@@ -434,8 +442,14 @@ enum Questions {
     }
 
     /// Written work in the target language comes back with the way to answer it: a correction view per answer.
-    static func writingNote(_ qs: [JSON], answers: [JSON]) -> String {
-        let written = qs.enumerated().filter { i, q in isWriting(q) && !(answers[safe: i]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { "Q\($0.offset + 1)" }
+    static func writingNote(_ qs: [JSON], answers: [JSON], ungraded: Set<Int>? = nil) -> String {
+        // Written in the target language and left to the teacher: the writing types, an essay, and in a language lesson any
+        // text answer the app couldn't check (a short answer whose key was a description, not the words).
+        let written = qs.enumerated().filter { i, q in
+            let typed = !(answers[safe: i]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            let open = isWriting(q) || (q["lang"] != nil && ["short_text", "long_text"].contains(q["type"]?.string ?? "") && (ungraded?.contains(i) ?? true))
+            return typed && open
+        }.map { "Q\($0.offset + 1)" }
         guard !written.isEmpty else { return "" }
         return "\n\nWritten answers \(written.joined(separator: ", ")): grade each against its rubric (or meaning, grammar, vocabulary, register) and answer it with a ```correction block — {\"lang\", \"original\": their text exactly as written, \"corrected\": the minimal correction (keep what was right), \"errors\": [{\"wrong\", \"right\", \"type\": grammar|particle|conjugation|vocabulary|spelling|word order|register|meaning, \"why\": one line}], \"rubric\": [{\"criterion\", \"score\", \"max\", \"note\"}], \"better\": a more natural version if theirs is correct but stiff, \"recast\": a cue (in their language) to produce the corrected sentence again}. The app draws the differences and asks them to produce it again; record `mastery` per concept, and save recurring errors to `memory`."
     }
@@ -683,7 +697,7 @@ struct QuizTool: Tool {
         text += "\n" + lines.joined(separator: "\n")
         text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
                                             ungraded: questions.count - autoTotal - unknown.count, unknown: unknown)
-        text += Questions.writingNote(questions, answers: answers)
+        text += Questions.writingNote(questions, answers: answers, ungraded: Set(graded.enumerated().filter { $0.element["correct"]?.isNull ?? true }.map(\.offset)))
         return ToolOutput(text: text, images: Questions.images(from: answers),
                           meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
     }

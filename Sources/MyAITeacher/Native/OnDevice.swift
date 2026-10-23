@@ -31,4 +31,23 @@ enum OnDevice {
         return nil
         #endif
     }
+
+    /// A sentence translated by the on-device model, for the reading popover when Apple's Translation has no installed
+    /// pair: the model covers fewer languages (no Arabic, Russian, Hindi) and can be loose, which the popover says.
+    static func translate(_ text: String, from: String, to: String) async -> String? {
+        #if canImport(FoundationModels)
+        guard #available(macOS 26, *), SystemLanguageModel.default.isAvailable else { return nil }
+        let langs = Set(SystemLanguageModel.default.supportedLanguages.compactMap { $0.languageCode?.identifier })
+        guard langs.contains(from), langs.contains(to) else { return nil }
+        let session = LanguageModelSession(instructions: """
+            Translate the learner's sentence from \(Languages.englishName(from)) into natural \(Languages.englishName(to)). \
+            Reply with the translation only: no notes, no quotes, no romanisation.
+            """)
+        guard let r = try? await session.respond(to: String(text.prefix(800)), options: GenerationOptions(temperature: 0, maximumResponseTokens: 200)) else { return nil }
+        let t = r.content.trimmingCharacters(in: .whitespacesAndNewlines)
+        return t.isEmpty ? nil : t
+        #else
+        return nil
+        #endif
+    }
 }

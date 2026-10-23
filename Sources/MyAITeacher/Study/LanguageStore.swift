@@ -219,6 +219,18 @@ enum ScriptCheck {
         "ar": ["Arabic"], "fa": ["Arabic"], "ur": ["Arabic"], "he": ["Hebrew"], "ru": ["Cyrillic"], "uk": ["Cyrillic"],
         "el": ["Greek"], "hi": ["Devanagari"], "bn": ["Bengali"], "th": ["Thai"],
     ]
+    /// Simplified Chinese characters that Japanese doesn't use (说 → 説, 时 → 時, 们 has none…): in a
+    /// Japanese text they are a slip into Chinese, a common garble of smaller models.
+    static let simplifiedOnly: Set<Character> = Set("么们这说时为对东车门问间关见长马鸟语认让请谢读买卖贵钱银铁话习书个几吗呢吧觉还现开进过动产业务员场电脑网页实际经济营销负责欢")
+    /// What is wrong with `text` as `lang`: another script, or simplified Chinese inside Japanese. nil when it fits.
+    static func slip(_ text: String, lang: String) -> String? {
+        if let s = foreign(text, lang: lang) { return "contains \(s), which \(Languages.englishName(lang)) isn't written in" }
+        if lang == "ja" {
+            let bad = text.filter { simplifiedOnly.contains($0) }
+            if !bad.isEmpty { return "contains Chinese (simplified) characters, not Japanese: \(String(Set(bad)).prefix(6))" }
+        }
+        return nil
+    }
     /// The first script in `text` that `lang` isn't written in (nil when it fits, or the language isn't one we know).
     static func foreign(_ text: String, lang: String) -> String? {
         // Latin-script languages: any non-Latin script is foreign.

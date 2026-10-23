@@ -23,6 +23,8 @@ final class LanguageWorkTests: XCTestCase {
         XCTAssertEqual(s.wrong.first?.given, "donde"); XCTAssertEqual(s.wrong.first?.target, "Dónde")
         let order = TextDiff.align(target: "buenos días", given: "días buenos")
         XCTAssertEqual(order.score, 0.5, "order matters, unlike a bag of words")
+        XCTAssertEqual(TextDiff.align(target: "أعمل معلمًا", given: "أعمل معلما").score, 1, "harakat are optional unless strict")
+        XCTAssertLessThan(TextDiff.align(target: "أعمل معلمًا", given: "اعمل معلما").score, 1, "a missing hamza is a spelling error")
         let miss = TextDiff.align(target: "Ich habe einen Hund", given: "Ich habe Hund gesehen")
         XCTAssertEqual(miss.missing, ["einen"]); XCTAssertEqual(miss.extra, ["gesehen"])
         XCTAssertTrue(miss.summary.contains("missed “einen”"), miss.summary)
@@ -31,6 +33,7 @@ final class LanguageWorkTests: XCTestCase {
 
     func testJapaneseIsComparedByReading() {
         XCTAssertEqual(TextAnalysis.japaneseKana("私は食べる。"), "わたしはたべる")
+        XCTAssertEqual(TextAnalysis.japaneseKana("七時に起きます"), "しちじにおきます")
         XCTAssertEqual(TextDiff.align(target: "私は食べる", given: "わたしはたべる").score, 1, "kana for kanji is right in dictation")
         XCTAssertEqual(TextDiff.align(target: "私は食べる", given: "わたしわたべる").ops.filter { $0.kind == .wrong }.count, 1, "は written as わ is one error")
         XCTAssertLessThan(TextDiff.align(target: "私は食べる", given: "わたしはたべる", strict: true).score, 1, "strict compares the writing")
@@ -83,6 +86,8 @@ final class LanguageWorkTests: XCTestCase {
         XCTAssertEqual(densha?["r"]?.string, "でんしゃ", "kana readings for kanji words")
         XCTAssertTrue(toks.contains { $0["saved"]?.bool == true }, "a saved word is marked")
         XCTAssertEqual(a["sentences"]?.array?.count, 2)
+        let t7 = LanguageWork.analyze("七時に起きます。", lang: "ja", study: nil)["tokens"]?.array?.first
+        XCTAssertEqual(t7?["r"]?.string, "しちじ", "clock times read as one word"); XCTAssertEqual(t7?["e"]?.int, 2)
         let es = LanguageWork.analyze("Los niños comen manzanas.", lang: "es", study: study)
         XCTAssertEqual(es["tokens"]?.array?.count, 4)
     }
@@ -96,5 +101,31 @@ final class LanguageWorkTests: XCTestCase {
         let line = LanguageExtension.stateLine(LanguageState(target: "ja", native: "en", level: "A2", profiled: true), study: study)
         XCTAssertTrue(line.contains("due to reuse: 担当"), line)
         XCTAssertTrue(line.contains("read this week: 500 characters in 2 passages"), line)
+    }
+}
+
+/// Checks against the model's garbles: Chinese inside Japanese, another script, a reading that isn't the dictionary's.
+final class LanguageSlipTests: XCTestCase {
+    func testSlipsAreCaught() {
+        XCTAssertNotNil(ScriptCheck.slip("田中さんに何Outlook said as 什么?", lang: "ja"), "什么 is Chinese")
+        XCTAssertNil(ScriptCheck.slip("本社に着いて、田中さんに声をかけます。机の上に置きます。", lang: "ja"), "Japanese passes (机 and 迎 are Japanese too)")
+        XCTAssertNotNil(ScriptCheck.slip("안녕 は Korean", lang: "ja"))
+        let errs = Questions.validate([["type": "short_text", "prompt": "公司について説明してください。说明", "lang": "ja"]])
+        XCTAssertTrue(errs.contains { $0.contains("Chinese") }, "\(errs)")
+        XCTAssertTrue(Questions.validate([["type": "short_text", "prompt": "What do you do?", "lang": "ja"]]).isEmpty, "an English prompt for a Japanese answer is fine")
+    }
+    func testReadingsAreCheckedAgainstTheDictionary() {
+        func item(_ term: String, _ reading: String) -> VocabItem { VocabItem(id: 1, lang: "ja", term: term, reading: reading, meaning: "x", tags: [], createdAt: Date()) }
+        XCTAssertNotNil(VocabTool.readingMismatch(item("出社", "しゅくしゃ"), lang: "ja"))
+        XCTAssertNil(VocabTool.readingMismatch(item("出社", "しゅっしゃ"), lang: "ja"))
+        XCTAssertNil(VocabTool.readingMismatch(item("乗り換える", "のりかえる"), lang: "ja"))
+        XCTAssertNil(VocabTool.readingMismatch(item("着く", "つく / ついた / 着いて"), lang: "ja"))
+        XCTAssertNil(VocabTool.readingMismatch(item("おはよう", "ohayou"), lang: "ja"), "no kanji, nothing to check")
+        var zh = item("学习", "xuéxí"); zh.lang = "zh"
+        XCTAssertNil(VocabTool.readingMismatch(zh, lang: "zh"))
+        zh.reading = "xuéxì"
+        XCTAssertNotNil(VocabTool.readingMismatch(zh, lang: "zh"))
+        zh.reading = "xuexi"
+        XCTAssertNil(VocabTool.readingMismatch(zh, lang: "zh"), "toneless pinyin is not contradicted")
     }
 }
