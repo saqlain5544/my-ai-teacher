@@ -224,6 +224,32 @@ and which words are due.
 * **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
   flashcards in a "<Language> vocabulary" deck, reviewed in Flashcards; the mentor opens lessons with the ones due.
   **Progress › Languages** shows each language's level and how many words are new, learning and known.
+* **Your own texts.** Paste a passage, attach a text file or PDF (or a photo of a page), or paste a link to a web page,
+  then click **📖 Read** under your message: it opens as a reading card with every word clickable. Anywhere in a lesson,
+  select a word (or a short phrase) and click **Look up**.
+* **Real audio.** Attach an audio or video file (or paste a direct link to an audio file, then **🎧 Listen with a
+  transcript**). The app transcribes it with times — with Whisper on your Mac if you installed it in Settings › Voice,
+  otherwise with Apple's recognizer — and gives you a player: each sentence on its own, **Loop**, slower speeds that
+  keep the pitch, the text hidden or shown, and **Write what you hear**, checked word by word. Use recordings you're
+  allowed to use (podcasts with an open licence, your own).
+* **Talk.** **Talk** in the message box starts a spoken conversation in the language: you speak, the mentor answers
+  aloud, turn by turn, and keeps its corrections until you press **End conversation** — then it goes through them. Nothing is
+  recorded until you press Talk; the bar says which engine is listening and whether audio leaves your Mac.
+* **Pronunciation.** After **Say it**, besides the melody chart: for Mandarin, each syllable's tone — the shape your
+  pitch had against the tone in the dictionary (syllables the measurement can't judge even on the synthetic voice are
+  shown as –); for Japanese words, where your pitch falls (ꜜ) against where the synthetic voice's falls; for a single
+  word in other languages, which syllable you stressed. These are measurements of pitch and loudness, not of your
+  vowels and consonants, and a single miss is a hint rather than a verdict.
+* **Levels and grammar.** The mentor places you per skill (reading, listening, writing, speaking, vocabulary, grammar)
+  from real work and notes the evidence; a level marked **?** is provisional until you've done a task in that skill. It
+  keeps a grammar syllabus by CEFR level, and a point counts as learned when you use it right in what you write or say.
+  **Progress › Languages** shows the levels (hover for the evidence) and the grammar per level (click a level).
+* **Words in and out.** **Progress › Languages › Import words…** takes an Anki package (.apkg — from Anki 2.1.50 on,
+  export with "Support older Anki versions" ticked), Anki's "Notes in Plain Text", or a spreadsheet saved as CSV/TSV
+  (term and meaning, optionally reading, example, tags…). **Export words** writes a file for Anki (File › Import puts it
+  in the "<Language> vocabulary" deck with tags) or a CSV for spreadsheets. Review history stays in the app.
+* **After a test** the mentor gives its feedback and stops there: you answer, ask, or say you're ready before the next
+  questions.
 
 ## Practice tools
 

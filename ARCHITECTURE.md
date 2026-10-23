@@ -398,6 +398,42 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   | Supertonic 3 voice (open, 129 MB) | ✓ | — | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
   | Whisper large-v3-turbo (open, 1.04 GB) | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ | ✓ |
   | Foundation model (translation fallback) | ✓ | ✓ | ✓ | — | ✓ | ✓ | ✓ | — | — |
+* **Own texts and lookups anywhere** (`langwork.js`). A learner message with a pasted passage, an attached text/PDF
+  (its text, or OCR of a photo) or a web page link gets **📖 Read** (`R.userActions`): the text mounts as a `reading` card
+  under the message (`mountOwn`; a page goes through `LanguageWork.page`: URLSession + `HTMLToMarkdown` + `FetchCache`,
+  `plainText` strips Markdown, cut at a paragraph near 8,000 characters). One lookup popover (`#rd-pop`, on `body`, since
+  messages use paint containment) serves the reader and any selection: mouseup in a message with ≤40 letters selected
+  offers **Look up**, with the sentence around the selection for saving.
+* **Real audio** (`MediaTranscript`, `MediaPlayer`, `Composer.attachMedia`). An attached audio/video file (or a direct
+  link to one, `langwork mediaURL` → `Downloader.fetch`, ≤500 MB) is copied to `.teacher/attachments/media/`, decoded
+  with AVAssetReader to 16 kHz mono, cut at pauses (energy VAD, chunks ≤26 s) and transcribed per chunk by Whisper when
+  installed (else `SFSpeechURLRecognitionRequest`, labelled), sentences timed proportionally inside each chunk. The file
+  block carries `meta.media` + segments; `R.fileView` draws the player: per sentence ▶, loop, 0.6–1×
+  (`AVPlayer` with the time-domain pitch algorithm, a boundary observer ends the stretch → `T.lang('mediaDone')`),
+  hidden/shown text, write-what-you-hear checked with `TextDiff`. The send waits while `pendingMedia` is non-empty.
+* **Spoken conversation** (`ConversationController`, `UI/Conversation.swift`). Explicit **Talk** start/stop; each turn:
+  `Speech.dictate(stopAfterSilence: 1.4)` (`SilenceWatch`: voiced ≥0.4 s, then quiet relative to the noise floor) → the
+  heard text is sent with a hidden ephemeral note (`meta.spoken`: reply short, in the language, corrections held back) →
+  the reply's plain text is spoken → listening again. **End** sends a closing turn asking for the held-back corrections.
+  The bar names the recognition engine (and whether audio leaves the Mac).
+* **Pronunciation from pitch** (`Prosody`). On a speak take's final result, next to the melody chart: Mandarin — the take
+  is cut into one syllable per character (voiced stretches from 16 kHz YIN with parabolic interpolation, joined or cut
+  at loudness dips), each classified (level/rising/low/falling) and checked against the dictionary tone after sandhi
+  (3-3, 不, 一); a syllable is judged only when the same method recovers its tone from the synthetic voice. Japanese
+  (≤8 morae) — morae as equal shares of the voiced time; the drop is the first point as high as anything before it that
+  falls 2.5 semitones within 150 ms (none in the last mora: final lowering), learner vs the synthetic voice. Single
+  words elsewhere — the most prominent syllable (pitch, loudness, length). `Prosody.summary` puts one line into the
+  answer the lesson reads. Measured on Apple's voices: 妈麻马骂 4/4 (Tingting, isolated), connected sentences ~70%;
+  accent drop 雨/飴 right on Kyoko and Eddy, about 7/11 words on Kyoko overall.
+* **Structure** (`LanguageStructure.swift`). `language_skills` (CEFR per skill + evidence; "A2?" = provisional, no
+  sample yet) and `grammar_points` (per language, level, order) with mastery in the `mastery` table under
+  "<language> grammar"; `language` action=grammar records production evidence (the learner's sentence as the note).
+  `<language_state>` names the levels and the next points (`nextGrammar`: shaky first, then unseen, up to a level above
+  theirs). `VocabTransfer`: export TSV with Anki's headers (`#separator`, `#html`, `#deck`, `#tags column`, `#columns`)
+  or CSV; import Anki text exports, CSV/TSV with named columns, and `.apkg` (unzipped with ditto, the SQLite `notes`
+  table of collection.anki21/anki2; the zstd `.anki21b` is refused with how to export a readable package).
+* **After a graded result** the tool result (quiz feedback steps, `ask_learner` form answers) ends the reply with the
+  feedback: no new quiz in the same reply.
 
   Translation framework: ja→en reports "supported, not installed" (a download in System Settings); the other pairs were
   not probed. Dictionary Services had only English–Urdu and Arabic–English dictionaries enabled.
