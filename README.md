@@ -132,6 +132,18 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
 * a git diff panel with checkpoints.
 
 The agent can also:
+* **Know the project before touching it.** Its prompt carries a profile read from the manifests: build system, how to
+  build, check, test and lint it (`swift build`, `tsc --noEmit`, `cargo check`, `go vet`, `pytest`, make targets…),
+  languages, git state. A `symbols` tool gives a file's outline or where a name is defined, so it reads the right
+  twenty lines instead of the file.
+* **Verify as it goes.** Every file it writes or edits is syntax-checked on the spot and the verdict rides on the tool
+  result. `diagnostics` runs the project's check, tests or lint and returns the problems parsed (`file:line:col`),
+  grouped and counted, instead of a build log. Long builds and test suites run in the background and report back.
+* **Undo in one click.** Before the agent's first change to a file in a turn, the file is checkpointed; under the reply,
+  **Undo this turn's changes** puts every file back, with or without git. Edits that differ only in indentation are
+  matched and re-indented instead of failing.
+* **Your own commands.** `.teacher/commands/review.md` becomes `/review`, with `$ARGUMENTS` filled in, like Claude
+  Code's slash commands.
 * **Delegate to sub-agents** (explore, coder, reviewer, tester, or your own definitions in `.teacher/agents/`). Each can
   have its own model, effort level and token or time budget. They run in the background, you can steer them, and they
   can work in git worktrees.

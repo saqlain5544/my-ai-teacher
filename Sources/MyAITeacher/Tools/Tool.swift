@@ -49,6 +49,8 @@ struct ToolContext: Sendable {
     var vision = true
     /// Whether the learner wants to be tested (Settings `quizzes`, or a Quiz/Exam mode): graded questions are refused when not.
     var quizzes = true
+    /// Code agent mode: files written or edited are syntax-checked at once, and `bash` may run in the background.
+    var codeAgent = false
 }
 
 protocol Tool: Sendable {

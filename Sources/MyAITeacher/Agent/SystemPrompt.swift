@@ -21,7 +21,7 @@ enum SystemPrompt {
     }
 
     /// The code agent's prompt: an autonomous software engineer in the open folder, with the project's own memory.
-    static func buildAgent(settings: AppSettings, folder: URL, model: String, projectMemory: String) -> String {
+    static func buildAgent(settings: AppSettings, folder: URL, model: String, projectMemory: String, project: String? = nil) -> String {
         var s = Instructions.text(.codeAgent, settings)
         s += """
 
@@ -30,6 +30,7 @@ enum SystemPrompt {
         - Today is \(today()). Model: \(model). Folder: \(folder.path). Relative paths are inside it.
         - Shell: zsh on macOS; `bash` runs commands in this folder (persistent cwd). The user can stop you at any time.
         """
+        if let project { s += "\n\n" + project }
         if let t = Toolchains.section(Toolchains.shared.entries) { s += "\n\n" + t }
         if !projectMemory.isEmpty { s += "\n\n# Project memory\n" + projectMemory }
         return s

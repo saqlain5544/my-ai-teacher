@@ -4,16 +4,21 @@ import Foundation
 actor ShellState {
     static let shared = ShellState()
     private var cwd: [String: URL] = [:]
+    private var handles: [String: Int] = [:]
     func dir(_ conv: String, default d: URL) -> URL { cwd[conv] ?? d }
     func set(_ conv: String, _ u: URL) { cwd[conv] = u }
+    /// B1, B2… per lesson, for commands run in the background.
+    func nextHandle(_ conv: String) -> String { handles[conv, default: 0] += 1; return "B\(handles[conv]!)" }
 }
 
 struct BashTool: Tool {
-    func timeout(_ input: JSON) -> Double? { Double(min(600, max(1, input["timeout"]?.int ?? 120))) + 20 }
+    func timeout(_ input: JSON) -> Double? { input["background"]?.bool == true ? 20 : Double(min(600, max(1, input["timeout"]?.int ?? 120))) + 20 }
     let name = "bash"
     let description = """
     Run a shell command (zsh) on the learner's Mac. The working directory persists between calls (starts in the workspace). \
     Default timeout 120 s (max 600 s via `timeout`). Output over ~30k characters is truncated. \
+    `background: true` returns at once with a handle (B1…) and the command's output arrives later as a <background-task> \
+    message (up to 30 minutes): use it for long builds, test suites and servers' one-off runs, and carry on meanwhile. \
     Prefer the dedicated read/edit/glob/grep tools for files. Never run destructive commands without the learner's explicit request.
     """
     let risk = ToolRisk.execute
@@ -22,15 +27,17 @@ struct BashTool: Tool {
             "command": Schema.string("The command to run."),
             "timeout": Schema.integer("Timeout in seconds (default 120, max 600)."),
             "description": Schema.string("5-10 word description of what the command does."),
+            "background": Schema.boolean("Run without waiting; the output comes back as a message when it finishes (timeout up to 1800 s)."),
         ], required: ["command"])
     }
     func summary(_ input: JSON) -> String { input["command"]?.string ?? "" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let command = try input.req("command")
-        let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
         let session = ctx.shellID ?? ctx.conversationID
         let cwd = await ShellState.shared.dir(session, default: ctx.workspace)
+        if input["background"]?.bool == true, ctx.agentDepth == 0 { return await Self.background(command, input: input, cwd: cwd, ctx: ctx) }
+        let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
         let cwdFile = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-cwd-\(UUID().uuidString)")
         let script = "trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)"
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
@@ -45,6 +52,33 @@ struct BashTool: Tool {
         if r.timedOut { text += "\n[timed out after \(Int(timeout)) s]" }
         if r.exitCode != 0 { text += "\n[exit code \(r.exitCode)]" }
         return ToolOutput(text: text, isError: r.exitCode != 0 && !r.timedOut ? false : r.timedOut, meta: ["exit": .number(Double(r.exitCode))])
+    }
+
+    /// Runs the command detached; its output reaches the lesson as a `<background-task>` message (like a sub-agent's report).
+    static func background(_ command: String, input: JSON, cwd: URL, ctx: ToolContext) async -> ToolOutput {
+        let handle = await ShellState.shared.nextHandle(ctx.conversationID)
+        let timeout = TimeInterval(min(1800, max(10, input["timeout"]?.int ?? 900)))
+        let conv = ctx.conversationID, outputs = ctx.services.workspace.outputsDir
+        let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
+        let title = input["description"]?.string ?? String(command.prefix(80))
+        Task.detached(priority: .utility) {
+            let started = Date()
+            let r = await ProcessRunner.run(shell, ["-c", command], cwd: cwd, timeout: timeout)
+            var out = r.combined
+            if out.count > 30_000 {
+                let url = outputs.appendingPathComponent("bash-\(handle)-\(Int(started.timeIntervalSince1970)).txt")
+                try? Data(out.utf8).write(to: url)
+                out = truncateMiddle(out, max: 12_000) + "\n[full output: \(url.path)]"
+            }
+            if out.isEmpty { out = "(no output)" }
+            if r.timedOut { out += "\n[timed out after \(Int(timeout)) s]" }
+            let secs = Int(Date().timeIntervalSince(started))
+            let text = "<background-task id=\"\(handle)\" command=\"\(command.replacingOccurrences(of: "\"", with: "'").prefix(200))\" exit=\"\(r.exitCode)\" seconds=\"\(secs)\">\n\(out)\n</background-task>"
+            let msg = ChatMessage(role: .user, blocks: [Block(kind: .text, text: text, meta: ["backgroundTask": .string(handle), "title": .string(title), "exit": .number(Double(r.exitCode)), "seconds": .number(Double(secs))])])
+            await MainActor.run { AppModel.shared.session(for: conv)?.deliver(msg) }
+        }
+        return ToolOutput(text: "Started in the background as \(handle): `\(command)` (timeout \(Int(timeout)) s). Its output arrives as a <background-task id=\"\(handle)\"> message when it finishes; carry on with other work and don't poll for it.",
+                          meta: ["background": .string(handle)])
     }
 }
 

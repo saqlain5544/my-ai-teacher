@@ -429,6 +429,10 @@ struct TranscriptView: NSViewRepresentable {
                 app.showSubAgent(center.run(id)?.id ?? id)
             case "answer":
                 if let id = j["id"]?.string { app.interactions.resolve(id, j["value"] ?? .null) }
+            case "revert":
+                // Undo under a code agent's reply: the turn's files go back to their checkpoint.
+                guard let s = session, let t = j["turn"]?.string, let ext = app.extensions.get(CodeAgentExtension.self) else { return }
+                run("T.notice(\(JSON.string(ext.revert(s, turn: t)).compact))")
             case "regenerate": session?.regenerate()
             case "retry": session?.retry()
             case "edit":

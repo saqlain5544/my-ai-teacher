@@ -35,7 +35,11 @@
       const base = { id: nodeId(m, b, i), version: VERSION, index: i, meta };
       switch (b.kind) {
         case 'text':
-          if (b.meta && b.meta.agentReport) {
+          if (b.meta && b.meta.backgroundTask) {
+            const r = b.meta;
+            children.push(Object.assign(base, { type: 'agentReport', props: { agent: '', task: true, handle: r.backgroundTask, title: r.title || '', state: r.exit === 0 ? 'done' : 'failed (exit ' + r.exit + ')',
+              seconds: r.seconds, text: (b.text || '').replace(/^<background-task[^>]*>\n?|\n?<\/background-task>\s*$/g, '') } }));
+          } else if (b.meta && b.meta.agentReport) {
             const r = b.meta;
             children.push(Object.assign(base, { type: 'agentReport', props: { agent: r.agentReport, handle: r.handle || '', title: r.title || '', state: r.state || 'done',
               text: (b.text || '').replace(/^<background-agent[^>]*>\n?|\n?<\/background-agent>\s*$/g, '') } }));

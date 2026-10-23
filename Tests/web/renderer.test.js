@@ -1529,6 +1529,31 @@
     ok(b.disabled && /Saved/.test(b.textContent), 'marked saved');
   });
 
+
+  // ───────────── Code agent ─────────────
+  test('code agent: undo under a reply, a failed syntax check on its card, a background command, diagnostics', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'ed1', name: 'edit', input: { path: 'app.py', old_string: 'a', new_string: 'b' } }]);
+    const r1 = R('ed1', 'edit', 'Edited app.py.\nSyntax check found problems — fix them before moving on:\napp.py:3 error: invalid syntax', { meta: { syntaxErrors: true } });
+    const a2 = A([{ kind: 'toolUse', id: 'dg1', name: 'diagnostics', input: { what: 'check' } }]);
+    const r2 = R('dg1', 'diagnostics', '`swift build` → exit 1 in 3.0 s. 2 errors, 0 warnings\nSources/A.swift:\n  12:9 error: cannot find foo', { isError: true, meta: { errors: 2, warnings: 0, command: 'swift build' } });
+    const a3 = A('Fixed it.', { turn: { duration: 3, steps: 2, usage: { input: 10, output: 20 }, checkpoint: '1729', changedFiles: ['app.py', 'Sources/A.swift'] } });
+    const bg = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: '<background-task id="B1" command="swift test" exit="0" seconds="42">\nExecuted 5 tests\n</background-task>', meta: { backgroundTask: 'B1', title: 'run the tests', exit: 0, seconds: 42 } }] };
+    T.status('', false); T.reset([U('fix the bug'), a1, r1, a2, r2, a3, bg, A('All green.')], { agent: true });
+    const edit = $('[data-tool-id="ed1"]'); ok(edit && edit.classList.contains('syntax-errors'), 'an edit with a failed syntax check is marked');
+    const dg = $('[data-tool-id="dg1"]'); ok(dg, 'diagnostics card'); ok(/2 errors/.test(dg.textContent), 'summary shows the counts: ' + dg.textContent.slice(0, 120));
+    const undo = $('#m-' + a3.id + ' .turn-undo'); ok(undo, 'undo footer under the reply that changed files');
+    ok(/2 files changed/.test(undo.textContent) && /app\.py/.test(undo.textContent), undo.textContent);
+    posts.length = 0; click($('[data-act="undo-turn"]', undo));
+    eq(lastPost('revert'), { type: 'revert', turn: '1729' }, 'asks the app to restore the checkpoint');
+    ok($('[data-act="undo-turn"]', undo).disabled && /Undone/.test(undo.textContent), 'one undo per turn');
+    const task = $('#m-' + bg.id + ' .agent-report'); ok(task, 'a background command renders like an agent report');
+    ok(/Background command B1/.test(task.textContent) && /finished in 42 s/.test(task.textContent), task.textContent);
+    ok(!/background-task/.test(task.textContent), 'the envelope tag is not shown');
+    ok(!$('#m-' + bg.id + ' .bubble'), 'not a learner bubble');
+    T.reset([U('q'), A('x', { turn: { duration: 1, steps: 1, usage: {} } })], { agent: true });
+    ok(!$('.turn-undo'), 'no undo when nothing changed');
+  });
+
   // ───────────── Run ─────────────
   let passed = 0, failed = 0;
   for (const t of tests) {
