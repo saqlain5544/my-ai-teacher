@@ -1571,13 +1571,110 @@
     T.dictation('sp1:0', 'buenos dias', true);
     const c2 = $('[data-tool-id="sp1"]');
     ok(!$('.q-speak .btn.recording', c2), 'recording ended');
-    eq($$('.sp-target .ok', c2).length, 2, 'both words matched: ' + $('.sp-target', c2).innerHTML);
+    eq($$('.sp-diff .d-same', c2).length, 2, 'both words matched, in order: ' + ($('.sp-diff', c2) || {}).innerHTML);
+    ok(/100% matched/.test($('.sp-heard', c2).textContent), 'score shown');
     const dict = $('[data-q-input="1"]', c2); dict.value = 'Hasta luego'; dict.dispatchEvent(new Event('input', { bubbles: true }));
     posts.length = 0; click($('[data-act="q-submit"]', c2));
     const ans = lastPost('answer'); ok(ans, 'submitted');
     eq(ans.value.answers[0].heard, 'buenos dias', 'the recognised text is the answer'); eq(ans.value.answers[0].target, 'Buenos días');
     eq(ans.value.answers[1], 'Hasta luego');
     T.interaction({ id: 'sp1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language work: dictation is checked word by word; translation, rewrite, sentence building and tables', async () => {
+    const QZ = { title: 'Work', graded: true, questions: [
+      { type: 'dictation', prompt: 'Write what you hear', listen: 'Hasta luego, Marta', lang: 'es' },
+      { type: 'translate', prompt: 'Into Spanish', text: 'I work in sales.', from: 'en', to: 'Spanish', lang: 'es', rubric: [{ criterion: 'Meaning', points: 2 }, { criterion: 'Grammar', points: 2 }] },
+      { type: 'rewrite', prompt: 'Formal', text: '¿Qué quieres?', instruction: 'Make it formal (usted).', lang: 'es' },
+      { type: 'build_sentence', prompt: 'Use them', words: ['perro', 'parque'], lang: 'es' },
+      { type: 'table', prompt: 'hablar', lang: 'es', rows: ['yo', 'tú'], columns: ['presente'], cells: [['hablo'], null] },
+    ] };
+    const a = A([{ kind: 'toolUse', id: 'lw1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('test me'), a], {});
+    T.interaction({ id: 'lw1', kind: 'quiz', payload: QZ }, true);
+    let card = $('[data-tool-id="lw1"]'); noErrors(card, 'language work quiz');
+    ok($('.quiz-q[data-qi="0"] .ll-player .ll-text[hidden]', card), 'dictation plays first, text hidden');
+    ok($('.quiz-q[data-qi="1"] .lw-source', card).textContent.includes('I work in sales.'), 'translation shows its source');
+    ok(/Meaning/.test($('.quiz-q[data-qi="1"] .lw-rubric-ask', card).textContent), 'the rubric is shown before they write');
+    ok(/usted/.test($('.quiz-q[data-qi="2"] .lw-instruction', card).textContent), 'rewrite instruction');
+    const typeIn = (sel, v) => { const f = $(sel, card); f.value = v; f.dispatchEvent(new Event('input', { bubbles: true })); return f; };
+    typeIn('[data-q-input="0"]', 'hasta lluego marta');
+    typeIn('[data-q-input="1"]', 'Trabajo en ventas.');
+    typeIn('[data-q-input="2"]', '¿Qué quiere usted?');
+    typeIn('[data-q-input="3"]', 'El perro juega en el parque.');
+    ok($$('.quiz-q[data-qi="3"] .lw-chip.used', card).length === 2, 'the given words light up as they are used');
+    ok(/6 words/.test($('[data-words="3"]', card).textContent), 'word count: ' + $('[data-words="3"]', card).textContent);
+    ok(!$('.quiz-q[data-qi="4"] input[data-q-cell="4:0:0"]', card), 'a shown cell is not a field');
+    typeIn('input[data-q-cell="4:1:0"]', 'hablas');
+    posts.length = 0; click($('[data-act="q-submit"]', card));
+    const ans = lastPost('answer'); ok(ans, 'submitted');
+    eq(ans.value.answers[0], 'hasta lluego marta'); eq(ans.value.answers[4][1][0], 'hablas', 'table cells: ' + JSON.stringify(ans.value.answers[4]));
+    // The graded card: the dictation drawn word by word.
+    const diff = { score: 2 / 3, ops: [{ k: 'same', t: 'Hasta', g: 'hasta' }, { k: 'wrong', t: 'luego', g: 'lluego' }, { k: 'same', t: 'Marta', g: 'marta' }] };
+    T.interaction({ id: 'lw1', kind: 'quiz' }, false);
+    T.reset([U('test me'), a, R('lw1', 'quiz', 'graded', { meta: { graded: [{ correct: false, score: 0.67, given: 'hasta lluego marta', diff }, { correct: null, given: 'Trabajo en ventas.' }, { correct: null }, { correct: null }, { correct: false, score: 0.5, given: [[''], ['hablas']], answer: [['hablo'], ['hablas']] }], score: 0.67, total: 2 } })], {});
+    card = $('[data-tool-id="lw1"]');
+    const check = $('.quiz-q[data-qi="0"] .lw-check', card); ok(check, 'dictation check view');
+    ok($('.d-wrong del', check).textContent === 'lluego' && $('.d-wrong ins', check).textContent === 'luego', check.innerHTML);
+    ok(/67% of the words/.test(check.textContent), check.textContent);
+    T.status('', false);
+  });
+
+  test('language work: a correction shows the changes, the errors and a check of the learner\'s second attempt', () => {
+    const el = show('```correction\n{"lang":"es","original":"Yo trabajo en ventas desde dos años.","corrected":"Trabajo en ventas desde hace dos años.","errors":[{"wrong":"desde dos años","right":"desde hace dos años","type":"grammar","why":"*desde hace* + a period of time"},{"wrong":"Yo trabajo","right":"Trabajo","type":"register","why":"the subject pronoun is usually dropped"}],"rubric":[{"criterion":"Grammar","score":3,"max":5},{"criterion":"Vocabulary","score":5,"max":5}],"better":"Llevo dos años trabajando en ventas.","recast":"Say: I have worked in sales for two years."}\n```');
+    noErrors(el, 'correction');
+    const c = $('.lw-correction', el); ok(c, 'correction card');
+    ok($('.lw-v-diff del', c) && $('.lw-v-diff ins', c), 'deletions and insertions drawn');
+    ok($$('.lw-v-diff ins', c).some(x => x.textContent === 'hace'), 'the missing word is inserted: ' + $('.lw-v-diff', c).innerHTML);
+    eq($$('.lw-errors li', c).length, 2); ok(/8 \/ 10/.test($('.lw-total', c).textContent), 'rubric total');
+    ok($('.lw-better', c).textContent.includes('Llevo'), 'a more natural version');
+    click($('[data-act="lw-view"][data-v="corrected"]', c)); ok(!$('.lw-v-corrected', c).hidden && $('.lw-v-diff', c).hidden, 'views switch');
+    const ta = $('.lw-again-input', c); ta.value = 'Trabajo en ventas desde dos años.';
+    click($('[data-act="lw-check"]', c)); ok($('.lw-again-result ins', c), 'the second attempt is checked against the correction');
+    ta.value = 'Trabajo en ventas desde hace dos años.'; click($('[data-act="lw-check"]', c));
+    ok(/Exactly right/.test($('.lw-again-result', c).textContent), $('.lw-again-result', c).textContent);
+    posts.length = 0; click($('[data-act="lw-send"]', c));
+    eq(lastPost('suggest').text, 'My corrected version: Trabajo en ventas desde hace dos años.');
+  });
+
+  test('language work: a reading passage — readings from the app, click a word, save it with its sentence', async () => {
+    posts.length = 0;
+    const text = '私は会社員です。毎日電車で行きます。';
+    const el = show('```reading\n{"lang":"ja","title":"通勤","level":"A2","text":"' + text + '","readings":"all"}\n```');
+    noErrors(el, 'reading');
+    const r = $('.lw-reading', el); ok(r, 'reading card');
+    const an = await until(() => lastPost('langwork'), 'analyze request');
+    eq(an.op, 'analyze'); eq(an.text, text);
+    const key = an.key;
+    T.lang('analysis', key, { tokens: [{ s: 0, e: 1, r: 'わたし' }, { s: 1, e: 2 }, { s: 2, e: 5, r: 'かいしゃいん', saved: true }, { s: 5, e: 7 }, { s: 8, e: 10, r: 'まいにち' }, { s: 10, e: 12, r: 'でんしゃ' }, { s: 12, e: 13 }, { s: 13, e: 17 }],
+      sentences: [[0, 8], [8, 18]] });
+    const body = $('.lw-reading .rd-body', el);
+    ok($$('ruby', body).length === 4, 'furigana over the kanji words: ' + body.innerHTML.slice(0, 300));
+    ok($('.rd-w.saved', body), 'a saved word is marked');
+    eq($$('.rd-s', body).length, 2, 'two sentences');
+    click($('[data-act="rd-mode"][data-v="none"]', el)); eq($$('.lw-reading .rd-body ruby', el).length, 0, 'readings off');
+    click($('[data-act="rd-mode"][data-v="new"]', el)); eq($$('.lw-reading .rd-body ruby', el).length, 4, 'new words: all of them (none known yet)');
+    posts.length = 0;
+    const w = $$('.lw-reading .rd-w', el).find(x => x.textContent.includes('電車')); ok(w, 'the word 電車');
+    click(w);
+    const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === '電車' && lk.sentence === '毎日電車で行きます。', JSON.stringify(lk));
+    const pop = $('.lw-reading .rd-pop', el); ok(!pop.hidden, 'popover open'); ok(/Looking it up/.test(pop.textContent));
+    T.lang('lookup', lk.key, { word: '電車', reading: 'でんしゃ', senses: [{ pos: 'Noun', text: 'train (electric)' }], source: 'Wiktionary' });
+    ok(/train/.test(pop.textContent) && /でんしゃ/.test(pop.textContent), pop.textContent);
+    posts.length = 0; click($('[data-act="rd-translate"]', pop));
+    const tr = lastPost('langwork'); eq(tr.op, 'translate'); eq(tr.text, '毎日電車で行きます。');
+    T.lang('translation', lk.key, { text: 'I go by train every day.', source: 'On-device translation (Apple)' });
+    ok(/by train/.test(pop.textContent), 'the sentence translated');
+    posts.length = 0; click($('[data-act="rd-save"]', pop));
+    const v = lastPost('vocab'); ok(v && v.word.term === '電車' && v.word.example === '毎日電車で行きます。' && v.word.example_meaning === 'I go by train every day.' && v.word.meaning === 'train (electric)', JSON.stringify(v));
+    ok(w.classList.contains('saved'), 'marked saved in the passage');
+    posts.length = 0; click($('[data-act="rd-say"][data-si="1"]', el));
+    const sp = lastPost('speak'); ok(sp && sp.text === '毎日電車で行きます。' && sp.key, 'a sentence plays on its own: ' + JSON.stringify(sp));
+    ok($('.lw-reading .rd-s[data-si="1"]', el).classList.contains('speaking'), 'and is highlighted');
+    T.lang('spoken', sp.key, null);
+    ok(!$('.lw-reading .rd-s.speaking', el), 'highlight ends when spoken');
+    posts.length = 0; click($('[data-act="rd-done"]', el));
+    const done = lastPost('langwork'); ok(done && done.op === 'read' && done.words === 16 && done.unit === 'characters', JSON.stringify(done));
   });
 
   test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {

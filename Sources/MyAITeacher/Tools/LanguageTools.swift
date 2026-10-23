@@ -70,6 +70,34 @@ enum TextAnalysis {
         }
         return out
     }
+    /// The whole text's reading in hiragana (words with kanji by the tokenizer's reading, kana as written, punctuation
+    /// and spaces dropped): 私は食べる → わたしはたべる. Dictation and speech are compared on this.
+    static func japaneseKana(_ text: String) -> String {
+        let ns = text as NSString
+        guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
+                                                Locale(identifier: "ja") as CFLocale) else { return text }
+        var out = ""
+        while CFStringTokenizerAdvanceToNextToken(tok) != [] {
+            let r = CFStringTokenizerGetCurrentTokenRange(tok)
+            let w = ns.substring(with: NSRange(location: r.location, length: r.length))
+            guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
+            let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            if let common = commonReadings[w] { out += common; continue }
+            if hasKanji, let latin = CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String,
+               let kana = latin.lowercased().applyingTransform(.latinToHiragana, reverse: false), !kana.unicodeScalars.contains(where: { $0.isASCII && $0.properties.isAlphabetic }) {
+                out += kana
+            } else {
+                out += ScriptComposer.toHiragana(w).filter { $0.isLetter || $0.isNumber || $0 == "ー" }
+            }
+        }
+        return out
+    }
+    /// Everyday readings where the system's tokenizer picks the formal or rarer one (私 → わたくし): a learner writing
+    /// わたし is right.
+    static let commonReadings: [String: String] = [
+        "私": "わたし", "今日": "きょう", "明日": "あした", "昨日": "きのう", "何": "なに", "一人": "ひとり", "二人": "ふたり", "大人": "おとな",
+        "今年": "ことし", "今朝": "けさ", "上手": "じょうず", "下手": "へた", "眼鏡": "めがね", "部屋": "へや", "時計": "とけい", "果物": "くだもの",
+    ]
     static func sentences(_ text: String) -> [String] {
         let tok = NLTokenizer(unit: .sentence); tok.string = text
         return tok.tokens(for: text.startIndex..<text.endIndex).map { String(text[$0]).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }

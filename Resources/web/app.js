@@ -1337,7 +1337,9 @@
     /** The lesson's languages ({target, native, name, …}): the on-screen keyboard follows the target. */
     setLanguage(state) { if (R.setLanguage) R.setLanguage(state || null); },
     /** Recognised speech for a `speak` question ("toolId:qi"), partial until `final`. */
-    dictation(key, text, final) { if (R.dictation) R.dictation(key, text, !!final); },
+    dictation(key, text, final, info) { if (R.dictation) R.dictation(key, text, !!final, info || null); },
+    /** Language work answered by the app: a word's lookup, a passage's readings, a sentence translated, speech finished. */
+    lang(kind, key, data) { if (R.langEvent) R.langEvent(kind, key, data); },
     card(front, back, show) {
       document.body.classList.add('card-mode');
       unmountTree(thread);

@@ -4,7 +4,14 @@ import Foundation
 /// with a matching component; answers come back in the shapes documented below.
 enum Questions {
     static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
-                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing", "speak"]
+                        "fill_blanks", "ordering", "matching", "scale", "code", "math", "drawing", "speak",
+                        "dictation", "translate", "rewrite", "build_sentence", "table"]
+    /// Written work in a language the teacher grades and answers with a ```correction (the learner's text, corrected).
+    static let writingTypes: Set<String> = ["translate", "rewrite", "build_sentence"]
+    static func isWriting(_ q: JSON) -> Bool {
+        let t = q["type"]?.string ?? ""
+        return writingTypes.contains(t) || ((t == "long_text" || t == "short_text") && q["answer"] == nil && (q["lang"] != nil || q["rubric"] != nil))
+    }
 
     /// Compact schema: per-type fields are documented once in `type` instead of on every property.
     /// The error for a call without questions, with a call that works (models fix a shown example; they repeat a bare error).
@@ -22,6 +29,10 @@ enum Questions {
                 blank (+blank_options[][]); ordering: items[] in CORRECT order; matching: pairs [[left,right],…]; numeric: unit, min, max, \
                 integer; short/long_text: min_length, max_length, pattern (regex); scale: min,max,labels[]; code: language,starter; \
                 speak: target (the sentence to say aloud), lang, reading (the learner speaks; recognition shows what was heard). \
+                Language work (give lang): dictation: listen (the text, played and hidden; graded word by word); translate: text (the \
+                source), from, to; rewrite: text + instruction (e.g. "make it formal"); build_sentence: words[] to use in one sentence \
+                they write; table: rows[] (labels), columns[], answer [[per row, per column]], cells [[shown, or null to fill]]; \
+                long_text/translate/rewrite/build_sentence take rubric [{criterion, points}] and min_words — you grade them. \
                 Optional on all: hints[] (a ladder, gentlest first: nudge → targeted hint → one step; shown one at a time), concept, \
                 placeholder; language tests: lang (ISO code: picks the on-screen keyboard), listen (text read aloud before the \
                 question, hidden: dictation) + listen_lang, accents "strict" (diacritics must match in short_text/fill_blanks). \
@@ -32,6 +43,9 @@ enum Questions {
             "pairs": ["type": "array", "items": strs], "min": num, "max": num, "labels": strs, "max_select": ["type": "integer"],
             "language": str, "starter": str, "unit": str, "placeholder": str, "hint": str, "hints": strs, "concept": str,
             "target": str, "lang": str, "reading": str, "listen": str, "listen_lang": str, "accents": str,
+            "from": str, "to": str, "instruction": str, "words": strs, "rows": strs, "columns": strs,
+            "cells": ["type": "array", "items": ["type": "array"]], "min_words": ["type": "integer"],
+            "rubric": ["type": "array", "items": Schema.object(["criterion": str, "points": num])],
             "allow_other": ["type": "boolean"],
             "min_length": ["type": "integer"], "max_length": ["type": "integer"], "pattern": str, "integer": ["type": "boolean"],
         ]
@@ -108,6 +122,19 @@ enum Questions {
                 if !text.contains("{{}}") { errs.append("Q\(n): fill_blanks needs `text` containing {{}} for each blank.") }
             case "speak":
                 if (q["target"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): speak needs `target`, the sentence to say.") }
+            case "dictation":
+                if (q["listen"]?.string ?? q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): dictation needs `listen`, the text they hear and write.") }
+            case "translate", "rewrite":
+                if (q["text"]?.string ?? "").isEmpty { errs.append("Q\(n): \(type) needs `text`, the passage to \(type == "translate" ? "translate" : "rewrite").") }
+                if type == "rewrite", (q["instruction"]?.string ?? "").isEmpty { errs.append("Q\(n): rewrite needs `instruction` (how to rewrite it, e.g. \"in the polite register\").") }
+            case "build_sentence":
+                if (q["words"]?.array?.count ?? 0) < 2 { errs.append("Q\(n): build_sentence needs `words`, at least 2 to use.") }
+            case "table":
+                let rows = q["rows"]?.array?.count ?? 0, cols = q["columns"]?.array?.count ?? 0
+                if rows < 1 || cols < 1 { errs.append("Q\(n): table needs `rows` (labels) and `columns` (headers).") }
+                if let a = q["answer"]?.array, a.count != rows || a.contains(where: { ($0.array?.count ?? 0) != cols }) {
+                    errs.append("Q\(n): table `answer` must be one list per row with one entry per column (\(rows)×\(cols)).")
+                }
             case "": errs.append("Q\(n): missing `type`.")
             default: break
             }
@@ -232,11 +259,35 @@ enum Questions {
         let ans = q["answer"]
         let strict = q["accents"]?.string?.lowercased() == "strict"
         let pinyin = (q["lang"]?.string ?? "").lowercased().hasPrefix("zh")
+        let lang = q["lang"]?.string ?? q["listen_lang"]?.string
         if type == "speak" {
             let target = q["target"]?.string ?? q["text"]?.string ?? ""
             guard let heard = a["heard"]?.string ?? a.string, !heard.isEmpty else { return Grade(correct: false, score: 0, expected: target) }
-            let s = speechMatch(target: target, heard: heard)
+            let s = TextDiff.align(target: target, given: heard, lang: lang).score
             return Grade(correct: s >= 0.8, score: s, expected: target)
+        }
+        if type == "dictation" {
+            let target = q["listen"]?.string ?? q["text"]?.string ?? ""
+            guard let g = a.string, !g.trimmingCharacters(in: .whitespaces).isEmpty else { return Grade(correct: false, score: 0, expected: target) }
+            let s = TextDiff.align(target: target, given: g, strict: strict, lang: lang).score
+            return Grade(correct: s >= 0.999, score: s, expected: target)
+        }
+        if type == "table" {
+            guard let key = ans?.array, !key.isEmpty else { return Grade() }
+            let given = a.array ?? []
+            var ok = 0, total = 0
+            for (r, row) in key.enumerated() {
+                for (c, cell) in (row.array ?? []).enumerated() {
+                    // A cell shown to the learner (in `cells`) isn't asked.
+                    if let shown = q["cells"]?[r]?[c], !shown.isNull, shown.string != "" { continue }
+                    let alts = (cell.array?.compactMap(\.string) ?? cell.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
+                    guard !alts.isEmpty else { continue }
+                    total += 1
+                    if let g = given[safe: r]?[c]?.string, alts.contains(norm(g, strict: strict, pinyin: pinyin)) { ok += 1 }
+                }
+            }
+            guard total > 0 else { return Grade() }
+            return Grade(correct: ok == total, score: Double(ok) / Double(total), expected: key.map { ($0.array ?? []).map { $0.array?.first?.string ?? $0.string ?? "" }.joined(separator: " / ") }.joined(separator: " | "))
         }
         if a.isNull { return Grade(correct: type == "scale" ? nil : false, score: 0, expected: ans.map(describe)) }
         switch type {
@@ -338,10 +389,55 @@ enum Questions {
             }.joined(separator: "; ")
         case "fill_blanks": return (a.array ?? []).map { "“\($0.string ?? "")”" }.joined(separator: ", ") + (q["text"]?.string.map { "  (in: \($0))" } ?? "")
         case "drawing": return "(drawing attached as an image)"
-        case "speak": return a["heard"]?.string.map { "said “\($0)” (recognised on device; target “\(q["target"]?.string ?? "")”)" } ?? "(nothing was recognised)"
+        case "speak":
+            guard let heard = a["heard"]?.string else { return "(nothing was recognised)" }
+            let target = q["target"]?.string ?? q["text"]?.string ?? ""
+            let engine = a["engine"]?.string.map { ", \($0)" } ?? ""
+            return "said “\(heard)” (speech recognition\(engine); target “\(target)”: \(TextDiff.align(target: target, given: heard, lang: q["lang"]?.string).summary))"
+        case "dictation":
+            guard let g = a.string else { return "(no answer)" }
+            let target = q["listen"]?.string ?? q["text"]?.string ?? ""
+            return "“\(g)” — \(TextDiff.align(target: target, given: g, strict: q["accents"]?.string == "strict", lang: q["lang"]?.string ?? q["listen_lang"]?.string).summary)"
+        case "table":
+            let rows = q["rows"]?.array?.compactMap(\.string) ?? [], cols = q["columns"]?.array?.compactMap(\.string) ?? []
+            return (a.array ?? []).enumerated().map { r, row in
+                "\(rows[safe: r] ?? "row \(r + 1)"): " + (row.array ?? []).enumerated().map { c, v in "\(cols[safe: c] ?? "") “\(v.string ?? "")”" }.joined(separator: ", ")
+            }.joined(separator: "; ")
+        case "build_sentence":
+            guard let g = a.string else { return "(no answer)" }
+            let words = q["words"]?.array?.compactMap(\.string) ?? []
+            let low = norm(g)
+            let missing = words.filter { !low.contains(norm($0)) }
+            return "“\(g)”" + (missing.isEmpty ? " (uses every given word)" : " (doesn't contain: \(missing.joined(separator: ", ")) — maybe inflected; judge it)")
+        case "translate", "rewrite":
+            return a.string.map { "“\($0)”" + " (source: “\(q["text"]?.string ?? "")”)" } ?? "(no answer)"
         case "code": return "\n```\(q["language"]?.string ?? "")\n\(a.string ?? "")\n```"
         default: return a.string.map { "“\($0)”" } ?? a.compact
         }
+    }
+
+    /// The word-by-word alignment behind a dictation or speaking grade (the card shows it; Japanese is compared by reading).
+    static func diff(_ q: JSON, answer a: JSON) -> TextDiff.Result? {
+        switch q["type"]?.string {
+        case "speak":
+            guard let heard = a["heard"]?.string ?? a.string, !heard.isEmpty else { return nil }
+            return TextDiff.align(target: q["target"]?.string ?? q["text"]?.string ?? "", given: heard, lang: q["lang"]?.string)
+        case "dictation":
+            guard let g = a.string, !g.isEmpty else { return nil }
+            return TextDiff.align(target: q["listen"]?.string ?? q["text"]?.string ?? "", given: g, strict: q["accents"]?.string == "strict", lang: q["lang"]?.string ?? q["listen_lang"]?.string)
+        default: return nil
+        }
+    }
+    static func diffJSON(_ r: TextDiff.Result) -> JSON {
+        ["score": .number((r.score * 1000).rounded() / 1000),
+         "ops": .array(r.ops.map { ["k": .string($0.kind.rawValue), "t": $0.target.map { .string($0) } ?? .null, "g": $0.given.map { .string($0) } ?? .null] })]
+    }
+
+    /// Written work in the target language comes back with the way to answer it: a correction view per answer.
+    static func writingNote(_ qs: [JSON], answers: [JSON]) -> String {
+        let written = qs.enumerated().filter { i, q in isWriting(q) && !(answers[safe: i]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }.map { "Q\($0.offset + 1)" }
+        guard !written.isEmpty else { return "" }
+        return "\n\nWritten answers \(written.joined(separator: ", ")): grade each against its rubric (or meaning, grammar, vocabulary, register) and answer it with a ```correction block — {\"lang\", \"original\": their text exactly as written, \"corrected\": the minimal correction (keep what was right), \"errors\": [{\"wrong\", \"right\", \"type\": grammar|particle|conjugation|vocabulary|spelling|word order|register|meaning, \"why\": one line}], \"rubric\": [{\"criterion\", \"score\", \"max\", \"note\"}], \"better\": a more natural version if theirs is correct but stiff, \"recast\": a cue (in their language) to produce the corrected sentence again}. The app draws the differences and asks them to produce it again; record `mastery` per concept, and save recurring errors to `memory`."
     }
 
     /// Extracts drawings (data URLs) from answers so they can be passed to the model as images.
@@ -473,7 +569,7 @@ struct AskLearnerTool: Tool {
             for (i, q) in norm.enumerated() {
                 lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")]: \(q["prompt"]?.string ?? "")\n   Answer: \(Questions.describeAnswer(q, answers[safe: i] ?? .null))")
             }
-            return ToolOutput(text: "Learner's answers:\n" + lines.joined(separator: "\n"), images: Questions.images(from: answers),
+            return ToolOutput(text: "Learner's answers:\n" + lines.joined(separator: "\n") + Questions.writingNote(norm, answers: answers), images: Questions.images(from: answers),
                               meta: ["answers": .array(answers)])
         }
         let sel = reply["selected"]?.array?.compactMap(\.string) ?? []
@@ -573,7 +669,8 @@ struct QuizTool: Tool {
             graded.append(["correct": g.correct.map { .bool($0) } ?? .null, "score": g.score.map { .number($0) } ?? .null,
                            "explanation": q["explanation"] ?? .null, "expected": g.expected.map { .string($0) } ?? .null,
                            "answer": q["answer"] ?? .null, "given": a, "misconception": mis.map { .string($0) } ?? .null,
-                           "certainty": certainty.map { .number(Double($0.rawValue)) } ?? .null, "hints": .number(Double(hints))])
+                           "certainty": certainty.map { .number(Double($0.rawValue)) } ?? .null, "hints": .number(Double(hints)),
+                           "diff": Questions.diff(q, answer: a).map(Questions.diffJSON) ?? .null])
         }
         study.recordQuiz(conversationID: ctx.conversationID, title: input["title"]?.string ?? "Quiz", topic: subject, score: score, total: autoTotal,
                          data: ["questions": .array(questions), "answers": .array(answers), "hints": .array(hintsOpened), "certainty": .array(certainties)])
@@ -586,6 +683,7 @@ struct QuizTool: Tool {
         text += "\n" + lines.joined(separator: "\n")
         text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
                                             ungraded: questions.count - autoTotal - unknown.count, unknown: unknown)
+        text += Questions.writingNote(questions, answers: answers)
         return ToolOutput(text: text, images: Questions.images(from: answers),
                           meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
     }
