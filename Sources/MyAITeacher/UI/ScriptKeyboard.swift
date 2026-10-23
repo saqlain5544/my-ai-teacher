@@ -12,6 +12,8 @@ struct KeyboardKeyEvent {
     var mode: String            // tap | kana | romaji | keys
     var sessionID: String
     var remove = 0
+    /// The kana a candidate replaces: checked against the text before the caret, which may not be the draft's end.
+    var expect: String?
     var romaji: Bool { mode == "romaji" }
 }
 
@@ -47,7 +49,7 @@ struct ScriptKeyboardView: View {
             if !candidates.isEmpty {
                 HStack(spacing: 6) {
                     ForEach(candidates, id: \.term) { w in
-                        Button { post(.text(w.term), remove: w.kana.count) } label: {
+                        Button { post(.text(w.term), remove: w.kana.count, expect: w.kana) } label: {
                             Text(w.term).font(.system(size: 16)).padding(.horizontal, 8).padding(.vertical, 2)
                                 .background(RoundedRectangle(cornerRadius: 7).fill(Color.accentColor.opacity(0.14)))
                         }.buttonStyle(.plain).help(w.kana)
@@ -166,9 +168,9 @@ struct ScriptKeyboardView: View {
         }
     }
 
-    private func post(_ key: KeyboardLayouts.Key, remove: Int = 0) {
+    private func post(_ key: KeyboardLayouts.Key, remove: Int = 0, expect: String? = nil) {
         NotificationCenter.default.post(name: .composerKey, object: KeyboardKeyEvent(key: key, layout: layout, shift: shift, katakana: katakana, mode: mode,
-                                                                                     sessionID: sessionID, remove: remove))
+                                                                                     sessionID: sessionID, remove: remove, expect: expect))
     }
 
     @ViewBuilder private func button(_ key: KeyboardLayouts.Key) -> some View {

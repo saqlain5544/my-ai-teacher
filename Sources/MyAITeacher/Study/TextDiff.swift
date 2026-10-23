@@ -20,8 +20,9 @@ enum TextDiff {
     struct Result: Sendable {
         var ops: [Op]
         var targetCount: Int
-        /// Target tokens matched in order, over all target tokens (0…1).
-        var score: Double { targetCount == 0 ? 0 : Double(ops.filter { $0.kind == .same }.count) / Double(targetCount) }
+        /// Target tokens matched in order, over the target's tokens plus any extra ones (0…1): words added that aren't in
+        /// the target count against it ("el gato negro come mucho" is not "el gato negro").
+        var score: Double { targetCount == 0 ? 0 : Double(ops.filter { $0.kind == .same }.count) / Double(targetCount + ops.filter { $0.kind == .extra }.count) }
         var wrong: [Op] { ops.filter { $0.kind == .wrong } }
         var missing: [String] { ops.filter { $0.kind == .missing }.compactMap(\.target) }
         var extra: [String] { ops.filter { $0.kind == .extra }.compactMap(\.given) }

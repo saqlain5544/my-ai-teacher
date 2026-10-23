@@ -128,14 +128,18 @@
   const INITIALS = ['zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w', ''];
   const FINALS = new Set(('a o e i u ü v ai ei ao ou an en ang eng ong er ia ie iao iu ian in iang ing iong ua uo uai ui uan un uang ueng ' +
     'üe ve ue üan van ün vn').split(' '));
-  const isSyllable = s => INITIALS.some(i => s.startsWith(i) && FINALS.has(s.slice(i.length)));
+  const isSyllable = s => INITIALS.some(i => s.startsWith(i) && FINALS.has(s.slice(i.length)) && (!i || s.slice(i.length) !== 'er'));
   function lastSyllable(text) {
     const m = /[A-Za-züÜāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ]+$/.exec(text);
     if (!m) return null;
     const chars = Array.from(m[0]);
     const plain = chars.map(ch => (TONED[ch] ? TONED[ch][0] : ch).toLowerCase()).join('');
-    for (let n = Math.min(6, chars.length); n >= 1; n--) if (isSyllable(plain.slice(-n))) return chars.slice(-n).join('');
-    return m[0];
+    // The whole run must be pinyin, syllable after syllable: "Chapter3" and "level2" stay as typed.
+    const ok = new Array(plain.length + 1).fill(false); ok[0] = true;
+    for (let e = 1; e <= plain.length; e++) for (let n = 1; n <= Math.min(6, e); n++) if (ok[e - n] && isSyllable(plain.slice(e - n, e))) { ok[e] = true; break; }
+    if (!ok[plain.length]) return null;
+    for (let n = Math.min(6, chars.length); n >= 1; n--) if (ok[plain.length - n] && isSyllable(plain.slice(-n))) return chars.slice(-n).join('');
+    return null;
   }
   /** The syllable before the caret with its tone advanced (1 → 2 → 3 → 4 → none): "ma" → "mā", "mǎ" → "mà". */
   function cycleTone(text) {
@@ -260,7 +264,7 @@
         if (!(kana === '' && rest === m[0])) replaceBefore(el, m[0].length, kana + rest);
       }
     }
-    if (K.auto && K.layout.compose === 'pinyin' && /^[0-5]$/.test(e.data || '')) {
+    if (K.auto && K.layout.compose === 'pinyin' && /^[0-5]$/.test(e.data || '') && wants(el)) {
       const head = el.value.slice(0, el.selectionStart);
       const r = /[A-Za-züÜĀ-ǜ]$/.test(head.slice(0, -1)) ? setTone(head.slice(0, -1), +e.data) : null;
       if (r) { el.setRangeText(r.text, el.selectionStart - 1 - r.remove, el.selectionStart, 'end'); el.dispatchEvent(new Event('input', { bubbles: true })); }
@@ -356,7 +360,12 @@
         if (R._ctx) R._ctx.post({ type: 'inputSource', op: b.getAttribute('data-source'), lang: K.code });
       } else if (b.hasAttribute('data-fn')) {
         const fn = b.getAttribute('data-fn');
-        if (fn === 'close') { K.open = false; K.auto = false; render(); return; }
+        if (fn === 'close') {
+          K.open = false; K.auto = false; render();
+          // The Mac's input source goes back to what the learner had, if the panel switched it.
+          if (K.source && K.source.selected && R._ctx) R._ctx.post({ type: 'inputSource', op: 'restore', lang: K.code });
+          return;
+        }
         if (fn === 'pin') { K.pinned = !K.pinned; render(); return; }
         if (fn === 'compact') { K.compact = !K.compact; store('kbd.compact.' + K.code, K.compact ? '1' : ''); render(); return; }
         special(el, fn);
@@ -503,7 +512,10 @@
     K.lang = target; K.native = state && state.native || null;
     K.words = state && Array.isArray(state.words) ? state.words.filter(w => w && w.term && w.kana) : [];
     K.source = state && state.inputSource || null;
-    if (target !== K.code) { setLayout(target); K.auto = true; K.open = K.open && !!K.layout; if (K.layout) intro(); }
+    if (target !== K.code) {
+      if (K.code && K.source && K.source.selected && R._ctx) R._ctx.post({ type: 'inputSource', op: 'restore', lang: K.code });
+      setLayout(target); K.auto = true; K.open = K.open && !!K.layout; if (K.layout) intro();
+    }
     render();
     document.querySelectorAll(FIELDS).forEach(el => { if (el._kbdToggle) { el._kbdToggle = false; const t = el.nextElementSibling; if (t && t.classList.contains('kbd-toggle')) t.remove(); } });
     if (K.layout) addToggles(document.body);

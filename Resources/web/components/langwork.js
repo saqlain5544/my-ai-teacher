@@ -25,11 +25,13 @@
   const norm = (s, strict) => {
     let t = String(s).toLowerCase().normalize('NFD');
     if (!strict) t = t.replace(/[\u0300-\u036f\u064B-\u065F\u0670\u0640\u0591-\u05C7]/g, '');   // accents; harakat and niqqud are optional too
-    return t.normalize('NFC').replace(/[^\p{L}\p{N}#+]+/gu, ' ').trim();
+    return t.normalize('NFC').replace(/[^\p{L}\p{M}\p{N}#+]+/gu, ' ').trim();
   };
   function tokens(s, strict) {
     s = String(s || '');
-    if (UNSPACED.test(s)) return Array.from(s).filter(c => /[\p{L}\p{N}]/u.test(c)).map(c => ({ text: c, norm: norm(c, strict) }));
+    // Characters as the reader sees them (a Thai consonant with its vowel and tone marks is one), as Swift's Character.
+    if (UNSPACED.test(s)) return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s), x => x.segment)
+      .filter(c => /^[\p{L}\p{N}]/u.test(c)).map(c => ({ text: c, norm: norm(c, strict) }));
     return s.split(/\s+/).map(w => ({ text: w.replace(/^[\p{P}\p{S}]+|[\p{P}\p{S}]+$/gu, ''), norm: norm(w, strict) })).filter(t => t.norm);
   }
   /** [{k: same|wrong|missing|extra, t, g}] and the share of target tokens matched in order. */
@@ -51,7 +53,9 @@
       for (let q = 0; q < p; q++) ops.push({ k: 'wrong', t: miss[q].t, g: extra[q].g });
       ops.push(...miss.slice(p), ...extra.slice(p));
     }
-    return { ops, score: n ? ops.filter(o => o.k === 'same').length / n : 0 };
+    // Extra words count against the score: "el gato negro come mucho" is not "el gato negro".
+    const extra = ops.filter(o => o.k === 'extra').length;
+    return { ops, score: n ? ops.filter(o => o.k === 'same').length / (n + extra) : 0 };
   }
   /** The alignment drawn inline: right words plain, a wrong one struck through with the right one after it, a missing
    *  one inserted, an extra one struck. `joiner` '' for unspaced scripts. */
@@ -367,6 +371,12 @@
       '<button class="btn mini" data-act="rd-translate">Translate sentence</button><button class="btn mini" data-act="rd-ask">Ask teacher</button></div><div class="rd-pop-tr"></div>';
     return h;
   }
+  // Any other audio (a 🔊 elsewhere) ends a passage being read aloud: the app stops the voice, so its "spoken" never comes.
+  document.addEventListener('click', e => {
+    const b = e.target.closest && e.target.closest('[data-act="ll-play"]');
+    if (!b) return;
+    for (const st of readers.values()) if (st.playing || st.waiting) { stopPlaying(st); st.waiting = null; }
+  }, true);
   R.registerAction('rd-close', el => { const p = el.closest('.rd-pop'); if (p) p.hidden = true; });
   R.registerAction('rd-save', (el, e, ctx) => {
     const c = el.closest('.lw-reading'), st = c && readers.get(c.getAttribute('data-key')); if (!st || !st.lookup) return;
@@ -401,7 +411,7 @@
     }
     for (const st of readers.values()) {
       if (!st.lookup || st.lookup.key !== key) continue;
-      const pop = document.querySelector('.lw-reading[data-key="' + st.key + '"] .rd-pop'); if (!pop) return;
+      const pop = document.querySelector('.lw-reading[data-key="' + st.key + '"] .rd-pop'); if (!pop) continue;
       if (kind === 'lookup') { st.lookup.result = data || {}; pop.innerHTML = popHTML(st, data || {}); }
       if (kind === 'translation') {
         st.lookup.translation = data && data.text || '';

@@ -453,7 +453,8 @@ final class ComposerTextView: NSTextView {
         targetLanguageTyping()
         let prev = before(1).text.first
         switch e.key {
-        case .text(let t) where e.remove > 0:   // a kanji candidate for the kana before the caret
+        case .text(let t) where e.remove > 0:   // a kanji candidate for the kana before the caret (only if they are there)
+            if let k = e.expect, ScriptComposer.toHiragana(before(e.remove).text) != ScriptComposer.toHiragana(k) { return }
             replaceBefore(e.remove, with: t)
         case .text(var t):
             if e.layout.compose == "abugida", selectedRange().length == 0, let m = ScriptComposer.abugida(prev: prev, t) {

@@ -1509,6 +1509,7 @@
     // Pinyin: a digit after a syllable marks its tone.
     T.setLanguage({ target: 'zh', native: 'en' });
     text.value = ''; text.focus();
+    text.closest('[data-lang]').setAttribute('data-lang', 'zh');   // a Chinese question's field
     for (const ch of 'ni3hao3') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
     eq(text.value, 'nǐhǎo', 'ni3hao3 → nǐhǎo');
     click($('[data-fn="tone4"]', kbd)); eq(text.value, 'nǐhào', 'a tone key sets that tone');

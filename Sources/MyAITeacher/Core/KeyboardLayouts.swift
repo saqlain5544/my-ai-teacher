@@ -238,11 +238,15 @@ enum ScriptComposer {
         let run = Array(text.reversed().prefix { letters.contains($0) }.reversed())
         guard !run.isEmpty else { return nil }
         let plain = run.map { String(toned[$0]?.0 ?? $0).lowercased() }
-        for n in stride(from: min(6, run.count), through: 1, by: -1) {
-            let s = plain.suffix(n).joined()
-            if pinyinInitials.contains(where: { s.hasPrefix($0) && pinyinFinals.contains(String(s.dropFirst($0.count))) }) { return String(run.suffix(n)) }
+        func syllable(_ s: String) -> Bool {
+            pinyinInitials.contains { i in s.hasPrefix(i) && pinyinFinals.contains(String(s.dropFirst(i.count))) && (i.isEmpty || !s.hasSuffix("er") || s.count > i.count + 2) }
         }
-        return String(run)
+        // The whole run must be pinyin (syllable after syllable): "Chapter3" and "level2" stay as typed.
+        var ok = Array(repeating: false, count: plain.count + 1); ok[0] = true
+        for e in 1...plain.count { for n in 1...min(6, e) where ok[e - n] && syllable(plain[(e - n)..<e].joined()) { ok[e] = true; break } }
+        guard ok[plain.count] else { return nil }
+        for n in stride(from: min(6, run.count), through: 1, by: -1) where ok[plain.count - n] && syllable(plain.suffix(n).joined()) { return String(run.suffix(n)) }
+        return nil
     }
     /// The syllable before the caret with its tone advanced (none → 1 → 2 → 3 → 4 → none).
     static func cycleTone(_ text: String) -> (remove: Int, text: String)? {

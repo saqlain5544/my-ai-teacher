@@ -97,10 +97,10 @@ final class OpenSpeech: ObservableObject {
         tasks[id] = Task { [weak self] in
             do {
                 try await Self.download(c) { frac, note in Task { @MainActor in self?.states[id] = .downloading(frac, note) } }
-                await MainActor.run { self?.states[id] = .installed; self?.tasks[id] = nil }
+                await MainActor.run { if !Task.isCancelled { self?.states[id] = .installed }; self?.tasks[id] = nil }
                 AppLog.write("open speech: installed \(id)")
             } catch {
-                try? FileManager.default.removeItem(at: Self.folder(id))
+                // Only the staging folder goes (download's own cleanup): a working install stays if a re-download fails.
                 let msg = (error as? CancellationError) != nil ? "Cancelled" : error.localizedDescription
                 await MainActor.run { self?.states[id] = msg == "Cancelled" ? .absent : .failed(msg); self?.tasks[id] = nil }
                 AppLog.write("open speech: \(id) failed: \(msg)")
@@ -110,6 +110,7 @@ final class OpenSpeech: ObservableObject {
     func cancel(_ id: String) { tasks[id]?.cancel() }
     func remove(_ id: String) {
         cancel(id)
+        tasks[id] = nil
         try? FileManager.default.removeItem(at: Self.folder(id))
         states[id] = .absent
     }
@@ -145,6 +146,7 @@ final class OpenSpeech: ObservableObject {
             }
         }
         try Data("\(c.id) \(Date())\n".utf8).write(to: staging.appendingPathComponent(".installed"))
+        try Task.checkCancellation()   // removed or cancelled while unpacking: nothing moves into place
         let target = folder(c.id)
         try? fm.removeItem(at: target)
         try fm.moveItem(at: staging, to: target)

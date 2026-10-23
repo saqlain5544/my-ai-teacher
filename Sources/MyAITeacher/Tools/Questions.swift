@@ -197,12 +197,22 @@ enum Questions {
         // Arabic harakat and tatweel, Hebrew niqqud: optional in ordinary writing, so they count only when strict (the
         // system's diacritic folding leaves them in).
         if !strict { s.unicodeScalars.removeAll { (0x064B...0x065F).contains($0.value) || $0.value == 0x0670 || $0.value == 0x0640 || (0x0591...0x05C7).contains($0.value) } }
+        // Accents fold only on alphabets where they are accents (Latin, Greek, Cyrillic): a Devanagari vowel sign, a Thai
+        // tone mark or kana voicing (が ≠ か) is a different letter, never folded.
+        if !strict {
+            s = s.unicodeScalars.contains(where: { $0.value >= 0x0370 && !(0x0370...0x04FF).contains($0.value) && !(0x1E00...0x1FFF).contains($0.value) })
+                ? s.map { c -> String in
+                    let v = c.unicodeScalars.first?.value ?? 0
+                    return v < 0x0250 || (0x0370...0x04FF).contains(v) || (0x1E00...0x1FFF).contains(v) ? String(c).folding(options: .diacriticInsensitive, locale: nil) : String(c)
+                }.joined()
+                : s.folding(options: .diacriticInsensitive, locale: nil)
+        }
         // Punctuation that changes meaning survives: a leading minus (-5 ≠ 5), # and + (C# ≠ C), a decimal point (3.14).
-        return s.folding(options: strict ? [.caseInsensitive, .widthInsensitive] : [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil)
+        return s.folding(options: [.caseInsensitive, .widthInsensitive], locale: nil)
             .replacingOccurrences(of: "−", with: "-")
             .replacingOccurrences(of: #"(?<![\w])-(?=\d)"#, with: "\u{1}", options: .regularExpression)
             .replacingOccurrences(of: #"(?<=\d)\.(?=\d)"#, with: "\u{2}", options: .regularExpression)
-            .replacingOccurrences(of: #"[^\p{L}\p{N}#+\x{01}\x{02}]+"#, with: " ", options: .regularExpression)
+            .replacingOccurrences(of: #"[^\p{L}\p{M}\p{N}#+\x{01}\x{02}]+"#, with: " ", options: .regularExpression)
             .replacingOccurrences(of: "\u{1}", with: "-").replacingOccurrences(of: "\u{2}", with: ".")
             .trimmingCharacters(in: .whitespaces)
     }
