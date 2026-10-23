@@ -14,7 +14,9 @@ enum ToolRegistry {
     ]
     /// Always on in Language mentor mode (deferred elsewhere): the mentor must never have to load its own tools.
     static let languageTools: [Tool] = [LanguageTool(), VocabTool()]
-    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool(), SymbolsTool(), DiagnosticsTool()]
+    /// Always on in Code mentor mode: the engineer's tools and the project's tests and reviews.
+    static let mentorTools: [Tool] = [SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool()]
+    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool(), SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool()]
 
     /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
     static let agentTools: [Tool] = [
@@ -30,6 +32,11 @@ enum ToolRegistry {
         if mode == .language {
             let names = Set(languageTools.map(\.name))
             l.core += languageTools
+            l.deferred.removeAll { names.contains($0.name) }
+        }
+        if mode == .code {
+            let names = Set(mentorTools.map(\.name))
+            l.core += mentorTools
             l.deferred.removeAll { names.contains($0.name) }
         }
         return l

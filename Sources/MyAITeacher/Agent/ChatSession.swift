@@ -679,7 +679,7 @@ final class ChatSession: ObservableObject, Identifiable {
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         ctx.quizzes = Testing.on(settings, conversation.mode)
-        ctx.codeAgent = conversation.mode.isAgent
+        ctx.codeAgent = conversation.mode.isAgent || conversation.mode == .code
         ctx.checkpointTurn = app.extensions.get(CodeAgentExtension.self)?.currentTurnKey(self)
         let t0 = Date()
         var result: Block
@@ -727,6 +727,8 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
+        // A code mentor builds in the learner's folder: how it builds and tests is part of the lesson's ground.
+        if conversation.mode == .code, let project = await ProjectProfile.detect(services.workspace.url).section() { s += "\n\n" + project }
         return s
     }
 

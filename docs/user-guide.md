@@ -170,8 +170,14 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
   several minutes on a fast model, and longer on free ones.
 * **Your editor.** There is no built-in editor. Open the folder in Helix, VS Code, Zed, Xcode — whatever you use — edit,
   save, then tell the mentor to check (or just "check my work"). The agent runs the tests with `bash` and reads the files.
-* **The review** is free-form, like a senior engineer's: correctness, design, edge cases, naming and complexity, pointing
-  at your lines.
+* **Proven tests.** When the mentor registers the test command, the app runs the suite on the starter: it must fail.
+  A suite that already passes is refused, one that cannot run goes back to the mentor. The mentor tells you the command
+  so you can run it yourself.
+* **The review.** Say "check my work" (or ask for a review): the app runs the tests, works out exactly what you changed
+  since the last review, and hands both to the mentor with the findings still open from last time. The review comes back
+  as a card: findings by file and line, marked **must** (blocks a pass), **should** or **nit**, with the ones you fixed
+  struck through, and a verdict. Fix what it points at and ask again; rounds build on each other. A pass with green
+  tests records the project's concept as mastered.
 * **What the mentor won't do.**
   * It won't write the solution: the starter is scaffolding and TODOs, and it teaches with questions, hints and concepts.
   * It won't hide tests or solutions from you: the tests are in `.teacher/tests` and you can run them yourself.

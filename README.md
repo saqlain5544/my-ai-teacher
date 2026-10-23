@@ -98,8 +98,16 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
   cache or a data pipeline, always at the edge of what you can do.
 * **Your own editor.** There is no built-in editor: use Helix, VS Code, Zed, Xcode, anything. The files are right there
   in the folder; save, then ask the mentor to check. `bash` runs the tests and the mentor reads your changes.
-* **The review.** Like a demanding senior engineer: correctness, design, naming, edge cases, complexity, the tests you
-  should add, pointing at your lines — with questions and hints rather than code.
+* **Tests that are proven.** When the mentor registers the project's test command, the app runs the tests on the
+  starter: a suite that already passes is refused as vacuous, one that cannot run is sent back with its output, and a
+  red suite becomes the baseline for review.
+* **The review.** Ask for a review and the app hands the mentor exactly what you changed since the last one (unified
+  diffs), the test run, and the findings still open from the last round. The review comes back as a card: findings by
+  file and line, `must` / `should` / `nit`, fixed ones struck through, the verdict. Like a demanding senior engineer:
+  correctness and the failing tests first, then design, naming, edge cases, complexity, the tests you should add, with
+  questions and hints rather than code. A pass with green tests records the project's concept as mastered.
+* **The engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files and the project
+  profile, like the code agent, so it reads your code precisely and builds its examples against your real toolchain.
 * **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
   teaches with questions, targeted hints and concepts so you find the fix.
 
