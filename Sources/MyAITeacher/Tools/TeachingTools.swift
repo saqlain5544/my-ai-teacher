@@ -106,8 +106,9 @@ struct LessonPlanTool: Tool {
     reason). action="create" (title, subject, goal, deadline, modules → cards; start with 4–8 cards and a concrete `next` on the \
     first); "add" (title, lane, next, objectives, after, concept); "start" (card, next; replace=true sends the old focus back); \
     "park" (card, reason); "resume" (card); "complete" (card, evidence — required); "note" (card, text and/or next); "move" (card, \
-    lane, position); "get" (the whole board); "list" (all boards); "update" (title/goal/deadline, or the legacy full modules \
-    list). Mutations return the compact state; the app also appends the live <lesson_state> to each learner message.
+    lane, position); "outline" (card, outline: the chapter as sections with points and subsections, like a book's table of \
+    contents — refining it keeps progress); "section" (card, section id or title: done, moving on to the next); "get" (the \
+    whole board); "list" (all boards); "update" (title/goal/deadline, or the legacy full modules list). Mutations return the compact state; the app also appends the live <lesson_state> to each learner message.
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
@@ -118,9 +119,10 @@ struct LessonPlanTool: Tool {
             "next": Schema.string("The concrete next action for this card."),
             "concept": Schema.string("The `mastery` concept this card teaches."),
             "notes": Schema.string("Notes."),
+            "outline": Self.outlineSchema,
         ], required: ["title"])
         return Schema.object([
-            "action": Schema.string("Action.", enum: ["create", "add", "start", "park", "resume", "complete", "note", "move", "get", "list", "update"]),
+            "action": Schema.string("Action.", enum: ["create", "add", "start", "park", "resume", "complete", "note", "move", "outline", "section", "get", "list", "update"]),
             "plan": Schema.string("Board id or title (optional: the lesson's board is used)."),
             "id": Schema.string("Alias: the board id for get/update, or the card for card actions."),
             "card": Schema.string("Card id (C1) or title, for start/park/resume/complete/note/move."),
@@ -139,13 +141,31 @@ struct LessonPlanTool: Tool {
             "evidence": Schema.string("What shows the card is done: a quiz score, an exercise pass, a correct explanation (complete)."),
             "replace": Schema.boolean("start: send the current focus back to the backlog instead of failing."),
             "position": Schema.integer("Index in the board after add/move (0 = first)."),
+            "outline": Self.outlineSchema,
+            "section": Schema.string("Section id (\"2.3\") or title, for action=section."),
+            "done": Schema.boolean("section: mark it done (default) or reopen it (false)."),
         ], required: ["action"])
+    }
+    /// A chapter written out as a book's table of contents: sections, their key points, and subsections.
+    static var outlineSchema: JSON {
+        let leaf = Schema.object(["title": Schema.string("Subsection title."), "points": Schema.array(Schema.string("Point"), "What it covers.")], required: ["title"])
+        let section = Schema.object(["title": Schema.string("Section title."), "points": Schema.array(Schema.string("Point"), "What it covers."),
+                                     "sections": Schema.array(leaf, "Subsections.")], required: ["title"])
+        return Schema.array(section, "The card's outline, as a book chapter: sections with points and subsections (outline/create/add).")
     }
     func summary(_ input: JSON) -> String {
         "\(input["action"]?.string ?? "") \(input["title"]?.string ?? input["card"]?.string ?? input["id"]?.string ?? input["plan"]?.string ?? "")"
     }
 
+    /// Board changes are read–modify–write on one row: calls in parallel (a model often sends several `add`s at once)
+    /// each read the same board and the last save won — two cards got the same id and one was lost. One at a time.
+    static let writes = NSLock()
+
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        try Self.writes.withLock { try apply(input, ctx) }
+    }
+
+    private func apply(_ input: JSON, _ ctx: ToolContext) throws -> ToolOutput {
         let study = ctx.services.study
         let action = input["action"]?.string ?? "list"
         func finish(_ b: CourseBoard, _ line: String, full: Bool = false) -> ToolOutput {
@@ -204,9 +224,16 @@ struct LessonPlanTool: Tool {
                 let objectives: [String] = input["objectives"]?.array?.compactMap(\.string) ?? []
                 let after: [String] = input["after"]?.array?.compactMap(\.string) ?? []
                 let note: String? = input["text"]?.string ?? input["notes"]?.string
-                let c = try b.add(title: input["title"]?.string ?? "", lane: lane, next: input["next"]?.string, objectives: objectives, after: after,
+                var c = try b.add(title: input["title"]?.string ?? "", lane: lane, next: input["next"]?.string, objectives: objectives, after: after,
                                   concept: input["concept"]?.string, note: note, reason: input["reason"]?.string, position: input["position"]?.int)
+                if let o = input["outline"]?.array, !o.isEmpty { c = try b.setOutline(c.id, o) }
                 return finish(b, "Added \(c.id.uppercased()) \(c.title) → \(c.lane.rawValue).")
+            case "outline":
+                let c = try b.setOutline(cardKey, input["outline"]?.array ?? [])
+                return finish(b, "Outlined \(c.id.uppercased()) \(c.title): " + (b.position(c) ?? "") + ".")
+            case "section":
+                let c = try b.section(cardKey, input["section"]?.string ?? input["text"]?.string ?? "", done: input["done"]?.bool ?? true)
+                return finish(b, "\(c.id.uppercased()) \(c.title): " + (b.position(c) ?? "") + ".")
             case "start", "focus":
                 let c = try b.start(cardKey, next: input["next"]?.string, replace: input["replace"]?.bool ?? false)
                 return finish(b, "Focus: \(c.id.uppercased()) \(c.title).")

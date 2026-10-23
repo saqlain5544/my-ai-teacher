@@ -519,7 +519,7 @@ enum SubAgent {
     private static func resolve(_ q: TaskRequest, previous: SubAgentConfig?, limits: SubAgentSettings, host: AgentHost,
                                 ctx: ToolContext) async throws -> (SubAgentConfig, LLMClient, [String]) {
         var notes: [String] = []
-        let types = AgentCatalog.all(app: limits.definitions, folder: host.folder)
+        let types = AgentCatalog.all(app: limits.definitions, folder: host.folder, instructions: await host.instructions())
         let typeName = q.type ?? previous?.type.name ?? "explore"
         // A type named loosely ("general-purpose", Claude Code's name) resolves like a model when one clearly fits.
         var named = AgentCatalog.find(typeName, in: types)
@@ -959,6 +959,11 @@ enum SubAgent {
                 else { out[i].blocks[j] = .text("(An older image was here; only the latest \(requestImages) are kept.)") }
             }
         }
+        // Older turns get the lesson loop's microcompaction. A research run that fetches eight 40k-character pages would
+        // otherwise send 80k tokens once per step until the provider rejects it — and the supervisor would restart into
+        // the same request.
+        let keepFrom = ContextPolicy.turnStarts(out).last ?? 0
+        for i in out.indices where i < keepFrom { out[i].blocks = out[i].blocks.map(ContextPolicy.trim) }
         return out
     }
 

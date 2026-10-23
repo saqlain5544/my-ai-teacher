@@ -185,7 +185,11 @@ struct AnthropicClient: LLMClient {
             // Two cached blocks: the instructions shared by every lesson, then this lesson's context (date, memory, folder).
             // A change in the second (a new memory, a new day) keeps the first one's cache hit.
             let parts = SystemPrompt.split(r.system)
-            body["system"] = .array(parts.map { ["type": "text", "text": .string($0), "cache_control": ["type": "ephemeral"]] })
+            body["system"] = .array(parts.map { part -> JSON in
+                var o: [String: JSON] = ["type": "text", "text": .string(part)]
+                if r.cache { o["cache_control"] = ["type": "ephemeral"] }
+                return .object(o)
+            })
         }
         if !r.tools.isEmpty {
             var tools: [JSON] = r.tools.map { t in
@@ -194,7 +198,7 @@ struct AnthropicClient: LLMClient {
                 if isFirstParty { o["eager_input_streaming"] = true }
                 return .object(o)
             }
-            if case .object(var last) = tools[tools.count - 1] {
+            if r.cache, case .object(var last) = tools[tools.count - 1] {
                 last["cache_control"] = ["type": "ephemeral"]
                 tools[tools.count - 1] = .object(last)
             }
@@ -235,7 +239,7 @@ struct AnthropicClient: LLMClient {
                                                     "keep": ["type": "tool_uses", "value": 3], "clear_at_least": ["type": "input_tokens", "value": 6000],
                                                     "exclude_tools": .array(keepTools.map { .string($0) })]]]
         }
-        body["messages"] = .array(Self.convert(r.messages, model: r.model, toolset: isFirstParty && NativeComputerTool.declared(in: r.tools)))
+        body["messages"] = .array(Self.convert(r.messages, model: r.model, toolset: isFirstParty && NativeComputerTool.declared(in: r.tools), cache: r.cache))
         return .object(body)
     }
 
@@ -259,7 +263,7 @@ struct AnthropicClient: LLMClient {
 
     /// `toolset`: the request declares Anthropic's computer toolset, so its calls replay as members (left_click…) with
     /// `toolset_name`; otherwise they go back as ordinary `computer` calls.
-    static func convert(_ messages: [ChatMessage], model: String, toolset: Bool = false) -> [JSON] {
+    static func convert(_ messages: [ChatMessage], model: String, toolset: Bool = false, cache: Bool = true) -> [JSON] {
         var out: [(role: String, content: [JSON])] = []
         var toolsetCalls = Set<String>()   // their results must echo toolset_name
         for m in messages {
@@ -305,7 +309,7 @@ struct AnthropicClient: LLMClient {
         // Anthropic requires the first message to be from the user.
         if out.first?.role == "assistant" { out.insert(("user", [["type": "text", "text": "(continue)"]]), at: 0) }
         // Cache breakpoint on the final block of the conversation so the next turn reuses the prefix.
-        if var last = out.last, case .object(var lb) = last.content[last.content.count - 1] {
+        if cache, var last = out.last, case .object(var lb) = last.content[last.content.count - 1] {
             lb["cache_control"] = ["type": "ephemeral"]
             last.content[last.content.count - 1] = .object(lb)
             out[out.count - 1] = last

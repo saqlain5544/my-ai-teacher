@@ -294,8 +294,8 @@ struct StudyProgressView: View {
                         }
                     }
                 }
-                section("Learning plans") {
-                    if plans.isEmpty { Text("Ask your teacher to “make a learning plan” for a bigger goal.").foregroundStyle(.secondary) }
+                section("Course boards") {
+                    if plans.isEmpty { Text("Ask your teacher to “make a course board” for a bigger goal, like an exam or a project.").foregroundStyle(.secondary) }
                     ForEach(plans) { p in planCard(p) }
                 }
                 section("Model usage (30 days)") {

@@ -52,6 +52,8 @@ final class Workspace: @unchecked Sendable, Identifiable {
     var name: String { url.path == AppPaths.quickFolder.path ? "Quick questions" : url.lastPathComponent }
     var outputsDir: URL { stateDir.appendingPathComponent("outputs", isDirectory: true) }
     var attachmentsDir: URL { stateDir.appendingPathComponent("attachments", isDirectory: true) }
+    /// Tests the agent writes for the learner's work; the only `.teacher/` folder it may write to.
+    var testsDir: URL { stateDir.appendingPathComponent("tests", isDirectory: true) }
 
     init(url: URL) throws {
         self.url = url.standardizedFileURL
@@ -64,8 +66,10 @@ final class Workspace: @unchecked Sendable, Identifiable {
         // learner's own `git add -A`); the code agent's project memory and the learner's own sub-agent types
         // (`agents/*.md`) are worth versioning, so they stay visible.
         let ignore = stateDir.appendingPathComponent(".gitignore")
-        if !fm.fileExists(atPath: ignore.path) {
-            try? "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n!agents/\n!agents/*.md\n".write(to: ignore, atomically: true, encoding: .utf8)
+        let rules = "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n!agents/\n!agents/*.md\n!tests/\n!tests/**\n"
+        if !fm.fileExists(atPath: ignore.path) { try? rules.write(to: ignore, atomically: true, encoding: .utf8) }
+        else if let text = try? String(contentsOf: ignore, encoding: .utf8), !text.contains("!tests/") {
+            try? (text.hasSuffix("\n") ? text : text + "\n").appending("!tests/\n!tests/**\n").write(to: ignore, atomically: true, encoding: .utf8)
         }
         let readme = stateDir.appendingPathComponent("README.md")
         if !fm.fileExists(atPath: readme.path) {
@@ -73,8 +77,8 @@ final class Workspace: @unchecked Sendable, Identifiable {
             # .teacher
 
             State for **My AI Teacher** in this folder: lessons (`state.sqlite`), memories about this folder,
-            and tool outputs. Safe to delete — the teacher will start fresh here. Permissions are stored in
-            the app, not in this folder.
+            tool outputs, and the tests the teacher writes for your work (`tests/`, versioned with the project).
+            Safe to delete the rest — the teacher will start fresh here. Permissions are stored in the app, not here.
             """.utf8).write(to: readme)
         }
         db = try Database(path: stateDir.appendingPathComponent("state.sqlite").path)
@@ -85,6 +89,7 @@ final class Workspace: @unchecked Sendable, Identifiable {
 
     func contains(_ u: URL) -> Bool { u.isInside(url) }
     func isStatePath(_ u: URL) -> Bool { u.isInside(stateDir) }
+    func isTestsPath(_ u: URL) -> Bool { u.isInside(testsDir) }
 }
 
 extension URL {

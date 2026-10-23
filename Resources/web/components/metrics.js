@@ -3,7 +3,9 @@
   'use strict';
   const R = window.TeacherUI;
   const open = new Set();
-  const k = n => n == null ? '—' : n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));
+  // 950 · 12.4k · 3.61M: large counts in millions, never "3609.8k".
+  const k = n => n == null ? '—' : n >= 1e7 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M'
+    : n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));
   const sec = s => s == null ? '—' : s < 1 ? Math.round(s * 1000) + ' ms' : s < 60 ? s.toFixed(1) + ' s' : Math.floor(s / 60) + 'm ' + Math.round(s % 60) + 's';
   const tps = st => {
     const gen = (st.duration || 0) - (st.timeToFirstToken || 0);
@@ -26,7 +28,8 @@
     parts.push('<span title="Model">' + ctx.esc(last.model || m.model || '') + '</span>');
     parts.push('<span title="Total time for this reply">⏱ ' + sec(t.duration) + '</span>');
     if (speed) parts.push('<span title="Average decode speed (excludes time to first token)">⚡ ' + Math.round(speed) + ' tok/s</span>');
-    parts.push('<span title="Tokens (input + cached + output)">' + k(totalTok) + ' tokens' + (steps.some(s => s.usageEstimated) ? '*' : '') + '</span>');
+    const inTok = totalTok - (u.output || 0), est = steps.some(s => s.usageEstimated) ? '*' : '';
+    parts.push('<span title="Input tokens across every model call (including cached), and output tokens">' + k(inTok) + ' in · ' + k(u.output || 0) + ' out' + est + '</span>');
     if (t.tools && t.tools.length) parts.push('<span title="Tool calls">🔧 ' + t.tools.length + '</span>');
     if (t.steps > 1) parts.push('<span title="Model calls in this turn">' + t.steps + ' steps</span>');
     const chips = [];

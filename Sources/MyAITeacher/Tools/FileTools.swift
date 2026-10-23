@@ -80,12 +80,29 @@ struct WriteTool: Tool {
     }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let url = resolvePath(try input.req("path"), workspace: ctx.workspace)
-        let content = input["content"]?.string ?? ""
+        let (content, strayEOF) = HeredocSlip.strip(input["content"]?.string ?? "")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         let existed = FileManager.default.fileExists(atPath: url.path)
         try Data(content.utf8).write(to: url, options: .atomic)
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
-        return ToolOutput(text: "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines).", meta: ["path": .string(url.path)])
+        return ToolOutput(text: "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines)." + (strayEOF ? " " + HeredocSlip.note : ""),
+                          meta: ["path": .string(url.path)])
+    }
+}
+
+/// Models that usually write files with `cat > f <<'EOF'` sometimes end `write` or `run_code` content with the heredoc's
+/// terminator. A lone `EOF` last line in content with no heredoc of its own is never meant: it broke every file of a Zig
+/// project in a live lesson (`build.zig:50:1: error: file cannot be a tuple`) and two `run_code` compiles. Dropped, and
+/// the model is told, so it stops adding it.
+enum HeredocSlip {
+    static let note = "(A trailing `EOF` line was removed: `write` and `run_code` take the content itself, no heredoc terminator.)"
+    static func strip(_ content: String) -> (String, Bool) {
+        var lines = content.components(separatedBy: "\n")
+        while let l = lines.last, l.trimmingCharacters(in: .whitespaces).isEmpty, lines.count > 1 { lines.removeLast() }
+        guard let last = lines.last?.trimmingCharacters(in: .whitespaces), ["EOF", "'EOF'", "\"EOF\""].contains(last),
+              !content.contains("<<") else { return (content, false) }
+        lines.removeLast()
+        return (lines.joined(separator: "\n") + "\n", true)
     }
 }
 
@@ -93,38 +110,59 @@ struct EditTool: Tool {
     let name = "edit"
     let description = """
     Exact string replacement in a file. `old_string` must match the file exactly (including whitespace) and be unique \
-    unless `replace_all` is true. Read the file first. To create a new file use `write`.
+    unless `replace_all` is true. Several changes to one file: `edits` (applied in order, all or nothing). Read the file \
+    first. To create a new file use `write`.
     """
     let risk = ToolRisk.write
     var schema: JSON {
         Schema.object([
             "path": Schema.string("File path."),
-            "old_string": Schema.string("Exact text to replace."),
-            "new_string": Schema.string("Replacement text."),
+            "old_string": Schema.string("Exact text to replace (one change)."),
+            "new_string": Schema.string("Replacement text (one change)."),
             "replace_all": Schema.boolean("Replace every occurrence (default false)."),
-        ], required: ["path", "old_string", "new_string"])
+            "edits": Schema.array(Schema.object(["old_string": Schema.string("Exact text to replace."), "new_string": Schema.string("Replacement."),
+                                                 "replace_all": Schema.boolean("Every occurrence.")], required: ["old_string", "new_string"]),
+                                  "Several changes, applied in order; nothing is written unless every one applies."),
+        ], required: ["path"])
     }
+
+    /// One replacement applied to `content`, or why it can't be.
+    static func apply(_ content: String, old: String, new: String, all: Bool, n: Int?, file: String) -> (String?, String) {
+        let tag = n.map { "Edit \($0): " } ?? ""
+        guard !old.isEmpty else { return (nil, tag + "old_string must not be empty. Use `write` to create files.") }
+        guard old != new else { return (nil, tag + "old_string and new_string are identical.") }
+        let count = content.components(separatedBy: old).count - 1
+        if count == 0 { return (nil, tag + "old_string not found in \(file). Re-read the file and copy the text exactly.") }
+        if count > 1 && !all { return (nil, tag + "old_string occurs \(count) times. Add surrounding context to make it unique, or set replace_all.") }
+        if all { return (content.replacingOccurrences(of: old, with: new), "") }
+        let r = content.range(of: old)!
+        return (content.replacingCharacters(in: r, with: new), "")
+    }
+
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let url = resolvePath(try input.req("path"), workspace: ctx.workspace)
-        let old = input["old_string"]?.string ?? ""
-        let new = input["new_string"]?.string ?? ""
-        guard !old.isEmpty else { return .error("old_string must not be empty. Use `write` to create files.") }
-        guard old != new else { return .error("old_string and new_string are identical.") }
         guard let content = try? String(contentsOf: url, encoding: .utf8) else { return .error("Cannot read \(url.path).") }
-        let count = content.components(separatedBy: old).count - 1
-        if count == 0 { return .error("old_string not found in \(url.lastPathComponent). Re-read the file and copy the text exactly.") }
-        let all = input["replace_all"]?.bool ?? false
-        if count > 1 && !all {
-            return .error("old_string occurs \(count) times. Add surrounding context to make it unique, or set replace_all.")
+        var changes: [(old: String, new: String, all: Bool)] = (input["edits"]?.array ?? []).map {
+            ($0["old_string"]?.string ?? "", $0["new_string"]?.string ?? "", $0["replace_all"]?.bool ?? false)
         }
-        let updated: String
-        if all { updated = content.replacingOccurrences(of: old, with: new) }
-        else { let r = content.range(of: old)!; updated = content.replacingCharacters(in: r, with: new) }
+        if changes.isEmpty || input["old_string"]?.string != nil {
+            changes.insert((input["old_string"]?.string ?? "", input["new_string"]?.string ?? "", input["replace_all"]?.bool ?? false), at: 0)
+        }
+        var updated = content
+        for (k, c) in changes.enumerated() {
+            let (next, why) = Self.apply(updated, old: c.old, new: c.new, all: c.all, n: changes.count > 1 ? k + 1 : nil, file: url.lastPathComponent)
+            guard let next else { return .error(why + (changes.count > 1 ? " Nothing was changed." : "")) }
+            updated = next
+        }
         try Data(updated.utf8).write(to: url, options: .atomic)
-        // Small diff preview for the UI.
-        let line = content[..<content.range(of: old)!.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).count
-        return ToolOutput(text: "Edited \(url.path): replaced \(all ? count : 1) occurrence(s) near line \(line).",
-                          meta: ["path": .string(url.path), "old": .string(String(old.prefix(2000))), "new": .string(String(new.prefix(2000)))])
+        // Small diff preview for the UI (the first change).
+        let first = changes[0]
+        let line = content.range(of: first.old).map { content[..<$0.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).count } ?? 1
+        let summary = changes.count == 1 ? "replaced \(first.all ? max(1, content.components(separatedBy: first.old).count - 1) : 1) occurrence(s) near line \(line)"
+                                         : "applied \(changes.count) edits"
+        return ToolOutput(text: "Edited \(url.path): \(summary).",
+                          meta: ["path": .string(url.path), "old": .string(String(first.old.prefix(2000))), "new": .string(String(first.new.prefix(2000))),
+                                 "edits": .number(Double(changes.count))])
     }
 }
 

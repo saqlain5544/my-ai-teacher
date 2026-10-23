@@ -22,6 +22,7 @@
   const $$ = (sel, root) => Array.from((root || document).querySelectorAll(sel));
   const click = el => { ok(el, 'nothing to click'); el.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true })); };
   const lastPost = type => posts.filter(p => p.type === type).pop();
+  window.T.armDelay(0);
   const ERR = '.comp-error, .diagram-error, .math-error, .katex-error';
   const noErrors = (el, what) => { const e = $(ERR, el); ok(!e, (what || 'render') + ' shows an error: ' + (e && e.textContent.slice(0, 200))); };
 
@@ -283,6 +284,10 @@
     const blk = await until(() => { const b = $('.mermaid-block', el); return b && !b.hasAttribute('data-pending') && b; }, 'mermaid error', 8000);
     ok($('.diagram-error', blk), 'error box');
     ok(!$('body > [id^="dmmd"], body > svg[id^="mmd"]'), 'no stray mermaid nodes');
+    // When the reply finishes, the broken diagram is reported to the app (the teacher fixes it next time).
+    posts.length = 0; T.status('Thinking', true); T.status('', false);
+    const told = await until(() => lastPost('visualError'), 'diagram error reported', 4000);
+    ok(told.kind === 'mermaid' && /error/i.test(told.msg), JSON.stringify(told));
   });
 
   // ───────────── Plots and charts ─────────────
@@ -732,6 +737,73 @@
     ok(!d.open, 'collapsed after'); ok(/6 words/.test($('summary', d).textContent), 'word count: ' + $('summary', d).textContent);
   });
 
+  test('a step\'s thinking collapses when the next step starts streaming in a new message', async () => {
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    T.delta(a.id, 0, 'thinking', 'Plan the lookup in the source.\n\n\n\n\n\n'); await sleep(150);
+    const d = $('#m-' + a.id + ' details.thinking');
+    ok(d.open && d.classList.contains('live'), 'open while it streams');
+    const tb = $('.thinking-body', d);
+    ok(tb.textContent.trim() === 'Plan the lookup in the source.' && tb.children.length === 1, 'trailing blank lines are not shown: ' + JSON.stringify(tb.innerHTML));
+    // The step ends with a tool call; the next step streams in a new message.
+    const b = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next step.'); await sleep(150);
+    const d1 = $('#m-' + a.id + ' details.thinking');
+    ok(!d1.open && !d1.classList.contains('live'), 'the earlier step\'s thinking is collapsed and finished');
+    ok(/Thought process · 6 words/.test($('summary', d1).textContent), $('summary', d1).textContent);
+    ok($('#m-' + b.id + ' details.thinking').open, 'the new step streams open');
+    T.status('', false); await sleep(120);
+  });
+
+  test('thinking streams as markdown, the same way the reply does', async () => {
+    T.reset([U('q')], {});
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    T.delta(a.id, 0, 'thinking', '**Plan** the work.\n\n```python\nprint(1)\n```'); await sleep(150);
+    const d = $('#m-' + a.id + ' details.thinking');
+    ok(d && $('.thinking-body strong', d) && $('.thinking-body pre.thinking-code', d), 'formatted while it streams, fences as plain code');
+    // A long thought streams by segments: what's already finished keeps its nodes from frame to frame.
+    const long = Array.from({ length: 40 }, (_, i) => 'Step ' + i + ': **check** the window function against the RFC.').join('\n\n');
+    T.delta(a.id, 0, 'thinking', '\n\n' + long); await sleep(150);
+    const first = $('.thinking-body p', d);
+    T.delta(a.id, 0, 'thinking', '\n\nOne more.'); await sleep(150);
+    ok($('.thinking-body p', d) === first, 'finished segments are not re-rendered');
+    const body = $('.thinking-body', d); ok(body.scrollHeight - body.scrollTop - body.clientHeight < 30, 'pinned to the newest line');
+    T.delta(a.id, 1, 'text', 'Done.'); await sleep(150); T.status('', false); await sleep(120);
+    d.open = true; await sleep(80);
+    ok(!d.classList.contains('raw') && $('.thinking-body strong', d), 'markdown when opened after finishing');
+    ok($('.thinking-body pre.thinking-code', d), 'its code fence reads as plain code (no run button, no widget)');
+  });
+
+  test('reading back: a bounded page offers newer messages, and asks for them', () => {
+    posts.length = 0;
+    T.status('', false);
+    T.reset([U('old question'), A('old answer')], { earlier: 1200, newer: 4800 });
+    const nb = $('.newer [data-act="newer"]');
+    ok(nb && /4,800 more/.test(nb.textContent), 'a Show newer button with the count: ' + (nb && nb.textContent));
+    ok($('.earlier [data-act="older"]'), 'and Show earlier above');
+    ok(thread_last_is_newer(), 'the newer bar is at the bottom');
+    click(nb);
+    eq(lastPost('newer') && lastPost('newer').type, 'newer', 'asks for the newer page');
+    ok(nb.disabled, 'disabled while it loads');
+    T.reset([U('live')], {});
+    ok(!$('.newer'), 'the live window has no newer bar');
+    function thread_last_is_newer() { const t = document.getElementById('thread'); return t.lastElementChild && t.lastElementChild.classList.contains('newer'); }
+  });
+
+  test('text boxes opt out of writing suggestions (no Math Results in an attempt)', () => {
+    const el = show('```problem\n{"q": "What is 12 x 7?", "hints": ["Think 10 x 7 + 2 x 7"], "solution": "84", "answer": "84"}\n```');
+    const ta = $('.pb-attempt', el);
+    ok(ta, 'an attempt box');
+    eq([ta.getAttribute('writingsuggestions'), ta.getAttribute('autocorrect'), ta.getAttribute('autocomplete')], ['false', 'off', 'off']);
+    const b = { kind: 'toolUse', id: 'qz', name: 'ask_learner', input: { question: 'Your answer?', options: ['A'], allow_free_text: true } };
+    T.reset([U('q'), A([b])], {}); T.interaction({ id: 'qz', kind: 'ask', payload: { question: 'Your answer?', options: ['A'], allow_free_text: true } }, true);
+    const free = $('[data-tool-id="qz"] textarea');
+    ok(free && free.getAttribute('writingsuggestions') === 'false', 'a question card\'s free-text box too');
+    T.interaction({ id: 'qz' }, false);
+  });
+
   // ───────────── AST, registries and fallbacks ─────────────
   test('a message projects into typed nodes with stable ids and tool-result links', () => {
     const AST = window.TeacherAST;
@@ -873,6 +945,25 @@
     ok(/1 done/.test(body.textContent) && /1 parked/.test(body.textContent) && /due 2099-01-01/.test(body.textContent), 'pills: ' + body.textContent.slice(0, 200));
     ok(!body.textContent.includes('<lesson_state'), 'the raw state block is not shown to the learner');
     ok(!body.textContent.includes('plan-b1'), 'the id stays out of the title');
+  });
+  test('a board card shows each chapter\'s outline like a book\'s contents', () => {
+    const plan = { id: 'plan-o', title: 'Zig systems', focus: 'c1', cards: [
+      { id: 'c1', title: 'RESP server', lane: 'doing', at: '1.2', outline: [
+        { id: '1', title: 'RESP framing', points: ['types', 'CRLF'], sections: [{ id: '1.1', title: 'Simple strings', done: true }, { id: '1.2', title: 'Bulk strings' }] },
+        { id: '2', title: 'The store' }] },
+      { id: 'c2', title: 'Event loop', lane: 'backlog', outline: [{ id: '1', title: 'kqueue' }] }] };
+    const b = { kind: 'toolUse', id: 'tbo', name: 'lesson_plan', input: { action: 'outline', card: 'c1' } };
+    T.status('', false); T.reset([U('plan'), A([b]), R('tbo', 'lesson_plan', 'Outlined', { meta: { plan } })], {});
+    const body = $('[data-tool-id="tbo"] .body');
+    const focusOutline = $('.board-focus .board-outline-wrap', body);
+    ok(focusOutline && focusOutline.open, 'the focus chapter\'s outline is open');
+    ok(/1\/3 sections/.test($('summary', focusOutline).textContent), 'progress: ' + $('summary', focusOutline).textContent);
+    eq($$('.board-focus .board-outline li', body).length, 4, 'sections and subsections');
+    ok($('.board-focus li.now', body).textContent.includes('Bulk strings'), 'the current section is marked');
+    ok($('.board-focus li.done', body).textContent.includes('Simple strings'), 'finished ones are ticked');
+    ok($('.board-focus .bo-points', body).textContent.includes('CRLF'), 'points under a section');
+    const other = $('.board-backlog .board-outline-wrap', body);
+    ok(other && !other.open, 'other chapters are folded');
   });
   test('tool cards render for every built-in tool', () => {
     const calls = [
@@ -1066,29 +1157,39 @@
     T.interaction({ id: 'qh1' }, false); T.status('', false);
   });
 
-  test('exercise card: the brief and an editor button, never the hidden tests or solution', () => {
-    const input = { action: 'create', title: 'LRU cache', language: 'python', brief: 'Implement an **LRU cache** with O(1) `get` and `put`.',
-      files: { 'lru.py': 'class LRU: ...' }, tests: { 'test_lru.py': 'SECRET_TEST_ASSERTION' }, solution: { 'lru.py': 'SECRET_SOLUTION_CODE' }, test: 'python3 -m unittest' };
-    const a = A([{ kind: 'toolUse', id: 'ex1', name: 'exercise', input }]);
-    T.reset([U('set me a project'), a, R('ex1', 'exercise', 'Exercise ex-1 is open', { meta: { exercise: 'ex-1', title: 'LRU cache', folder: '/x/exercises/lru-cache' } })], {});
-    const card = $('[data-tool-id="ex1"]'); noErrors(card, 'exercise');
-    ok($('.exercise-card', card) && $('.exercise-card strong', card), 'brief rendered');
-    const html = document.body.innerHTML;
-    ok(!html.includes('SECRET_TEST_ASSERTION') && !html.includes('SECRET_SOLUTION_CODE'), 'hidden inputs never reach the page');
-    posts.length = 0; click($('[data-act="ex-open"]', card));
-    eq(lastPost('openExercise'), { type: 'openExercise', id: 'ex-1' });
-    posts.length = 0; click($('[data-act="ex-helix"]', card)); eq(lastPost('openHelix'), { type: 'openHelix', id: 'ex-1' });
-    click($('[data-act="ex-check"]', $('[data-tool-id="ex1"]'))); eq(lastPost('checkExercise'), { type: 'checkExercise', id: 'ex-1' });
-    // A setup that failed its own checks shows no output (it can quote the tests).
-    const b = A([{ kind: 'toolUse', id: 'ex2', name: 'exercise', input }]);
-    T.reset([U('q'), b, R('ex2', 'exercise', 'Your reference solution fails: AssertionError SECRET_TEST_ASSERTION', { isError: true })], {});
-    ok(!document.body.innerHTML.includes('SECRET_TEST_ASSERTION'), 'failed setup output hidden');
-    // Built in steps: adding hidden files shows a line, never the files; publishing shows the project from the result.
-    const c = A([{ kind: 'toolUse', id: 'ex3', name: 'exercise', input: { action: 'add', id: 'ex-2', part: 'solution', files: { 'a.py': 'SECRET_SOLUTION_CODE' } } },
-      { kind: 'toolUse', id: 'ex4', name: 'exercise', input: { action: 'publish', id: 'ex-2' } }]);
-    T.reset([U('q'), c, R('ex3', 'exercise', 'Added 1 file(s)'), R('ex4', 'exercise', 'open', { meta: { exercise: 'ex-2', title: 'Rate limiter', brief: 'A *token bucket*', folder: '/x' } })], {});
-    ok(!document.body.innerHTML.includes('SECRET_SOLUTION_CODE'), 'added hidden files never shown');
-    ok($('[data-tool-id="ex4"] .exercise-card em') && $('[data-tool-id="ex4"]').textContent.includes('Rate limiter'), 'published project card');
+  test('quiz: an exam case, "don\'t know yet", and a skip that says why', () => {
+    const input = { title: 'Incident', case: 'A service p99 jumps from **40 ms** to 900 ms after a deploy.', questions: [
+      { type: 'single_choice', prompt: 'First suspect?', options: ['GC', 'Lock contention'] }, { type: 'short_text', prompt: 'What do you measure?' }] };
+    const a = A([{ kind: 'toolUse', id: 'qk1', name: 'quiz', input }]);
+    T.status('Waiting', true); T.reset([U('q'), a], {});
+    T.interaction({ id: 'qk1', kind: 'quiz', payload: input }, true);
+    const card = () => $('[data-tool-id="qk1"]');
+    ok($('.quiz-case', card()) && $('.quiz-case', card()).textContent.includes('900 ms'), 'case shown above the questions');
+    // "Don't know yet" alone is enough to submit, and it reaches the app as certainty 0.
+    click($('[data-act="q-sure"][data-q="0"][data-v="0"]', card()));
+    posts.length = 0; click($('[data-act="q-submit"]', card()));
+    eq(lastPost('answer').value.certainty, [0, null], 'don\'t know sent');
+    // A fresh quiz: Skip asks why, and the reason goes with it.
+    const b = A([{ kind: 'toolUse', id: 'qk2', name: 'quiz', input }]);
+    T.reset([U('q'), b], {}); T.interaction({ id: 'qk2', kind: 'quiz', payload: input }, true);
+    const c2 = () => $('[data-tool-id="qk2"]');
+    posts.length = 0; click($('[data-act="q-skip"]', c2()));
+    ok(!lastPost('answer') && $$('[data-act="q-skip-why"]', c2()).length === 4, 'reasons offered, nothing sent yet');
+    click($('[data-act="q-skip-why"][data-v="too_easy"]', c2()));
+    eq(lastPost('answer').value, { cancelled: true, reason: 'too_easy' }, 'reason sent');
+    T.interaction({ id: 'qk2' }, false); T.status('', false);
+    T.reset([U('q'), b, R('qk2', 'quiz', 'The learner skipped the quiz — too easy. Raise the bar.', { isError: true })], {});
+    ok(c2().textContent.includes('Skipped — too easy.'), 'the reason stays visible');
+  });
+
+  test('components drafted in thinking stay text: no blank widget where the reasoning should be', async () => {
+    const thought = 'I will draw it.\n\n```visual\n<!-- title: Draft; height: 360 -->\n<canvas id="c"></canvas><script>c.getContext("2d")</script>\n```\n\n```mermaid\nflowchart TD\n  A --> B\n```\nThen the quiz:\n```problem\n{"q":"x?","solution":"y"}\n```';
+    const a = A([{ kind: 'thinking', text: thought }, { kind: 'text', text: 'Answer.' }]);
+    T.reset([U('q'), a], { showThinking: true });
+    const d = $('#m-' + a.id + ' details.thinking'); d.open = true; await sleep(80);
+    const body = $('.thinking-body', d);
+    ok(!$('iframe, .visual, .mermaid-block, .problem, .comp', body), 'no live components in thinking');
+    ok(body.innerText.includes('getContext') && body.innerText.includes('flowchart TD') && body.innerText.includes('I will draw it'), 'the drafts read as text');
   });
 
   test('a draft the self-check revised is collapsed, with what the review found', () => {
@@ -1097,6 +1198,7 @@
     const el = $('#m-' + draft.id);
     ok(el.classList.contains('superseded') && $('.draft-note', el), 'marked as a draft');
     ok(getComputedStyle($('.blocks', el)).display === 'none', 'collapsed');
+    const tail = $(':scope > .tail', el); ok(!tail || getComputedStyle(tail).display === 'none', 'no empty footer gap under the note');
     click($('[data-act="draft-toggle"]', el));
     ok(getComputedStyle($('.blocks', el)).display !== 'none' && el.textContent.includes('not x'), 'opens with the review notes');
   });
@@ -1122,6 +1224,35 @@
     const card = $('[data-tool-id="qz3"]'); noErrors(card, 'graded');
     ok($('.mis', card) && $('.mis', card).textContent.includes('multiplies the exponents'), 'mix-up shown');
     ok(card.textContent.includes('You were sure'), 'confident miss noted');
+  });
+
+  test('a quiz with nothing auto-graded says it went for review, not "Score 0 / 0"', () => {
+    const a = A([{ kind: 'toolUse', id: 'qz4', name: 'quiz', input: { questions: [{ type: 'free_text', prompt: 'Why?' }] } }]);
+    const graded = [{ correct: null, given: 'because', certainty: 2, hints: 0 }];
+    T.reset([U('q'), a, R('qz4', 'quiz', 'Answers', { meta: { graded, score: 0, total: 0 } })], {});
+    const card = $('[data-tool-id="qz4"]'); noErrors(card, 'review');
+    ok(!card.textContent.includes('Score: 0 / 0'), 'no empty score'); ok(card.textContent.includes('review'), 'review note');
+  });
+
+  test('a question that just appeared ignores a click meant for the card it replaced', () => {
+    window.T.armDelay(700);
+    try {
+      const a = A([{ kind: 'toolUse', id: 'ak9', name: 'ask_learner', input: { question: 'Which?', options: ['A', 'B'] } }]);
+      T.reset([U('q'), a], {});
+      T.interaction({ id: 'ak9', kind: 'ask_learner', payload: { question: 'Which?', options: ['A', 'B'] } }, true);
+      posts.length = 0; click($$('[data-act="ask-opt"]', $('[data-tool-id="ak9"]'))[0]);
+      ok(!lastPost('answer'), 'an instant click does not answer');
+    } finally { window.T.armDelay(0); }
+  });
+
+  test('the status pill steps aside while the question it announces is on screen', () => {
+    const a = A([{ kind: 'toolUse', id: 'ak7', name: 'ask_learner', input: { question: 'Which?', options: ['A', 'B'] } }]);
+    T.reset([U('q'), a], {}); T.status('Waiting for your answer…', true);
+    ok(!$('#status').classList.contains('tucked'), 'shown while nothing is pending');
+    T.interaction({ id: 'ak7', kind: 'ask_learner', payload: { question: 'Which?', options: ['A', 'B'] } }, true);
+    ok($('#status').classList.contains('tucked'), 'tucked while the card is visible');
+    T.interaction({ id: 'ak7' }, false);
+    ok(!$('#status').classList.contains('tucked'), 'back once answered'); T.status('', false);
   });
 
   test('ask_learner: quick options and free text', () => {
@@ -1171,6 +1302,8 @@
     const el = show('```visual\n<!-- title: Broken -->\n<script>undefinedFunction()</script>\n```');
     const err = await until(() => { const e = $('.visual-error', el); return e && !e.hidden && e; }, 'error bar', 6000);
     ok(/undefinedFunction/.test(err.textContent), 'message: ' + err.textContent);
+    const told = await until(() => lastPost('visualError'), 'reported to the app');
+    ok(told.title === 'Broken' && /undefinedFunction/.test(told.msg), 'the teacher hears about it: ' + JSON.stringify(told));
     posts.length = 0; click($('[data-act="visual-fix"]', el));
     ok(lastPost('suggest').text.includes('Broken'), 'fix request');
   });
@@ -1198,6 +1331,57 @@
     click($('#m-' + e.id + ' [data-act="retry"]')); eq(lastPost('retry').type, 'retry');
     const st = A([], { error: 'Stopped.' }); T.reset([U('q'), st], {});
     ok(!$('#m-' + st.id + ' .msg-error') && $('#m-' + st.id + ' .msg-stopped'), 'a stop is a quiet note, not an error');
+  });
+
+  test('large token counts read in millions, input and output apart', () => {
+    const u = { input: 169, output: 6402, cacheRead: 3609600 };
+    const a = A('Done', { metrics: { model: 'm', duration: 900, usage: u }, turn: { duration: 900, steps: 121, usage: u } });
+    T.reset([U('q'), a], {});
+    const line = $('#m-' + a.id + ' .meta-line').textContent;
+    ok(line.includes('3.61M in') && line.includes('6.4k out') && !/\d{4}\.\dk/.test(line), line);
+  });
+
+  test('welcome: a course in progress offers to continue, and says which board', () => {
+    T.reset([], { welcome: { title: 'Hi', suggestions: [{ title: 'Continue: TCP', subtitle: '1 of 2 done', prompt: 'Let us continue', board: 'plan-1' }, { title: 'New', prompt: 'x' }] } });
+    const c = $('.suggestion.continue'); ok(c && c.textContent.includes('Continue: TCP'), 'continue card first');
+    posts.length = 0; click(c);
+    eq(lastPost('suggest'), { type: 'suggest', text: 'Let us continue', board: 'plan-1' }, 'the board goes with it');
+    posts.length = 0; click($$('.suggestion')[1]); eq(lastPost('suggest'), { type: 'suggest', text: 'x' }, 'others unchanged');
+  });
+
+  test('components follow the agent tree: a fence the agent lacks reads as code', async () => {
+    const src = '```problem\n{"q":"2+2?","solution":"4"}\n```\n\n```chart\n{"type":"bar","labels":["a"],"series":[{"name":"s","data":[1]}]}\n```';
+    let a = A(src); T.reset([U('q'), a], { components: ['mermaid', 'chart'] });
+    let m = $('#m-' + a.id); await sleep(50);
+    ok(!$('.problem', m) && $('pre', m) && m.textContent.includes('"solution"'), 'problem is not this agent\'s: shown as source');
+    ok($('.chart, .comp canvas, .comp svg, [class*="chart"]', m), 'chart is');
+    a = A(src); T.reset([U('q'), a], {});
+    m = $('#m-' + a.id); await sleep(50);
+    ok($('.problem', m), 'no list: everything renders (and the cache did not keep the old choice)');
+  });
+
+  test('code views: a memory layout shows its padding, a file tree its notes', async () => {
+    const lay = '```layout\n{"name":"Header","size":24,"align":8,"fields":[{"name":"flag","type":"bool","offset":0,"size":1},{"name":"id","type":"u64","offset":8,"size":8},{"name":"score","type":"f32","offset":16,"size":4}]}\n```\n\n```tree\n["src/", "  main.zig  # entry point", "  soa.zig  # the container"]\n```';
+    const el = show(lay);
+    const box = await until(() => $('.comp.layout', el), 'layout loads lazily', 6000);
+    ok(/24 bytes/.test(box.textContent) && /11 B padding/.test(box.textContent), 'padding worked out from the offsets: ' + $('.lay-head', box).textContent);
+    eq($$('.lay-seg.pad', box).length, 2, 'a gap after flag and tail padding');
+    ok($('.lay-seg', box).style.flexGrow === '1', 'widths applied after the sanitizer');
+    const ft = await until(() => $('.comp.ftree', el), 'tree');
+    eq($$('.ft-row', ft).length, 3); ok($$('.ft-row', ft)[1].style.paddingLeft === '20px' && ft.textContent.includes('entry point'), 'depth and notes: ' + $$('.ft-row', ft).map(r => r.getAttribute('data-d') + '|' + r.style.paddingLeft).join(' ') + ' ' + ft.textContent);
+  });
+
+  test('tests card: failures open with their output; Run again asks the app and updates in place', async () => {
+    const meta = { passed: 1, total: 2, tests: [{ name: '01_push.sh', passed: true, seconds: 0.2, output: 'ok' }, { name: '02_pop.sh', passed: false, seconds: 0.3, output: 'expected 3, got 2', cases: { passed: 0, failed: 1 } }] };
+    const a = A([{ kind: 'toolUse', id: 'rt1', name: 'run_tests', input: { filter: 'pop' } }]);
+    T.reset([U('q'), a, R('rt1', 'run_tests', 'Tests: 1/2 passing', { meta })], {});
+    const card = () => $('[data-tool-id="rt1"]');
+    ok(card().textContent.includes('1 of 2 passing') && card().textContent.includes('expected 3, got 2'), 'the failure shows its output');
+    posts.length = 0; click($('[data-act="tests-rerun"]', card()));
+    eq(lastPost('runTests'), { type: 'runTests', id: 'rt1', input: { command: null, path: null, filter: 'pop' } }, 'the same tests, run by the app');
+    window.TeacherTests.update('rt1', { passed: 2, total: 2, tests: [{ name: '01_push.sh', passed: true, seconds: 0.1 }, { name: '02_pop.sh', passed: true, seconds: 0.1 }] });
+    await sleep(30);
+    ok(card().textContent.includes('2 of 2 passing') && card().textContent.includes('re-run by you'), 'updated in place: ' + card().textContent.slice(0, 120));
   });
 
   test('metrics footer expands', () => {

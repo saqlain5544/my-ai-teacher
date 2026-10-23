@@ -372,7 +372,9 @@ struct AskLearnerTool: Tool {
     Show interactive questions in the chat and WAIT for the learner. Quick choice: `question` + `options`. \
     Form: `questions` (any type). Set `graded: true` for a quiz: include `answer`s; the app auto-grades \
     (choice, true/false, numeric, short text, blanks, ordering, matching, symbolic math), updates mastery, and returns \
-    long text/code/drawings for you to grade. Use for diagnostics, choices, practice (aim ~85% success) and reflection.
+    long text/code/drawings for you to grade. Use for diagnostics, choices, practice and reflection. A test reads like a \
+    real exam: a `case` (a realistic scenario, code, data or a passage) that the questions refer to, needing reading and \
+    reasoning rather than recall; a few questions, each worth answering. Refused while the learner has quizzes off.
     """
     let risk = ToolRisk.interactive
     var schema: JSON {
@@ -384,6 +386,7 @@ struct AskLearnerTool: Tool {
             "title": Schema.string("Form title."),
             "graded": Schema.boolean("Quiz mode: auto-grade with `answer`s."),
             "subject": Schema.string("Subject (graded)."),
+            "case": Schema.string("Markdown shown above the questions: the whole scenario, code, data or passage they refer to, in full (exam style; not a pointer to your reply)."),
             "questions": ["type": "array", "items": Questions.schema(graded: true)],
         ])
     }
@@ -392,6 +395,7 @@ struct AskLearnerTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let hasForm = !(input["questions"]?.array ?? []).isEmpty, hasQuick = !(input["question"]?.string ?? "").isEmpty
         if input["graded"]?.bool == true, hasForm { return try await QuizTool().run(input, ctx) }
+        if input["graded"]?.bool == true, !ctx.quizzes { return .error(Testing.refusal) }
         // Some models send `graded` with no questions, or nothing at all: say exactly what to send (they repeat a bare error).
         guard hasForm || hasQuick else { return .error(Questions.missingQuestions) }
         var payload = input.object ?? [:]
@@ -401,7 +405,7 @@ struct AskLearnerTool: Tool {
             payload["questions"] = .array(Questions.normalize(qs).map(Questions.publicView))
         }
         let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "ask", conversationID: ctx.conversationID, payload: .object(payload))
-        if reply["cancelled"]?.bool == true { return .error("The learner dismissed the question.") }
+        if reply["cancelled"]?.bool == true { return .error(Testing.skipped("question", reason: reply["reason"]?.string)) }
         if let qs = input["questions"]?.array {
             let norm = Questions.normalize(qs)
             let answers = reply["answers"]?.array ?? []
@@ -425,28 +429,31 @@ struct QuizTool: Tool {
     let description = """
     Show a graded interactive quiz in the chat and WAIT for the answers. Auto-grades single/multiple choice, true/false, \
     numeric, short text (accepted answers), fill-in-the-blanks, ordering, matching and math (symbolic equivalence via SymPy); \
-    returns long text, code and drawings for you to grade. Results update concept mastery. 1-6 questions targeted at what \
-    was just taught; mix types and difficulty (aim ~85% success).
+    returns long text, code and drawings for you to grade. Results update concept mastery. Like a real exam: a `case` \
+    (a realistic scenario, code, data or a passage) the questions refer to, needing reading and reasoning rather than \
+    recall; 2-6 questions on what was just taught, each worth answering. Refused while the learner has quizzes off.
     """
     let risk = ToolRisk.interactive
     var schema: JSON {
         Schema.object([
             "title": Schema.string("Quiz title."),
             "subject": Schema.string("Subject, e.g. algebra."),
+            "case": Schema.string("Markdown shown above the questions: the whole scenario, code, data or passage they refer to, in full (not a pointer to your reply)."),
             "questions": Schema.array(Questions.schema(graded: true), "Questions."),
         ], required: ["title", "questions"])
     }
     func summary(_ input: JSON) -> String { input["title"]?.string ?? "Quiz" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        guard ctx.quizzes else { return .error(Testing.refusal) }
         let questions = Questions.normalize(input["questions"]?.array ?? [])
         guard !questions.isEmpty else { return .error(Questions.missingQuestions) }
         let errs = Questions.validate(questions, graded: true)
         if !errs.isEmpty { return .error("Fix the quiz and call it again:\n" + errs.joined(separator: "\n")) }
-        let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null,
+        let payload: JSON = ["title": input["title"] ?? "Quiz", "subject": input["subject"] ?? .null, "case": input["case"] ?? .null,
                              "questions": .array(questions.map(Questions.publicView)), "graded": true]
         let reply = await ctx.interactions.request(id: ctx.toolCallID, kind: "quiz", conversationID: ctx.conversationID, payload: payload)
-        if reply["cancelled"]?.bool == true { return .error("The learner skipped the quiz.") }
+        if reply["cancelled"]?.bool == true { return .error(Testing.skipped("quiz", reason: reply["reason"]?.string)) }
         let answers = reply["answers"]?.array ?? []
         // Per question: hints the learner opened (the app also opens one when they're stuck) and how sure they were.
         let hintsOpened = reply["hints"]?.array ?? [], certainties = reply["certainty"]?.array ?? []
@@ -457,10 +464,17 @@ struct QuizTool: Tool {
         var autoTotal = 0
         var lines: [String] = []
         var wrong = 0, hinted = 0
-        var sureButWrong: [String] = [], luckyGuesses: [String] = [], missedAgain: [String] = []
+        var sureButWrong: [String] = [], luckyGuesses: [String] = [], missedAgain: [String] = [], unknown: [String] = []
         let missedBefore = study.missedInLesson(ctx.conversationID)
         for (i, q) in questions.enumerated() {
             let a = answers[safe: i] ?? .null
+            // "Don't know yet" (certainty 0): a gap to teach, not a mistake. Nothing is graded or recorded.
+            if certainties[safe: i]?.int == 0 {
+                unknown.append("Q\(i + 1)" + (q["concept"]?.string.map { " (\($0))" } ?? ""))
+                lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(q["concept"]?.string.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   → 🤷 the learner doesn't know this yet")
+                graded.append(["correct": .null, "unknown": true, "explanation": q["explanation"] ?? .null, "answer": q["answer"] ?? .null, "given": a])
+                continue
+            }
             var g = await Questions.grade(q, answer: a)
             let mis = g.correct == true ? nil : Questions.misconception(q, answer: a)
             if mis != nil, g.correct == nil { g.correct = false; g.score = 0 }   // a tagged wrong answer needs no judgement
@@ -511,20 +525,24 @@ struct QuizTool: Tool {
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
         text += "\n" + lines.joined(separator: "\n")
         text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
-                                            ungraded: questions.count - autoTotal)
+                                            ungraded: questions.count - autoTotal - unknown.count, unknown: unknown)
         return ToolOutput(text: text, images: Questions.images(from: answers),
                           meta: ["graded": .array(graded), "score": .number((score * 10).rounded() / 10), "total": .number(Double(autoTotal))])
     }
 
     /// What to do with the result: a first mistake is corrected now with a retry; a concept missed again in the same lesson
     /// gets a worked example instead of yet another quiz (more questions alone don't help a learner who lacks the method).
-    static func feedbackSteps(wrong: Int, missedAgain: [String] = [], sureButWrong: [String], luckyGuesses: [String], hinted: Int, ungraded: Int = 0) -> String {
+    static func feedbackSteps(wrong: Int, missedAgain: [String] = [], sureButWrong: [String], luckyGuesses: [String], hinted: Int, ungraded: Int = 0,
+                              unknown: [String] = []) -> String {
         var s: [String] = []
+        if !unknown.isEmpty {
+            s.append("\(unknown.joined(separator: ", ")): the learner doesn't know this yet — a gap to teach, not a mistake. Teach it properly (the mechanism, a worked example, a visual) before testing it again, later and in a new context.")
+        }
         if ungraded > 0 {
-            s.append("Grade the 📝 answers yourself and record each with `mastery` (concept, correct). A wrong one is a mistake like any other: name the misconception, then one near-identical retry; if the learner's answers make no sense, ask what they meant before quizzing again.")
+            s.append("Grade the 📝 answers yourself and record each with `mastery` (concept, correct). A wrong one is a mistake like any other: name the misconception and teach the gap behind it; if the learner's answers make no sense, ask what they meant.")
         }
         if wrong > 0 {
-            s.append("For each ❌: say what the learner most likely believed (the misconception named above, if any), why it's tempting, and the fix in a sentence or two. Then give ONE near-identical retry per mistake (same concept, new numbers or wording) with `ask_learner` (graded) before moving on.")
+            s.append("For each ❌: say what the learner most likely believed (the misconception named above, if any), why it's tempting, and the fix. A slip needs only that. A mistake that shows a gap in understanding needs teaching first (a new angle, a worked example), not another question. Then move on: check the point again later in the lesson, in a new context — never quiz the same point twice in a row.")
         }
         if !missedAgain.isEmpty {
             s.append("\(missedAgain.joined(separator: ", ")): missed again in this lesson. Don't quiz it again in this turn: teach it with one worked example, step by step, then ask the learner to explain the key step back in their own words, and end your turn. Try a fresh question later.")

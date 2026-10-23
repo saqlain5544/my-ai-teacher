@@ -53,9 +53,24 @@
     return html;
   }
 
+  /** A card's outline as a nested table of contents (a chapter of the course book): ticks for finished sections, the
+   *  current one marked. Open for the focus card, folded for the others. */
+  function outlineHTML(sections, at, ctx) {
+    return '<ol class="board-outline">' + (sections || []).map(s => '<li class="' + (s.done ? 'done' : '') + (s.id === at ? ' now' : '') + '">' +
+      '<span class="bo-id">' + ctx.esc(s.id) + '</span>' + ctx.inline(String(s.title || '').replace(/^\s*(§\s*)?\d+(\.\d+)*[.):]?\s+(?=\S)/, '')) +
+      ((s.points || []).length ? '<div class="bo-points">' + s.points.map(p => ctx.inline(p)).join(' · ') + '</div>' : '') +
+      ((s.sections || []).length ? outlineHTML(s.sections, at, ctx) : '') + '</li>').join('') + '</ol>';
+  }
+  function leaves(sections) { return (sections || []).flatMap(s => (s.sections || []).length ? leaves(s.sections) : [s]); }
+
   /** The course board: the focus card first (title + the concrete next action), then the lanes; parked detours last. */
   function boardBody(bd, ctx) {
     const esc = ctx.esc, inline = ctx.inline;
+    const outline = (c, open) => {
+      if (!(c.outline || []).length) return '';
+      const ls = leaves(c.outline), done = ls.filter(s => s.done).length;
+      return '<details class="board-outline-wrap"' + (open ? ' open' : '') + '><summary>' + done + '/' + ls.length + ' sections</summary>' + outlineHTML(c.outline, c.at, ctx) + '</details>';
+    };
     const cards = bd.cards || [];
     const title = String(bd.title || 'Course board').replace(/\s*\[plan-[0-9a-z]+\]\s*$/i, '');
     const course = cards.filter(c => c.lane !== 'parked');
@@ -74,7 +89,8 @@
       html += '<div class="board-focus"><div class="board-lane-name">Focus</div><div class="board-focus-title">' + id(focus) + inline(focus.title || '') + '</div>' +
         '<div class="board-next">' + (focus.next ? '<b>Next</b> ' + inline(focus.next) : '<span class="board-nonext">next action not set</span>') + '</div>' +
         ((focus.objectives || []).length ? '<ul class="plan-objs">' + focus.objectives.map(o => '<li>' + inline(String(o)) + '</li>').join('') + '</ul>' : '') +
-        ((focus.evidence || []).length ? '<div class="board-evidence">' + inline(focus.evidence.slice(-2).join(' · ')) + '</div>' : '') + '</div>';
+        ((focus.evidence || []).length ? '<div class="board-evidence">' + inline(focus.evidence.slice(-2).join(' · ')) + '</div>' : '') +
+        outline(focus, true) + '</div>';
     }
     const lanes = [['review', 'Review'], ['backlog', 'Up next'], ['done', 'Done']];
     for (const [lane, name] of lanes) {
@@ -86,7 +102,7 @@
         (c.next && lane !== 'done' ? '<div class="board-cnext">' + inline(c.next) + '</div>' : '') +
         (c.after && c.after.length && lane !== 'done' ? '<div class="board-after">after ' + esc(c.after.map(a => String(a).toUpperCase()).join(', ')) + '</div>' : '') +
         (lane === 'done' && (c.evidence || []).length ? '<div class="board-evidence">' + inline(c.evidence[c.evidence.length - 1]) + '</div>' : '') +
-        '</div></li>').join('') + '</ol></div>';
+        outline(c, false) + '</div></li>').join('') + '</ol></div>';
     }
     if (parked.length) {
       html += '<details class="board-parked"><summary>Parked · ' + parked.length + '</summary><ul class="board-parked-list">' + parked.map(c =>

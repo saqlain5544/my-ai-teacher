@@ -58,6 +58,19 @@ final class FuzzyTests: XCTestCase {
 final class DeepSeekTests: XCTestCase {
     private let ds = ProviderCatalog.presets.first { $0.id == "deepseek" }!
 
+    func testOneOffCallsDoNotWritePromptCaches() {
+        let p = ProviderCatalog.presets.first { $0.id == "anthropic" }!
+        let c = AnthropicClient(config: p, apiKey: nil)
+        var r = LLMRequest(model: "claude-opus-4-8", system: "shared instructions\n\n# Environment\nfolder",
+                           messages: [ChatMessage(role: .user, blocks: [.text("hi")])])
+        let cached = c.buildBody(r)
+        XCTAssertNotNil(cached["system"]?[0]?["cache_control"], "the lesson's own call caches")
+        r.cache = false
+        let oneOff = c.buildBody(r)
+        XCTAssertNil(oneOff["system"]?[0]?["cache_control"], "a plan/review/summary call writes no entry it can never read")
+        XCTAssertNil(oneOff["messages"]?[0]?["content"]?[0]?["cache_control"])
+    }
+
     func testThinkingOffIsExplicitAndOnCarriesEffort() {
         let c = OpenAIClient(config: ds, apiKey: nil)
         var r = LLMRequest(model: "deepseek-chat", system: "", messages: [ChatMessage(role: .user, blocks: [.text("hi")])])

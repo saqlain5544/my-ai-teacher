@@ -86,28 +86,22 @@ A learner model rather than a chat log:
 You can see and edit all of it in **Memory**. **Progress** shows your activity, mastery, a confidence check (how often
 you're right when you're sure) and what's coming back for review.
 
-### A code mentor that never writes your code
+### A code mentor that builds with you
 In **Code mentor** mode you learn by building real software, not toy snippets.
 
 * **Lessons designed first.** Before teaching, the mentor makes a hidden lesson design: the real system the topic comes
   from (nginx's `limit_req`, Redis eviction, Git's object store, …), the concepts with analogies and where they break,
   and what to read. It then reads the real docs and source, builds and runs working examples, and only then writes the
   lesson. Every example in it has actually run.
-* **Exercises in your own editor.** Each exercise card has **Open in Helix**, which opens the project in Helix in
-  Ghostty, Alacritty or Terminal. When you're done, **Check my work** runs the hidden tests on your saved files and the
-  mentor reviews them.
-
-* **The project.** The mentor sets a multi-file project in your folder (`exercises/<name>/`). It might be a CLI tool, a
-  parser, a cache or a data pipeline, always at the edge of what you can do.
-* **The editor.** Work in CodeMirror, in the right panel or its own window: Run, Test and Submit.
-* **Hidden tests.** They're checked against the mentor's own hidden reference solution before you see the project. You
-  only ever see what the tests print.
-* **The sandbox.** Your code runs on your Mac, with no network, writes only inside a temporary run folder, and no access
-  to the app's data.
-* **The review.** Submitting sends your work to the mentor, who reviews it like a demanding senior engineer: free-form,
-  pointing at your lines, with questions and hints.
-* **No writing, no revealing.** The mentor can't write to your project, and any reply that repeats the solution is
-  withheld.
+* **A real project in your folder.** The mentor creates the starter files — real structure, interfaces, TODOs, never the
+  solution — and writes the tests to `.teacher/tests`, versioned with the project. It might be a CLI tool, a parser, a
+  cache or a data pipeline, always at the edge of what you can do.
+* **Your own editor.** There is no built-in editor: use Helix, VS Code, Zed, Xcode, anything. The files are right there
+  in the folder; save, then ask the mentor to check. `bash` runs the tests and the mentor reads your changes.
+* **The review.** Like a demanding senior engineer: correctness, design, naming, edge cases, complexity, the tests you
+  should add, pointing at your lines — with questions and hints rather than code.
+* **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
+  teaches with questions, targeted hints and concepts so you find the fix.
 
 ### A coding agent too
 **Code sessions** work in a folder, much like Claude Code:

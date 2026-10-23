@@ -60,28 +60,29 @@ final class IntelligenceTests: XCTestCase {
     }
 }
 
-/// The code mentor designs, researches and tests a lesson before teaching it; the learner works in Helix.
+/// The code mentor designs, researches and tests a lesson before teaching it; the learner works in their own editor.
 final class MentorLessonTests: XCTestCase {
     func testTheMentorDesignsTheLessonFirst() {
         let ask = DeepWork.planRequest(.code)
-        for part in ["Real system", "Concepts", "analogy", "Research", "Working examples", "Exercises", "Pitfalls"] { XCTAssertTrue(ask.contains(part), part) }
+        for part in ["Real system", "Concepts", "analogy", "Research", "Working examples", "Projects", ".teacher/tests", "Pitfalls"] { XCTAssertTrue(ask.contains(part), part) }
         XCTAssertEqual(DeepWork.planRequest(.tutor), DeepWork.planRequest, "other modes keep the general plan")
         let note = DeepWork.planNote("Real system: Redis eviction", mode: .code)
-        XCTAssertTrue(note.contains("working examples with `run_code`") && note.contains("Helix") && note.contains("Never show solutions"), note)
+        XCTAssertTrue(note.contains("working examples with `run_code`") && note.contains("`.teacher/tests`") && note.contains("Never show solutions"), note)
         let prompt = SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m")
-        XCTAssertTrue(prompt.contains("design each lesson before teaching it") && prompt.contains("Helix"))
+        XCTAssertTrue(prompt.contains("design the lesson from the real system") && prompt.contains("`.teacher/tests`") && prompt.contains("own editor"), prompt)
     }
 
-    func testHelixOpensInTheLearnersTerminal() {
-        let dir = URL(fileURLWithPath: "/Users/x/AI Teacher Workspace/exercises/lru cache")
-        let script = URL(fileURLWithPath: "/tmp/h.command")
-        XCTAssertEqual(ExternalEditor.launch(helix: "/opt/homebrew/bin/hx", dir: dir, terminal: "/Applications/Ghostty.app", script: script).arguments,
-                       ["-na", "/Applications/Ghostty.app", "--args", "--working-directory=\(dir.path)", "-e", "/opt/homebrew/bin/hx", "."])
-        XCTAssertEqual(ExternalEditor.launch(helix: "/opt/homebrew/bin/hx", dir: dir, terminal: "/Applications/Alacritty.app", script: script).arguments,
-                       ["-na", "/Applications/Alacritty.app", "--args", "--working-directory", dir.path, "-e", "/opt/homebrew/bin/hx", "."])
-        XCTAssertEqual(ExternalEditor.launch(helix: "hx", dir: dir, terminal: "/System/Applications/Utilities/Terminal.app", script: script).arguments,
-                       ["-a", "/System/Applications/Utilities/Terminal.app", "/tmp/h.command"])
-        XCTAssertEqual(ExternalEditor.script(helix: "/opt/homebrew/bin/hx", dir: URL(fileURLWithPath: "/tmp/it's here")),
-                       "#!/bin/zsh -l\ncd '/tmp/it'\\''s here' && exec '/opt/homebrew/bin/hx' .\n", "quotes survive")
+    func testTheMentorWorksInTheFolderWithTestsInTheTeacherDirectory() {
+        let tools = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).map(\.name))
+        for t in ["write", "edit", "bash", "read"] { XCTAssertTrue(tools.contains(t), "\(t) in \(tools)") }
+        XCTAssertFalse(tools.contains("exercise"), "the exercise subsystem is gone")
+        let lesson = URL(fileURLWithPath: "/tmp/mentor-lesson-\(UUID().uuidString.prefix(6))")
+        let scope = AgentScope(type: "coder", tools: ["write"], readOnly: false, root: lesson, folderName: "lesson")
+        let grants = LessonGrants(access: .full)
+        func decision(_ path: String) -> ToolDecision {
+            SubAgentPolicy.decide(WriteTool(), ["path": .string(path), "content": .string("x")], scope: scope, grants: grants)
+        }
+        if case .deny(let why) = decision(".teacher/tests/check.py") { XCTFail("tests must be writable: \(why)") }
+        if case .allow = decision(".teacher/state.sqlite") { XCTFail("the rest of .teacher stays private") }
     }
 }

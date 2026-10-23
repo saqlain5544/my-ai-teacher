@@ -32,7 +32,7 @@ struct Composer: View {
                     }
                 }
                 HStack(alignment: .bottom, spacing: 8) {
-                    Button(action: pickFiles) { Image(systemName: "paperclip") }
+                    Button(action: pickFiles) { Image(systemName: "paperclip").accessibilityLabel("Attach files") }
                         .buttonStyle(.borderless).help("Attach images, PDFs or files")
                         .padding(.bottom, 4)
                     GrowingTextView(text: $session.draft, height: $height,
@@ -51,18 +51,18 @@ struct Composer: View {
                     } label: {
                         Image(systemName: speech.isListening ? "mic.fill" : "mic").foregroundStyle(speech.isListening ? .red : .secondary)
                     }
-                    .buttonStyle(.borderless).help("Dictate").padding(.bottom, 4)
+                    .buttonStyle(.borderless).accessibilityLabel(speech.isListening ? "Stop dictation" : "Dictate").help("Dictate").padding(.bottom, 4)
                     if session.isRunning {
                         Button { session.stop() } label: {
                             Image(systemName: "stop.circle.fill").font(.system(size: 22))
                         }
-                        .buttonStyle(.borderless).help("Stop (⌘.)").keyboardShortcut(".", modifiers: .command)
+                        .buttonStyle(.borderless).accessibilityLabel("Stop generating").help("Stop (⌘.)").keyboardShortcut(".", modifiers: .command)
                     } else {
                         Button(action: send) {
                             Image(systemName: "arrow.up.circle.fill").font(.system(size: 22))
                                 .foregroundStyle(canSend ? Color.accentColor : Color.secondary.opacity(0.5))
                         }
-                        .buttonStyle(.borderless).disabled(!canSend).help("Send (Return)")
+                        .buttonStyle(.borderless).disabled(!canSend).accessibilityLabel("Send").help("Send (Return)")
                     }
                 }
             }
@@ -131,7 +131,11 @@ struct Composer: View {
         if panel.runModal() == .OK { Self.attach(panel.urls, to: session) }
     }
 
-    static func short(_ n: Int) -> String { n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)" }
+    /// 950, 12.4k, 3.61M: large counts in millions, never "3609.8k".
+    static func short(_ n: Int) -> String {
+        if n >= 1_000_000 { return String(format: n >= 10_000_000 ? "%.1fM" : "%.2fM", Double(n) / 1_000_000) }
+        return n >= 1000 ? String(format: "%.1fk", Double(n) / 1000) : "\(n)"
+    }
 
     // MARK: Attachments
 

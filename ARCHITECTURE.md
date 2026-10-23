@@ -58,7 +58,15 @@ reasoning disabled explicitly; models that require it fall back to low effort (l
 
 Prompt caching: the system prompt starts with instructions identical across lessons; lesson context (date, memory,
 folder) comes after `# Environment`. Anthropic-format requests send them as two cached blocks plus tools and the last
-message as breakpoints; other providers cache the shared prefix implicitly.
+message as breakpoints; other providers cache the shared prefix implicitly. The plan, review and compaction-summary calls
+opt out (`LLMRequest.cache = false`): their prefixes can never be read back, so their cache writes were pure cost. Their
+usage is counted in the turn, the lesson and the usage log, so the cost dashboard is not 30–100% short.
+
+Per-turn hidden context (`<context>` memory recall, the plan, revision notes) is marked `ephemeral`: after its turn,
+microcompaction stubs it like a bulky tool result instead of re-sending it for the rest of the lesson. Token estimates are
+script-aware (CJK/kana/Hangul ≈ 1 token per character, Latin ¼), because `chars / 4` under-counted a Japanese lesson 4–6×
+and let requests run past the budget before compaction fired. The lesson window is also trimmed at load, and
+`windowTrim` always makes progress when one long turn exceeds the window.
 
 | Measured (free model `minimax-m3.1-flash:free`, OpenRouter) | Before | After |
 |---|---|---|
@@ -90,8 +98,19 @@ rewording the tool mattered more than placement (fence 2/3 in both arms), so **d
 WebKit renders the transcript in its own GPU-accelerated process; visuals run in sandboxed frames inside it.
 NaturalLanguage (embeddings, language ID), Speech and the on-device language model (titles, ~0.5 s) run locally on the
 Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a background queue; SQLite uses WAL.
+A lesson turn holds `ProcessInfo.beginActivity(.userInitiatedAllowingIdleSystemSleep)` for its duration: the learner now
+leaves for their own editor mid-turn, and App Nap would otherwise throttle the stream and tool processes.
 
 ## Transcript rendering
+* Text deltas leave Swift on a `CADisplayLink` from the transcript's own view (`NSView.displayLink`) and land in the
+  page's `requestAnimationFrame` loop, so a reply advances at the display's refresh rate (120 Hz on ProMotion) instead of
+  a fixed 60 Hz timer. A hidden window's paused rAF is backed by a 120 ms timer.
+* A frame rebuilds only what changed: finished markdown is cached by content, tool cards are memoised on everything their
+  HTML depends on (result, meta, open state, progress), thinking streams as one text node and becomes markdown once it
+  finishes, and an open code fence over 1,600 characters stays plain until it closes (highlighting the growing fence on
+  every frame is quadratic).
+* A plan is rendered from its structured modules — status mark, numbered title, objectives — never as one markdown
+  paragraph; the model still gets the plan as list-shaped markdown.
 * The renderer consumes a typed tree, not blocks: `nodes.js` projects each message into `message { children: [node] }`
   with stable ids (tool calls by call id, the rest by position), explicit tool-call → result links, and a vocabulary of
   six node types (text, thinking, tool, attachment, agentReport, error). Markdown is a leaf, not re-parsed into nodes;
@@ -266,32 +285,19 @@ Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a backgr
 * Guards: restated facts with changed numbers/negations supersede (old text in history); reflection only edits what it
   was shown and archives instead of deleting; concepts fold only with the same words or a trailing qualifier;
   prerequisites stay acyclic; the concept index updates incrementally.
+* Semantic recall uses Apple's 512-dim English sentence embedder. Non-Latin text gets no vector: encoded by the English
+  model it was noise (Arabic related and unrelated sentences both ≈0.97 cosine, inside the store's 0.55–0.9 band, which
+  made every pair *full* semantic evidence). Those memories fall back to lexical/FTS matching until a multilingual
+  embedder ships. Latin-script text keeps the current model.
 
-## Code mentor exercises
-* `exercise` tool (core in Code mentor, deferred elsewhere).
-  * `create` takes a brief, starter files, hidden tests, a hidden reference solution and a test command.
-  * It first proves the exercise in scratch folders: the tests must pass on starter plus solution, and fail on the
-    starter alone. A failure goes back to the model with the output.
-  * The starter (plus `BRIEF.md`) goes to `<folder>/exercises/<slug>/`. The tests and solution go to
-    `support/exercises/<id>/`.
-  * `read` returns the learner's files and last output; `check` runs the hidden tests on their current work.
-* `Sandbox` is `sandbox-exec` with an allow-default profile:
-  * no network (unix sockets aside);
-  * writes only in the run folder, `/private/var/folders`, `/private/tmp` and build caches;
-  * no reads of the app's support folder (keys, hidden tests, solutions) or credential stores;
-  * API keys stripped from the environment, a timeout, and capped output.
-
-  Paths go through `realpath`: Foundation's symlink resolution drops `/private`, and Seatbelt would never match.
-* Tests run in a scratch copy of the learner's project, with the hidden tests merged in. The tests never land in the
-  learner's folder, and only the test command's output comes back.
-* The editor is CodeMirror 6, bundled once from `web-src/editor` (`npm ci && npm run build`) into `vendor/codemirror.js`
-  (~940 KB, loaded only by `editor.html`). It runs in the inspector's Exercise tab or the "exercise" window. Edits save as
-  the learner types, and Submit (`ExerciseActions`) sends the files and test output to the lesson as hidden context.
-* `ExerciseExtension`, registered first so its refusals beat approval prompts:
-  * it refuses the teacher's `write`, `edit` and shell writes into an exercise folder;
-  * through the `willStoreReply` hook, it withholds any fenced code block that repeats four or more of the hidden
-    solution's signature lines (or most of a short block) before the reply is stored.
-* The exercise card never renders the call's tests or solution, or a failed setup's output, which can quote them.
+## Code mentor projects
+* No `exercise` tool and no built-in editor. The mentor creates the starter files directly in the lesson folder (`write`/
+  `edit`, gated by the folder grant) and writes the project's tests to `<folder>/.teacher/tests/`, run with `bash`. The
+  learner edits in any external editor and asks the mentor to check; `bash` runs the tests where the files are.
+* `.teacher/tests` is the only `.teacher/` path the agent may write (`PermissionExtension`, `SubAgentPolicy`);
+  `.teacher/.gitignore` keeps `tests/` versioned alongside the project while the rest of `.teacher/` stays private.
+* The mentor's shell is an ordinary shell in the folder — no scratch sandbox, no hidden test store, no reference
+  solution, no leak detector and no CodeMirror bundle. The folder access grant and approval prompts are the boundary.
 
 ## Depth standard
 Every teaching prompt carries the same standard:
@@ -312,7 +318,16 @@ help the learner had to ask for went unused. So these are app behaviour, not jus
   solution is logged with no mastery gain. A guess earns less (BKT guess 0.5). A wrong answer always counts.
 * **Wrong answers name their misconception.** Graded questions tag wrong answers in `misconceptions`, which the page
   never sees. A hit goes into the result, into learner memory (kind misconception) and into a re-check follow-up. The result
-  asks for one near-identical retry. A concept missed again in the same lesson gets a worked example instead of another quiz.
+  asks the teacher to explain the misconception, teach a real gap before checking again, and never quiz the same point twice in a
+  row. The old "one near-identical retry" rule produced quiz loops in live runs. A concept missed again in the same lesson
+  gets a worked example instead of another quiz.
+* **Quizzes can be switched off** (`AppSettings.quizzes`, the toolbar's Quizzes button; `Testing`). The switch is sticky and
+  takes effect on the next request. While it is off, `TestingExtension` appends a note to the learner's message (request
+  copy only), and `quiz` and graded `ask_learner` return a refusal. Quiz and Exam prep modes always test.
+* **Skips carry a reason** (`Testing.SkipReason`: need more explanation, too easy, not now, unclear). The tool result tells the
+  teacher what to do about each. **Don't know yet** (certainty 0) is not graded or recorded; the result asks for teaching.
+* **Exam-style quizzes:** `quiz` and `ask_learner` take a `case` (Markdown shown above the questions) that the questions
+  refer to.
 * **Certainty per question** (Guessing / Unsure / Sure, in `responses`):
   * a confident mistake is re-checked tomorrow and its flashcards come forward;
   * a lucky guess is flagged for a later check;
@@ -350,6 +365,56 @@ the concept without moving it, and a ```problem the mentor just posed shows as t
 tab, a strip above the composer, the transcript plan card and the Progress screen, whose **Continue this course**
 links the board before the first message so the first request already carries the state. Learners park questions and
 ask for checks; only the mentor marks cards done.
+
+Cards carry **outlines** (`Card.outline`: sections with points and up to four levels of subsections, ids positional —
+"2.3.1") and a `now` pointer: `lesson_plan outline` sets or refines one (finished sections keep their marks by title,
+and the pointer follows its section when ids renumber), `section` marks one done and moves on. The header shows only
+the position ("§2.3 Arena allocators (5/14 sections)"), so a 300-section book costs the same per request as a
+one-card board. The parser takes outlines in the shapes models actually send (untitled groupings, `{"item": …}`
+wrappers, objects for lists, `name`/`heading` for `title`): a strict parser made a live teacher give up and send flat
+one-line outlines. Board writes take a lock — models send several `add`s in parallel, and read–modify–write on one row
+lost cards. The rules say the board keeps the teacher oriented and is not a script: the learner's request outranks it.
+
+`scripts/ab-board.py` measures whether all this helps or hurts: the installed app runs a twelve-turn course (two
+detours, forced summarisation, time away, a request for the rest of the course) with a simulated expert learner, in
+three arms forced with `MYAITEACHER_EXP=course_board=nested|shallow|off` (never randomised for learners), and a
+stronger model scores each reply blind for depth and for continuity.
+
+## Agent tree (tools and components)
+Every agent is a node in one tree (`AgentTree`). A node declares what it adds; an agent gets everything on its path to
+the root and never what its children add:
+
+```
+root ── files (read, write, batch edit, ls), web, sub-agents (task), load_tools; core visualisations
+├── teacher ── ask_learner, math, run_code, bash, memory, lesson_plan; quiz, mastery, flashcards (runtime); vocab, practice, problem
+│   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
+│   └── code-mentor ── run_tests; glob, grep (runtime); layout, tree
+└── engineer ── the code agent: shell, search, run_tests, todo, project memory, browser and Mac control; layout, tree
+```
+
+* **Three sets per node.** `core` tools go with every request; `deferred` ones load at runtime with `load_tools` (one line
+  each in the prompt, which keeps context small); `components` are the fences the agent may write. `ToolRegistry.active`,
+  `load_tools` and a direct call to a tool all resolve against the agent's path, so a tutor can't load the code mentor's
+  `run_tests` and the code mentor can't reach the code agent's browser.
+* **Components follow the same tree.** The page gets the agent's component list with each `T.reset`; a fence outside it
+  renders as its source, never a widget. Changing the set clears the markdown caches.
+* **Guides follow it too.** Each node has a guide (`Guides`, editable in Settings › Instructions as "App guide" and
+  "Tools guide: …"); an agent's prompt joins the guides on its path, root first, with `{more_tools}` filled from its own
+  loadable tools.
+* **The course board is core** for teachers: it must never depend on another tool being loaded (it used to arrive with
+  `mastery`, so switching quizzes off removed the board too).
+
+## Instructions and limits
+* Every agent's standing instructions live in `Instructions` (teacher, each mode, board, app guide, code agent,
+  built-in sub-agents), short by default and editable in Settings → Instructions (stored in `AppSettings.instructions`;
+  a lesson keeps the prompt it started with, so its cached prefix stays valid). The defaults say what the app needs —
+  the standard of work, learner-first rules, how tools and rendering work — and leave teaching craft to the model.
+* No tool-step cap by default (`maxToolTurns = 0`; the old saved default 40 reads as none): a reply works until it is
+  done, carrying on past output limits and summarising as it goes. With a cap set, the last step offers no tools, so
+  the reply always ends with a write-up instead of a dangling tool call.
+* Code lessons and the code agent get the installed toolchains (`Toolchains`: versions and standard-library paths,
+  detected once in the background) so they teach the version the learner has. `write` and `run_code` drop a stray
+  trailing `EOF` line (heredoc syntax models type into content).
 
 ## Long lessons
 * A lesson loads as a window (from the compaction point or the last 400 messages); earlier messages page in on request.
@@ -394,8 +459,9 @@ The app's footprint must not grow with how much the learner has done: data lives
   To restore one (app quit; `sqlite3 <db>`): `ATTACH '<backup>' AS b; UPDATE memories SET embedding = x.embedding,
   norm = x.norm, vec = NULL FROM b.memories AS x WHERE x.id = memories.id; DELETE FROM memory_meta WHERE key='vec_v1';`
   (`testABackupRestores` runs exactly this).
-* Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, markdown
-  segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite (8 MB per connection).
+* Caches are bounded by size, not only count: page render caches (`Cache` in app.js: KaTeX, highlighting, finished
+  markdown by content, streaming markdown segments, diagrams), the fetched-page cache (4M chars), URLCache (4 MB), SQLite
+  (8 MB per connection).
 * `MemoryGovernor` is the safety net: on macOS memory pressure, or a footprint over 1.5 GB, it drops everything that
   rebuilds (memory indexes, fetched pages, SQLite caches, page caches) and returns freed pages to the system.
   `{"action":"shed"}` triggers it in a test instance; the log records the footprint before and after.

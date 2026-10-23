@@ -1,51 +1,46 @@
 import Foundation
 
 enum ToolRegistry {
-    /// Always sent to the model: the tools that carry most lessons (measured from recorded tool usage).
-    static let core: [Tool] = [
-        AskLearnerTool(), MathTool(), RunCodeTool(), ReadTool(), WriteTool(), EditTool(), LsTool(), BashTool(),
-        WebSearchTool(), WebFetchTool(), MemoryTool(), LoadToolsTool(),
+    /// Every tool the app has. Which agent gets which comes from `AgentTree`: an agent has the tools on its path to the
+    /// root, core ones with every request and the rest after `load_tools`.
+    static let all: [Tool] = [
+        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), RunTestsTool(),
+        WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
+        AskLearnerTool(), QuizTool(), MathTool(), MemoryTool(), LessonPlanTool(), MasteryTool(), FlashcardsTool(),
+        ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool(),
     ]
-    /// Loaded on demand via `load_tools` (listed by one line in the system prompt) to keep every request lean.
-    static let deferred: [Tool] = [
-        GlobTool(), GrepTool(), TodoWriteTool(), TaskTool(), AgentsTool(), FlashcardsTool(), MasteryTool(), LessonPlanTool(), ExerciseTool(),
-    ]
-    static let all: [Tool] = core + deferred + [VisualTool(), QuizTool(), ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool()]
-
-    /// Code agent: the whole coding toolset up front (no load step), project memory instead of the learner's.
-    static let agentTools: [Tool] = [
-        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), TodoWriteTool(),
-        TaskTool(), AgentsTool(), WebSearchTool(), WebFetchTool(), ProjectMemoryTool(), AskLearnerTool(),
-        BrowserTool(), MacTool(), ComputerTool(),
-    ]
-
-    /// Core and deferred sets for a lesson, after its experiment arms (stable for the lesson's lifetime).
-    static func layout(_ lessonID: String?) -> (core: [Tool], deferred: [Tool]) {
-        let visualInCore = Experiments.arm(Experiments.visualTool, unit: lessonID ?? "") == "core"
-        return visualInCore ? (core.dropLast() + [VisualTool(), LoadToolsTool()], deferred) : (core, deferred + [VisualTool()])
-    }
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
     static func enabled(_ settings: AppSettings) -> [Tool] {
         all.filter { !settings.disabledTools.contains($0.name) }
     }
 
-    /// Tools for a request: core + whatever this lesson has loaded (in load order, so the prefix only ever grows).
-    static func active(_ settings: AppSettings, loaded: [String], lessonID: String? = nil, mode: TeachingMode = .tutor) -> [Tool] {
+    /// What the learner's settings switch off for an agent (disabled tools, Python, the board system).
+    static func off(_ settings: AppSettings) -> Set<String> {
         var off = Set(settings.disabledTools)
-        if mode.isAgent { return agentTools.filter { !off.contains($0.name) } }
         if settings.python == .off { off.insert("math") }   // SymPy needs Python
-        let l = layout(lessonID)
-        // Code mentor sets projects from the first reply: its exercise tool needs no load step.
-        let extra = (mode == .code ? ["exercise"] : []) + loaded.filter { !(mode == .code && $0 == "exercise") }
-        // The code mentor never writes code files: projects come through `exercise`, demonstrations through `run_code`.
-        if mode == .code { off.formUnion(["write", "edit", "bash"]) }
-        return (l.core + extra.compactMap { name in l.deferred.first { $0.name == name } }).filter { !off.contains($0.name) }
+        if Experiments.boardOff { off.insert("lesson_plan") }
+        return off
     }
 
-    /// One line per deferred tool for the system prompt.
-    static func deferredIndex(_ lessonID: String? = nil) -> String {
-        layout(lessonID).deferred.map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
+    /// An agent's runtime-loadable tools (after its settings).
+    static func loadable(_ node: String, _ settings: AppSettings = AppSettings()) -> [Tool] {
+        let off = off(settings)
+        return AgentTree.deferred(node).compactMap { byName[$0] }.filter { !off.contains($0.name) }
+    }
+
+    /// Tools for a request: the agent's core tools, then whatever this lesson has loaded (in load order, so the prefix
+    /// only ever grows).
+    static func active(_ settings: AppSettings, loaded: [String], lessonID: String? = nil, mode: TeachingMode = .tutor) -> [Tool] {
+        let node = AgentTree.node(for: mode), off = off(settings)
+        let canLoad = Set(AgentTree.deferred(node))
+        let names = AgentTree.core(node) + loaded.filter { canLoad.contains($0) }
+        return names.compactMap { byName[$0] }.filter { !off.contains($0.name) }
+    }
+
+    /// One line per runtime-loadable tool, for an agent's prompt.
+    static func deferredIndex(_ node: String, _ settings: AppSettings = AppSettings()) -> String {
+        loadable(node, settings).map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
     }
 
     /// Tools a research sub-agent may use without supervision.
@@ -222,7 +217,7 @@ struct LoadToolsTool: Tool {
     func summary(_ input: JSON) -> String { input["names"]?.array?.compactMap(\.string).joined(separator: ", ") ?? "" }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let wanted = input["names"]?.array?.compactMap(\.string) ?? []
-        let known = Set(ToolRegistry.layout(ctx.conversationID).deferred.map(\.name))
+        let known = Set(AgentTree.deferred(ctx.agentNode))
         let ok = wanted.filter { known.contains($0) }, bad = wanted.filter { !known.contains($0) }
         guard !ok.isEmpty else { return .error("Unknown tools: \(bad.joined(separator: ", ")). Loadable: \(known.sorted().joined(separator: ", ")).") }
         return ToolOutput(text: "Loaded \(ok.joined(separator: ", ")). Call them from your next step." + (bad.isEmpty ? "" : " Unknown: \(bad.joined(separator: ", ")).") ,

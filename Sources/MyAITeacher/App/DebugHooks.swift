@@ -31,7 +31,13 @@ enum DebugHooks {
 
     static func handle(_ cmd: JSON) {
         let app = AppModel.shared
-        let session: ChatSession? = { if case .lesson(let id) = app.selection { return app.session(for: id) }; return nil }()
+        // A command may name its lesson ({"lesson": id}); otherwise it acts on the selected one. Scripts name it: a click in
+        // the window (or a notice) that changes the selection must not send their next message nowhere.
+        let session: ChatSession? = {
+            if let id = cmd["lesson"]?.string, !id.isEmpty { return app.session(for: id) }
+            if case .lesson(let id) = app.selection { return app.session(for: id) }
+            return nil
+        }()
         switch cmd["action"]?.string {
         case "snapshot": snapshot(to: cmd["path"]?.string ?? "/tmp/myaiteacher.png")
         case "eval":
@@ -50,20 +56,15 @@ enum DebugHooks {
             let q = cmd["query"]?.string ?? ""
             let out = ModelPickerPopover.sections(q, providers: app.availableProviders, models: app.modelList, names: { p, m in app.modelMeta[p]?[m]?.name })
             AppLog.write("picker \"\(q)\": " + out.prefix(4).map { "\($0.provider.id)[\($0.models.prefix(3).joined(separator: ", "))]" }.joined(separator: " · "))
-        case "exerciseSubmit":   // {"action":"exerciseSubmit","id":"ex-…"} (or the newest): what the editor's Submit does
-            let id = cmd["id"]?.string ?? ExerciseStore.list().first?.id
-            Task { @MainActor in
-                var r: Sandbox.Result?
-                if let id { r = await ExerciseActions.submit(id) }
-                AppLog.write("exercise submit \(id ?? "none"): \(r.map { $0.passed ? "pass" : "fail (exit \($0.exitCode))" } ?? "no exercise")")
-            }
         case "shed":   // what memory pressure does: every rebuildable cache goes (the log says how much was freed)
             MemoryGovernor.shared.shed(critical: cmd["critical"]?.bool == true, reason: "debug")
         case "send":
             if let t = cmd["text"]?.string {
                 // An image path attaches it, as a learner's drop would.
                 let img = cmd["image"]?.string.flatMap { ImageUtil.loadForModel(URL(fileURLWithPath: $0)) }
-                session?.send(t, attachments: img.map { [$0.block] } ?? [])
+                guard let s = session else { AppLog.write("send: no lesson"); return }
+                if s.isRunning { AppLog.write("send refused: a reply is still running"); return }
+                s.send(t, attachments: img.map { [$0.block] } ?? [])
                 AppLog.write("sent: \(t.prefix(80))\(img == nil ? "" : " + image")")
             }
         case "answer":
@@ -123,8 +124,16 @@ enum DebugHooks {
             AppLog.write("status running=\(session?.isRunning ?? false) msgs=\(session?.messages.count ?? -1) status=\(session?.status ?? "-") error=\(session?.errorMessage ?? "-")")
         case "resize":
             if let w = NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) }) {
-                w.setFrame(NSRect(x: w.frame.minX, y: w.frame.minY, width: cmd["w"]?.double ?? 1240, height: cmd["h"]?.double ?? 840), display: true)
+                // Optional x/y (top-left, in screen points from the top of the main screen): side-by-side test windows.
+                let h = cmd["h"]?.double ?? 840, screen = w.screen ?? NSScreen.main
+                let x = cmd["x"]?.double ?? w.frame.minX
+                let y = cmd["y"].flatMap(\.double).map { Double(screen?.frame.maxY ?? CGFloat(h)) - $0 - h } ?? w.frame.minY
+                if w.styleMask.contains(.fullScreen) { w.toggleFullScreen(nil) }
+                w.setFrame(NSRect(x: x, y: y, width: cmd["w"]?.double ?? 1240, height: h), display: true)
             }
+        case "front":   // bring this instance's window forward (several test instances share one screen)
+            NSApp.activate(ignoringOtherApps: true)
+            NSApp.windows.first(where: { $0.isVisible && !($0 is NSPanel) })?.makeKeyAndOrderFront(nil)
         // Perf workloads (scripts/perf): synthetic data at scale, and the hot paths run on their own.
         case "mark":   // {"action":"mark","name":"…"}: brackets a workload in the signpost timeline
             Signposts.event("mark", cmd["name"]?.string ?? "")

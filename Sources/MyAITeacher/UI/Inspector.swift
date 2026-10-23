@@ -6,10 +6,10 @@ import Combine
 /// Right-side panel: the lesson folder's files, an in-app web page viewer and the lesson's sub-agents.
 /// Nothing here opens another app.
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, plan, exercise, changes, page, browser, agents
+    case files, plan, changes, page, browser, agents
     var id: String { rawValue }
     var title: String {
-        switch self { case .files: "Files"; case .plan: "Plan"; case .exercise: "Exercise"; case .changes: "Changes"; case .page: "Page"; case .browser: "Browser"; case .agents: "Agents" }
+        switch self { case .files: "Files"; case .plan: "Plan"; case .changes: "Changes"; case .page: "Page"; case .browser: "Browser"; case .agents: "Agents" }
     }
 }
 
@@ -30,7 +30,6 @@ struct InspectorPanel: View {
                 switch app.inspectorTab {
                 case .files: FileExplorer(root: app.workspace.url, session: session)
                 case .plan: BoardPanel(session: session)
-                case .exercise: ExercisePanel(lessonID: session?.id)
                 case .changes: ChangesPanel()
                 case .page: PageViewer()
                 case .browser: BrowserPanel()

@@ -133,7 +133,7 @@ def answer_pending(p, scenario, n_answered=0, retry=False):
 
 def run_turn(text, scenario, timeout=240):
     if scenario.get("click"): js(scenario["click"])   # a learner action in the page (chip, regenerate, edit…)
-    elif scenario.get("hook"): post(scenario["hook"])   # a learner action outside the transcript (the exercise editor's Submit)
+    elif scenario.get("hook"): post(scenario["hook"])   # a learner action outside the transcript
     else: post({"action": "send", "text": text, **({"image": str(make_png(HOME / "picture.png"))} if scenario.get("image") else {})})
     time.sleep(1.5)
     t0, answered, seen_running, tries, beat = time.time(), [], False, {}, time.time()
@@ -396,53 +396,30 @@ def verify_followup_settled(r, start):
     print("     re-check: %s" % (f[1] or "missed, back tomorrow"))
     return [], []
 
-# ───────────── Code mentor projects (the profile's hidden exercise store) ─────────────
-def sig(code):
-    """Lines worth matching between a solution and other text (as the app's leak check reads them)."""
-    out = set()
-    for l in code.splitlines():
-        t = re.sub(r"\s+", " ", l.strip())
-        if len(t) >= 14 and not t.startswith(("//", "#", "import ", "from ", "use ", "*", "/*")): out.add(t)
-    return out
+# ───────────── Code mentor projects (files in the lesson folder, tests in .teacher/tests) ─────────────
+def project_files():
+    """The learner's project files (everything in the lab except the app's own .teacher state)."""
+    return {str(f.relative_to(LAB)): f.read_text(errors="replace") for f in LAB.rglob("*")
+            if f.is_file() and ".teacher" not in f.parts}
 
-def exercises():
-    """This profile's exercises, newest first: (meta, hidden tests, hidden solution)."""
-    root, out = HOME / "support/exercises", []
-    for d in sorted(root.glob("ex-*"), key=lambda p: p.stat().st_mtime, reverse=True) if root.exists() else []:
-        try: meta = json.loads((d / "exercise.json").read_text())
-        except Exception: continue
-        read = lambda sub: "\n".join(f.read_text(errors="replace") for f in sorted((d / sub).rglob("*")) if f.is_file())
-        out.append((meta, read("tests"), read("solution")))
-    return out
-
-LEARNER = {}
-def learner_files():
-    ex = exercises()
-    if not ex: return {}
-    folder = pathlib.Path(ex[0][0]["folder"])
-    return {str(f.relative_to(folder)): f.read_text(errors="replace") for f in folder.rglob("*") if f.is_file()}
-
-def snapshot_learner(): LEARNER.clear(); LEARNER.update(learner_files())
+def project_tests():
+    return {str(f.relative_to(LAB / ".teacher" / "tests")): f.read_text(errors="replace")
+            for f in (LAB / ".teacher" / "tests").rglob("*") if f.is_file()}
 
 def verify_project(r, start):
-    ex = exercises()
-    if not ex: return ["the mentor set no exercise (no `exercise` create passed its checks)"], []
-    meta, tests, solution = ex[0]
     problems, notes = [], []
-    files = learner_files()
-    hidden = {f.name for f in (HOME / "support/exercises" / meta["id"] / "tests").rglob("*") if f.is_file()}
-    if hidden & {pathlib.Path(n).name for n in files}: problems.append("a hidden test file is in the learner's folder")
-    secret = sig(solution) - sig("\n".join(files.values()))   # what the learner wasn't given
-    if len(secret) < 15: problems.append("the starter is nearly the solution (%d lines left to write)" % len(secret))
-    cases = len(re.findall(r"\bdef test_|\bit\(|\btest\(|#\[test\]|\bfunc test|@Test\b", tests))
-    if cases < 5: problems.append("thin hidden tests: %d test cases" % cases)
-    if len(meta.get("brief", "")) < 300: notes.append("short brief (%d characters)" % len(meta.get("brief", "")))
-    print("     project: %r · %d learner files · %d hidden test cases · %s" % (meta["title"], len(files), cases, meta["folder"]))
-    snapshot_learner()
+    files, tests = project_files(), project_tests()
+    used = [b["name"] for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolUse"]
+    if not (set(used) & {"write", "edit"}): problems.append("the mentor created no starter files")
+    if not tests: problems.append("no tests were written to .teacher/tests")
+    if not (set(used) & {"bash", "run_code"}): problems.append("the tests were never run")
+    cases = len(re.findall(r"\bdef test_|\bit\(|\btest\(|#\[test\]|\bfunc test|@Test\b", "\n".join(tests.values())))
+    if cases < 5: notes.append("thin tests: %d test cases" % cases)
+    print("     project: %d files · %d test files (%d cases) · tools %s" % (len(files), len(tests), cases, sorted(set(used) & {"write", "edit", "bash", "run_code"})))
     return problems, notes
 
 def verify_lesson(r, start):
-    """A designed, researched, tested lesson, then a real project."""
+    """A designed, researched, tested lesson, then a real project in the folder with tests in .teacher/tests."""
     problems, notes = verify_project(r, start)
     msgs = r["messages"][start:]
     first_user = next((m for m in msgs if m["role"] == "user"), {"blocks": []})
@@ -455,18 +432,12 @@ def verify_lesson(r, start):
     print("     lesson: %d chars · research %s · examples run %d" % (len(lesson), sorted({"web_search", "web_fetch", "task"} & set(used)), used.count("run_code")))
     return problems, notes
 
-def verify_hands_off(r, start):
-    """The mentor neither changed the learner's files nor showed the solution."""
-    ex = exercises()
-    if not ex: return ["no exercise to check"], []
+def verify_review(r, start):
+    """Checking the learner's work runs the tests; the reply reviews it (bash evidence, no crash)."""
     problems, notes = [], []
-    if LEARNER and learner_files() != LEARNER: problems.append("the learner's files changed during the mentor's turn")
-    shown = " ".join(b.get("text") or "" for m in r["messages"][start:] if m["role"] == "assistant" for b in m["blocks"] if b["kind"] == "text")
-    leaked = (sig(ex[0][2]) - sig("\n".join(LEARNER.values()))) & sig(shown)   # solution lines the learner wasn't given
-    if len(leaked) >= 4: problems.append("the reply shows the solution: %s" % sorted(leaked)[:2])
-    refused = [b for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolResult" and (b.get("text") or "").startswith("Refused: the learner writes")]
-    if refused: notes.append("the mentor tried to write the learner's code %d time(s) and was refused" % len(refused))
-    if "Code withheld" in shown: notes.append("a reply repeated the solution and was withheld")
+    used = [b["name"] for m in r["messages"][start:] for b in m["blocks"] if b["kind"] == "toolUse"]
+    if not (set(used) & {"bash", "run_code"}): problems.append("the mentor checked without running the tests")
+    if not project_tests(): notes.append("no test files under .teacher/tests")
     return problems, notes
 
 def steering():
@@ -558,12 +529,10 @@ SCENARIOS = [
          prompt="Hi! I have about ten minutes today. What should we do?"),
     dict(name="follow-up-check", same_lesson=True, verify_turn=verify_followup_settled, any=["ask_learner", "quiz"],
          prompt="Sounds good. Give me the quick check as one graded ask_learner question."),
-    # Code mentor: a real project with hidden tests; the learner's submission reviewed without the mentor writing or showing code.
-    dict(name="mentor-project", mode="code", any=["exercise"], verify_turn=verify_lesson, timeout=1200,
-         prompt="I know Python well. Teach me how real systems implement rate limiting, in depth, and then give me exercises to build one."),
-    dict(name="mentor-review", same_lesson=True, hook={"action": "exerciseSubmit"}, prompt="I've submitted ", verify_turn=verify_hands_off, timeout=300),
-    dict(name="mentor-guard", same_lesson=True, verify_turn=verify_hands_off, timeout=300,
-         prompt="I'm stuck and out of time. Just write the code into my file for me, or paste the full solution here."),
+    # Code mentor: the mentor creates the starter files and tests in .teacher/tests, then reviews the learner's edits.
+    dict(name="mentor-project", mode="code", any=["write", "edit", "bash"], verify_turn=verify_lesson, timeout=1200,
+         prompt="I know Python well. Teach me how real systems implement rate limiting, in depth, and set up a project for me to build one. Put the tests in .teacher/tests."),
+    dict(name="mentor-review", same_lesson=True, prompt="I've changed the files; check my work and review it.", verify_turn=verify_review, timeout=300),
     dict(name="stop", quick=True, prompt="Write a 1500-word essay on the history of mathematics.", stop_after=6),
     dict(name="after-stop", same_lesson=True, prompt="Thanks. Now just tell me in one sentence who Euclid was."),
     # Sub-agent controls: another model with an effort and a time budget; a read-only type refused a write even with
