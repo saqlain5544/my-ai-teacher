@@ -70,7 +70,7 @@ struct ScriptKeyboardView: View {
             default: break
             }
             NotificationCenter.default.post(name: .composerKey, object: KeyboardKeyEvent(key: key, layout: layout, shift: shift, katakana: katakana, romaji: romaji))
-            if case .text = key, shift, layout.shift == nil || true { shift = false }
+            if case .text = key, shift { shift = false }   // one shifted key at a time, as on the page
         } label: {
             Text(label(key))
                 .font(.system(size: isFn ? 12 : 16))

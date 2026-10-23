@@ -126,13 +126,16 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
     /// The best recogniser locale for a language code ("ja" → ja-JP), or nil when the Mac has none for it.
     nonisolated static func recognizerLocale(_ language: String?) -> Locale? {
         guard let l = language?.lowercased(), !l.isEmpty else { return nil }
-        let all = SFSpeechRecognizer.supportedLocales()
+        let all = supportedLocales
         if let exact = all.first(where: { $0.identifier.lowercased().replacingOccurrences(of: "_", with: "-") == l }) { return exact }
         let base = String(l.split(whereSeparator: { $0 == "-" || $0 == "_" }).first ?? Substring(l))
         let region = Locale.current.region?.identifier ?? ""
         let candidates = all.filter { ($0.language.languageCode?.identifier ?? "") == base }
         return candidates.first { $0.region?.identifier == region } ?? candidates.sorted { $0.identifier < $1.identifier }.first
     }
+
+    /// The Mac's recogniser locales never change while the app runs (the composer asks on every render).
+    nonisolated static let supportedLocales = SFSpeechRecognizer.supportedLocales()
 
     private func startListening(language: String?, onText: @escaping (String, Bool) -> Void) {
         let wanted = Self.recognizerLocale(language)
@@ -148,7 +151,8 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate {
         let input = engine.inputNode
         let format = input.outputFormat(forBus: 0)
         input.installTap(onBus: 0, bufferSize: 1024, format: format) { buf, _ in req.append(buf) }
-        do { engine.prepare(); try engine.start() } catch { return }
+        // No microphone, or one held by another app: the caller hears a final empty result instead of waiting forever.
+        do { engine.prepare(); try engine.start() } catch { listeningLanguage = nil; onFinal = nil; onText("", true); return }
         self.engine = engine
         self.request = req
         isListening = true

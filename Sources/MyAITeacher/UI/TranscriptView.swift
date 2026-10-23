@@ -370,7 +370,9 @@ struct TranscriptView: NSViewRepresentable {
             case "vocab":
                 // The Save button on a ```vocab card: into the learner's vocabulary and its flashcard deck.
                 guard let s = session, let w = j["word"], let term = w["term"]?.string, let meaning = w["meaning"]?.string else { return }
-                let lang = w["lang"]?.string.flatMap(Languages.code) ?? s.language?.target ?? s.services.study.languageProfiles().first { $0.role == "target" }?.code ?? "und"
+                guard let lang = w["lang"]?.string.flatMap(Languages.code) ?? s.language?.target ?? s.services.study.languageProfiles().first(where: { $0.role == "target" })?.code else {
+                    run("T.notice('Which language is this word in? Ask the teacher to set your language profile, then save it again.')"); return
+                }
                 if s.services.study.addVocab(lang: lang, term: term, reading: w["reading"]?.string, meaning: meaning, pos: w["pos"]?.string, example: w["example"]?.string,
                                              exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, source: s.id) != nil {
                     EventBus.publish(.studyDataChanged)

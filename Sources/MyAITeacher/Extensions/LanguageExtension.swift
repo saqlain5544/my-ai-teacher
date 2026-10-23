@@ -10,7 +10,6 @@ struct LanguageState: Equatable, Sendable {
     var profiled = false       // the mentor set the target with `language` action=profile
     var source = "none"        // profile | asked | content | none
 
-    var hasKeyboard: Bool { KeyboardLayouts.layout(for: target) != nil }
     /// What the page needs (T.setLanguage): codes, display names, direction.
     var json: JSON {
         ["target": target.map { .string($0) } ?? .null, "native": native.map { .string($0) } ?? .null,
@@ -56,7 +55,9 @@ final class LanguageExtension: AgentExtension {
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
         guard !session.conversation.mode.isAgent else { return }
         let st = state(for: session, push: true)
-        if st.target == nil && session.conversation.mode != .language { return }
+        // Outside Language mentor mode the line needs the learner's word for it (or a profile): tagged words quoted in a
+        // history lesson are not a language the learner is learning. The keyboard still follows what the page shows.
+        if session.conversation.mode != .language && (st.target == nil || st.source == "content") { return }
         Self.inject(Self.stateLine(st, study: session.services.study), into: &request)
     }
 
