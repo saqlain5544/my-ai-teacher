@@ -118,6 +118,35 @@ extension StudyStore {
     }
 }
 
+// MARK: - Kanji and hanzi through the learner's own words
+
+/// A character of the learner's saved words: the words it appears in, and how far along it is — known when a word with
+/// it is known (recalled and stable), learning when one is being reviewed, new otherwise.
+struct HanCharacter: Identifiable, Hashable, Sendable {
+    var char: String
+    var words: [VocabItem]
+    var status: String { words.contains { $0.status == "known" } ? "known" : words.contains { $0.status == "learning" } ? "learning" : "new" }
+    var id: String { char }
+}
+
+extension StudyStore {
+    static func isHan(_ c: Character) -> Bool {
+        c.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) || (0xF900...0xFAFF).contains($0.value) }
+    }
+    /// The kanji (hanzi) of a language's saved words, in the order the learner met them.
+    func hanCharacters(lang: String) -> [HanCharacter] {
+        var order: [String] = [], words: [String: [VocabItem]] = [:]
+        for v in vocab(lang: lang, limit: 100_000).sorted(by: { $0.createdAt < $1.createdAt }) {
+            for c in v.term where Self.isHan(c) {
+                let k = String(c)
+                if words[k] == nil { order.append(k) }
+                if !(words[k]?.contains { $0.id == v.id } ?? false) { words[k, default: []].append(v) }
+            }
+        }
+        return order.map { HanCharacter(char: $0, words: words[$0] ?? []) }
+    }
+}
+
 // MARK: - Vocabulary in and out (Anki, spreadsheets)
 
 /// Vocabulary to and from files: tab-separated text with Anki's header lines (Anki 2.1.55+ imports it with the deck and

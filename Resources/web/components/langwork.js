@@ -419,6 +419,14 @@
     }, 0);
   });
 
+  // Each kanji/hanzi of the looked-up word, with the learner's saved words that use it (none yet: it's new to them).
+  R.kanjiHTML = list => {
+    if (!list || !list.length) return '';
+    const st = { known: 'known', learning: 'learning', new: 'new', unseen: 'new to your words' };
+    return '<div class="rd-kanji">' + list.map(k => '<div class="rk-row"><span class="rk-char st-' + esc(k.status) + '" title="' + esc(st[k.status] || '') + '">' + esc(k.char) + '</span>' +
+      '<span class="rk-words">' + (k.words && k.words.length ? 'also in your words: ' + k.words.map(w => '<span class="rk-w st-' + esc(w.status) + '" title="' + esc(w.meaning) + '">' + esc(w.term) + (w.reading ? ' <small>' + esc(w.reading) + '</small>' : '') + '</span>').join(' · ')
+        : '<span class="rk-none">' + (k.status === 'unseen' ? 'not in your saved words yet' : 'only in this word so far') + '</span>') + '</span></div>').join('') + '</div>';
+  };
   function popHTML(L, r) {
     const reading = (r && r.reading) || L.reading || '';
     let h = '<div class="rd-pop-head"><span class="rd-pop-word"' + langAttr(L.lang) + '>' + esc(L.word) + '</span>' + (reading ? '<span class="rd-pop-reading">' + esc(reading) + '</span>' : '') +
@@ -751,6 +759,10 @@
     .ls-result { width: 100%; }
     .ls-foot { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin-top: 8px; font-size: .82em; flex-wrap: wrap; }
     .msg.user.spoken .bubble > .md > :first-child::before { content: '🎤 '; }
+    .rd-kanji { margin-top: 8px; border-top: 1px solid var(--border); padding-top: 6px; display: flex; flex-direction: column; gap: 4px; }
+    .rk-row { display: flex; gap: 8px; align-items: baseline; font-size: .9em; }
+    .rk-char { font-size: 1.6em; line-height: 1; min-width: 1.2em; } .rk-char.st-known { color: var(--good); } .rk-char.st-learning { color: var(--accent); }
+    .rk-w small { color: var(--muted); } .rk-w.st-known { color: var(--good); } .rk-none { color: var(--faint); }
     .sel-lookup { position: absolute; z-index: 60; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
     .msg.user .own-read { align-self: stretch; margin-top: 8px; position: relative; }
     .own-read .own-close { position: absolute; right: 8px; top: -2px; z-index: 1; }

@@ -1702,8 +1702,12 @@
     click(w);
     const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === '電車' && lk.sentence === '毎日電車で行きます。', JSON.stringify(lk));
     const pop = $('.rd-pop:not([hidden])'); ok(pop && !pop.closest('.msg'), 'popover open, on the page (not clipped by the message)'); ok(/Looking it up/.test(pop.textContent));
-    T.lang('lookup', lk.key, { word: '電車', reading: 'でんしゃ', senses: [{ pos: 'Noun', text: 'train (electric)' }], source: 'Wiktionary' });
+    T.lang('lookup', lk.key, { word: '電車', reading: 'でんしゃ', senses: [{ pos: 'Noun', text: 'train (electric)' }], source: 'Wiktionary',
+      kanji: [{ char: '電', status: 'known', words: [{ term: '電話', reading: 'でんわ', meaning: 'telephone', status: 'known' }] }, { char: '車', status: 'unseen', words: [] }] });
     ok(/train/.test(pop.textContent) && /でんしゃ/.test(pop.textContent), pop.textContent);
+    const kj = $$('.rd-kanji .rk-row', pop); eq(kj.length, 2, 'a row per kanji');
+    ok(/電話/.test(kj[0].textContent) && $('.rk-char.st-known', kj[0]), 'the kanji with the saved words that share it');
+    ok(/not in your saved words yet/.test(kj[1].textContent), kj[1].textContent);
     posts.length = 0; click($('[data-act="rd-translate"]', pop));
     const tr = lastPost('langwork'); eq(tr.op, 'translate'); eq(tr.text, '毎日電車で行きます。');
     T.lang('translation', lk.key, { text: 'I go by train every day.', source: 'On-device translation (Apple)' });

@@ -484,6 +484,7 @@ struct LanguageStructureView: View {
     @State private var skills: [SkillLevel] = []
     @State private var grammar: [GrammarPoint] = []
     @State private var openLevel: String? = nil
+    @State private var han: [HanCharacter] = []
     @State private var message: String? = nil
 
     var body: some View {
@@ -525,6 +526,18 @@ struct LanguageStructureView: View {
                     }.padding(.leading, 6)
                 }
             }
+            if !han.isEmpty {
+                let known = han.filter { $0.status == "known" }.count, learning = han.filter { $0.status == "learning" }.count
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(code == "zh" ? "Hanzi" : "Kanji") in your words: \(han.count) · \(known) known · \(learning) learning")
+                        .font(.caption.bold()).foregroundStyle(.secondary)
+                    han.prefix(300).reduce(Text("")) { t, h in
+                        t + Text(h.char).foregroundColor(h.status == "known" ? .green : h.status == "learning" ? .accentColor : .secondary)
+                    }
+                    .font(.title3).lineSpacing(2).textSelection(.enabled)
+                    .help("Green: in a word you know · blue: in a word you're reviewing · grey: only in new words")
+                }
+            }
             HStack(spacing: 10) {
                 Button("Import words…") { importWords() }
                 Menu("Export words") {
@@ -541,6 +554,7 @@ struct LanguageStructureView: View {
     private func reload() {
         let s = app.services.study
         skills = s.skills(lang: code); grammar = s.grammarSyllabus(lang: code)
+        han = code == "ja" || code == "zh" ? s.hanCharacters(lang: code) : []
     }
 
     private func export(csv: Bool) {

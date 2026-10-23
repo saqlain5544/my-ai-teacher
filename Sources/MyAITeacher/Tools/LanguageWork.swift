@@ -123,6 +123,17 @@ enum LanguageWork {
         guard let lang, let study, var o = j.object else { return j }
         let lemma = j["lemma"]?.string
         if let v = study.vocab(lang: lang, limit: 5000).first(where: { $0.term == word || $0.term == lemma }) { o["saved"] = .string(v.status) }
+        // Kanji/hanzi: each character with the learner's saved words that share it (their own word family for it).
+        if lang == "ja" || lang == "zh", word.contains(where: StudyStore.isHan) {
+            let chars = study.hanCharacters(lang: lang)
+            var seen = Set<Character>()
+            o["kanji"] = .array(word.filter { StudyStore.isHan($0) && seen.insert($0).inserted }.map { c -> JSON in
+                let h = chars.first { $0.char == String(c) }
+                let others = (h?.words ?? []).filter { $0.term != word && $0.term != lemma }.prefix(6)
+                return ["char": .string(String(c)), "status": h.map { .string($0.status) } ?? "unseen",
+                        "words": .array(others.map { ["term": .string($0.term), "reading": $0.reading.map { .string($0) } ?? .null, "meaning": .string($0.meaning), "status": .string($0.status)] })]
+            })
+        }
         return .object(o)
     }
 

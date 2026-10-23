@@ -244,6 +244,9 @@ and which words are due.
   from real work and notes the evidence; a level marked **?** is provisional until you've done a task in that skill. It
   keeps a grammar syllabus by CEFR level, and a point counts as learned when you use it right in what you write or say.
   **Progress › Languages** shows the levels (hover for the evidence) and the grammar per level (click a level).
+* **Kanji and hanzi.** Looking up a word written in kanji (hanzi) shows each character with the other saved words that
+  use it. **Progress › Languages** shows the characters of your saved words in the order you met them, green once a word
+  with them is known. (Stroke order and components aren't included yet.)
 * **Words in and out.** **Progress › Languages › Import words…** takes an Anki package (.apkg — from Anki 2.1.50 on,
   export with "Support older Anki versions" ticked), Anki's "Notes in Plain Text", or a spreadsheet saved as CSV/TSV
   (term and meaning, optionally reading, example, tags…). **Export words** writes a file for Anki (File › Import puts it

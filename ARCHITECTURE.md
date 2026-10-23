@@ -432,6 +432,10 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   theirs). `VocabTransfer`: export TSV with Anki's headers (`#separator`, `#html`, `#deck`, `#tags column`, `#columns`)
   or CSV; import Anki text exports, CSV/TSV with named columns, and `.apkg` (unzipped with ditto, the SQLite `notes`
   table of collection.anki21/anki2; the zstd `.anki21b` is refused with how to export a readable package).
+* **Kanji/hanzi through the deck.** `StudyStore.hanCharacters` lists the Han characters of a language's saved words in
+  the order met, each known/learning/new from its words' FSRS state; `LanguageWork.lookup` adds `kanji` (each character
+  of the word with the learner's other words that share it) and the popover draws it (`R.kanjiHTML`). Stroke order and
+  components need KanjiVG (CC BY-SA 3.0) / KANJIDIC2 (CC BY-SA 4.0) as an on-demand download; not built yet.
 * **After a graded result** the tool result (quiz feedback steps, `ask_learner` form answers) ends the reply with the
   feedback: no new quiz in the same reply.
 

@@ -100,4 +100,14 @@ final class LanguageStructureTests: XCTestCase {
         XCTAssertEqual(e.map(\.term), ["Brot", "laufen"])
         XCTAssertEqual(e.first?.meaning, "bread\n(n.)"); XCTAssertEqual(e.first?.notes, "das Brot"); XCTAssertEqual(e.first?.tags, ["food"])
     }
+
+    func testKanjiThroughTheLearnersWords() {
+        study.addVocab(lang: "ja", term: "電話", reading: "でんわ", meaning: "telephone")
+        study.addVocab(lang: "ja", term: "電車", reading: "でんしゃ", meaning: "train")
+        study.addVocab(lang: "ja", term: "ねこ", meaning: "cat")
+        let h = study.hanCharacters(lang: "ja")
+        XCTAssertEqual(h.map(\.char), ["電", "話", "車"], "in the order met, kana words add none")
+        XCTAssertEqual(h.first?.words.map(\.term), ["電話", "電車"])
+        XCTAssertEqual(h.first?.status, "new", "not reviewed yet")
+    }
 }
