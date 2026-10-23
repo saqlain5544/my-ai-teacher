@@ -327,6 +327,19 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   `.teacher/.gitignore` keeps `tests/` versioned alongside the project while the rest of `.teacher/` stays private.
 * The mentor's shell is an ordinary shell in the folder — no scratch sandbox, no hidden test store, no reference
   solution, no leak detector and no CodeMirror bundle. The folder access grant and approval prompts are the boundary.
+* **The review loop as mechanism** (`Study/MentorProject.swift`, `Tools/MentorTools.swift`, `Extensions/CodeMentorExtension.swift`).
+  `.teacher/project.json` holds the project: title, concept, test command, every test run, the review rounds.
+  `project_tests` set registers the command and proves the suite red on the starter — a run with no failures is refused
+  (vacuous), a runner that errors is refused with its output — then snapshots the learner's files (`.teacher/review/
+  snapshot/`, text files only, bounded) as the baseline. `project_review` start runs the tests, diffs the files against
+  the snapshot (`/usr/bin/diff -u` per changed file, capped) and returns the diffs, the parsed run (`TestOutput.parse`:
+  pytest, jest/vitest, mocha, go test, swift test, cargo, zig, rspec, mix, ctest) and the open findings; `findings`
+  records the round (file, line, severity, text, concept), carries unresolved findings forward, marks resolved ids, takes
+  a new snapshot, refuses a pass that still carries a `must`, and on a pass with the last run green records the project's
+  concept with `StudyStore.recordAttempt`. `CodeMentorExtension` appends a `<project_state>` line to every request
+  (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
+  mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
+  checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
 
 ## Language mentor
 * **Mode `language`** (`Instructions.mode(.language)`), with `language` and `vocab` as core tools (deferred in every

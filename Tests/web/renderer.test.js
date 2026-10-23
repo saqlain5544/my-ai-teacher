@@ -1554,6 +1554,26 @@
     ok(!$('.turn-undo'), 'no undo when nothing changed');
   });
 
+
+  // ───────────── Code mentor ─────────────
+  test('code mentor: test runs show a pass/fail bar and a review round shows its findings by file', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'pt1', name: 'project_tests', input: { action: 'set', command: 'pytest -q' } }]);
+    const r1 = R('pt1', 'project_tests', 'Proven red on the starter: 2 failing, 0 passing.', { meta: { run: { passed: 0, failed: 2, errored: false, seconds: 0.4, failing: ['test_plain', 'test_empty'], exit: 1, why: 'set' }, command: 'pytest -q' } });
+    const a2 = A([{ kind: 'toolUse', id: 'rv1', name: 'project_review', input: { action: 'findings', verdict: 'changes', summary: 'Works, but brittle.' } }]);
+    const r2 = R('rv1', 'project_review', 'Round 1 recorded.', { meta: { verdict: 'changes', round: { number: 1, verdict: 'changes', summary: 'Works, but brittle.', tests: { passed: 2, failed: 0, errored: false, seconds: 0.3, failing: [], exit: 0, why: 'review' },
+      findings: [{ id: 1, file: 'shop.py', line: 2, severity: 'must', text: 'What happens when qty is missing?', resolved: false }, { id: 2, file: 'shop.py', line: 1, severity: 'nit', text: 'A docstring would help.', resolved: true }, { id: 3, file: 'util.py', line: null, severity: 'should', text: 'Unused.', resolved: false }] } } });
+    T.status('', false); T.reset([U('check my work'), a1, r1, a2, r2, A('Fix the must first.')], {});
+    const pt = $('[data-tool-id="pt1"]'); ok(pt, 'tests card');
+    ok(/0 passed, 2 failed/.test(pt.textContent), 'summary line: ' + pt.textContent.slice(0, 120));
+    const rv = $('[data-tool-id="rv1"]'); ok(rv, 'review card');
+    ok(/Changes requested/.test(rv.textContent), 'verdict shown (opened by default)');
+    eq($$('.review-file', rv).length, 2, 'findings grouped by file');
+    eq($$('.finding.must', rv).length, 1); ok($('.finding.resolved', rv), 'a resolved finding is struck through');
+    ok($('.tests-bar.green', rv), 'the round carries its test run');
+    ok(/2 passed · 0 failed/.test(rv.textContent), rv.textContent.slice(0, 200));
+    noErrors(rv, 'review card');
+  });
+
   // ───────────── Run ─────────────
   let passed = 0, failed = 0;
   for (const t of tests) {
