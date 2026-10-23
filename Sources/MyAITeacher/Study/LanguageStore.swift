@@ -185,3 +185,33 @@ enum Languages {
     /// Scripts that are not the Latin alphabet (the learner needs a keyboard or transliteration for them).
     static let scripted: Set<String> = ["ja", "ko", "zh", "yue", "ar", "he", "fa", "ur", "ru", "uk", "bg", "sr", "mk", "el", "hi", "mr", "ne", "sa", "bn", "ta", "te", "kn", "ml", "gu", "pa", "si", "th", "lo", "km", "my", "ka", "hy", "am", "yi", "ps", "ku", "sd", "ug", "mn", "grc"]
 }
+
+
+/// Writing systems a language's words are written in, to catch a slip into another script (a Korean word in a Japanese
+/// example sentence, Cyrillic in a Greek one). Latin, digits and punctuation are always allowed: names, romanisation
+/// and brand names are fine in any language.
+enum ScriptCheck {
+    static let scripts: [(name: String, ranges: [ClosedRange<UInt32>])] = [
+        ("Hiragana", [0x3040...0x309F]), ("Katakana", [0x30A0...0x30FF, 0x31F0...0x31FF, 0xFF66...0xFF9F]),
+        ("Han", [0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF]), ("Hangul", [0xAC00...0xD7AF, 0x1100...0x11FF, 0x3130...0x318F]),
+        ("Arabic", [0x0600...0x06FF, 0x0750...0x077F, 0xFB50...0xFDFF, 0xFE70...0xFEFF]), ("Hebrew", [0x0590...0x05FF]),
+        ("Cyrillic", [0x0400...0x04FF]), ("Greek", [0x0370...0x03FF]), ("Devanagari", [0x0900...0x097F]), ("Bengali", [0x0980...0x09FF]),
+        ("Thai", [0x0E00...0x0E7F]),
+    ]
+    /// The non-Latin scripts each language uses.
+    static let allowed: [String: Set<String>] = [
+        "ja": ["Hiragana", "Katakana", "Han"], "zh": ["Han"], "yue": ["Han"], "ko": ["Hangul", "Han"],
+        "ar": ["Arabic"], "fa": ["Arabic"], "ur": ["Arabic"], "he": ["Hebrew"], "ru": ["Cyrillic"], "uk": ["Cyrillic"],
+        "el": ["Greek"], "hi": ["Devanagari"], "bn": ["Bengali"], "th": ["Thai"],
+    ]
+    /// The first script in `text` that `lang` isn't written in (nil when it fits, or the language isn't one we know).
+    static func foreign(_ text: String, lang: String) -> String? {
+        // Latin-script languages: any non-Latin script is foreign.
+        let ok = allowed[lang] ?? []
+        for u in text.unicodeScalars {
+            guard let s = scripts.first(where: { $0.ranges.contains { $0.contains(u.value) } }) else { continue }
+            if !ok.contains(s.name) { return s.name }
+        }
+        return nil
+    }
+}

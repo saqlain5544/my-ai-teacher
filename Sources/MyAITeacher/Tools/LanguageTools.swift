@@ -31,6 +31,8 @@ enum TextAnalysis {
     /// Words with lemma and part of speech where the on-device tagger knows the language, and a Latin reading for
     /// other scripts. Japanese and Chinese are segmented into words (no spaces in the source).
     static func tokens(_ text: String, language: String?) -> [Token] {
+        let code = language.flatMap(Languages.code) ?? (text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) } ? "ja" : nil)
+        if code == "ja" { return japaneseTokens(text) }
         let tagger = NLTagger(tagSchemes: [.lexicalClass, .lemma])
         tagger.string = text
         if let l = language.flatMap(Languages.code) { tagger.setLanguage(NLLanguage(l), range: text.startIndex..<text.endIndex) }
@@ -39,8 +41,32 @@ enum TextAnalysis {
             let w = String(text[range])
             let lemma = tagger.tag(at: range.lowerBound, unit: .word, scheme: .lemma).0?.rawValue
             let latin = ScriptRuns.runs(w).contains { $0.script != .latin && $0.script != .neutral } ? w.applyingTransform(.toLatin, reverse: false) : nil
-            out.append(Token(text: w, lemma: lemma == w ? nil : lemma, pos: tag?.rawValue.lowercased(), reading: latin == w ? nil : latin))
+            let pos = tag?.rawValue.lowercased()
+            out.append(Token(text: w, lemma: lemma == w ? nil : lemma, pos: pos == "otherword" ? nil : pos, reading: latin == w ? nil : latin))
             return true
+        }
+        return out
+    }
+
+    /// Japanese words with Japanese readings. The generic path read kanji as Mandarin (担当 [dān dāng]) and tagged every
+    /// word "otherword"; the system's Japanese tokenizer segments the sentence and gives each word's reading in romaji,
+    /// shown with its hiragana (担当 [たんとう tantou]).
+    static func japaneseTokens(_ text: String) -> [Token] {
+        let ns = text as NSString
+        guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
+                                                Locale(identifier: "ja") as CFLocale) else { return [] }
+        var out: [Token] = []
+        while CFStringTokenizerAdvanceToNextToken(tok) != [] {
+            let r = CFStringTokenizerGetCurrentTokenRange(tok)
+            let w = ns.substring(with: NSRange(location: r.location, length: r.length))
+            guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }   // punctuation, spaces
+            let latin = (CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String)?.lowercased()
+            let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            let kana = hasKanji ? latin.flatMap { $0.applyingTransform(.latinToHiragana, reverse: false) } : nil
+            // は, へ and を standing alone are the particles, read wa, e and o (the tokenizer spells them ha, he, wo).
+            if let particle = ["は": "wa", "へ": "e", "を": "o"][w] { out.append(Token(text: w, lemma: nil, pos: "particle", reading: particle)); continue }
+            let reading = [kana, latin == w.lowercased() ? nil : latin].compactMap { $0 }.joined(separator: " ")
+            out.append(Token(text: w, lemma: nil, pos: nil, reading: reading.isEmpty ? nil : reading))
         }
         return out
     }
@@ -64,8 +90,9 @@ struct LanguageTool: Tool {
     Language-learning utilities. action="profile": set or read which language the learner is learning (`target`, e.g. \
     "ja"), their own language (`native`), and a CEFR `level` (A1–C2) — the app shows the right on-screen keyboard and \
     tells you the state on every request. action="transliterate": convert `text` to a script (`to`: latin, hiragana, \
-    katakana, hangul, arabic, cyrillic, greek, hebrew, thai, pinyin, ascii). action="analyze": segment `text` into words \
-    with lemma, part of speech and a Latin reading (Japanese and Chinese are segmented without spaces), plus sentence \
+    katakana, hangul, arabic, cyrillic, greek, hebrew, thai, pinyin, ascii) — romanised text only: write foreign names by \
+    sound yourself. action="analyze": segment `text` into words with their readings (Japanese in kana and romaji, \
+    Chinese in pinyin, other scripts in Latin), lemma and part of speech where the system knows them, plus sentence \
     count and detected languages. action="dictionary": Wiktionary definitions of `word` (with `lang` to pick the language \
     section). Use these to check readings and forms before teaching them; the learner never sees the calls.
     """
@@ -123,6 +150,11 @@ struct LanguageTool: Tool {
             let text = try input.req("text")
             let to = input["to"]?.string?.lowercased() ?? "latin"
             guard let out = Transliteration.apply(text, to: to) else { return .error("Unknown target script “\(to)”. One of: \(Transliteration.targets.keys.sorted().joined(separator: ", ")).") }
+            // Letters left over mean the text wasn't romanisation of that script (an English name to katakana gave
+            // "サm Cアrテr"): say so instead of handing back a half-converted word.
+            if !["latin", "ascii", "pinyin", "halfwidth"].contains(to), out.unicodeScalars.contains(where: { $0.isASCII && $0.properties.isAlphabetic }) {
+                return .error("“\(text)” isn't a romanisation of \(to), so it can't be converted letter by letter (it would give “\(out)”). Write foreign words and names by sound yourself (Sam Carter → サム・カーター in katakana), then check the reading with action=analyze.")
+            }
             return ToolOutput(text: out, meta: ["text": .string(out)])
         case "analyze":
             let text = try input.req("text")
@@ -193,7 +225,8 @@ struct VocabTool: Tool {
     let name = "vocab"
     let description = """
     The learner's vocabulary for the language they are learning. action="add": save words (`words`: term, reading, \
-    meaning, pos, example, example_meaning, notes, tags) — each becomes a flashcard in the language's deck; the learner \
+    meaning, pos, example, example_meaning, notes, tags) — each becomes a flashcard in the language's deck; adding a word \
+    already saved updates it (no need to remove it first); the learner \
     also saves words themselves from ```vocab cards. action="due": words due for review now (start lessons with these). \
     action="list" (recent, or by `tag`), "search" (`query`), "stats" (counts: new, learning, known, due), "remove" (`term`). \
     Save the words you teach, with an example sentence from the lesson; don't save what they already knew.
@@ -236,7 +269,15 @@ struct VocabTool: Tool {
             guard !added.isEmpty else { return .error("No words saved: each needs `term` and `meaning`.") }
             EventBus.publish(.studyDataChanged)
             let st = study.vocabStats(lang: lang)
-            return ToolOutput(text: "Saved \(added.count) word(s) to \(Languages.englishName(lang)) (\(st.total) in all, \(st.due) due for review):\n" + added.map(line).joined(separator: "\n"),
+            // A slip into another script (a Korean word in a Japanese example) is easy to miss in a long list: name it.
+            let slips = added.compactMap { v -> String? in
+                for (field, text) in [("term", v.term), ("example", v.example ?? "")] {
+                    if let s = ScriptCheck.foreign(text, lang: lang) { return "“\(v.term)”: its \(field) contains \(s), which \(Languages.englishName(lang)) isn't written in" }
+                }
+                return nil
+            }
+            let check = slips.isEmpty ? "" : "\nCheck and re-add (adding again updates the word):\n" + slips.map { "- " + $0 }.joined(separator: "\n")
+            return ToolOutput(text: "Saved \(added.count) word(s) to \(Languages.englishName(lang)) (\(st.total) in all, \(st.due) due for review):\n" + added.map(line).joined(separator: "\n") + check,
                               meta: ["count": .number(Double(added.count)), "lang": .string(lang)])
         case "due":
             let due = study.dueVocab(lang: lang, limit: limit)

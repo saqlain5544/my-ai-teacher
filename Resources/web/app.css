@@ -163,6 +163,9 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .thinking > summary::before { content: "›"; display: inline-block; transition: transform .15s; font-size: 1.2em; line-height: 1; }
 .thinking[open] > summary::before { transform: rotate(90deg); }
 .thinking .thinking-body { margin-top: 6px; max-height: 340px; overflow-y: auto; }
+/* A closed block hides its body outright: WebKit kept a closed <details>' content laid out (a blank, full-height gap
+   after a tool call where the reasoning had been). */
+.thinking:not([open]) > .thinking-body { display: none; }
 .thinking.raw .thinking-body { white-space: pre-wrap; overflow-wrap: anywhere; }
 .thinking .thinking-code { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 0.92em; max-height: none; }
 .thinking.live > summary { animation: pulse 1.6s ease-in-out infinite; }
@@ -612,3 +615,7 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 .draft-note { color: var(--muted); font-size: 0.88em; }
 .draft-issues { margin: 4px 0 8px 18px; padding: 0; }
 
+
+/* vocab tool card */
+.vocab-saved td { padding: 3px 10px 3px 0; vertical-align: top; }
+.vocab-saved .muted { color: var(--muted); font-size: .9em; }

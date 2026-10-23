@@ -19,6 +19,21 @@
   R.defineTool({ name: 'todo_write', icon: '☑︎', title: 'Checklist', open: () => true,
     body: (n, ctx) => '<ul class="todo">' + (input(n).todos || []).map(t => '<li class="' + ctx.esc(t.status) + '">' + (t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○') + ' <span>' + ctx.esc(t.content) + '</span></li>').join('') + '</ul>' });
 
+  // ── Language mentor: the learner's word deck and language utilities ───
+  R.defineTool({ name: 'vocab', icon: '📚', title: 'Vocabulary',
+    compact: n => ['remove', 'stats'].includes(input(n).action),
+    summary: n => { const i = input(n), w = Array.isArray(i.words) ? i.words : [];
+      return (i.action || '') + (w.length ? ' · ' + w.length + ' word' + (w.length === 1 ? '' : 's') + ': ' + w.slice(0, 4).map(x => x.term || x.word || '').join('、') + (w.length > 4 ? '…' : '') : i.term ? ' ' + i.term : i.query ? ' “' + i.query + '”' : ''); },
+    body(n, ctx) {
+      const i = input(n), w = Array.isArray(i.words) ? i.words : [];
+      const list = w.length ? '<table class="vocab-saved"><tbody>' + w.map(x => '<tr><td lang="' + ctx.esc(i.lang || '') + '"><b>' + ctx.esc(x.term || x.word || '') + '</b>' +
+        (x.reading ? ' <span class="muted">' + ctx.esc(x.reading) + '</span>' : '') + '</td><td>' + ctx.inline(x.meaning || x.translation || '') + '</td></tr>').join('') + '</tbody></table>' : '';
+      return list + (n.props.output ? ctx.pre(n.props.output) : '');
+    } });
+  R.defineTool({ name: 'language', icon: '🌐', title: 'Language',
+    compact: n => input(n).action === 'profile',
+    summary: n => { const i = input(n); return (i.action || '') + ' ' + (i.word || i.target || (i.text ? String(i.text).slice(0, 40) : '') || '') + (i.to ? ' → ' + i.to : ''); } });
+
   // ── The course board / learning plan ──────────────────────────────────
   R.defineTool({ name: 'lesson_plan', icon: '🗺', title: 'Learning plan', open: finished,
     summary: n => { const i = input(n); return (i.action || '') + ' ' + (i.title || i.card || i.id || i.plan || ''); },

@@ -156,7 +156,7 @@ final class LanguageExtension: AgentExtension {
         return l.rawValue
     }
 
-    private static let askPattern = try! NSRegularExpression(pattern: #"(?i)\b(learn(?:ing)?|teach(?:\s+me)?|practi[cs](?:e|ing)|stud(?:y|ying)|speak(?:ing)?|improve(?:\s+my)?|lessons?\s+(?:in|on|of)|tutor(?:\s+me)?\s+in|help\s+me\s+with|my)\b([^.!?\n]{0,50})"#)
+    nonisolated private static let askPattern = try! NSRegularExpression(pattern: #"(?i)\b(learn(?:ing)?|teach(?:\s+me)?|practi[cs](?:e|ing)|stud(?:y|ying)|speak(?:ing)?|improve(?:\s+my)?|lessons?\s+(?:in|on|of)|tutor(?:\s+me)?\s+in|help\s+me\s+with|my)\b([^.!?\n]{0,50})"#)
     /// "I want to learn Japanese", "teach me some Spanish", "practise my Arabic" → the language named last.
     nonisolated static func asked(_ texts: [String]) -> String? {
         let names = Languages.names.keys.sorted { $0.count > $1.count }

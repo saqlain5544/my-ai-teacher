@@ -1055,7 +1055,7 @@
     const title = typeof d.title === 'function' ? guard(b.name, () => d.title(tn), b.name) : (d.title || b.name);
     const running = pendingCall || p.status === 'running';
     const isErr = p.status === 'error';
-    const compact = !!d.compact && !pend;
+    const compact = !!(typeof d.compact === 'function' ? guard(b.name, () => d.compact(tn), false) : d.compact) && !pend;
     const open = S.openTools.has(b.id) || !!(d.open && guard(b.name, () => d.open(tn), false));
     let state = running ? '<span class="spinner"></span>' : (isErr ? 'failed' : (r && r.meta && r.meta.ms ? fmtMs(r.meta.ms) : '✓'));
     if (pend && pend.kind === 'permission') state = 'needs approval';

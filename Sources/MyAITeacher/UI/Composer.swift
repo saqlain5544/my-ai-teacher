@@ -257,7 +257,8 @@ struct GrowingTextView: NSViewRepresentable {
         context.coordinator.textView = tv
         // Keys from the on-screen keyboard land at this view's caret (composition needs the text before it).
         context.coordinator.keyObserver = NotificationCenter.default.addObserver(forName: .composerKey, object: nil, queue: .main) { [weak tv] n in
-            guard let tv, tv.window != nil, let e = n.object as? KeyboardKeyEvent else { return }
+            // Only the composer in the window the key was pressed in (every open lesson has one); a reset goes to all.
+            guard let tv, let w = tv.window, let e = n.object as? KeyboardKeyEvent, e.key == .fn("reset") || w.isKeyWindow else { return }
             MainActor.assumeIsolated { tv.apply(e) }
         }
         return scroll
@@ -270,7 +271,10 @@ struct GrowingTextView: NSViewRepresentable {
         tv.onPasteFiles = onPasteFiles
         tv.onPasteImage = onPasteImage
         if tv.placeholder != placeholder { tv.placeholder = placeholder; tv.needsDisplay = true }
-        if tv.string != text { tv.string = text; context.coordinator.recalc() ; tv.needsDisplay = true }
+        if tv.string != text {
+            tv.string = text; context.coordinator.recalc() ; tv.needsDisplay = true
+            if text.isEmpty { tv.isContinuousSpellCheckingEnabled = true }   // sent: back to the learner's own language
+        }
         if context.coordinator.lastFocus != focusTick {
             context.coordinator.lastFocus = focusTick
             DispatchQueue.main.async { tv.window?.makeFirstResponder(tv) }
@@ -338,6 +342,16 @@ final class ComposerTextView: NSTextView {
     private var romaji = false
     private var katakana = false
 
+    /// Typing in the language being learned (the on-screen keyboard, or romaji): the Mac's spell-checker underlines it as
+    /// misspelt English, so it's off until the message is sent (an empty composer turns it back on).
+    private func targetLanguageTyping() {
+        if isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = false }
+    }
+    override func didChangeText() {
+        super.didChangeText()
+        if string.isEmpty, !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
+    }
+
     /// The character before the caret (a composed character sequence), and the UTF-16 range of the last `n` of them.
     private func before(_ n: Int) -> (text: String, range: NSRange) {
         let ns = string as NSString
@@ -353,7 +367,13 @@ final class ComposerTextView: NSTextView {
     }
 
     func apply(_ e: KeyboardKeyEvent) {
+        if e.key == .fn("reset") {   // the keyboard closed: back to plain typing in the learner's own language
+            romaji = false; katakana = false
+            if !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
+            return
+        }
         window?.makeFirstResponder(self)
+        targetLanguageTyping()
         let prev = before(1).text.first
         switch e.key {
         case .text(var t):
@@ -387,11 +407,13 @@ final class ComposerTextView: NSTextView {
     /// Romaji mode: Latin letters typed on the physical keyboard become kana as soon as a syllable is complete.
     override func insertText(_ string: Any, replacementRange: NSRange) {
         super.insertText(string, replacementRange: replacementRange)
-        guard romaji, let s = string as? String, s.count == 1, let c = s.first, c.isASCII, c.isLetter || c == "'" || c == "-", !hasMarkedText() else { return }
+        // Punctuation too, as a Japanese input method does: "." → 。, "," → 、, "?" → ？ (the page's keyboard already did).
+        guard romaji, let s = string as? String, s.count == 1, let c = s.first, c.isASCII, c.isLetter || "'-.,?!".contains(c), !hasMarkedText() else { return }
+        targetLanguageTyping()
         let ns = self.string as NSString
         let caret = selectedRange().location
         let head = ns.substring(to: caret)
-        guard let m = head.range(of: "[A-Za-z'\\-]+$", options: .regularExpression) else { return }
+        guard let m = head.range(of: "[A-Za-z'\\-.,?!]+$", options: .regularExpression) else { return }
         let run = String(head[m])
         let kana = ScriptComposer.romaji(run, katakana: katakana)
         guard kana != run else { return }

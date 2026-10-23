@@ -751,6 +751,7 @@
     T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next step.'); await sleep(150);
     const d1 = $('#m-' + a.id + ' details.thinking');
     ok(!d1.open && !d1.classList.contains('live'), 'the earlier step\'s thinking is collapsed and finished');
+    ok($('.thinking-body', d1).offsetHeight === 0, 'and takes no space: no blank gap where the reasoning was');
     ok(/Thought process · 6 words/.test($('summary', d1).textContent), $('summary', d1).textContent);
     ok($('#m-' + b.id + ' details.thinking').open, 'the new step streams open');
     T.status('', false); await sleep(120);
@@ -1336,6 +1337,14 @@
     posts.length = 0; click(c);
     eq(lastPost('suggest'), { type: 'suggest', text: 'Let us continue', board: 'plan-1' }, 'the board goes with it');
     posts.length = 0; click($$('.suggestion')[1]); eq(lastPost('suggest'), { type: 'suggest', text: 'x' }, 'others unchanged');
+  });
+
+  test('language tool cards: the words saved, and a compact profile line', () => {
+    const a = A([{ kind: 'toolUse', id: 'v1', name: 'vocab', input: { action: 'add', lang: 'ja', words: [{ term: 'はじめまして', reading: 'hajimemashite', meaning: 'pleased to meet you' }, { term: '営業部', meaning: 'sales department' }] } },
+                 { kind: 'toolUse', id: 'l1', name: 'language', input: { action: 'profile', target: 'ja', level: 'A2' } }]);
+    T.reset([U('q'), a, R('v1', 'vocab', 'Saved 2 word(s)'), R('l1', 'language', 'Target language: Japanese')], {});
+    const v = $('[data-tool-id="v1"]'); ok(v.textContent.includes('Vocabulary') && v.textContent.includes('2 words'), v.textContent.slice(0, 80));
+    const l = $('[data-tool-id="l1"]'); ok(l.textContent.includes('Language') && !/🔧/.test(l.textContent), 'its own card, not the generic one');
   });
 
   test('metrics footer expands', () => {

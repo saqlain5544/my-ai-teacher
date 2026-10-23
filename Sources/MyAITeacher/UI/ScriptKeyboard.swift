@@ -44,6 +44,11 @@ struct ScriptKeyboardView: View {
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 12).fill(Color.primary.opacity(0.04)))
+        // Closing the keyboard ends romaji and katakana in the composer too: they used to stay on, and English typed after
+        // closing it came out as kana ("My ろぇ: い いんsたll…").
+        .onDisappear {
+            NotificationCenter.default.post(name: .composerKey, object: KeyboardKeyEvent(key: .fn("reset"), layout: layout, shift: false, katakana: false, romaji: false))
+        }
     }
 
     private func label(_ key: KeyboardLayouts.Key) -> String {
