@@ -79,6 +79,7 @@ final class CodeAgentTests: XCTestCase {
         let bad = try await WriteTool().run(["path": "bad.py", "content": "def f(:\n    pass\n"], ctx())
         XCTAssertTrue(bad.text.contains("Syntax check found problems"), bad.text)
         XCTAssertTrue(bad.text.contains("SyntaxError") || bad.text.contains("invalid syntax"), bad.text)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("__pycache__").path), "the check leaves nothing in the project")
         XCTAssertEqual(bad.meta?["syntaxErrors"]?.bool, true)
         let good = try await WriteTool().run(["path": "good.py", "content": "def f():\n    pass\n"], ctx())
         XCTAssertTrue(good.text.contains("Syntax check: ok"), good.text)
@@ -123,6 +124,15 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent("a.txt"), encoding: .utf8), "one\n")
         XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("new.txt").path))
         XCTAssertEqual(Checkpoints.restore(ws, turn: "nope").restored, [])
+        XCTAssertEqual(Checkpoints.restore(ws, turn: "t1").restored, [], "an undo happens once: the checkpoint is gone")
+        // A later turn that touched the same file blocks the older undo (it would wipe the later change).
+        try write("c.txt", "v1\n")
+        Checkpoints.backup(ws, turn: "1000", file: dir.appendingPathComponent("c.txt")); try write("c.txt", "v2\n")
+        Checkpoints.backup(ws, turn: "2000", file: dir.appendingPathComponent("c.txt")); try write("c.txt", "v3\n")
+        Checkpoints.backup(ws, turn: "3000", file: dir.appendingPathComponent("a.txt"))
+        XCTAssertEqual(Checkpoints.laterTurns(ws, touching: "1000"), ["2000"]); XCTAssertEqual(Checkpoints.laterTurns(ws, touching: "2000"), [])
+        XCTAssertEqual(Checkpoints.restore(ws, turn: "2000").restored, ["c.txt"]); XCTAssertEqual(try String(contentsOf: dir.appendingPathComponent("c.txt"), encoding: .utf8), "v2\n")
+        XCTAssertEqual(Checkpoints.laterTurns(ws, touching: "1000"), [], "once the later turn is undone, the older one may be")
         for i in 0..<(Checkpoints.keep + 5) { Checkpoints.backup(ws, turn: "p\(i)", file: dir.appendingPathComponent("a.txt")) }
         Checkpoints.prune(ws)
         let left = try FileManager.default.contentsOfDirectory(atPath: ws.stateDir.appendingPathComponent("checkpoints").path)

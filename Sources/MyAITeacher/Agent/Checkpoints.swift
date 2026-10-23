@@ -49,9 +49,20 @@ enum Checkpoints {
         return true
     }
 
-    /// Puts every file of the turn back as it was. Returns what happened, for the notice and for the agent.
+    /// Turns after `turn` whose checkpoints hold any of the same files: undoing `turn` would discard their changes.
+    static func laterTurns(_ ws: Workspace, touching turn: String) -> [String] {
+        guard let m = manifest(ws, turn: turn) else { return [] }
+        let mine = Set(m.files.map(\.path))
+        let root = ws.stateDir.appendingPathComponent("checkpoints", isDirectory: true)
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []).filter { $0 > turn && $0.allSatisfy(\.isNumber) }
+        return names.filter { later in (manifest(ws, turn: later)?.files ?? []).contains { mine.contains($0.path) } }.sorted()
+    }
+
+    /// Puts every file of the turn back as it was, then forgets the checkpoint (an undo happens once). Returns what
+    /// happened, for the notice and for the agent.
     static func restore(_ ws: Workspace, turn: String) -> (restored: [String], removed: [String], failed: [String]) {
         guard let m = manifest(ws, turn: turn) else { return ([], [], []) }
+        defer { if m.files.allSatisfy({ !$0.existed || $0.backup != nil }) { try? FileManager.default.removeItem(at: manifestURL(ws, turn: turn)) } }
         let fm = FileManager.default
         var restored: [String] = [], removed: [String] = [], failed: [String] = []
         for e in m.files {

@@ -110,12 +110,12 @@ enum Diagnostics {
         let ext = file.pathExtension.lowercased()
         var cmd: (String, [String])?
         switch ext {
-        case "py": cmd = ProcessRunner.which("python3").map { ($0, ["-m", "py_compile", file.path]) }
+        case "py": cmd = ProcessRunner.which("python3").map { ($0, ["-c", "import ast, sys; ast.parse(open(sys.argv[1], encoding='utf-8').read(), sys.argv[1])", file.path]) }   // not py_compile: it writes __pycache__ into the project
         case "js", "mjs", "cjs": cmd = ProcessRunner.which("node").map { ($0, ["--check", file.path]) }
         case "rb": cmd = ProcessRunner.which("ruby").map { ($0, ["-c", file.path]) }
         case "zig": cmd = ProcessRunner.which("zig").map { ($0, ["ast-check", file.path]) }
         case "swift": cmd = ProcessRunner.which("swiftc").map { ($0, ["-parse", file.path]) }
-        case "go": cmd = ProcessRunner.which("gofmt").map { ($0, ["-e", "-l", file.path]) }
+        case "go": cmd = ProcessRunner.which("gofmt").map { ($0, ["-e", file.path]) }   // syntax errors on stderr with exit 2; formatting is not an error
         case "sh", "bash", "zsh": cmd = ("/bin/zsh", ["-n", file.path])
         case "json":
             guard let data = try? Data(contentsOf: file) else { return nil }
@@ -129,8 +129,8 @@ enum Diagnostics {
         guard let (exe, args) = cmd else { return nil }
         let r = await ProcessRunner.run(exe, args, cwd: folder, timeout: 10)
         if r.timedOut { return nil }
-        if r.exitCode == 0 && (ext != "go" || r.stdout.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty) { return "ok" }
-        let out = r.combined.replacingOccurrences(of: file.path, with: file.lastPathComponent)
+        if r.exitCode == 0 { return "ok" }
+        let out = (ext == "go" ? r.stderr : r.combined).replacingOccurrences(of: file.path, with: file.lastPathComponent)
         let items = parse(out, folder: folder)
         return items.isEmpty ? String(out.trimmingCharacters(in: .whitespacesAndNewlines).prefix(600)) : summary(items, cap: 10)
     }

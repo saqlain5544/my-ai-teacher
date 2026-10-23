@@ -43,6 +43,8 @@ final class CodeAgentExtension: AgentExtension {
 
     /// The user pressed Undo under a reply: the turn's files go back, and the agent hears about it with the next message.
     func revert(_ session: ChatSession, turn: String) -> String {
+        let later = Checkpoints.laterTurns(session.services.workspace, touching: turn)
+        if !later.isEmpty { return "A later turn changed the same file\(later.count == 1 ? "" : "s") again: undo that turn first, then this one." }
         let r = Checkpoints.restore(session.services.workspace, turn: turn)
         let n = r.restored.count + r.removed.count
         guard n > 0 || !r.failed.isEmpty else { return "Nothing to undo: that turn's checkpoint is gone." }
