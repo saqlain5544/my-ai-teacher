@@ -40,6 +40,13 @@ final class SourceToolTests: XCTestCase {
         XCTAssertFalse(bare.isError, "a bare module name is found through Python: \(bare.text)")
         let missing = try await SourceTool().run(["library": "python no_such_module_here"], ctx())
         XCTAssertTrue(missing.isError && missing.text.contains("Couldn't find"), missing.text)
+        let folder = try await SourceTool().run(["library": "python", "action": "outline", "path": "json"], ctx())
+        XCTAssertTrue(folder.isError && folder.text.contains("is a folder"), folder.text)
+        let reversed = try await SourceTool().run(["library": "python json", "action": "read", "path": "decoder.py", "from": 5, "to": 2], ctx())
+        XCTAssertTrue(reversed.text.contains("lines 5–5") && reversed.text.contains("     5\t"), reversed.text)
+        let frozen = try await SourceTool().run(["library": "python os", "action": "outline"], ctx())
+        XCTAssertFalse(frozen.isError, frozen.text); XCTAssertTrue(frozen.text.contains("os.py") && frozen.text.contains("ƒ"), "a frozen stdlib module is read from its .py: \(frozen.text)")
+        XCTAssertEqual(LibrarySources.snake("std.ArrayList"), "std.array_list"); XCTAssertEqual(LibrarySources.snake("HashMap"), "hash_map"); XCTAssertEqual(LibrarySources.snake("io"), "io")
     }
 
     @MainActor func testPackagesInTheFolderAndTheToolchainsThatAreInstalled() async throws {
@@ -54,6 +61,10 @@ final class SourceToolTests: XCTestCase {
             XCTAssertFalse(zig.isError, zig.text); XCTAssertTrue(zig.text.contains("std.zig") || zig.text.contains("array_list"), zig.text)
             let al = try await SourceTool().run(["library": "zig std.array_list", "action": "outline"], ctx())
             XCTAssertFalse(al.isError, al.text); XCTAssertTrue(al.text.contains("ƒ") && al.text.lowercased().contains("append"), al.text)
+            let typed = try await SourceTool().run(["library": "zig std.ArrayList"], ctx())
+            XCTAssertFalse(typed.isError, typed.text); XCTAssertTrue(typed.text.contains("array_list.zig"), "the type's spelling finds its file: \(typed.text)")
+            let unknown = try await SourceTool().run(["library": "zig std.NoSuchThing"], ctx())
+            XCTAssertFalse(unknown.isError, unknown.text); XCTAssertTrue(unknown.text.contains("not a file or folder") && unknown.text.contains("std.zig"), "falls back to std with a note: \(unknown.text)")
         }
         if ProcessRunner.which("go") != nil {
             let go = try await SourceTool().run(["library": "go net/http", "action": "find", "query": "server.go"], ctx())

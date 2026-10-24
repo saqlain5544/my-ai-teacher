@@ -39,9 +39,20 @@ enum LibrarySources {
         func dir(_ u: URL) -> URL? { var d: ObjCBool = false; return FileManager.default.fileExists(atPath: u.path, isDirectory: &d) && d.boolValue ? u : nil }
         func sub(_ root: URL, _ rel: String) -> URL? {
             guard !rel.isEmpty else { return root }
-            let candidates = [rel, rel.replacingOccurrences(of: ".", with: "/"), rel.replacingOccurrences(of: ".", with: "/") + ".zig", rel + ".zig", rel + ".py", rel + ".rs"]
-            for c in candidates { let u = root.appendingPathComponent(c); if FileManager.default.fileExists(atPath: u.path) { return u } }
+            // `std.ArrayList` lives in array_list.zig, `HashMap` in hash_map.rs: the type name's snake_case is tried too.
+            for r in [rel, snake(rel)] {
+                let slash = r.replacingOccurrences(of: ".", with: "/")
+                for c in [r, slash, slash + ".zig", r + ".zig", slash + ".py", slash + ".rs", slash + "/mod.rs"] {
+                    let u = root.appendingPathComponent(c); if FileManager.default.fileExists(atPath: u.path) { return u }
+                }
+            }
             return nil
+        }
+        /// The file for `rel` under `root`, or the root itself with a note saying the name is not a file there, so an
+        /// installed library never reads as missing because of how a type is spelled.
+        func place(_ root: URL, _ rel: String, name: String, note: String) -> Root {
+            if let u = sub(root, rel) { return Root(name: name + (rel.isEmpty ? "" : " " + rel), path: u, note: note) }
+            return Root(name: name, path: root, note: "`\(rel)` is not a file or folder under \(root.path) — `find` or `grep` for it. " + note)
         }
         switch eco {
         case "zig":
@@ -49,7 +60,7 @@ enum LibrarySources {
             if std == nil, let zig = tool("zig"), let env = await run(zig, ["env"]) { std = Toolchains.stdlib("zig", output: env).map { URL(fileURLWithPath: $0) } }
             guard let root = std.flatMap(dir) else { return nil }
             let rel = rest.hasPrefix("std.") ? String(rest.dropFirst(4)) : rest == "std" ? "" : rest
-            return sub(root, rel).map { Root(name: "zig std" + (rel.isEmpty ? "" : " " + rel), path: $0, note: "Zig's standard library source (std.zig is the index; std/<name>.zig per namespace)") }
+            return place(root, rel, name: "zig std", note: "Zig's standard library source (std.zig is the index; std/<name>.zig per namespace)")
         case "rust", "rustc", "cargo":
             if eco == "cargo", !rest.isEmpty {
                 // ~/.cargo/registry/src/<index>/<crate>-<version>: the newest version present.
@@ -66,7 +77,7 @@ enum LibrarySources {
             let crate = rest.split(separator: " ").first.map(String.init) ?? "std"
             let base = root.appendingPathComponent(["std", "core", "alloc", "test", "proc_macro"].contains(crate) ? crate + "/src" : crate)
             let rel = rest.split(separator: " ").dropFirst().joined(separator: "/")
-            return sub(dir(base) ?? root, rel).map { Root(name: "rust \(crate)", path: $0, note: "Rust's \(crate) source (needs the rust-src component: `rustup component add rust-src`)") }
+            return place(dir(base) ?? root, rel, name: "rust \(crate)", note: "Rust's \(crate) source (needs the rust-src component: `rustup component add rust-src`)")
         case "go":
             guard let go = tool("go") else { return nil }
             if rest.contains(".") && rest.contains("/") {   // a module path: golang.org/x/net
@@ -83,7 +94,7 @@ enum LibrarySources {
             }
             guard let goroot = await run(go, ["env", "GOROOT"]) else { return nil }
             let src = URL(fileURLWithPath: goroot).appendingPathComponent("src")
-            return sub(src, rest).map { Root(name: "go " + (rest.isEmpty ? "standard library" : rest), path: $0, note: "Go's standard library source under GOROOT/src (one directory per package)") }
+            return place(src, rest, name: "go " + (rest.isEmpty ? "standard library" : ""), note: "Go's standard library source under GOROOT/src (one directory per package)")
         case "python", "python3", "pip":
             guard let py = tool("python3") else { return nil }
             if rest.isEmpty {
@@ -91,16 +102,22 @@ enum LibrarySources {
                 return dir(URL(fileURLWithPath: std)).map { Root(name: "python standard library", path: $0, note: "CPython's pure-Python stdlib (C modules such as _json live in the interpreter)") }
             }
             let module = rest.split(separator: " ").first.map(String.init) ?? rest
-            guard module.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." }),
-                  let file = await run(py, ["-c", "import importlib, sys; m = importlib.import_module(sys.argv[1]); print(getattr(m, '__file__', '') or '<builtin>')", module]) else { return nil }
-            if file == "<builtin>" {
-                // sys, math, _json…: compiled into the interpreter. The stdlib folder stands in, with the note saying why.
-                guard let std = await run(py, ["-c", "import sysconfig; print(sysconfig.get_paths()['stdlib'])"]), let d = dir(URL(fileURLWithPath: std)) else { return nil }
-                return Root(name: "python \(module)", path: d, note: "`\(module)` is a built-in module without Python source (its C source is in CPython's Modules/ or Python/ tree); this is the stdlib folder instead")
+            // Located without importing it (a package's import-time code never runs from here). Output: the file or
+            // <builtin>, the stdlib folder, and the import name (a pip distribution name maps to its top-level module).
+            guard module.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" || $0 == "." || $0 == "-" }),
+                  let out = await run(py, ["-c", Self.pythonLocator, module]) else { return nil }
+            let lines = out.split(separator: "\n").map(String.init)
+            guard lines.count == 3, let d = dir(URL(fileURLWithPath: lines[1])) else { return nil }
+            let file = lines[0], name = lines[2]
+            if file == "<builtin>" || file.hasSuffix(".so") || file.hasSuffix(".pyd") {
+                // sys, _json… are compiled into the interpreter and math, _socket… are compiled extensions: no Python
+                // source. The stdlib folder stands in, with the note saying why.
+                let how = file == "<builtin>" ? "a built-in module compiled into the interpreter" : "a compiled extension module (\(file))"
+                return Root(name: "python \(name)", path: d, note: "`\(name)` is \(how), without Python source (its C source is in CPython's Modules/ tree); this is the stdlib folder instead")
             }
             let u = URL(fileURLWithPath: file)
             let path = u.lastPathComponent == "__init__.py" ? u.deletingLastPathComponent() : u
-            return Root(name: "python \(module)", path: path, note: "where `import \(module)` loads from")
+            return Root(name: "python \(name)", path: path, note: "where `import \(name)` loads from")
         case "npm", "node":
             guard !rest.isEmpty else { return nil }
             let pkg = rest.split(separator: " ").first.map(String.init) ?? rest
@@ -123,6 +140,43 @@ enum LibrarySources {
             if let r = await locate("cargo " + s, folder: folder) { return r }
             return nil
         }
+    }
+
+    /// argv[1]: a module or pip distribution name → three lines: its file (or <builtin>), the stdlib folder, the import name.
+    static let pythonLocator = """
+    import importlib.util, importlib.metadata, os, sys, sysconfig
+    n = sys.argv[1]; std = sysconfig.get_paths()['stdlib']
+    def spec(m):
+        try: return importlib.util.find_spec(m)
+        except Exception: return None
+    s = spec(n)
+    if s is None:
+        key = n.lower().replace('_', '-'); names = []
+        try: names = [m for m, ds in importlib.metadata.packages_distributions().items() if key in [d.lower().replace('_', '-') for d in ds]]
+        except Exception:   # Python 3.9, or a distribution without metadata: each distribution's own top_level.txt
+            for d in importlib.metadata.distributions():
+                try:
+                    if (d.metadata['Name'] or '').lower().replace('_', '-') == key: names += (d.read_text('top_level.txt') or '').split()
+                except Exception: pass
+        for m in sorted(names):
+            s = spec(m)
+            if s is not None: n = m; break
+    if s is None: sys.exit(3)
+    p = s.origin if s.has_location and s.origin else None
+    if p is None and s.origin == 'frozen':
+        base = os.path.join(std, *n.split('.'))
+        p = base + '.py' if os.path.isfile(base + '.py') else os.path.join(base, '__init__.py') if os.path.isdir(base) else None
+    print(p or '<builtin>'); print(std); print(n)
+    """
+
+    /// `ArrayList` → `array_list`, `HashMap` → `hash_map`, `std.ArrayList` → `std.array_list`.
+    static func snake(_ s: String) -> String {
+        var out = ""
+        for (i, c) in s.enumerated() {
+            if c.isUppercase, i > 0, let prev = out.last, prev.isLetter || prev.isNumber, prev.isLowercase || prev.isNumber { out.append("_") }
+            out.append(contentsOf: c.lowercased())
+        }
+        return out
     }
 
     static let skipDirs: Set<String> = ["node_modules", ".git", "__pycache__", "testdata", "target", ".build", "zig-cache", ".zig-cache"]
@@ -177,12 +231,16 @@ struct SourceTool: Tool {
         }
         let root = lib.path
         let fm = FileManager.default
-        func resolveFile(_ p: String) -> URL? {
-            let u = p.hasPrefix("/") ? URL(fileURLWithPath: p) : root.path.hasSuffix("/" + p) ? root : root.appendingPathComponent(p)
-            if fm.fileExists(atPath: u.path) { return u }
+        /// The file for `p`: under the root, absolute, or the root itself when the library resolved to one file.
+        enum Found { case file(URL), problem(String) }
+        func resolveFile(_ p: String) -> Found {
             var isDir: ObjCBool = false
-            if fm.fileExists(atPath: root.path, isDirectory: &isDir), !isDir.boolValue, p.isEmpty || root.lastPathComponent == p { return root }
-            return nil
+            let rootIsFile = fm.fileExists(atPath: root.path, isDirectory: &isDir) && !isDir.boolValue
+            if rootIsFile, p.isEmpty || root.lastPathComponent == p || root.path.hasSuffix("/" + p) { return .file(root) }
+            guard !p.isEmpty else { return .problem("Give `path`, a file under \(root.path) (`locate` lists it).") }
+            let u = p.hasPrefix("/") ? URL(fileURLWithPath: p) : root.appendingPathComponent(p)
+            guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { return .problem("No file \(p) under \(root.path): `find` it by name.") }
+            return isDir.boolValue ? .problem("\(u.path) is a folder: give a file in it (`locate` or `find` lists them).") : .file(u)
         }
         let meta: JSON = ["root": .string(root.path), "name": .string(lib.name)]
         switch input["action"]?.string ?? "locate" {
@@ -205,15 +263,17 @@ struct SourceTool: Tool {
             let hits = LibrarySources.find(q, in: root)
             return ToolOutput(text: hits.isEmpty ? "No file under \(root.path) has “\(q)” in its name. Try `grep`, or `locate` to see the layout." : "\(hits.count) file(s):\n" + hits.joined(separator: "\n"), meta: meta)
         case "outline":
-            guard let file = resolveFile(input["path"]?.string ?? "") else { return .error("Give `path`, a file under \(root.path).") }
+            let file: URL
+            switch resolveFile(input["path"]?.string ?? "") { case .problem(let m): return .error(m); case .file(let f): file = f }
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { return .error("Cannot read \(file.path).") }
             let syms = SymbolsTool.outline(text, ext: file.pathExtension.lowercased())
             if syms.isEmpty { return ToolOutput(text: "No definitions recognised in \(file.lastPathComponent) (\(text.split(separator: "\n").count) lines): `read` it.", meta: meta) }
             return ToolOutput(text: "\(file.path): \(syms.count) definitions\n" + syms.prefix(500).map { "\(String($0.line).leftPad(5))  \($0.kind == "function" ? "ƒ" : $0.kind == "type" ? "T" : "c")  \($0.text)" }.joined(separator: "\n") + (syms.count > 500 ? "\n… \(syms.count - 500) more" : ""), meta: meta)
         case "read":
-            guard let file = resolveFile(input["path"]?.string ?? "") else { return .error("Give `path`, a file under \(root.path).") }
+            let file: URL
+            switch resolveFile(input["path"]?.string ?? "") { case .problem(let m): return .error(m); case .file(let f): file = f }
             let from = max(1, input["from"]?.int ?? 1)
-            let to = min(input["to"]?.int ?? (from + 200), from + 400)
+            let to = max(from, min(input["to"]?.int ?? (from + 200), from + 400))
             var r = try await ReadTool().run(["path": .string(file.path), "offset": .number(Double(from)), "limit": .number(Double(to - from + 1))], ctx)
             r.text = "\(file.path) lines \(from)–\(to):\n" + r.text
             r.meta = meta
