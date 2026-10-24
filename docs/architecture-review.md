@@ -68,8 +68,8 @@ extension points.
 * `ChatSession.swift`: stream handling moved out into `ReplyBuilder` (pure, unit tested), which the sub-agent loop
   now shares (one set of stream rules; it had drifted before, dropping thinking signatures). Tool execution and the step
   loop could follow; they were left in place because another session's uncommitted edits sit in `execute`.
-* Computer use and the course board are `Features.Module`s; testing and language could follow. A module's hooks
-  register right after the permission gate, so each move needs the check done for the board: the hooks it implements
-  must keep their order relative to the other extensions that implement the same hooks.
+* Computer use and the course board are `Features.Module`s. Testing and language stay plain extensions on purpose:
+  testing has no tools (a module would add nothing), and language adds a system-prompt section, so registering it
+  with the modules (after the permission gate) would reorder the prompt every new lesson gets.
 * The quiz-grouping check is in `renderer.test.js`. The late-progress change has no renderer test: the page API can't see
   the memory it frees, and a visible check would pass without it.
