@@ -40,6 +40,12 @@ final class AgentTreeTests: XCTestCase {
         XCTAssertFalse(ToolRegistry.deferredIndex("tutor").contains("`grep`"))
     }
 
+    func testAFenceCalledAsAToolGetsTheRightAdvice() {
+        XCTAssertTrue(ChatSession.unavailable("vocab", node: "tutor").contains("```vocab"))
+        XCTAssertEqual(ChatSession.unavailable("vocab", node: "engineer"), "Tool `vocab` is not available.", "not the code agent's fence")
+        XCTAssertEqual(ChatSession.unavailable("frobnicate", node: "tutor"), "Tool `frobnicate` is not available.")
+    }
+
     func testPromptsComposeTheGuidesOnThePath() {
         let s = AppSettings()
         let mentor = SystemPrompt.build(settings: s, mode: .code, coreMemory: "", model: "m")

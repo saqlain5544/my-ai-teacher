@@ -19,6 +19,15 @@ protocol TranscriptSink: AnyObject {
 /// Everything optional (permissions, memory, languages, logging…) lives in `AgentExtension`s.
 @MainActor
 final class ChatSession: ObservableObject, Identifiable {
+    /// Why a call can't run. Models call rendering components as tools (`vocab`, `chart`): those are fences, written in
+    /// the reply; say so, rather than a bare "not available" they retry.
+    nonisolated static func unavailable(_ name: String, node: String) -> String {
+        if AgentTree.components(node).contains(name) {
+            return "`\(name)` is not a tool: it's a fence. Write it in your reply as ```\(name) followed by its content (see The app), and the learner sees it drawn."
+        }
+        return "Tool `\(name)` is not available."
+    }
+
     nonisolated let id: String
     let services: Services
     @Published var conversation: Conversation
@@ -607,7 +616,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode).contains { $0.name == name }
         guard callable, let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
             record(false)
-            return .toolResult(id: callID, name: name, content: "Tool `\(name)` is not available.", isError: true)
+            return .toolResult(id: callID, name: name, content: Self.unavailable(name, node: node), isError: true)
         }
         if input["_raw"] != nil {
             record(false)
