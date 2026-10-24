@@ -33,7 +33,7 @@ final class ArchitectureTests: XCTestCase {
 
     func testOuterFailureDiscardsCommittedSavepoints() throws {
         XCTAssertThrowsError(try db.transaction {
-            try db.transaction { try db.execute("INSERT INTO t VALUES(1)") }
+            _ = try db.transaction { try db.execute("INSERT INTO t VALUES(1)") }
             throw SQLiteError(message: "outer")
         })
         XCTAssertEqual(try count(), 0)
