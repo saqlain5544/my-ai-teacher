@@ -185,3 +185,4 @@ Tests, the live end-to-end harness and the profiler are described in [docs/devel
 * [Development](docs/development.md): building, testing, the live harness, releases.
 * [Architecture](ARCHITECTURE.md): design, invariants, extension points, bounded memory, runtime.
 * [Memory design](docs/memory-design.md): how the learner model works and the evidence behind it.
+* [Architecture review](docs/architecture-review.md): what the October 2026 review changed, per area, and what is left open.
