@@ -54,7 +54,7 @@ final class AppModel: ObservableObject {
         let s = SettingsStore()
         let g = GlobalStore()
         let start = s.value.lastFolder.map { URL(fileURLWithPath: $0) }.flatMap { FileManager.default.fileExists(atPath: $0.path) ? $0 : nil } ?? s.defaultFolder
-        let ws = (try? Workspace(url: start)) ?? (try! Workspace(url: s.defaultFolder))
+        let ws = (try? Workspace(url: start)) ?? (try? Workspace(url: s.defaultFolder)) ?? Self.fallbackWorkspace(s.defaultFolder)
         settings = s
         global = g
         workspace = ws
@@ -86,6 +86,15 @@ final class AppModel: ObservableObject {
             await withCheckedContinuation { c in DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up"); c.resume() } }
         } }
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
+    }
+
+    /// Neither the last folder nor the default one can hold `.teacher/` (a full disk, a read-only or unmounted volume):
+    /// the app starts in a temporary folder instead of crashing at launch, and the learner can open another folder.
+    private static func fallbackWorkspace(_ wanted: URL) -> Workspace {
+        let tmp = FileManager.default.temporaryDirectory.appendingPathComponent("MyAITeacher-fallback", isDirectory: true)
+        AppLog.write("workspace: \(wanted.path) is unusable; starting in \(tmp.path)")
+        guard let ws = try? Workspace(url: tmp) else { fatalError("No usable folder: \(wanted.path) and \(tmp.path) both failed") }
+        return ws
     }
 
     /// Built-in features are extensions; add new ones here without touching the agent loop. A feature with its own
