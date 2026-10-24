@@ -156,8 +156,9 @@ enum ProcessRunner {
                     stdin: String? = nil, timeout: TimeInterval = 120, outputLimit: Int = 2_000_000,
                     onOutput: (@Sendable (String) -> Void)? = nil) async -> ProcessResult {
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: executable)
-        p.arguments = args
+        let (exe, argv) = WriteFence.wrap(executable, args)
+        p.executableURL = URL(fileURLWithPath: exe)
+        p.arguments = argv
         if let cwd { p.currentDirectoryURL = cwd }
         p.environment = environment(env)
         let outPipe = Pipe(), errPipe = Pipe()

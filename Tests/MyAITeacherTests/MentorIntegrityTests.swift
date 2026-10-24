@@ -36,18 +36,18 @@ final class MentorIntegrityTests: XCTestCase {
         try write("limiter.py", "def allow(key):\n    return True\n")          // the mentor's command wrote the solution
         try write("solution.py", "print('x')")                                // and a new file
         try FileManager.default.removeItem(at: dir.appendingPathComponent("notes.md"))
-        try write(".teacher/tests/test_limiter.py", "assert True")            // its own space is fine
+        try write(".teacher/tests/test_limiter.py", "assert True")            // and a test, while they are locked
         let fixed = MentorGuard.restore(ws, from: b)
-        XCTAssertEqual(fixed, ["limiter.py", "notes.md", "solution.py (removed)"])
+        XCTAssertEqual(fixed, [".teacher/tests/test_limiter.py (removed)", "limiter.py", "notes.md", "solution.py (removed)"])
         XCTAssertTrue(read("limiter.py")?.contains("TODO") == true, "back to the learner's version")
         XCTAssertEqual(read("notes.md"), "mine"); XCTAssertNil(read("solution.py"))
-        XCTAssertEqual(read(".teacher/tests/test_limiter.py"), "assert True")
+        XCTAssertNil(read(".teacher/tests/test_limiter.py"), "the tests are locked after the baseline too")
     }
 
     func testARepliesSolutionToATodoFunctionIsWithheld() throws {
         try write("limiter.py", "class Bucket:\n    def __init__(self, cap):\n        self.cap = cap\n\ndef allow_request(key, now):\n    # TODO: refill, then take a token\n    raise NotImplementedError\n")
         try write("done.py", "def helper_done(x):\n    return x\n")
-        let stubs = MentorGuard.stubNames(ws)
+        let stubs = MentorGuard.learner(ws).targets
         XCTAssertEqual(stubs, ["allow_request"], "only functions whose body still says TODO: not __init__, not helper_done")
         let learner = MentorGuard.learner(ws)
         let reply = "Here's the idea:\n\n```python\ndef allow_request(key, now):\n    b = buckets[key]\n    b.refill(now)\n    return b.take()\n```\n\nAnd a tiny unrelated example:\n\n```python\ndef area(r):\n    return 3.14 * r * r\n\nprint(area(2))\n```"

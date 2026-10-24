@@ -363,12 +363,37 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   concept with `StudyStore.recordAttempt`. A round belongs to a `start` that found changes (`openReview`: when, which
   files, its run): without one `findings` is refused, a pass needs that run green, and a `must` counts as resolved only
   when its file is among the changed ones.
-  `MentorGuard` holds the solution boundary after the baseline: `write`/`edit` into the project (outside `.teacher/`)
-  are refused; around every command tool (bash, run_code, run_tests, diagnostics, project_tests, project_review) the
-  project's text files are cloned and anything the call changed, created or deleted is put back, with a note to the
-  mentor; `task` starts only read-only types; and `willStoreReply` replaces a code block that defines one of the
-  project's TODO functions (four lines or more) with a notice. A learner saving a file in the seconds a mentor's
-  command runs could see that save undone: the guard can't tell their write from the command's. `CodeMentorExtension` appends a `<project_state>` line to every request
+  `project_tests` set stores nothing until its run is accepted, takes `targets` (the functions the learner writes, plus
+  every placeholder-bodied function it finds) and refuses a starter that already implements one (three or more lines
+  of code, no placeholder). The record (`ProjectStore.mutate`, one lock) is sealed with an HMAC whose key lives in the
+  app's support folder (`project.seal`): `ProjectStore.intact` shows an edit made outside the app. The baseline stores
+  `testsDigest` (the command and every file under `.teacher/tests`); `start` records whether the suite and the record
+  are intact, and a pass needs both. After the baseline the tests are locked; `project_tests` unlock (an approval the
+  learner gives, or the Project panel) opens them until the next `set`, which re-baselines and logs the change.
+  `findings` carries a hint ladder per finding and the help the mentor gave; the learner's revealed hints and hint
+  requests are `help` on the record, so a pass after help is recorded with `Help.hint`/`.solution` (evidence, not
+  unaided mastery) and schedules a reimplementation follow-up; a pass opens an explain-back (`explain` grades it).
+  `MentorGuard` holds the boundary after the baseline: `write`/`edit` into the learner's files or `.teacher/` (except
+  `.teacher/mentor/`, and the tests while unlocked) are refused. Every command tool (bash, run_code, run_tests,
+  diagnostics, project_tests, project_review) runs under a `WriteFence` (`Core/WriteFence.swift`): a `sandbox-exec`
+  profile, set as a task-local around the call, that `ProcessRunner` and `ShellJob` start their programs under. It
+  denies writing each learner file, creating files outside dot and build folders, and anything under `.teacher/`
+  but `mentor/` (and `tests/` while unlocked), so nothing has to be put back and a learner's own save is never
+  touched; a refused write gets a note to the mentor. Without `sandbox-exec` the old fallback runs: the protected
+  files are cloned before the call and put back after it. `task` starts only read-only types. Code that defines a
+  target with a line of new code (not one already in the learner's files) is masked while the reply streams
+  (`streamMask`: the reply is redrawn whole once it needs masking, an open code block cut from its fence), withheld
+  from the stored reply, tool inputs, tool output and live progress (`filterProgress`), and a signed thinking block
+  keeps its text for the provider but is drawn as `meta.shown`. Definitions are found in Python, Go (methods),
+  Rust, Zig, Swift, Kotlin, JS/TS (functions, arrows, methods) and C-family code. What the guard stops is logged on
+  the project (no code). Its limits: a solution described in prose, or in a language whose definitions it can't see.
+  The Project panel (Inspector → Project, `UI/ProjectPanel.swift`) reads the record: the test trend, failing tests
+  (rerun one via `ProjectTestRunner.filtered`: pytest -k, jest -t, go -run, cargo, swift --filter, zig test
+  --test-filter; a hint request), open findings by file (hint rungs, open in an editor at the line, show in Files,
+  copy path:line), the diff since the baseline, the protection state and the guard's log; Run tests, Request review
+  (after a self-review sheet, kept with the round), Unlock the tests, Restore (the learner's files back to the last
+  review, current versions to the Trash) and a Markdown report.
+  `CodeMentorExtension` appends a `<project_state>` line to every request
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.

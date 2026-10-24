@@ -27,6 +27,9 @@ final class CodeMentorExtension: AgentExtension {
         if let n = changed { parts.append(n == 0 ? "nothing changed since the \(p.snapshotWhy ?? "baseline")" : "\(n) file\(n == 1 ? "" : "s") changed since the \(p.snapshotWhy ?? "baseline") — review with `project_review` start when they ask") }
         let open = p.openFindings
         if let r = p.rounds.last { parts.append("review round \(r.number): \(r.verdict), \(open.count) open finding\(open.count == 1 ? "" : "s")") }
+        if p.testsUnlockedAt != nil { parts.append("tests unlocked by the learner: edit them, then `project_tests` set to re-baseline") }
+        if p.helpSinceReview != .none { parts.append("help since the last review: \(p.helpSinceReview == .solution ? "a solution" : "hints")") }
+        if let e = p.explainBack, e.verdict == nil { parts.append("explain-back open: ask them to explain one design choice, trade-off or failure mode of their code, then `project_review` explain") }
         return "<project_state>" + parts.joined(separator: " · ") + "</project_state>"
     }
 

@@ -54,6 +54,9 @@ final class Workspace: @unchecked Sendable, Identifiable {
     var attachmentsDir: URL { stateDir.appendingPathComponent("attachments", isDirectory: true) }
     /// Tests the agent writes for the learner's work; the only `.teacher/` folder it may write to.
     var testsDir: URL { stateDir.appendingPathComponent("tests", isDirectory: true) }
+    /// The code mentor's own notes and scratch files: the one `.teacher/` folder it writes once a project's tests are
+    /// locked (`tests/` then changes only after the learner unlocks it).
+    var mentorDir: URL { stateDir.appendingPathComponent("mentor", isDirectory: true) }
 
     init(url: URL) throws {
         self.url = url.standardizedFileURL
@@ -66,7 +69,7 @@ final class Workspace: @unchecked Sendable, Identifiable {
         // learner's own `git add -A`); the code agent's project memory and the learner's own sub-agent types
         // (`agents/*.md`) are worth versioning, so they stay visible.
         let ignore = stateDir.appendingPathComponent(".gitignore")
-        let rules = "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n!agents/\n!agents/*.md\n!tests/\n!tests/**\n"
+        let rules = "# My AI Teacher's own state (lessons, caches) — not part of the project.\n*\n!.gitignore\n!code-memory.md\n!agents/\n!agents/*.md\n!tests/\n!tests/**\n!mentor/\n!mentor/**\n"
         if !fm.fileExists(atPath: ignore.path) { try? rules.write(to: ignore, atomically: true, encoding: .utf8) }
         else if let text = try? String(contentsOf: ignore, encoding: .utf8), !text.contains("!tests/") {
             try? (text.hasSuffix("\n") ? text : text + "\n").appending("!tests/\n!tests/**\n").write(to: ignore, atomically: true, encoding: .utf8)
@@ -90,6 +93,7 @@ final class Workspace: @unchecked Sendable, Identifiable {
     func contains(_ u: URL) -> Bool { u.isInside(url) }
     func isStatePath(_ u: URL) -> Bool { u.isInside(stateDir) }
     func isTestsPath(_ u: URL) -> Bool { u.isInside(testsDir) }
+    func isMentorPath(_ u: URL) -> Bool { u.isInside(mentorDir) }
 }
 
 extension URL {

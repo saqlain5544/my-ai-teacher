@@ -46,7 +46,8 @@
           } else children.push(Object.assign(base, { type: 'text', props: { markdown: b.text || '' } }));
           break;
         case 'thinking':
-          children.push(Object.assign(base, { type: 'thinking', props: { text: b.text || '' } }));
+          // A signed block the app may not rewrite is drawn as `meta.shown` (the code mentor withholds a solution so).
+          children.push(Object.assign(base, { type: 'thinking', props: { text: (b.meta && typeof b.meta.shown === 'string') ? b.meta.shown : (b.text || '') } }));
           break;
         case 'toolUse': {
           const result = L.result(b.id);

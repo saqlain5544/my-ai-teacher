@@ -50,8 +50,8 @@ final class PermissionExtension: AgentExtension {
             guard let p = input["path"]?.string else { return .allow }
             let url = resolvePath(p, workspace: ws.url)
             let verb = tool.name == "edit" ? "edit" : "write"
-            if ws.isStatePath(url), !ws.isTestsPath(url) {
-                return .deny("`.teacher/` is the app's private state folder. Tests go in `.teacher/tests`; write everything else in the folder.")
+            if ws.isStatePath(url), !ws.isTestsPath(url), !ws.isMentorPath(url) {
+                return .deny("`.teacher/` is the app's private state folder. Tests go in `.teacher/tests`, a code mentor's notes in `.teacher/mentor`; write everything else in the folder.")
             }
             if ws.contains(url) {
                 if access >= .write || app.interactions.isGranted("write", conversationID: conv) { return .allow }

@@ -53,11 +53,12 @@ struct OpenAIClient: LLMClient {
                 var splitter = ThinkTagSplitter()
                 var usage: Usage?
                 var finish: String?
+                var ended = false   // [DONE], or a whole non-streamed body
                 do {
                     for try await ev in SSEClient.stream(req) {
                         if SSEClient.trace { FileHandle.standardError.write(Data(("SSE " + ev.data + "\n").utf8)) }
-                        if ev.event == "__json__" { Self.emitNonStreaming(ev.data, continuation); continue }
-                        if ev.data == "[DONE]" { break }
+                        if ev.event == "__json__" { Self.emitNonStreaming(ev.data, continuation); ended = true; continue }
+                        if ev.data == "[DONE]" { ended = true; break }
                         guard let j = JSON.parse(ev.data) else { continue }
                         if let err = j["error"], !err.isNull {
                             // The provider's own code when it gives one (OpenRouter sends {"error":{"code":400,…}}): a 500
@@ -122,6 +123,9 @@ struct OpenAIClient: LLMClient {
                         }
                         if let f = choice["finish_reason"]?.string { finish = f }
                     }
+                    // Closed with neither a finish reason nor [DONE]: the connection dropped mid-reply, which used to end
+                    // the turn mid-sentence as if the model had finished. Thrown as a lost connection, so it is retried.
+                    if !ended, finish == nil { throw URLError(.networkConnectionLost) }
                     splitter.flush().forEach { continuation.yield($0) }
                     for idx in order { if let c = calls[idx], !c.name.isEmpty { continuation.yield(.toolCall(c.finish())) } }
                     if let usage { continuation.yield(.usage(usage)) }

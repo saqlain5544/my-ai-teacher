@@ -739,6 +739,17 @@
     ok(!d.open, 'collapsed after'); ok(/6 words/.test($('summary', d).textContent), 'word count: ' + $('summary', d).textContent);
   });
 
+  test('thinking the app withheld is drawn as its notice, not its text', async () => {
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [
+      { kind: 'thinking', text: 'def allow(now): refill then take', signature: 'sig', meta: { shown: '[Thinking withheld: it worked out the learner\'s own allow.]' } },
+      { kind: 'text', text: 'Try the refill first.' }] };
+    T.reset([U('q'), a], {}); await sleep(150);
+    const d = $('#m-' + a.id + ' details.thinking'); d.open = true; await sleep(150);
+    const body = $('.thinking-body', d);
+    ok(body && /Thinking withheld/.test(body.textContent), 'notice shown');
+    ok(!/refill then take/.test($('#m-' + a.id).textContent), 'withheld text not drawn');
+  });
+
   test('a step\'s thinking collapses when the next step starts streaming in a new message', async () => {
     T.reset([U('q')], {});
     const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };

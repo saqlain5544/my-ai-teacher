@@ -60,11 +60,12 @@ final class ShellJob: @unchecked Sendable {
         posix_spawnattr_setsigdefault(&attr, &defaults)
         // CLOEXEC_DEFAULT: the child gets 0, 1 and 2 only, none of the app's descriptors (databases, sockets).
         posix_spawnattr_setflags(&attr, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF | POSIX_SPAWN_CLOEXEC_DEFAULT))
-        let argv: [UnsafeMutablePointer<CChar>?] = [strdup(shell), strdup("-c"), strdup(script), nil]
+        let (exe, args) = WriteFence.wrap(shell, ["-c", script])
+        let argv: [UnsafeMutablePointer<CChar>?] = ([exe] + args).map { strdup($0) } + [nil]
         let envp: [UnsafeMutablePointer<CChar>?] = env.map { strdup("\($0.key)=\($0.value)") } + [nil]
         defer { argv.forEach { free($0) }; envp.forEach { free($0) } }
         var child: pid_t = 0
-        let rc = posix_spawn(&child, shell, &fa, &attr, argv, envp)
+        let rc = posix_spawn(&child, exe, &fa, &attr, argv, envp)
         close(fds[1])
         guard rc == 0 else { close(fds[0]); throw ToolError("Couldn't start \(shell): \(String(cString: strerror(rc))).") }
         pid = child

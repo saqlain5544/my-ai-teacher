@@ -113,9 +113,18 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
   finds it by name (`source`), outlines it, reads the real implementation and cites file and line. The projects then
   reimplement a real piece of it against the original's behaviour.
 * **No solution, enforced.** The mentor writes the starter and the tests; once the tests are registered, your project's
-  files are yours. The app refuses the mentor's writes and edits to them, undoes anything one of its commands changes
-  there, lets it start only read-only helpers, and withholds a reply that writes out one of your TODO functions. It
-  teaches with questions, targeted hints and concepts so you find the fix.
+  files are yours and the tests are locked. The app refuses the mentor's writes to them, runs its commands inside a
+  write fence the operating system enforces (so nothing is undone behind your back and your own saves are never
+  touched), lets it start only read-only helpers, and withholds code that writes one of your functions, even while
+  the reply streams. To change a test the mentor asks you to unlock them, and the change is recorded. It teaches with
+  questions, a ladder of hints and the concepts so you find the fix. It's a strong safety net, not a proof: a mentor
+  could still describe an answer in words.
+* **Your Project panel.** Inspector → Project: the test history, failing tests (rerun one, ask for a hint), the open
+  findings by file with hints you reveal one at a time and a link that opens the line in your editor, what you
+  changed since the last review, and what the guard stopped. Run the tests or request a review yourself; a review
+  starts with your own self-review. A pass after hints counts as evidence rather than unaided mastery, and the mentor
+  asks you to explain one of your design choices; a few days later it brings back a small reimplementation to check
+  it stuck. Export the project as a Markdown report, or restore your files to the last review.
 
 ### A language mentor
 In **Language mentor** mode you learn a language the way the research says it sticks: comprehensible input one step

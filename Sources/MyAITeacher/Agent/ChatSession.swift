@@ -268,6 +268,8 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Reports from background sub-agents not yet read by the teacher; folded in at the next step of a running turn.
     private var inbox: [ChatMessage] = []
+    /// Replies drawn through `streamMask` (redrawn whole), not streamed as deltas.
+    private var masking: Set<String> = []
 
     /// A background sub-agent finished: the teacher reads its report at the next step, or in a new turn if the lesson is idle.
     func deliver(_ report: ChatMessage) {
@@ -454,6 +456,7 @@ final class ChatSession: ObservableObject, Identifiable {
             messages[idx] = assistant
             persist(idx)
             sink?.upsert(assistant)
+            masking.remove(assistant.id)
             conversation.usage = Usage(input: step.usage.promptTotal, output: (conversation.usage?.output ?? 0) + step.usage.output)
             if assistant.error != nil { break }
             let calls = assistant.toolUses
@@ -552,6 +555,12 @@ final class ChatSession: ObservableObject, Identifiable {
         if usedTools, announces, last.hasSuffix(":") || last.hasSuffix("…") || last.hasSuffix("...") || last.count < 160 {
             return "it ends by announcing a next step (“\(last.prefix(120))”) without taking it"
         }
+        // Stopped mid-sentence: a prose line (not code, a table, a list or a heading) whose last character is a letter or a comma.
+        let inFence = text.components(separatedBy: "```").count % 2 == 0
+        if !inFence, last.count >= 24, last.last.map({ $0.isLetter || $0 == "," }) == true,
+           last.range(of: #"^\s*([#|>*\-+`]|\d+[.)])"#, options: .regularExpression) == nil {
+            return "it stops mid-sentence (“…\(last.suffix(60))”): finish the reply from where it stopped, without repeating it"
+        }
         let open = todos.filter { ["pending", "in_progress"].contains($0["status"]?.string ?? "") }
         if !open.isEmpty, usedTools {
             return "your todo list still has \(open.count) open item\(open.count == 1 ? "" : "s") (\(open.prefix(3).compactMap { $0["content"]?.string }.joined(separator: "; ")))"
@@ -589,8 +598,18 @@ final class ChatSession: ObservableObject, Identifiable {
     private func handle(_ ev: StreamEvent, _ m: inout ChatMessage) {
         for effect in ReplyBuilder.apply(ev, to: &m) {
             switch effect {
-            case .delta(let index, let kind, let text): sink?.delta(m.id, index: index, kind: kind, text: text)
-            case .upsert: sink?.upsert(m)
+            case .delta(let index, let kind, let text):
+                // A reply an extension masks while it streams (the code mentor's withheld code) is redrawn whole at each
+                // line end once it needs masking; until then it streams as deltas.
+                if masking.contains(m.id) {
+                    if text.contains("\n") { sink?.upsert(host.streamMask(m, self) ?? m) }
+                } else if text.contains("\n"), let masked = host.streamMask(m, self) {
+                    masking.insert(m.id)
+                    sink?.upsert(masked)
+                } else {
+                    sink?.delta(m.id, index: index, kind: kind, text: text)
+                }
+            case .upsert: sink?.upsert(masking.contains(m.id) ? host.streamMask(m, self) ?? m : m)
             case .clearStatus: if status != nil { setStatus(nil) }
             case .thinking: setStatus("Thinking…")
             case .toolStarted(let name): setStatus(Self.toolVerb(name))
@@ -708,7 +727,10 @@ final class ChatSession: ObservableObject, Identifiable {
             return .toolResult(id: callID, name: name, content: "Not allowed: \(reason) Ask the learner how they'd like to proceed, or continue without it.", isError: true)
         }
         EventBus.publish(.toolStarted(conversationID: id, tool: name, callID: callID))
-        let progress = ProgressThrottle { [weak self] text in self?.sink?.toolProgress(callID, text: text) }
+        let progress = ProgressThrottle { [weak self] text in
+            guard let self, let shown = self.host.filterProgress(callID, text, self) else { return }
+            self.sink?.toolProgress(callID, text: shown)
+        }
         var ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
@@ -719,7 +741,8 @@ final class ChatSession: ObservableObject, Identifiable {
         let t0 = Date()
         var result: Block
         do {
-            let out = try await tool.runBounded(input, ctx)
+            let fence = host.writeFence(call, tool, self)
+            let out = try await WriteFence.$profile.withValue(fence) { try await tool.runBounded(input, ctx) }
             if tool.risk == .interactive { waited += Date().timeIntervalSince(t0) }
             var meta = out.meta?.object ?? [:]
             meta["ms"] = .number(Date().timeIntervalSince(started) * 1000)

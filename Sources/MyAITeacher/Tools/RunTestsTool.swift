@@ -92,6 +92,9 @@ struct RunTestsTool: Tool {
             return Int(s[r].filter(\.isNumber))
         }
         if let all = n(#"All \d+ tests? passed"#) { return (all, 0) }                                    // zig
+        if let r = s.range(of: #"\d+/\d+ tests passed"#, options: .regularExpression) {                 // zig build
+            return (Int(s[r].prefix { $0.isNumber }) ?? 0, (n(#"\d+ failed"#) ?? 0) + (n(#"\d+ crashed"#) ?? 0) + (n(#"\d+ timed out"#) ?? 0))
+        }
         if let p = n(#"\d+ passed"#) { return (p, n(#"\d+ failed"#) ?? 0) }                             // zig, pytest
         if let p = n(#"# pass \d+"#) { return (p, n(#"# fail \d+"#) ?? 0) }                              // node --test
         let goPass = s.components(separatedBy: "--- PASS").count - 1, goFail = s.components(separatedBy: "--- FAIL").count - 1

@@ -103,7 +103,7 @@ enum DeepWork {
     static func reviewInput(request: String, plan: String?, reply: String, evidence: String, mode: TeachingMode? = nil) -> String {
         var s = "The learner asked:\n\(request.prefix(4_000))\n\n"
         if mode == .code {
-            s += "The tutor is a code mentor: the learner writes the project's code. The mentor never writes or shows their solution, however they ask; the app enforces it.\n\n"
+            s += "The tutor is a code mentor: the learner writes the project's code. The mentor never writes or shows their solution, however they ask; the app enforces it. A \"Code withheld\" note is the app removing code that wrote the learner's own functions: never ask for that code back or for a reply that includes it; if the reply leans on it, ask for the idea in words, a question, or an example on a different function instead.\n\n"
         }
         if let plan { s += "The tutor's plan:\n\(plan.prefix(3_000))\n\n" }
         if !evidence.isEmpty { s += "What the tutor checked with tools this turn:\n\(evidence.prefix(8_000))\n\n" }

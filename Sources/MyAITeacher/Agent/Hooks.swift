@@ -11,6 +11,8 @@ enum AppEvent: Sendable {
     case toolFinished(conversationID: String, tool: String, callID: String, ok: Bool)
     case memoryChanged(MemoryChange)
     case studyDataChanged
+    /// A code mentor project's record changed (a test run, a review round, the guard's log).
+    case projectChanged(folder: String)
     case workspaceChanged(path: String)
     case notice(conversationID: String?, text: String)
     /// A tool-approval decision (emitted by `ExtensionHost.shouldRun`; `choice` is the learner's option id, or "policy").
@@ -81,8 +83,14 @@ protocol AgentExtension: AnyObject {
     func summaryContext(_ session: ChatSession) -> [String]
     /// Gate a tool call. A deny wins; an `ask` the learner approves moves on to the next extension's gate.
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision
+    /// The `WriteFence` profile the programs this call starts run under (nil: unfenced). The first extension's wins.
+    func writeFence(_ call: Block, tool: Tool, session: ChatSession) -> String?
     /// Observe or rewrite a tool result.
     func didRun(_ call: Block, result: inout Block, session: ChatSession)
+    /// A streaming reply as it should be drawn (nil: as it is). Only the drawing: the reply is finished by `willStoreReply`.
+    func streamMask(_ message: ChatMessage, session: ChatSession) -> ChatMessage?
+    /// A tool's live output as it should be drawn: the text, a replacement, or nil to drop it.
+    func filterProgress(_ callID: String, text: String, session: ChatSession) -> String?
     /// Rewrite a finished reply before it is stored and shown in its final form (e.g. withhold solution code).
     func willStoreReply(_ message: inout ChatMessage, session: ChatSession)
     /// Called when a learner turn completes (no more tool calls), with its metrics.
@@ -97,7 +105,10 @@ extension AgentExtension {
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {}
     func summaryContext(_ session: ChatSession) -> [String] { [] }
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision { .allow }
+    func writeFence(_ call: Block, tool: Tool, session: ChatSession) -> String? { nil }
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {}
+    func streamMask(_ message: ChatMessage, session: ChatSession) -> ChatMessage? { nil }
+    func filterProgress(_ callID: String, text: String, session: ChatSession) -> String? { text }
     func willStoreReply(_ message: inout ChatMessage, session: ChatSession) {}
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {}
     func sessionWillClose(_ session: ChatSession) {}
@@ -160,7 +171,18 @@ final class ExtensionHost {
             })
         }
     }
+    func writeFence(_ c: Block, _ t: Tool, _ s: ChatSession) -> String? { extensions.lazy.compactMap { $0.writeFence(c, tool: t, session: s) }.first }
     func didRun(_ c: Block, _ r: inout Block, _ s: ChatSession) { for e in extensions { e.didRun(c, result: &r, session: s) } }
+    func streamMask(_ m: ChatMessage, _ s: ChatSession) -> ChatMessage? {
+        var out: ChatMessage?
+        for e in extensions { if let masked = e.streamMask(out ?? m, session: s) { out = masked } }
+        return out
+    }
+    func filterProgress(_ id: String, _ text: String, _ s: ChatSession) -> String? {
+        var t: String? = text
+        for e in extensions { guard let cur = t else { break }; t = e.filterProgress(id, text: cur, session: s) }
+        return t
+    }
     func willStoreReply(_ m: inout ChatMessage, _ s: ChatSession) { for e in extensions { e.willStoreReply(&m, session: s) } }
     func didFinishTurn(_ m: inout TurnMetrics, _ s: ChatSession) { for e in extensions { e.didFinishTurn(&m, session: s) } }
     func sessionWillClose(_ s: ChatSession) { for e in extensions { e.sessionWillClose(s) } }
