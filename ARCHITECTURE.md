@@ -18,7 +18,7 @@ Sources/MyAITeacher/
   Workspace/   Folder workspaces (.teacher state), GlobalStore, Services
   Telemetry/   Local-only telemetry (events + daily rollups in teacher.sqlite) behind the Insights dashboard
   Native/      Apple on-device model jobs (lesson titles) — no network, weak-linked
-  UI/          SwiftUI views + TranscriptView bridge + Inspector (files, in-app page viewer)
+  UI/          SwiftUI views + TranscriptView bridge + Inspector (files, plan, changes, browser, agents)
   App/         App entry, AppModel, settings, CLI (--cli), DebugHooks
 Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
 ```
@@ -34,8 +34,8 @@ Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
   signatures). Per‑turn context (recalled memories, mode changes) goes into hidden blocks of the learner message.
 * **Append‑only history** except explicit edit/regenerate (which truncate) and compaction (which summarises a prefix
   for the request only; the transcript keeps everything).
-* **Everything stays in the app.** Links open in the inspector's page viewer (ephemeral storage, no downloads, popups
-  load in place), files preview in the inspector, mailto copies the address. Nothing launches Safari, Mail or Finder.
+* **Everything stays in the app.** Links open in a tab of the in-app browser (right panel → Browser; the learner's tab,
+  so the agent sees it only on a site its lesson approved), files preview in the inspector, mailto copies the address. Nothing launches Safari, Mail or Finder.
   Visuals run in sandboxed iframes (`allow-scripts` only, CSP `connect-src 'none'`) with libraries from `teacher-lib:`.
 * **Storage writes.** A write whose failure the caller can't act on uses `db.run(…)` (or `db.write("what") { … }` for
   several statements), which logs to `Log.db`; never `try? db.execute`. Statements that must change together go in one
@@ -109,7 +109,11 @@ rewording the tool mattered more than placement (fence 2/3 in both arms), so **d
 ## Native hardware
 WebKit renders the transcript in its own GPU-accelerated process; visuals run in sandboxed frames inside it.
 NaturalLanguage (embeddings, language ID), Speech and the on-device language model (titles, ~0.5 s) run locally on the
-Neural Engine/CPU; read-only tools run in parallel; telemetry writes on a background queue; SQLite uses WAL.
+Neural Engine/CPU; tool calls run in waves (consecutive read-only and network calls — reads, searches, fetches,
+sub-agents — at once; a write, command, browser action or question alone, in the model's order); telemetry writes on a
+background queue; SQLite uses WAL. Profiled with `scripts/perf` (mock model): the main thread is idle most of a turn and
+its short stalls are WebKit IPC and transcript repaints, not computation, so there is no hand-written assembly — the
+CPU-bound work is already native (ripgrep for `grep`, Accelerate for pitch, the Neural Engine for embeddings).
 A lesson turn holds `ProcessInfo.beginActivity(.userInitiatedAllowingIdleSystemSleep)` for its duration: the learner now
 leaves for their own editor mid-turn, and App Nap would otherwise throttle the stream and tool processes.
 
@@ -249,13 +253,18 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 
 ## Browser and computer use (code agent)
 * **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
-  (non-persistent in test profiles), separate from the transcript and the page viewer. Off-panel tabs live in an
+  (non-persistent in test profiles), separate from the transcript. Links from lessons open in it as the learner's tabs. Off-panel tabs live in an
   offscreen panel so they keep rendering and can be screenshotted. A helper injected into an isolated content world of
   every frame builds the snapshot (roles, names, values, states; open shadow roots, same-origin iframes; cross-origin
   frames introduce themselves and are read on their own, refs `f2.ref_3`) and acts by ref with real event sequences
   (pointer/mouse/click, key/beforeinput/input, native value setter for framework-controlled inputs). Refs are stable
   per element and bound to their document (each answer carries the helper's token; a ref from an earlier page is
   refused). Console and fetch/XHR are captured in the page world; screenshots map back through their scale.
+* **Fast by round trips**: `steps` runs up to 20 actions in one call (one envelope, stopping at the first failure);
+  `snapshot: true` returns the controls after an action; an action reports the visible text it added (a confirmation,
+  an error). After each action the tab settles by events, not a fixed pause: a navigation it started (seen within
+  80 ms) until loaded, then the DOM until 100 ms without mutations (a click or key is watched for 0.35 s at least, for
+  handlers on a short timer), then the requests it began. Approved cross-origin frames are snapshotted concurrently.
 * **Sites are the lesson's**: while the agent acts, every main-frame navigation (links, scripts, form posts, server and
   meta redirects, back/forward) must go to a site its lesson approved, or it is cancelled with a notice; what it reads
   (snapshots, text, logs, switching tabs, the page after an action, cross-origin frames) only ever comes from approved
@@ -427,6 +436,12 @@ root ── files (read, write, batch edit, ls), web, sub-agents (task), load_to
 * No tool-step cap by default (`maxToolTurns = 0`; the old saved default 40 reads as none): a reply works until it is
   done, carrying on past output limits and summarising as it goes. With a cap set, the last step offers no tools, so
   the reply always ends with a write-up instead of a dangling tool call.
+* A turn ends for a reason: the work is done, the learner is needed (a question), Stop, a cap, or an error that isn't
+  transient. A dropped or stalled stream is retried (three times, with backoff), also after part of the reply arrived;
+  a reply that ends with its work plainly unfinished (`ChatSession.unfinished`: empty, announcing a step it never took
+  after using tools, or a todo list still open) is sent back with a hidden note, at most twice a turn.
+* A running `bash` card has **Background**: the learner sends the command to the background (a job, B1…) and the agent
+  carries on; a backgrounded job's card shows its handle and URL and a Stop.
 * Code lessons and the code agent get the installed toolchains (`Toolchains`: versions and standard-library paths,
   detected once in the background) so they teach the version the learner has. `write` and `run_code` drop a stray
   trailing `EOF` line (heredoc syntax models type into content).
@@ -585,6 +600,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Claude Code tool | My AI Teacher | Notes |
 |---|---|---|
 | Bash | `bash` | zsh, persistent cwd per lesson, timeout (≤600 s), 30k-char head/tail truncation, huge output spilled to `.teacher/outputs` |
+| Background jobs | `bash_jobs` | each command runs in its own process group (`ShellJob`); a server or watcher (a known command, or a printed localhost URL), a `cmd &`, or `background: true` moves to the background as B1… and the call returns; list, read new output, stop (the whole group); stopped when the lesson is deleted or the app quits |
 | Read | `read` | `cat -n` lines, offset/limit, images (sent to the model), PDFs with page ranges, binary detection |
 | Write | `write` | creates parents; permission-gated by folder access |
 | Edit | `edit` | exact unique match or `replace_all`, helpful errors |

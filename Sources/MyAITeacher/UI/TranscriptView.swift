@@ -389,6 +389,12 @@ struct TranscriptView: NSViewRepresentable {
                 } else {
                     showBrowse(from: from, to: to, anchorAt: anchorAt, session: s)
                 }
+            case "toolBackground":   // the learner sends a running command to the background; the agent carries on
+                if let id = j["id"]?.string { ShellJobs.shared.moveToBackground(callID: id) }
+            case "jobStop":   // a backgrounded command's Stop: the job and everything it started
+                guard let h = j["handle"]?.string, let s = session, let job = ShellJobs.shared.job(s.id, h) else { return }
+                job.stop(); ShellJobs.shared.forget(s.id, job.handle ?? h)
+                s.studyNotes.append("The learner stopped background job \(job.handle ?? h) (`\(job.command.prefix(80))`).")
             case "agent":   // a sub-agent card: open it in the right-hand panel, or stop it
                 guard let id = j["id"]?.string, let s = session else { return }
                 let center = SubAgentCenter.shared

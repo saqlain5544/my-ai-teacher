@@ -109,6 +109,38 @@ final class BrowserTests: XCTestCase {
         XCTAssertEqual(v5, "inner")
     }
 
+    /// One call, several actions: one model round trip instead of one per click; the first failure stops the rest.
+    func testStepsRunSeveralActionsInOneCallAndSettleByEvents() async throws {
+        let nav = try await act(["action": "navigate", "url": .string(dir.appendingPathComponent("form.html").path)])
+        let name = try ref(nav.text, "Name"), create = try ref(nav.text, "Create account")
+        let t0 = Date()
+        let out = try await act(["action": "steps", "steps": [["action": "fill", "ref": .string(name), "value": "Ada"],
+                                                               ["action": "click", "ref": .string(create), "snapshot": true]]])
+        XCTAssertFalse(out.isError, out.text)
+        XCTAssertTrue(out.text.contains("[1/2] fill") && out.text.contains("[2/2] click") && out.text.contains("Now:\nPage: Sign up"), out.text)
+        XCTAssertEqual(out.text.components(separatedBy: "<untrusted_page_content").count, 2, "one envelope for all the steps")
+        XCTAssertTrue(out.text.contains("New text on the page:\nThanks Ada / free / false /"), "what the click made appear: \(out.text)")
+        let v = try await js("document.getElementById('out').textContent")
+        XCTAssertEqual(v, "Thanks Ada / free / false / ")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 2, "two actions and a snapshot, settled by events")
+        // A click that changes nothing comes back in a fraction of a second (it waited a fixed 200 ms before).
+        let t1 = Date()
+        try await act(["action": "hover", "ref": .string(name)])
+        XCTAssertLessThan(Date().timeIntervalSince(t1), 0.6)
+        let bad = try await act(["action": "steps", "steps": [["action": "click", "ref": "ref_99999"], ["action": "fill", "ref": .string(name), "value": "Bob"]]])
+        XCTAssertTrue(bad.isError)
+        XCTAssertTrue(bad.text.contains("Stopped at step 1: the other 1 did not run."), bad.text)
+        let still = try await js("document.querySelector('[name=name]').value")
+        XCTAssertEqual(still, "Ada", "steps after a failure don't run")
+        let nested = try await act(["action": "steps", "steps": [["action": "steps", "steps": []]]])
+        XCTAssertTrue(nested.isError)
+        // A handler that answers on a short timer is still seen: a click is watched for a third of a second.
+        _ = try await js("const b = document.createElement('button'); b.textContent = 'Later'; b.onclick = () => setTimeout(() => { const p = document.createElement('p'); p.textContent = 'Saved after a moment'; document.body.append(p); }, 250); document.body.append(b); 1")
+        let snap = try await act(["action": "snapshot"]).text
+        let later = try await act(["action": "click", "ref": .string(try ref(snap, "Later"))])
+        XCTAssertTrue(later.text.contains("New text on the page:\nSaved after a moment"), later.text)
+    }
+
     func testRefusesSecretsUploadsAndUnapprovedNavigation() async throws {
         try await act(["action": "navigate", "url": .string(dir.appendingPathComponent("form.html").path)])
         let snap = try await act(["action": "snapshot"]).text

@@ -92,6 +92,7 @@ enum DebugHooks {
             }
         case "quick": app.quickQuestion()
         case "stop": session?.stop(); AppLog.write("stopped")
+        case "quit": NSApp.terminate(nil)   // a real quit (willTerminate runs), for this test instance only
         case "newLesson": app.newLesson(mode: cmd["mode"]?.string.flatMap(TeachingMode.init(rawValue:)) ?? .tutor)
         case "setModel":
             if let p = cmd["provider"]?.string, let m = cmd["model"]?.string { session?.setModel(providerID: p, model: m) }

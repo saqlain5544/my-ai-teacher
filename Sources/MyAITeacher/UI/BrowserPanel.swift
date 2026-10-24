@@ -16,8 +16,8 @@ struct BrowserPanel: View {
                 BrowserHost(tab: tab).id(tab.id)
             } else {
                 VStack(spacing: 6) {
-                    Text("The code agent's browser").font(.callout.weight(.semibold))
-                    Text("Pages it opens appear here, live. You can browse too, and take over at any time.")
+                    Text("Browser").font(.callout.weight(.semibold))
+                    Text("Links from lessons open here, and so do the pages agents use, live. Type an address to browse; take over at any time.")
                         .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
                 }
                 .padding(20).frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -50,8 +50,8 @@ struct BrowserPanel: View {
     /// What the learner opens is theirs: local addresses they type are allowed for this run (they chose them).
     private func learnerOpen(_ raw: String) {
         guard let u = AgentBrowser.parseURL(raw) else { return }
-        if let key = SiteKey.of(u), key.isLocal { browser.learnerSites.insert(key.id) }
-        (browser.active ?? browser.newTab()).load(u)
+        if let t = browser.active { if let key = SiteKey.of(u), key.isLocal { browser.learnerSites.insert(key.id) }; t.load(u) }
+        else { browser.openForLearner(u) }
     }
 }
 

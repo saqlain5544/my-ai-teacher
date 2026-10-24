@@ -1030,6 +1030,19 @@
     T.status('', false);
   });
 
+  test('a running command can go to the background; a background job has its handle and Stop', async () => {
+    T.status('Working', true);
+    T.reset([U('q'), A([{ kind: 'toolUse', id: 'bg1', name: 'bash', input: { command: 'npm run build' } }])], {});
+    const card = $('[data-tool-id="bg1"]');
+    const btn = $('[data-act="tool-background"]', card); ok(btn, 'Background while it runs');
+    click(btn); eq(lastPost('toolBackground').id, 'bg1', 'asks the app to background this call');
+    T.upsert(R('bg1', 'bash', 'building…', { meta: { background: 'B2', url: 'http://localhost:5173/' } })); await sleep(160);
+    ok(!$('[data-act="tool-background"]', card), 'no Background once it returned');
+    ok(card.textContent.includes('B2 · background · http://localhost:5173/'), 'handle and URL in the head');
+    click($('[data-act="job-stop"]', card)); eq(lastPost('jobStop').handle, 'B2', 'Stop names the job');
+    T.status('', false);
+  });
+
   test('practice cards written one object per line render as a list', () => {
     const code = '{"q":"6 and 8: hypotenuse?","a":"10"}\n{"q":"Is 7, 8, 9 a triple?","a":"No: 49 + 64 = 113, not 81."}';
     T.reset([U('q'), A([{ kind: 'text', text: '```practice\n' + code + '\n```' }])], {});

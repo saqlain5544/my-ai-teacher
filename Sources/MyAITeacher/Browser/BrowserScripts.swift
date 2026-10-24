@@ -453,6 +453,21 @@ enum BrowserScripts {
         info: guard(() => ({ url: location.href, title: document.title, w: innerWidth, h: innerHeight, sx: scrollX, sy: scrollY,
                        docH: document.documentElement.scrollHeight, focus: describe(deepActive()), token })),
         html: () => document.documentElement.outerHTML.slice(0, 3000000),
+        // Resolves once the document has had no mutations for `ms` (or after `max`), and not before `min`: an action's
+        // effect has landed (a click's handler may answer on a short timer, so clicks watch a little longer).
+        visible: () => (document.body ? document.body.innerText : '').slice(0, 300000),
+        quiet: o => new Promise(res => {
+          const ms = (o && o.ms) || 100, max = (o && o.max) || 1200, min = (o && o.min) || 0, t0 = performance.now();
+          let last = t0;
+          const mo = new MutationObserver(() => { last = performance.now(); });
+          try { mo.observe(document, { subtree: true, childList: true, attributes: true, characterData: true }); } catch (e) {}
+          const tick = () => {
+            const now = performance.now();
+            if ((now - last >= ms && now - t0 >= min) || now - t0 >= max) { mo.disconnect(); res({ quiet: now - last >= ms, ms: Math.round(now - t0) }); }
+            else setTimeout(tick, 20);
+          };
+          setTimeout(tick, 20);
+        }),
         wait: o => o.text ? (document.body && document.body.innerText.toLowerCase().includes(String(o.text).toLowerCase()))
                  : (() => { let el = null; try { el = document.querySelector(o.selector); } catch (e) { return 'bad selector'; } return !!(el && el.getClientRects().length); })(),
         resources: () => performance.getEntriesByType('resource').slice(-150).map(e => ({ url: e.name, type: e.initiatorType, ms: Math.round(e.duration),

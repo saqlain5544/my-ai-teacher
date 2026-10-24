@@ -1,8 +1,8 @@
 import AppKit
 import WebKit
 
-/// The code agent's browser (right panel → Browser): tabs of WKWebViews over one persistent website data store of its own,
-/// separate from the transcript and the page viewer. The learner watches it live, can browse in it and can take over;
+/// The in-app browser (right panel → Browser): tabs of WKWebViews over one persistent website data store of its own,
+/// separate from the transcript; links from lessons open here too. The learner watches it live, can browse in it and can take over;
 /// the agent acts through the helper in an isolated content world, so page scripts can't see or tamper with it.
 /// Tabs not on screen live in an offscreen panel, so they keep a real size, keep rendering and can be screenshotted.
 ///
@@ -86,6 +86,15 @@ final class AgentBrowser: ObservableObject {
         park(tab)
         if let url { tab.load(url) }
         return tab
+    }
+
+    /// A page the learner opened (a link in a lesson, the address bar): a new tab, or the active one when the tabs are
+    /// full. A local address they chose is allowed for this run, as typed into the address bar.
+    @discardableResult
+    func openForLearner(_ url: URL) -> BrowserTab {
+        if let key = SiteKey.of(url), key.isLocal { learnerSites.insert(key.id) }
+        if tabs.count >= Self.tabLimit, let t = active { activeID = t.id; t.load(url); return t }
+        return newTab(url)
     }
 
     func close(_ tab: BrowserTab) {
@@ -211,6 +220,8 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     var inheritedOrigin: URL?
     var inflight = 0
     var lastNetwork = Date.distantPast
+    /// When the latest main-frame navigation started (an action that navigates shows here within a frame or two).
+    var navStartedAt = Date.distantPast
     var lastStatus: Int?
     var lastError: String?
     /// Screenshot pixels → CSS pixels, from the latest screenshot.
@@ -376,7 +387,7 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     /// Frames are forgotten when a main-frame navigation starts: the new document's frames can introduce themselves
     /// before WebKit reports the commit.
-    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { frames.removeAll() }
+    func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) { frames.removeAll(); navStartedAt = Date() }
 
     /// A new document: the refs and logs belong to the old one.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {

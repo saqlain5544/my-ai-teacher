@@ -325,6 +325,7 @@ final class ChatSession: ObservableObject, Identifiable {
         if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
         var steps = 0
         var limitContinues = 0
+        var nudges = 0   // replies that ended with the work plainly unfinished, sent back to finish it
         // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
         let asked = messages.lastIndex { $0.role == .user && !$0.isToolResultOnly }
         let askedText = asked.map { i in messages[i].blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") } ?? ""
@@ -394,7 +395,10 @@ final class ChatSession: ObservableObject, Identifiable {
                         host.willRequest(&request, self)
                         continue
                     }
-                    if assistant.blocks.isEmpty, attempt < 3, Self.isTransient(error) {
+                    // A dropped or stalled stream is retried, also after part of the reply arrived (that part is discarded
+                    // and asked for again): it used to end the turn mid-sentence.
+                    if attempt < 3, Self.isTransient(error) {
+                        if !assistant.blocks.isEmpty { assistant.blocks.removeAll(); sink?.upsert(assistant) }
                         attempt += 1; step.retries = attempt
                         setStatus("Provider busy — retrying (\(attempt)/3)…")
                         try? await Task.sleep(nanoseconds: UInt64(pow(2.0, Double(attempt)) * 1_000_000_000))
@@ -472,6 +476,16 @@ final class ChatSession: ObservableObject, Identifiable {
                     }
                 }
             }
+            // The reply ended but the work plainly hasn't (nothing written, an announced next step never taken, a todo list
+            // still open): sent back once or twice to finish it or to say what blocks it, so a turn doesn't stop for no reason.
+            if calls.isEmpty, !Task.isCancelled, assistant.error == nil, nudges < 2, !wrapping,
+               let why = Self.unfinished(reply: assistant.blocks.filter { $0.kind == .text }.compactMap(\.text).joined(separator: "\n"),
+                                         usedTools: steps > 1, todos: todos) {
+                nudges += 1
+                setStatus("Continuing…")
+                append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: Self.unfinishedNote(why), meta: ["hidden": true, "ephemeral": true])]))
+                continue
+            }
             if calls.isEmpty {
                 // A background report arrived during this step: read it before ending the turn.
                 if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
@@ -503,6 +517,37 @@ final class ChatSession: ObservableObject, Identifiable {
                                                                meta: ["hidden": true, "ephemeral": true])]))
             }
         }
+    }
+
+    /// Why a reply without tool calls leaves its work unfinished, or nil when ending the turn is right: an empty reply; one
+    /// whose last words announce a step it didn't take ("Let me run the tests:"), after tools this turn; an open todo list.
+    /// A question to the learner always ends the turn: waiting for them is a solid reason.
+    nonisolated static func unfinished(reply: String, usedTools: Bool, todos: [JSON]) -> String? {
+        let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
+        if text.isEmpty { return "the reply was empty" }
+        let tail = String(text.suffix(400))
+        if tail.hasSuffix("?") { return nil }
+        let last = tail.split(whereSeparator: \.isNewline).last.map(String.init) ?? tail
+        let announces = last.range(of: #"(?i)\b(let me(?! know)|let's|i'?ll now|i will now|now i'?ll|now i will|next,? i'?ll|next,? i will|i'?m going to|i am going to|i'?ll (start|begin|run|check|open|fix|try|write|add|create|update|test|verify|look))\b"#,
+                                   options: .regularExpression) != nil
+        if usedTools, announces, last.hasSuffix(":") || last.hasSuffix("…") || last.hasSuffix("...") || last.count < 160 {
+            return "it ends by announcing a next step (“\(last.prefix(120))”) without taking it"
+        }
+        let open = todos.filter { ["pending", "in_progress"].contains($0["status"]?.string ?? "") }
+        if !open.isEmpty, usedTools {
+            return "your todo list still has \(open.count) open item\(open.count == 1 ? "" : "s") (\(open.prefix(3).compactMap { $0["content"]?.string }.joined(separator: "; ")))"
+        }
+        return nil
+    }
+
+    static func unfinishedNote(_ why: String) -> String {
+        """
+        <context>
+        Your reply ended, but the work isn't finished: \(why). If there is more to do, do the next step now with a tool call; \
+        don't describe it. If you are done, mark the todo items completed and give the final answer. If you are blocked or \
+        need the learner, say exactly what you need and why, and stop.
+        </context>
+        """
     }
 
     /// Hidden note for the last step of a turn that used all its tool steps.
@@ -537,10 +582,12 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Tools
 
-    /// Runs tool calls and records their results as one user message (updated live as each tool finishes).
+    /// Runs tool calls and records their results as one user message (updated live as each tool finishes). Calls run in
+    /// waves: consecutive read-only and network calls (reads, searches, fetches, sub-agents) all at once; a call that
+    /// writes, runs a command, drives the browser or waits for the learner runs alone, in the order the model gave.
     private func runTools(_ calls: [Block], client: LLMClient) async {
-        let parallelSafe = calls.allSatisfy { c in
-            guard let t = ToolRegistry.byName[c.name ?? ""] else { return true }
+        func concurrent(_ c: Block) -> Bool {
+            guard let t = ToolRegistry.byName[c.name ?? ""] else { return true }   // unknown: answered at once with an error
             return t.risk == .readOnly || t.risk == .network
         }
         let resultIndex = messages.count
@@ -553,23 +600,26 @@ final class ChatSession: ObservableObject, Identifiable {
             self.messages[resultIndex] = placeholder
             self.sink?.upsert(placeholder)
         }
-        if parallelSafe && calls.count > 1 {
-            setStatus("Running \(calls.count) tools…")
-            await withTaskGroup(of: (Int, Block).self) { group in
-                for (i, c) in calls.enumerated() {
-                    group.addTask { await (i, self.execute(c, client: client)) }
-                }
-                for await (i, b) in group { results[i] = b; publish(results) }
+        var i = 0
+        while i < calls.count {
+            if Task.isCancelled {
+                for k in i..<calls.count { results[k] = .toolResult(id: calls[k].id ?? "", name: calls[k].name ?? "", content: "Cancelled by the learner.", isError: true) }
+                break
             }
-        } else {
-            for (i, c) in calls.enumerated() {
-                if Task.isCancelled {
-                    results[i] = .toolResult(id: c.id ?? "", name: c.name ?? "", content: "Cancelled by the learner.", isError: true)
-                    continue
+            var end = i
+            while end < calls.count && concurrent(calls[end]) { end += 1 }
+            if end - i >= 2 {
+                setStatus("Running \(end - i) tools at once…")
+                await withTaskGroup(of: (Int, Block).self) { group in
+                    for k in i..<end { let c = calls[k]; group.addTask { await (k, self.execute(c, client: client)) } }
+                    for await (k, b) in group { results[k] = b; publish(results) }
                 }
-                setStatus(Self.toolVerb(c.name ?? ""))
-                results[i] = await execute(c, client: client)
+                i = end
+            } else {
+                setStatus(Self.toolVerb(calls[i].name ?? ""))
+                results[i] = await execute(calls[i], client: client)
                 publish(results)
+                i += 1
             }
         }
         placeholder.blocks = results
