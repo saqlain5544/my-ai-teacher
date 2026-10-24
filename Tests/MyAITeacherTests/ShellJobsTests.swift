@@ -111,6 +111,20 @@ final class ShellJobsTests: XCTestCase {
         XCTAssertEqual(left.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "", "the grandchild was ended too")
     }
 
+    /// A background job that ends by itself is reported to the lesson in the <background-task> format the transcript draws.
+    func testAFinishedBackgroundJobIsReported() async throws {
+        let c = try await ctx()
+        let out = try await BashTool().run(["command": "echo building; sleep 5; echo built; exit 2", "background": true], c)
+        let job = try XCTUnwrap(ShellJobs.shared.job(conv, out.meta?["background"]?.string ?? ""))
+        while job.isRunning { try await Task.sleep(for: .milliseconds(100)) }
+        let msg = ShellJobs.finishedMessage(job, handle: "B1")
+        let text = msg.blocks[0].text ?? ""
+        XCTAssertTrue(text.hasPrefix("<background-task id=\"B1\" command=\"echo building;") && text.contains("exit=\"2\""), text)
+        let body = text.split(separator: "\n").dropFirst().joined(separator: "\n")
+        XCTAssertTrue(body.hasPrefix("built") && !body.contains("building"), "only what the agent hasn't seen: \(text)")
+        XCTAssertEqual(msg.blocks[0].meta?["backgroundTask"]?.string, "B1")
+    }
+
     func testRecognisingServersAndTheirURLs() {
         for cmd in ["npm run dev", "pnpm dev", "yarn start", "bun run dev -- --port 3000", "npx vite", "vite", "python3 -m http.server 8000",
                     "python manage.py runserver", "flask run", "uvicorn app:app --reload", "rails s", "php -S localhost:8000", "next dev", "tail -f log.txt"] {

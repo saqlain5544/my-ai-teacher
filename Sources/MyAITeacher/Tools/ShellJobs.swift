@@ -235,7 +235,28 @@ final class ShellJobs: @unchecked Sendable {
         let h = "B\(counters[job.conversationID]!)"
         job.handle = h
         jobs[job.conversationID, default: [:]][h] = job
+        let conv = job.conversationID
+        // When it ends on its own (a build done, a server that crashed), the lesson hears it as a <background-task>
+        // message: read at the next step of a running turn, or in a turn of its own when the lesson is idle.
+        Task.detached(priority: .utility) { [weak self] in
+            while job.isRunning { try? await Task.sleep(for: .seconds(1)) }
+            guard let self, !job.stopped, self.job(conv, h) != nil else { return }
+            let msg = Self.finishedMessage(job, handle: h)
+            await MainActor.run { AppModel.shared.session(for: conv)?.deliver(msg) }
+        }
         return h
+    }
+
+    /// The report of a background job that ended by itself: its exit, how long it ran, and what it printed since the
+    /// agent last looked (the end of it, when long).
+    static func finishedMessage(_ job: ShellJob, handle: String) -> ChatMessage {
+        var out = job.readNew()
+        if out.count > 12_000 { out = truncateMiddle(out, max: 12_000) }
+        if out.isEmpty { out = "(nothing new since you last looked)" }
+        let code = job.exitCode ?? -1, secs = job.seconds
+        let text = "<background-task id=\"\(handle)\" command=\"\(job.command.replacingOccurrences(of: "\"", with: "'").prefix(200))\" exit=\"\(code)\" seconds=\"\(secs)\">\n\(out)\n</background-task>"
+        return ChatMessage(role: .user, blocks: [Block(kind: .text, text: text, meta: ["backgroundTask": .string(handle), "title": .string(job.title),
+                                                                                        "exit": .number(Double(code)), "seconds": .number(Double(secs))])])
     }
     func waitingOn(_ callID: String, _ job: ShellJob?) { lock.lock(); waiting[callID] = job; lock.unlock() }
     /// Background for a running call's command; false when it has already finished.

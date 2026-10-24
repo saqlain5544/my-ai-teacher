@@ -58,6 +58,10 @@ enum Schema_ {
     CREATE TABLE IF NOT EXISTS followups(id INTEGER PRIMARY KEY AUTOINCREMENT, subject TEXT NOT NULL, concept TEXT NOT NULL,
         kind TEXT NOT NULL, note TEXT, due REAL NOT NULL, created_at REAL NOT NULL, resolved_at REAL, outcome TEXT, conversation_id TEXT);
     CREATE INDEX IF NOT EXISTS followups_open ON followups(resolved_at, due);
+    CREATE TABLE IF NOT EXISTS languages(code TEXT PRIMARY KEY, role TEXT NOT NULL DEFAULT 'target', level TEXT, notes TEXT, updated_at REAL NOT NULL);
+    CREATE TABLE IF NOT EXISTS vocab(id INTEGER PRIMARY KEY AUTOINCREMENT, lang TEXT NOT NULL, term TEXT NOT NULL, reading TEXT, meaning TEXT NOT NULL,
+        pos TEXT, example TEXT, example_meaning TEXT, notes TEXT, tags TEXT, card_id INTEGER, source TEXT, created_at REAL NOT NULL, UNIQUE(lang, term));
+    CREATE INDEX IF NOT EXISTS vocab_lang ON vocab(lang, created_at);
     """
 }
 

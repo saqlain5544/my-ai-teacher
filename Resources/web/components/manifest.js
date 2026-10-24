@@ -2,6 +2,8 @@
 window.TeacherManifest = { version: 1, modules: [
   {src: "components/code.js", lazy: ["layout", "memlayout", "struct-layout", "tree", "filetree", "file-tree"]},
   {src: "components/data.js"},
+  {src: "components/keyboard.js"},
+  {src: "components/langlearn.js"},
   {src: "components/language.js"},
   {src: "components/metrics.js"},
   {src: "components/plot.js", lazy: ["plot", "graph", "function-plot"]},
@@ -9,8 +11,10 @@ window.TeacherManifest = { version: 1, modules: [
   {src: "components/questions.js"},
   {src: "components/visuals.js"},
   {src: "components/tools/agents.js"},
+  {src: "components/tools/code.js"},
   {src: "components/tools/files.js"},
   {src: "components/tools/memory.js"},
+  {src: "components/tools/mentor.js"},
   {src: "components/tools/teaching.js"},
   {src: "components/tools/web.js"},
 ] };

@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Course board — design mockup</title>
+<style>
+  :root { --bg:#f6f5f2; --panel:#fff; --ink:#1f2328; --muted:#69707a; --line:#e3e0d9;
+          --accent:#b45309; --accent-soft:#fff3e5; --blue:#1d4ed8; --blue-soft:#eef3ff;
+          --green:#166534; --green-soft:#ecfdf3; --purple:#6d28d9; --purple-soft:#f4efff; }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--ink); font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif; }
+  .page { max-width:1180px; margin:0 auto; padding:28px 24px 48px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  .sub { color:var(--muted); margin:0 0 20px; }
+  .layout { display:grid; grid-template-columns: 330px 1fr; gap:18px; align-items:start; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:14px; }
+  .chat { padding:14px; }
+  .chat h2, .board h2 { font-size:12px; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0 0 12px; }
+  .msg { padding:9px 11px; border-radius:10px; margin:0 0 8px; }
+  .msg.learner { background:#f1f3f5; }
+  .msg.mentor { background:var(--blue-soft); margin-left:14px; }
+  .tag { display:inline-block; font-size:11px; padding:1px 7px; border-radius:99px; background:var(--accent-soft); color:var(--accent); margin-top:6px; }
+  .strip { display:flex; gap:10px; flex-wrap:wrap; align-items:center; padding:11px 14px; border-bottom:1px solid var(--line); background:#fffdf8; border-radius:14px 14px 0 0; }
+  .strip .focus { font-weight:650; }
+  .strip .next { color:var(--muted); }
+  .strip .pill { font-size:11px; padding:2px 8px; border-radius:99px; background:var(--accent-soft); color:var(--accent); }
+  .board { overflow:hidden; }
+  .cols { display:grid; grid-template-columns: repeat(4, minmax(0,1fr)); gap:10px; padding:14px; }
+  .col { background:#faf9f7; border:1px solid var(--line); border-radius:11px; padding:9px; min-height:180px; }
+  .col h3 { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 8px; display:flex; justify-content:space-between; }
+  .col h3 span { font-weight:500; color:#9aa0a8; }
+  .todo { background:#fff; border:1px solid var(--line); border-radius:9px; padding:8px 9px; margin-bottom:7px; }
+  .todo.doing { border-color:#f0c48a; box-shadow:0 0 0 2px var(--accent-soft); }
+  .todo.done { opacity:.68; }
+  .todo .t { font-weight:600; font-size:12.5px; }
+  .todo .n { color:var(--muted); font-size:11.5px; margin-top:3px; }
+  .todo .ev { color:var(--green); font-size:11px; margin-top:4px; }
+  .todo .id { color:#9aa0a8; font-size:10.5px; font-weight:500; margin-right:4px; }
+  .review { border-left:3px solid var(--purple); }
+  .parked { margin:0 14px 14px; border-top:1px dashed var(--line); padding-top:11px; }
+  .parked h3 { font-size:11px; letter-spacing:.06em; text-transform:uppercase; color:var(--muted); margin:0 0 7px; }
+  .chips { display:flex; gap:7px; flex-wrap:wrap; }
+  .chip { background:var(--purple-soft); color:var(--purple); font-size:11.5px; padding:4px 9px; border-radius:99px; }
+  .state { margin-top:18px; padding:14px; background:#0f172a; color:#dbe3ef; border-radius:14px; }
+  .state h2 { color:#93a4bd; font-size:11px; letter-spacing:.1em; text-transform:uppercase; margin:0 0 8px; }
+  pre { margin:0; white-space:pre-wrap; font:12px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .state .k { color:#93c5fd; } .state .a { color:#fcd34d; } .state .g { color:#86efac; }
+  .note { color:var(--muted); font-size:12px; margin-top:9px; }
+  .legend { display:flex; gap:14px; flex-wrap:wrap; color:var(--muted); font-size:12px; margin-top:12px; }
+  @media (max-width:900px){ .layout{grid-template-columns:1fr} .cols{grid-template-columns:1fr 1fr} }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Course board — a mentor state tracker, not a Jira board</h1>
+  <p class="sub">The board is the learner-visible view. The compact <em>state header</em> at the tail of each request is the mechanism that keeps the mentor oriented.</p>
+
+  <div class="layout">
+    <section class="card chat">
+      <h2>Lesson (detour in progress)</h2>
+      <div class="msg learner">Why did my Python function modify the list I passed in?</div>
+      <div class="msg mentor">Because lists are mutable and the function received a reference to the same object. Use a copy if you need isolation.<div class="tag">parked → P1</div></div>
+      <div class="msg learner">Also, what laptop should I buy for programming?</div>
+      <div class="msg mentor">Any recent machine with 16 GB RAM and an SSD is plenty; spend the difference on a keyboard and a second monitor.<div class="tag">parked → P2</div></div>
+      <div class="msg learner">OK, back to calculus. Where were we?</div>
+      <div class="msg mentor"><b>Focus:</b> one-sided limits. <b>Next:</b> three problems, then a continuity check.<div class="tag">returns to C1</div></div>
+      <div class="legend"><span>● Doing</span><span>● Review</span><span>● Parked</span></div>
+    </section>
+
+    <section class="card board">
+      <div class="strip">
+        <span class="focus">Limits &amp; continuity</span>
+        <span class="next">next: 3 one-sided-limit problems</span>
+        <span class="pill">2 parked</span>
+        <span class="pill">12 days to final</span>
+      </div>
+      <div class="cols">
+        <div class="col">
+          <h3>Backlog <span>2</span></h3>
+          <div class="todo"><div class="t"><span class="id">C2</span>Derivatives</div><div class="n">after C1 · rules → chain rule</div></div>
+          <div class="todo"><div class="t"><span class="id">C3</span>Applications</div><div class="n">after C2 · optimization, related rates</div></div>
+        </div>
+        <div class="col">
+          <h3>Doing <span>1</span></h3>
+          <div class="todo doing"><div class="t"><span class="id">C1</span>Limits &amp; continuity</div><div class="n">next: 3 one-sided-limit problems, then continuity check</div><div class="ev">✓ graphical limits (quiz 4/5)</div></div>
+        </div>
+        <div class="col">
+          <h3>Review <span>1</span></h3>
+          <div class="todo review"><div class="t"><span class="id">C4</span>One-sided limits</div><div class="n">due in 2 days · transfer check</div></div>
+        </div>
+        <div class="col">
+          <h3>Done <span>2</span></h3>
+          <div class="todo done"><div class="t"><span class="id">C0</span>Diagnostic</div><div class="n">evidence: 6/8, algebra shaky</div></div>
+          <div class="todo done"><div class="t"><span class="id">C5</span>Graphical limits</div><div class="n">evidence: 4/5 unaided</div></div>
+        </div>
+      </div>
+      <div class="parked">
+        <h3>Parked — learner tangents, not lost</h3>
+        <div class="chips"><span class="chip">P1 Python list mutation</span><span class="chip">P2 laptop advice</span></div>
+      </div>
+    </section>
+  </div>
+
+  <section class="state">
+    <h2>What the model receives at the end of the request (≈100 tokens)</h2>
+<pre>&lt;<span class="k">lesson_state</span> rev="7" source="app"&gt;
+Course: Calculus I — be ready for the final · final in 12 days
+Focus: C1 Limits and continuity (doing)
+Next: three one-sided-limit problems, then a continuity check
+Then: C2 Derivatives (after C1)
+Parked (2): Python list mutation; laptop advice
+Open loop: awaiting the attempt at lim x→2⁻ |x-2|/(x-2)
+Watch: one-sided limits (2 misses); hint rung: targeted hint
+Evidence: graphical limits 4/5; one-sided limits 3/3 unaided
+&lt;/<span class="k">lesson_state</span>&gt;</pre>
+    <div class="note">The full board is fetched only with <code>lesson_plan get</code> or when the plan changes; the header is request-only, appended after the learner's words, and never stored in the transcript.</div>
+  </section>
+</div>
+</body>
+</html>

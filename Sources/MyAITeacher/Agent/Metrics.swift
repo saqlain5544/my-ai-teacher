@@ -41,6 +41,9 @@ struct TurnMetrics: Codable, Sendable, Hashable {
     var memoriesRecalled: [String] = []
     var memoryWrites = 0
     var languages: [String] = []
+    /// Code agent: the checkpoint the turn's file changes can be undone from, and those files.
+    var checkpoint: String?
+    var changedFiles: [String]?
     var cancelled = false
     var error: String?
 

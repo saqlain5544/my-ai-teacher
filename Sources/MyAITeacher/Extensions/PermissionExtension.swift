@@ -77,7 +77,8 @@ final class PermissionExtension: AgentExtension {
                 choice == "once" ? .allow : .deny("The learner declined writing outside the folder.")
             }
         case .execute:
-            if access == .full || app.interactions.isGranted(tool.name, conversationID: conv) { return .allow }
+            let grant = tool.name == "diagnostics" ? "bash" : tool.name   // diagnostics runs shell commands: one grant for both
+            if access == .full || app.interactions.isGranted(grant, conversationID: conv) { return .allow }
             let detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
             let what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
             return .ask(ApprovalRequest(
@@ -89,7 +90,7 @@ final class PermissionExtension: AgentExtension {
                           ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
                 switch choice {
                 case "once": return .allow
-                case "lesson": self?.app.interactions.grant(tool.name, conversationID: conv); return .allow
+                case "lesson": self?.app.interactions.grant(grant, conversationID: conv); return .allow
                 case "grant_full": self?.app.setAccess(.full, for: ws); return .allow
                 default: return .deny("The learner declined.")
                 }

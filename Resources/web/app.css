@@ -221,6 +221,9 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .q-count { color: var(--faint); margin-left: auto; }
 .q-text.invalid { border-color: var(--bad) !important; box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
 .agent-mode .msg-actions .chip { display: none; }
+.turn-undo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--border); border-radius: 9px; font-size: 0.85em; color: var(--muted); }
+.turn-undo .files { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: var(--mono); font-size: 0.92em; }
+.tool-card.syntax-errors .tool-head { color: var(--bad); }
 .msg-stopped { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 0.88em; margin: 4px 0; }
 .earlier { display: flex; justify-content: center; margin: 4px 0 18px; }
 .agent-note { margin: 0.4em 0; }
@@ -414,6 +417,10 @@ svg.chart { width: 100%; max-width: 640px; height: auto; font-family: -apple-sys
 .say { border: 0; background: transparent; cursor: pointer; font-size: 0.95em; opacity: .7; padding: 2px 4px; }
 .say:hover { opacity: 1; }
 .vocab-card > .say { position: absolute; top: 10px; right: 8px; }
+.vocab-save { position: absolute; bottom: 8px; right: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 1px 8px; font-size: 0.78em; cursor: pointer; }
+.vocab-save:hover { border-color: var(--accent); color: var(--accent); }
+.vocab-save:disabled { color: var(--good); cursor: default; }
+.vocab-card { padding-bottom: 30px; }
 .comp-error { border: 1px solid var(--bad-soft); border-radius: 10px; padding: 8px 12px; }
 /* A node or component the page could not render: readable, in place, never a blank reply. */
 .node-error { color: var(--muted); font-size: 0.9em; border: 1px dashed var(--border); border-radius: 10px; padding: 8px 12px; margin: 0.5em 0; }

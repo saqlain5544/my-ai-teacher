@@ -51,6 +51,10 @@ struct ToolContext: Sendable {
     var quizzes = true
     /// The agent's node in `AgentTree` (what it may load at runtime).
     var agentNode = "tutor"
+    /// Code agent mode: files written or edited are syntax-checked at once, and `bash` may run in the background.
+    var codeAgent = false
+    /// The code agent's checkpoint key for this turn: sub-agents working in the lesson's folder back files up under it.
+    var checkpointTurn: String? = nil
 }
 
 protocol Tool: Sendable {
@@ -194,6 +198,8 @@ enum ProcessRunner {
                     c.resume(returning: ProcessResult(stdout: "", stderr: "Failed to launch \(executable): \(error.localizedDescription)", exitCode: -1, timedOut: false))
                     return
                 }
+                // Cancelled before the launch (Stop right after a background start): the handler had nothing to end.
+                if Task.isCancelled { endTree(p) }
                 if let stdin { inPipe.fileHandleForWriting.write(Data(stdin.utf8)) }
                 try? inPipe.fileHandleForWriting.close()
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
@@ -212,6 +218,10 @@ enum ProcessRunner {
         let tree = descendants(of: pid) + [pid]
         for q in tree { kill(q, SIGTERM) }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { for q in tree where kill(q, 0) == 0 { kill(q, SIGKILL) } }
+    }
+    /// Sends `signal` to a process and its descendants, deepest first.
+    static func killTree(_ root: Int32, _ signal: Int32) {
+        for pid in descendants(of: root) + [root] { kill(pid, signal) }
     }
     private static func descendants(of root: Int32) -> [Int32] {
         var all: [Int32] = [], frontier = [root]

@@ -13,6 +13,8 @@ protocol TranscriptSink: AnyObject {
     func interaction(_ pending: InteractionCenter.Pending, active: Bool)
     func setStatus(_ status: String?)
     func notice(_ text: String)
+    /// The lesson's languages changed (target language, keyboard): the page follows.
+    func language(_ state: LanguageState?)
 }
 
 /// One lesson: owns the message history and runs the agent loop (stream → tools → repeat).
@@ -44,6 +46,8 @@ final class ChatSession: ObservableObject, Identifiable {
     /// What the learner did in the transcript that the tutor should hear with their next message (e.g. opening a
     /// problem's solution without trying it).
     var studyNotes: [String] = []
+    /// Which language the lesson teaches and in which it is taught (LanguageExtension); the composer's keyboard follows it.
+    @Published var language: LanguageState?
 
     private(set) var messages: [ChatMessage] = []
     unowned let app: AppModel
@@ -150,6 +154,10 @@ final class ChatSession: ObservableObject, Identifiable {
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
+        // A project command (/name args): the user's own prompt from .teacher/commands/name.md rides along, hidden.
+        if conversation.mode.isAgent, let expanded = ProjectCommands.expand(trimmed, folder: services.workspace.url) {
+            blocks.append(Block(kind: .text, text: "<context>\n\(expanded)\n</context>", meta: ["hidden": true]))
+        }
         var msg = ChatMessage(role: .user, blocks: blocks)
         host.willSend(&msg, self)
         if conversation.title == "New lesson" {
@@ -322,7 +330,7 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         let client = provider.client(apiKey: key)
-        if conversation.systemPrompt == nil { conversation.systemPrompt = buildSystemPrompt(model: conversation.model) }
+        if conversation.systemPrompt == nil { conversation.systemPrompt = await buildSystemPrompt(model: conversation.model) }
         var steps = 0
         var limitContinues = 0
         var nudges = 0   // replies that ended with the work plainly unfinished, sent back to finish it
@@ -695,6 +703,8 @@ final class ChatSession: ObservableObject, Identifiable {
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         ctx.quizzes = Testing.on(settings, conversation.mode)
         ctx.agentNode = node
+        ctx.codeAgent = conversation.mode.isAgent || conversation.mode == .code
+        ctx.checkpointTurn = app.extensions.get(CodeAgentExtension.self)?.currentTurnKey(self)
         let t0 = Date()
         var result: Block
         do {
@@ -733,13 +743,16 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Context
 
-    private func buildSystemPrompt(model: String) -> String {
+    private func buildSystemPrompt(model: String) async -> String {
         if conversation.mode.isAgent {
+            let profile = await ProjectProfile.detect(services.workspace.url)
             return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
-                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url))
+                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section())
         }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
+        // A code mentor builds in the learner's folder: how it builds and tests is part of the lesson's ground.
+        if conversation.mode == .code, let project = await ProjectProfile.detect(services.workspace.url).section() { s += "\n\n" + project }
         return s
     }
 
@@ -918,6 +931,11 @@ final class ChatSession: ObservableObject, Identifiable {
 }
 
 /// Coalesces streamed tool output to ≤ 10 UI updates per second.
+private struct SummaryCall: Sendable {
+    var text = ""
+    var usage = Usage()
+}
+
 final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = ""

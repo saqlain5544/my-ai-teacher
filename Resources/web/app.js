@@ -817,6 +817,9 @@
     unmountComponents(root);
   }
   function agentReportHTML(p) {
+    if (p.task) return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">⌘</span><span>Background command <b>' + esc(p.handle || '') + '</b> · ' +
+      esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state)) + (p.seconds != null ? ' in ' + p.seconds + ' s' : '') + '</span></div>' +
+      '<details><summary>Output</summary>' + pre(p.text || '') + '</details></div>';
     return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(p.handle || '') + '</b> · ' +
       esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state || 'finished')) + '</span>' +
       '<button class="btn mini" data-act="agent-open" data-agent="' + esc(p.agent) + '">Open</button></div>' +
@@ -1386,6 +1389,10 @@
       more.innerHTML = '<button class="btn" data-act="older">Show earlier messages (' + Number(n).toLocaleString() + ' more)</button>';
     },
     setFontSize(px) { document.documentElement.style.setProperty('--font-size', px + 'px'); },
+    /** The lesson's languages ({target, native, name, …}): the on-screen keyboard follows the target. */
+    setLanguage(state) { if (R.setLanguage) R.setLanguage(state || null); },
+    /** Recognised speech for a `speak` question ("toolId:qi"), partial until `final`. */
+    dictation(key, text, final) { if (R.dictation) R.dictation(key, text, !!final); },
     card(front, back, show) {
       document.body.classList.add('card-mode');
       unmountTree(thread);

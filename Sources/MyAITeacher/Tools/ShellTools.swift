@@ -34,9 +34,9 @@ struct BashTool: Tool {
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let command = try input.req("command")
-        let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
         let session = ctx.shellID ?? ctx.conversationID
         let cwd = await ShellState.shared.dir(session, default: ctx.workspace)
+        let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
         let cwdFile = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-cwd-\(UUID().uuidString)")
         let script = "trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)"
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
@@ -74,7 +74,7 @@ struct BashTool: Tool {
             }
             var text = truncateMiddle(job.output, max: 12_000).trimmingTrailingNewlines
             if text.isEmpty { text = "(no output yet)" }
-            text += "\n[\(why) now runs in the background as \(handle). New output: bash_jobs {\"action\": \"output\", \"handle\": \"\(handle)\"}; stop it with {\"action\": \"stop\", \"handle\": \"\(handle)\"}. Don't start it again.]"
+            text += "\n[\(why) now runs in the background as \(handle). If it ends by itself, its output arrives as a <background-task id=\"\(handle)\"> message: carry on meanwhile, don't poll. New output now: bash_jobs {\"action\": \"output\", \"handle\": \"\(handle)\"}; stop it with {\"action\": \"stop\", \"handle\": \"\(handle)\"}. Don't start it again.]"
             let others = ShellJobs.shared.summary(ctx.conversationID, except: handle)
             if !others.isEmpty { text += "\n" + others }
             var meta: [String: JSON] = ["background": .string(handle)]

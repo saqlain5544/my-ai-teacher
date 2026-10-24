@@ -7,7 +7,7 @@ enum ToolRegistry {
         ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), BashJobsTool(), RunCodeTool(), RunTestsTool(),
         WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
         AskLearnerTool(), QuizTool(), MathTool(), MemoryTool(), MasteryTool(), FlashcardsTool(),
-        ProjectMemoryTool(),
+        ProjectMemoryTool(), LanguageTool(), VocabTool(), SourceTool(), SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool(),
     ] + Features.tools   // optional features' tools (computer use: browser, mac, computer; the course board: lesson_plan)
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 

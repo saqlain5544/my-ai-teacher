@@ -96,6 +96,7 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | Quiz | Graded quizzes that mix difficulty and interleave related concepts |
 | Exam prep | Exam-style problems, mark schemes, timing, a revision plan |
 | Code mentor | Teaches programming by doing: small runnable examples, reviews your code |
+| Language mentor | Teaches a language: placement, glossed sentences, dialogues, dictation, speaking, your own vocabulary deck |
 | ELI5 | Plain words, everyday analogies, one idea at a time |
 | Research | Searches the web, compares sources and cites every claim |
 
@@ -168,27 +169,57 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
   analogies, research in the real docs and source, and two to four working examples it runs first. A full lesson can take
   several minutes on a fast model, and longer on free ones.
 * **Your editor.** There is no built-in editor. Open the folder in Helix, VS Code, Zed, Xcode — whatever you use — edit,
-  save, then tell the mentor to check (or just "check my work"). The mentor runs the tests and reads the files.
-* **Test results.** Each test run shows a card with every test's pass or fail and the output of failures. **Run again** on
-  the card re-runs the same tests yourself, with no wait for the model; the mentor sees the new result with your next
-  message.
-* **Code views.** The mentor can draw a type's memory layout (fields, offsets, padding and alignment) and a project's file
-  tree with notes.
-* **The review** is free-form, like a senior engineer's: correctness, design, edge cases, naming and complexity, pointing
-  at your lines.
+  save, then tell the mentor to check (or just "check my work"). The agent runs the tests with `bash` and reads the files.
+* **A language from its source.** "Teach me Zig's std", "how does Go's net/http serve a request", "walk me through
+  Python's asyncio event loop": the mentor finds the installed source on your Mac, outlines it, reads the real
+  implementation and teaches from it with file and line references. It works for standard libraries (Zig, Rust, Go,
+  Python) and for packages in your project (npm, Cargo, pip, SwiftPM).
+* **Proven tests.** When the mentor registers the test command, the app runs the suite on the starter: it must fail.
+  A suite that already passes is refused, one that cannot run goes back to the mentor. The mentor tells you the command
+  so you can run it yourself.
+* **The review.** Say "check my work" (or ask for a review): the app runs the tests, works out exactly what you changed
+  since the last review, and hands both to the mentor with the findings still open from last time. The review comes back
+  as a card: findings by file and line, marked **must** (blocks a pass), **should** or **nit**, with the ones you fixed
+  struck through, and a verdict. Fix what it points at and ask again; rounds build on each other. A pass with green
+  tests records the project's concept as mastered.
 * **What the mentor won't do.**
   * It won't write the solution: the starter is scaffolding and TODOs, and it teaches with questions, hints and concepts.
   * It won't hide tests or solutions from you: the tests are in `.teacher/tests` and you can run them yourself.
 * **Mastery.** A clean test run after your own work is the checkpoint: the mentor records the concept with `mastery` and
   makes the next project harder.
 
+## Language mentor
+
+In **Language mentor** mode, say which language you want to learn and where you are ("I did two years of Spanish at
+school"). The mentor places you with a few questions, sets your profile, and from then on knows the language, your level
+and which words are due.
+
+* **The keyboard for the script.** A ⌨ button appears next to every answer field in a quiz or form, and in the message
+  box's toolbar, when the language needs one: Japanese (kana, or type romaji and get kana), Korean (jamo join into
+  syllables; backspace removes one jamo), Chinese pinyin with an ā→á key that cycles the tone mark, Arabic, Persian,
+  Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi, Bengali and Thai, plus accent rows for Spanish, French, German,
+  Portuguese, Italian, Vietnamese and many more. The panel's menu switches to any other layout; ✕ hides it until you
+  press ⌨ again. For 汉字 use the Mac's own input source.
+* **In the lesson:** glossed sentences (click a word to see where it lands in the translation; click any foreign
+  word anywhere to hear it), listening cards with **Slowly** and hidden text for dictation, role-play dialogues where
+  your lines stay hidden until you reveal them, conjugation tables with the stem and the ending in different colours,
+  and tone diagrams for Mandarin.
+* **Tests:** **Say it** questions listen through the microphone in the target language (the Mac asks for permission the
+  first time) and show which words it understood; dictation questions play the audio first; where accents matter, the
+  mentor grades them strictly.
+* **Dictation in the target language.** With a target language set, the microphone button in the message box offers to
+  dictate in it as well as in your own language.
+* **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
+  flashcards in a "<Language> vocabulary" deck, reviewed in Flashcards; the mentor opens lessons with the ones due.
+  **Progress › Languages** shows each language's level and how many words are new, learning and known.
+
 ## Practice tools
 
-* **Quizzes and forms** come in 13 question types, graded instantly where possible:
+* **Quizzes and forms** come in 14 question types, graded instantly where possible:
   * choice: single choice, multiple choice, true/false;
   * typed: short text, long text, numeric (units and ranges), fill in the blanks;
   * structured: ordering, matching, scale;
-  * work: code, math (checked symbolically with SymPy, with a live preview) and drawing.
+  * work: code, math (checked symbolically with SymPy, with a live preview), drawing, and **say it** (speech, in the language being learned).
 * **Practice cards** are quick self-checks: try, reveal, then mark **Got it** or **Missed**.
 * **Worked examples** are revealed one step at a time.
 * **Flashcards** (⌥⌘1) use FSRS spaced repetition. Ask the teacher to "make flashcards" from any lesson. While
@@ -238,9 +269,19 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   *Full access* per folder; grants live in **Settings › Tools**. Writes and commands outside what you granted ask
   first. You can allow once or for the lesson, grant the folder write or full access, or deny.
 * **Tools.**
-  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed).
-  * Commands: bash, and run_code in 12 languages.
+  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed), and `symbols` (a file's outline, or
+    where a name is defined).
+  * Commands: bash (with `background: true` for long builds and test suites, whose output arrives as a message), and
+    run_code in 12 languages.
+  * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
   * Planning: a todo checklist.
+* **It knows your project.** The agent's instructions carry a profile read from your manifests: the build system, how
+  to build, check, test and lint, the languages, the git state. Every file it writes or edits is syntax-checked on the
+  spot, and it is told to run the project's check and tests before it reports.
+* **Undo.** Under each reply that changed files: **Undo this turn's changes** puts every file back as it was before that
+  turn (the app keeps a checkpoint per turn in `.teacher/checkpoints`, no git needed). The agent is told you did.
+* **Your own commands.** A file `.teacher/commands/review.md` becomes `/review`; type `/review src/app.py` and the file's
+  text, with `$ARGUMENTS` filled in, goes to the agent with your message.
   * `project_memory`, which keeps build commands, conventions and gotchas in `.teacher/code-memory.md`. The agent
     also reads `CLAUDE.md` and `AGENTS.md`.
 * **Changes panel.** A git diff of what changed, with checkpoints.

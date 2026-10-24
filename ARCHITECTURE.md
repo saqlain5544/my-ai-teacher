@@ -250,6 +250,35 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 ## Code agent
 * Mode `agent` ("Code agent", ⇧⌘K): a software-engineer prompt, the whole coding toolset up front, and project memory
   in `.teacher/code-memory.md` (plus CLAUDE.md / AGENTS.md) instead of the learner model; `project_memory` tool.
+* **Project profile** (`ProjectProfile.detect`, once per session when the prompt is built): the manifests at the top of
+  the folder (Package.swift, package.json scripts and lockfile, tsconfig, Cargo, go.mod, pyproject, build.zig,
+  Makefile targets, CMake, Gradle, Maven, Gemfile, mix, deno) → build / check / test / lint / format commands, languages
+  by file count (code only; a bounded walk), git branch and dirty count, `.teacher/commands`. It is the `# Project`
+  section of the agent's prompt and the default commands of `diagnostics`.
+* **Verification loop.** `WriteTool`/`EditTool` in agent mode (`ToolContext.codeAgent`) run `Diagnostics.quickCheck`
+  on the file (py_compile, node --check, ruby -c, zig ast-check, swiftc -parse, gofmt -e, zsh -n, JSON; ≤ 10 s) and
+  append the verdict to the result (`meta.syntaxErrors` marks the card). `diagnostics` runs the project's check, test
+  or lint command (or one given) and parses clang/swift/zig/go, tsc, rustc, python and eslint output into
+  `file:line:col severity message`, grouped by file and capped (`Diagnostics.parse` / `summary`). `bash` with
+  `background: true` runs detached (≤ 30 min) and delivers a `<background-task>` message through `ChatSession.deliver`,
+  like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the foreground. `ShellState` keeps
+  the lesson's running background tasks by handle: Stop cancels them (the processes end, nothing is delivered), and a
+  foreground `bash` result names the ones still running. A coder sub-agent working in the lesson's folder (no
+  worktree) backs files up under the turn's checkpoint too (`ToolContext.checkpointTurn`), so Undo covers its edits.
+  `ProjectProfile.detect` caches per folder behind a fingerprint of the manifests' dates and sizes (ten minutes; the
+  git part refreshed after a minute), so neither the prompt nor `diagnostics` re-walks the folder.
+* **Checkpoints and undo** (`Checkpoints`, `CodeAgentExtension`): registered before `PermissionExtension`, its
+  `shouldRun` copies a file to `.teacher/checkpoints/<turn>/` before the agent's first write or edit to it in the turn
+  (a created file is recorded as absent). `didFinishTurn` keeps only files whose content differs from the backup and
+  stores `checkpoint` and `changedFiles` on the turn's metrics (optional fields, so older messages decode); the page's
+  footer offers **Undo this turn's changes** (`revert` message → `Checkpoints.restore`), the agent hears about an undo
+  with the next message, and the newest 40 checkpoints are kept. No git needed; the Changes panel's git checkpoints
+  are the user's own.
+* `symbols`: a file's outline or the definitions of a name across the folder, by per-language regular expressions
+  (ripgrep for the search) — definitions, not mentions. `edit` matches a block whose lines differ only in indentation
+  or trailing whitespace when that match is unique, and re-indents the replacement. `ProjectCommands`:
+  `.teacher/commands/<name>.md` typed as `/name args` in a code session goes to the agent as hidden context with
+  `$ARGUMENTS` filled in.
 
 ## Browser and computer use (code agent)
 * **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
@@ -322,6 +351,54 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   `.teacher/.gitignore` keeps `tests/` versioned alongside the project while the rest of `.teacher/` stays private.
 * The mentor's shell is an ordinary shell in the folder — no scratch sandbox, no hidden test store, no reference
   solution, no leak detector and no CodeMirror bundle. The folder access grant and approval prompts are the boundary.
+* **The review loop as mechanism** (`Study/MentorProject.swift`, `Tools/MentorTools.swift`, `Extensions/CodeMentorExtension.swift`).
+  `.teacher/project.json` holds the project: title, concept, test command, every test run, the review rounds.
+  `project_tests` set registers the command and proves the suite red on the starter — a run with no failures is refused
+  (vacuous), a runner that errors is refused with its output — then snapshots the learner's files (`.teacher/review/
+  snapshot/`, text files only, bounded) as the baseline. `project_review` start runs the tests, diffs the files against
+  the snapshot (`/usr/bin/diff -u` per changed file, capped) and returns the diffs, the parsed run (`TestOutput.parse`:
+  pytest, jest/vitest, mocha, go test, swift test, cargo, zig, rspec, mix, ctest) and the open findings; `findings`
+  records the round (file, line, severity, text, concept), carries unresolved findings forward, marks resolved ids, takes
+  a new snapshot, refuses a pass that still carries a `must`, and on a pass with the last run green records the project's
+  concept with `StudyStore.recordAttempt`. `CodeMentorExtension` appends a `<project_state>` line to every request
+  (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
+  mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
+  checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
+* **Learning a language or library from its source** (`Tools/SourceTool.swift`): `source` resolves a library by name
+  to where it lives on this Mac — Zig's std (`zig env`, via `Toolchains`), Rust's std/core/alloc (`rustc --print
+  sysroot` + rust-src), Go's GOROOT/src and module cache, Python's stdlib and any importable module (`importlib`;
+  built-ins without Python source are named as such), npm packages under the folder's `node_modules`, Cargo registry
+  crates, SwiftPM checkouts, or a folder path — then locates, finds files by name, outlines (`SymbolsTool.outline`),
+  reads numbered line ranges and greps within it. Roots are cached per launch. Core in Code mentor mode, deferred in
+  other lessons; the instructions make the installed source the textbook and the projects reimplementations of it.
+
+## Language mentor
+* **Mode `language`** (`Instructions.mode(.language)`), with `language` and `vocab` as core tools (deferred in every
+  other mode, loadable with `load_tools`). `LanguageTool`: profile (target/native/level in the `languages` table),
+  transliterate (ICU `StringTransform`s; romaji through the keyboard's own table, since ICU reads "nn" as a doubled
+  consonant), analyze (`NLTokenizer` word units + `NLTagger` lexical class and lemma, a Latin reading for other scripts),
+  dictionary (Wiktionary's keyless REST definitions). `VocabTool`: the `vocab` table, each row linked to a flashcard in
+  "<Language> vocabulary" (FSRS review in the Flashcards screen; `LanguageStore.swift`).
+* **Runtime detection.** `LanguageExtension` computes a `LanguageState` per lesson: the language the learner asked for
+  (a trigger-word window over their messages against `Languages.names`), else the most frequent non-native language of
+  the replies (`lang=` tags and scripts, cached per message; replies already carry `meta.languages`), with the profile
+  adding the level; the learner's own language is the dominant language of their messages. The state goes to the page
+  (`T.setLanguage`, on reset and after every turn) and to `ChatSession.language` (the composer), and a one-line
+  `<language_state>` is appended to the last learner message of every request (request copy only, like the board card).
+* **Keyboard.** `Resources/web/keyboard-layouts.js` is the one layouts file: the page (`components/keyboard.js`) and the
+  composer (`KeyboardLayouts`, which parses the JSON after the assignment) both read it. Composition lives in both
+  (`keyboard.js` and `ScriptComposer`, with the same tests): Hangul jamo → syllables with compound vowels and finals and
+  jamo-wise backspace; kana ゛゜ and small forms; romaji → kana syllable by syllable as typed; a tone key that cycles
+  pinyin marks by the placement rule; combining marks (Vietnamese tones, niqqud, harakat) folding into the previous
+  letter. On the page the panel opens when an eligible field takes focus (never numeric, math or code fields) and types
+  with `setRangeText` + an input event, so the forms' own validation runs.
+* **Components** (`components/langlearn.js`): `gloss` (interlinear, role colours, SVG alignment arcs drawn on mount and
+  resize), `listen` (speak messages with a `rate` multiplier), `dialogue`, `conjugation`, `tones`; the `speak` question
+  type posts `dictate` (start/stop) and the app streams `T.dictation(key, text, final)` from `Speech.dictate(language:)`,
+  which picks the recogniser locale for the language; `listen` on any question renders the player first. Grading:
+  `accents: "strict"` keeps diacritics in `Questions.norm`; pinyin tone marks and numbers agree (`pinyinNumbers`, only
+  for `lang: zh`); `speak` answers are `{heard, target}` graded by `speechMatch` (words, or characters for scripts
+  without spaces, as a multiset; ≥ 80% is correct).
 
 ## Depth standard
 Every teaching prompt carries the same standard:
@@ -614,6 +691,10 @@ The app's footprint must not grow with how much the learner has done: data lives
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
+| — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
+| — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
+| /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
+| /command | `.teacher/commands/*.md` | project slash commands with `$ARGUMENTS` |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |

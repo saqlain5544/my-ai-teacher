@@ -6,8 +6,9 @@ import Foundation
 ///     root ── core for every agent: files, batch edit, web, sub-agents, the core visualisations
 ///     ├── teacher ── teaching: questions and quizzes, the course board, learner memory, math, code to show things
 ///     │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (their instructions differ, not their tools)
-///     │   └── code-mentor ── projects: tests, code search, memory-layout and file-tree views
-///     └── engineer ── the code agent: shell, code search, tests, project memory, browser and Mac control
+///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones
+///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views
+///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control
 ///
 /// Per node there are three sets: tools sent with every request (`core`), tools loaded at runtime with `load_tools`
 /// (`deferred`, one line each in the prompt, so context stays small), and rendering components (fences the agent may
@@ -30,7 +31,7 @@ enum AgentTree {
                   guide: Guides.root),
         AgentNode(id: "teacher", parent: "root",
                   core: ["ask_learner", "math", "run_code", "bash", "memory", "lesson_plan"],
-                  deferred: ["quiz", "mastery", "flashcards", "todo_write", "bash_jobs"],
+                  deferred: ["quiz", "mastery", "flashcards", "todo_write", "bash_jobs", "language", "vocab", "source"],
                   components: ["vocab", "practice", "problem"],
                   guide: Guides.teacher),
         AgentNode(id: "tutor", parent: "teacher"),
@@ -40,13 +41,16 @@ enum AgentTree {
         AgentNode(id: "exam", parent: "teacher"),
         AgentNode(id: "eli5", parent: "teacher"),
         AgentNode(id: "research", parent: "teacher"),
+        AgentNode(id: "language", parent: "teacher",
+                  core: ["language", "vocab"],
+                  components: ["listen", "gloss", "dialogue", "conjugation", "tones"]),
         AgentNode(id: "code-mentor", parent: "teacher",
-                  core: ["run_tests"],
+                  core: ["run_tests", "project_tests", "project_review", "symbols", "diagnostics", "source"],
                   deferred: ["glob", "grep"],
                   components: ["layout", "tree"],
                   guide: Guides.codeMentor),
         AgentNode(id: "engineer", parent: "root",
-                  core: ["bash", "bash_jobs", "run_code", "glob", "grep", "run_tests", "todo_write", "agents", "ask_learner", "project_memory",
+                  core: ["bash", "bash_jobs", "run_code", "glob", "grep", "symbols", "source", "diagnostics", "run_tests", "todo_write", "agents", "ask_learner", "project_memory",
                          "browser", "mac", "computer"],
                   components: ["layout", "tree"],
                   guide: Guides.engineer),

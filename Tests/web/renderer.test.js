@@ -1511,6 +1511,152 @@
     ok(worst < 250, 'worst frame ' + worst.toFixed(0) + ' ms');
   });
 
+
+  // ───────────── Language mentor ─────────────
+  test('language mentor: the on-screen keyboard follows the target language and types into quiz fields', async () => {
+    const QZ = { title: 'かな', graded: true, questions: [{ type: 'short_text', prompt: 'Write "hello"', answer: 'こんにちは', lang: 'ja' }, { type: 'numeric', prompt: 'How many?', answer: 3 }] };
+    const a = A([{ kind: 'toolUse', id: 'kb1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('quiz me'), a], {});
+    T.interaction({ id: 'kb1', kind: 'quiz', payload: QZ }, true);
+    T.setLanguage({ target: 'ja', native: 'en', name: '日本語', english: 'Japanese' });
+    const card = $('[data-tool-id="kb1"]');
+    const text = $('[data-q-input="0"]', card); ok(text, 'text field');
+    ok(text.nextElementSibling && text.nextElementSibling.classList.contains('kbd-toggle'), 'a ⌨ toggle beside the text field');
+    ok(!$('[data-q-input="1"]', card).nextElementSibling || !$('[data-q-input="1"]', card).nextElementSibling.classList.contains('kbd-toggle'), 'none beside the number field');
+    text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    const kbd = $('#kbd'); ok(kbd && !kbd.hidden, 'the panel opens when the field takes focus');
+    ok($('select[data-layout]', kbd).value === 'ja', 'Japanese layout chosen');
+    click($('[data-key="こ"]', kbd)); click($('[data-key="ん"]', kbd)); click($('[data-key="に"]', kbd)); click($('[data-key="ち"]', kbd)); click($('[data-key="は"]', kbd));
+    eq(text.value, 'こんにちは', 'keys type into the focused field');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちば', '゛ voices the last kana');
+    click($('[data-fn="dakuten"]', kbd)); eq(text.value, 'こんにちは', 'and toggles it off');
+    click($('[data-fn="kana"]', kbd)); click($('[data-key="あ"]', kbd)); eq(text.value, 'こんにちはア', 'katakana mode');
+    click($('[data-fn="bksp"]', kbd)); click($('[data-fn="kana"]', kbd));
+    click($('[data-fn="mode"]', kbd)); ok(/romaji/i.test(kbd.textContent), 'romaji mode hint');
+    for (const ch of 'sekai') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかい', 'romaji typed on the keyboard becomes kana');
+    for (const ch of 'kyo') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかいきょ', 'digraphs');
+    click($('[data-fn="mode"]', kbd));
+    // Another language from the menu; a language without a panel hides it.
+    const sel = $('select[data-layout]', kbd); sel.value = 'ko'; sel.dispatchEvent(new Event('change', { bubbles: true }));
+    text.value = ''; text.focus();
+    for (const j of 'ㅎㅏㄴㄱㅡㄹ') click($('[data-key="' + j + '"]', kbd));
+    eq(text.value, '한글', 'Hangul jamo compose into syllables');
+    click($('[data-fn="bksp"]', kbd)); eq(text.value, '한그', 'backspace removes one jamo');
+    T.setLanguage({ target: 'zh', native: 'en' });
+    text.value = ''; text.focus();
+    for (const k of ['n', 'i']) click($('[data-key="' + k + '"]', kbd));
+    click($('[data-fn="tone"]', kbd)); eq(text.value, 'nī'); click($('[data-fn="tone"]', kbd)); click($('[data-fn="tone"]', kbd)); eq(text.value, 'nǐ', 'the tone key cycles pinyin tone marks');
+    T.setLanguage({ target: 'sw', native: 'en' });
+    ok($('#kbd').hidden, 'Swahili needs no panel');
+    T.setLanguage(null);
+    T.interaction({ id: 'kb1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: gloss, listen, dialogue, conjugation and tones render and speak', () => {
+    const el = show([
+      '```gloss\n{"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]}\n```',
+      '```listen\n{"lang":"es","text":"¿Dónde está la estación?","translation":"Where is the station?","hide":true}\n```',
+      '```dialogue\n{"lang":"fr","title":"Au café","lines":[{"who":"Serveur","text":"Bonjour, vous désirez ?","translation":"Hello, what would you like?"},{"who":"Vous","text":"Un café, s\'il vous plaît."}],"you":"Vous"}\n```',
+      '```conjugation\n{"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"tú","form":"hablas"},{"person":"él","form":"es","irregular":true}]}\n```',
+      '```tones\n{"text":"nǐ hǎo ma"}\n```',
+    ].join('\n\n'));
+    noErrors(el, 'language components');
+    const g = $('.gloss', el); ok(g, 'gloss');
+    eq($$('.gl-w', g).length, 3); ok($('.gl-w .gw[lang="ja"]', g), 'words tagged with the language');
+    eq($$('.gl-arcs path', g).length, 3, 'alignment lines drawn'); ok($('.gl-legend', g), 'role legend');
+    click($('.gl-w[data-i="1"]', g)); ok($('.gl-t[data-j="3"]', g).classList.contains('hi'), 'clicking a word highlights its translation');
+    const l = $('.listen', el); ok(l, 'listen'); ok($('.ll-text[hidden]', l), 'dictation hides the text');
+    posts.length = 0; click($('[data-act="ll-play"][data-rate]', l));
+    const sp = lastPost('speak'); ok(sp && sp.lang === 'es' && sp.rate < 1, 'slow playback: ' + JSON.stringify(sp));
+    click($('[data-act="ll-reveal"]', l)); ok(!$('.ll-text[hidden]', l), 'text revealed');
+    const d = $('.dialogue', el); ok(d, 'dialogue'); eq($$('.dl-line', d).length, 2);
+    ok($('.dl-you .dl-text[hidden]', d), 'the learner\'s line is hidden'); click($('.dl-you [data-act="ll-reveal"]', d)); ok(!$('.dl-you .dl-text[hidden]', d), 'revealed');
+    const c = $('.conjugation', el); ok(c, 'conjugation'); eq($$('.cj-stem', c).length, 3, 'stem marked in regular forms and the key'); ok($('tr.irr .cj-irregular', c), 'irregular form flagged');
+    const t = $('.tones', el); ok(t, 'tones'); eq($$('.tn-path', t).length, 3); ok($('.tn-path.t3', t), 'third tone contour');
+    ok(t.textContent.includes('tone 3'), 'tone labels');
+  });
+
+  test('language mentor: a speak question records what the Mac heard and submits it', async () => {
+    const QZ = { title: 'Say it', graded: true, questions: [{ type: 'speak', prompt: 'Say good morning', target: 'Buenos días', lang: 'es', reading: 'BWEH-nos DEE-as' }, { type: 'short_text', prompt: 'Dictation', listen: 'Hasta luego', listen_lang: 'es', answer: 'Hasta luego', accents: 'strict' }] };
+    const a = A([{ kind: 'toolUse', id: 'sp1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('test me'), a], {});
+    T.interaction({ id: 'sp1', kind: 'quiz', payload: QZ }, true);
+    const card = $('[data-tool-id="sp1"]');
+    noErrors(card, 'speak quiz');
+    ok($('.q-speak .sp-target[lang="es"]', card), 'target shown in the language');
+    ok($('.quiz-q[data-qi="1"] .ll-player .ll-text[hidden]', card), 'the dictation question plays audio and hides its text');
+    posts.length = 0; click($('[data-act="q-speak"]', card));
+    const d = lastPost('dictate'); ok(d && d.op === 'start' && d.lang === 'es' && d.id === 'sp1:0', 'asks the app to listen in Spanish: ' + JSON.stringify(d));
+    ok($('.q-speak .btn.recording', $('[data-tool-id="sp1"]')), 'recording state');
+    T.dictation('sp1:0', 'buenos', false);
+    ok($('.q-speak .sp-heard', $('[data-tool-id="sp1"]')).textContent.includes('buenos'), 'partial result shown');
+    T.dictation('sp1:0', 'buenos dias', true);
+    const c2 = $('[data-tool-id="sp1"]');
+    ok(!$('.q-speak .btn.recording', c2), 'recording ended');
+    eq($$('.sp-target .ok', c2).length, 2, 'both words matched: ' + $('.sp-target', c2).innerHTML);
+    const dict = $('[data-q-input="1"]', c2); dict.value = 'Hasta luego'; dict.dispatchEvent(new Event('input', { bubbles: true }));
+    posts.length = 0; click($('[data-act="q-submit"]', c2));
+    const ans = lastPost('answer'); ok(ans, 'submitted');
+    eq(ans.value.answers[0].heard, 'buenos dias', 'the recognised text is the answer'); eq(ans.value.answers[0].target, 'Buenos días');
+    eq(ans.value.answers[1], 'Hasta luego');
+    T.interaction({ id: 'sp1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {
+    const el = show('```vocab\n[{"term":"りんご","lang":"ja","reading":"ringo","meaning":"apple","example":"りんごを食べる"}]\n```');
+    const b = $('.vocab-save', el); ok(b, 'save button');
+    posts.length = 0; click(b);
+    const p = lastPost('vocab'); ok(p && p.op === 'add' && p.word.term === 'りんご' && p.word.lang === 'ja' && p.word.reading === 'ringo', JSON.stringify(p));
+    ok(b.disabled && /Saved/.test(b.textContent), 'marked saved');
+  });
+
+
+  // ───────────── Code agent ─────────────
+  test('code agent: undo under a reply, a failed syntax check on its card, a background command, diagnostics', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'ed1', name: 'edit', input: { path: 'app.py', old_string: 'a', new_string: 'b' } }]);
+    const r1 = R('ed1', 'edit', 'Edited app.py.\nSyntax check found problems — fix them before moving on:\napp.py:3 error: invalid syntax', { meta: { syntaxErrors: true } });
+    const a2 = A([{ kind: 'toolUse', id: 'dg1', name: 'diagnostics', input: { what: 'check' } }]);
+    const r2 = R('dg1', 'diagnostics', '`swift build` → exit 1 in 3.0 s. 2 errors, 0 warnings\nSources/A.swift:\n  12:9 error: cannot find foo', { isError: true, meta: { errors: 2, warnings: 0, command: 'swift build' } });
+    const a3 = A('Fixed it.', { turn: { duration: 3, steps: 2, usage: { input: 10, output: 20 }, checkpoint: '1729', changedFiles: ['app.py', 'Sources/A.swift'] } });
+    const bg = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: '<background-task id="B1" command="swift test" exit="0" seconds="42">\nExecuted 5 tests\n</background-task>', meta: { backgroundTask: 'B1', title: 'run the tests', exit: 0, seconds: 42 } }] };
+    T.status('', false); T.reset([U('fix the bug'), a1, r1, a2, r2, a3, bg, A('All green.')], { agent: true });
+    const edit = $('[data-tool-id="ed1"]'); ok(edit && edit.classList.contains('syntax-errors'), 'an edit with a failed syntax check is marked');
+    const dg = $('[data-tool-id="dg1"]'); ok(dg, 'diagnostics card'); ok(/2 errors/.test(dg.textContent), 'summary shows the counts: ' + dg.textContent.slice(0, 120));
+    const undo = $('#m-' + a3.id + ' .turn-undo'); ok(undo, 'undo footer under the reply that changed files');
+    ok(/2 files changed/.test(undo.textContent) && /app\.py/.test(undo.textContent), undo.textContent);
+    posts.length = 0; click($('[data-act="undo-turn"]', undo));
+    eq(lastPost('revert'), { type: 'revert', turn: '1729' }, 'asks the app to restore the checkpoint');
+    ok($('[data-act="undo-turn"]', undo).disabled && /Undone/.test(undo.textContent), 'one undo per turn');
+    const task = $('#m-' + bg.id + ' .agent-report'); ok(task, 'a background command renders like an agent report');
+    ok(/Background command B1/.test(task.textContent) && /finished in 42 s/.test(task.textContent), task.textContent);
+    ok(!/background-task/.test(task.textContent), 'the envelope tag is not shown');
+    ok(!$('#m-' + bg.id + ' .bubble'), 'not a learner bubble');
+    T.reset([U('q'), A('x', { turn: { duration: 1, steps: 1, usage: {} } })], { agent: true });
+    ok(!$('.turn-undo'), 'no undo when nothing changed');
+  });
+
+
+  // ───────────── Code mentor ─────────────
+  test('code mentor: test runs show a pass/fail bar and a review round shows its findings by file', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'pt1', name: 'project_tests', input: { action: 'set', command: 'pytest -q' } }]);
+    const r1 = R('pt1', 'project_tests', 'Proven red on the starter: 2 failing, 0 passing.', { meta: { run: { passed: 0, failed: 2, errored: false, seconds: 0.4, failing: ['test_plain', 'test_empty'], exit: 1, why: 'set' }, command: 'pytest -q' } });
+    const a2 = A([{ kind: 'toolUse', id: 'rv1', name: 'project_review', input: { action: 'findings', verdict: 'changes', summary: 'Works, but brittle.' } }]);
+    const r2 = R('rv1', 'project_review', 'Round 1 recorded.', { meta: { verdict: 'changes', round: { number: 1, verdict: 'changes', summary: 'Works, but brittle.', tests: { passed: 2, failed: 0, errored: false, seconds: 0.3, failing: [], exit: 0, why: 'review' },
+      findings: [{ id: 1, file: 'shop.py', line: 2, severity: 'must', text: 'What happens when qty is missing?', resolved: false }, { id: 2, file: 'shop.py', line: 1, severity: 'nit', text: 'A docstring would help.', resolved: true }, { id: 3, file: 'util.py', line: null, severity: 'should', text: 'Unused.', resolved: false }] } } });
+    T.status('', false); T.reset([U('check my work'), a1, r1, a2, r2, A('Fix the must first.')], {});
+    const pt = $('[data-tool-id="pt1"]'); ok(pt, 'tests card');
+    ok(/0 passed, 2 failed/.test(pt.textContent), 'summary line: ' + pt.textContent.slice(0, 120));
+    const rv = $('[data-tool-id="rv1"]'); ok(rv, 'review card');
+    ok(/Changes requested/.test(rv.textContent), 'verdict shown (opened by default)');
+    eq($$('.review-file', rv).length, 2, 'findings grouped by file');
+    eq($$('.finding.must', rv).length, 1); ok($('.finding.resolved', rv), 'a resolved finding is struck through');
+    ok($('.tests-bar.green', rv), 'the round carries its test run');
+    ok(/2 passed · 0 failed/.test(rv.textContent), rv.textContent.slice(0, 200));
+    noErrors(rv, 'review card');
+  });
+
   // ───────────── Run ─────────────
   let passed = 0, failed = 0;
   for (const t of tests) {
