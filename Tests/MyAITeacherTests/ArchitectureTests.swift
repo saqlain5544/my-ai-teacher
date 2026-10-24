@@ -305,3 +305,22 @@ final class InteractionWaitTests: XCTestCase {
         XCTAssertEqual(r2["decision"]?.string, "once")
     }
 }
+
+final class TelemetryRetryTests: XCTestCase {
+    func testAFailedFlushKeepsTheBatchForTheNextTick() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("tm-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let db = try Database(path: dir.appendingPathComponent("t.sqlite").path)
+        let store = TelemetryStore(db: db)
+        let t = Telemetry(store: store, maxBuffer: 100, enabled: true)
+        try db.script("DROP TABLE tm_events")   // the next write fails
+        t.record(TelemetryEvent(ts: Date().timeIntervalSince1970, kind: .step, provider: "p", model: "m", conv: "c", value: 1, ok: true, label: nil, attrs: [:]))
+        t.flushNow()
+        XCTAssertEqual(t.buffered, 1, "the failed batch waits for the next tick")
+        try db.script(TelemetryStore.schema)
+        t.flushNow()
+        XCTAssertEqual(t.buffered, 0)
+        XCTAssertEqual(try db.query("SELECT COUNT(*) AS n FROM tm_events").first?.int("n"), 1, "written once, on retry")
+    }
+}

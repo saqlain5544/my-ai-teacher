@@ -136,7 +136,16 @@ final class Telemetry: @unchecked Sendable {
         }
         guard let store, !batch.isEmpty else { return }
         let t0 = clock_gettime_nsec_np(CLOCK_UPTIME_RAW)
-        do { try store.write(batch) } catch { AppLog.write("telemetry flush failed: \(error.localizedDescription)") }
+        do { try store.write(batch) } catch {
+            // The write is one transaction, so nothing of the batch landed: it goes back in front of newer events and the
+            // next tick retries it (it used to be dropped), within the buffer's cap.
+            AppLog.write("telemetry flush failed: \(error.localizedDescription)")
+            lock.withLock {
+                let room = max(0, maxBuffer - buffer.count)
+                if room < batch.count { stats.dropped += batch.count - room }
+                buffer.insert(contentsOf: batch.suffix(room), at: 0)
+            }
+        }
         let dt = clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - t0
         lock.withLock {
             stats.flushes += 1; stats.flushNanos += dt
