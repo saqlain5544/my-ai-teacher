@@ -375,3 +375,29 @@ final class CacheBreakpointTests: XCTestCase {
                        "nothing before the marker: one block, not an empty one")
     }
 }
+
+final class ReflectionFailureTests: XCTestCase {
+    private struct Throwing: LLMClient {
+        func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+            AsyncThrowingStream { $0.finish(throwing: URLError(.networkConnectionLost)) }
+        }
+    }
+    private struct Prose: LLMClient {
+        func stream(_ request: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+            AsyncThrowingStream { c in c.yield(.text("Nothing much to note here, sorry.")); c.finish() }
+        }
+    }
+
+    func testAFailedCallIsReportedSoTheLessonIsReflectedAgain() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("refl-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: dir))
+        let msgs = (0..<4).flatMap { i in [ChatMessage(role: .user, blocks: [.text("Can you explain why momentum is conserved in collision number \(i)?")]),
+                                           ChatMessage(role: .assistant, blocks: [.text("Because the net external force on the system is zero, so total momentum stays constant.")])] }
+        let failed = await Reflection.run(messages: msgs, conversationID: "c", client: Throwing(), model: "m", services: services, needsTitle: false)
+        XCTAssertTrue(failed.failed, "a network failure is not 'nothing to learn'")
+        let prose = await Reflection.run(messages: msgs, conversationID: "c", client: Prose(), model: "m", services: services, needsTitle: false)
+        XCTAssertFalse(prose.failed, "an unusable answer is not retried every turn")
+    }
+}

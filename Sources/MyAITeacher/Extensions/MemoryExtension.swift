@@ -64,7 +64,9 @@ final class MemoryExtension: AgentExtension {
             let outcome = await Reflection.run(messages: slice, conversationID: convID, client: BeatingClient(inner: client, beat: job.beat), model: model,
                                                services: services, needsTitle: needsTitle)
             await MainActor.run {
-                box.value?.applyReflection(outcome, messageCount: count)
+                // A failed call leaves the messages unreflected, so the next trigger tries them again (they were marked
+                // done, and that part of the lesson never reached the learner model).
+                if !outcome.failed { box.value?.applyReflection(outcome, messageCount: count) }
                 if Reflection.consolidationDue(services) { me.value?.consolidate(services: services, client: client, model: model) }
                 if outcome.applied > 0 {
                     var parts: [String] = []

@@ -9,6 +9,10 @@ enum Reflection {
         var applied: Int
         var added = 0, updated = 0, deleted = 0, rejected = 0, concepts = 0
         var rejections: [String] = []
+        /// The model call failed (network, rate limit, provider error): nothing was learned, so the messages are not
+        /// marked as reflected and the next trigger tries them again. A reply that wasn't usable JSON is not a failure:
+        /// asking again would likely pay for the same answer every turn.
+        var failed = false
     }
 
     static func transcriptExcerpt(_ messages: [ChatMessage], maxChars: Int = 14_000) -> String {
@@ -84,7 +88,8 @@ enum Reflection {
         # Lesson excerpt
         \(excerpt)
         """
-        guard let json = await complete(client: client, model: model, system: system, user: user) else { return Outcome(title: nil, applied: 0) }
+        let reply = await complete(client: client, model: model, system: system, user: user)
+        guard let json = reply.json else { return Outcome(title: nil, applied: 0, failed: reply.failed) }
         // Only memories the model was shown may be changed or removed.
         let shownIDs = Set((existing + "\n" + related).matches(of: #/\[#(\w+)\]/#).map { String($0.1) })
         var out = apply(json, hub: hub, conversationID: conversationID, allowed: shownIDs)
@@ -92,13 +97,13 @@ enum Reflection {
         return out
     }
 
-    private static func complete(client: LLMClient, model: String, system: String, user: String) async -> JSON? {
+    private static func complete(client: LLMClient, model: String, system: String, user: String) async -> (json: JSON?, failed: Bool) {
         var text = ""
         do {
             let req = LLMRequest(model: model, system: system, messages: [ChatMessage(role: .user, blocks: [.text(user)])], maxTokens: 4096, thinking: .off)
             for try await ev in client.stream(req) { if case .text(let t) = ev { text += t } }
-        } catch { return nil }
-        return extractJSON(text)
+        } catch { return (nil, true) }
+        return (extractJSON(text), false)
     }
 
     private static func strings(_ j: JSON?) -> [String] {
@@ -239,7 +244,7 @@ enum Reflection {
          "concepts":[{"name":"…","subjects":["…"]}]}
         """
         let user = "# Memories\n\(listing)\n\n# Concepts\n\(conceptListing.isEmpty ? "(none)" : conceptListing)"
-        guard let json = await complete(client: client, model: model, system: system, user: user) else { return Outcome(title: nil, applied: local.merged) }
+        guard let json = await complete(client: client, model: model, system: system, user: user).json else { return Outcome(title: nil, applied: local.merged) }
         // Only touch ids that were shown.
         let known = Set(all.map(\.id) + concepts.map(\.id))
         var filtered = json.object ?? [:]
