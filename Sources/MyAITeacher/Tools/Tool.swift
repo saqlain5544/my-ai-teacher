@@ -155,27 +155,24 @@ enum ProcessRunner {
         p.executableURL = URL(fileURLWithPath: executable)
         p.arguments = args
         if let cwd { p.currentDirectoryURL = cwd }
-        var environment = env ?? ShellEnvironment.shared.all
-        environment["TERM"] = "dumb"
-        environment["NO_COLOR"] = "1"
-        environment["PAGER"] = "cat"
-        environment["GIT_PAGER"] = "cat"
-        p.environment = environment
+        p.environment = environment(env)
         let outPipe = Pipe(), errPipe = Pipe()
         p.standardOutput = outPipe
         p.standardError = errPipe
         let inPipe = Pipe()
         p.standardInput = inPipe
         let out = OutputCollector(limit: outputLimit), err = OutputCollector(limit: outputLimit / 4)
+        let closed = DispatchGroup()
+        closed.enter(); closed.enter()
         outPipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil; return }
+            if d.isEmpty { h.readabilityHandler = nil; closed.leave(); return }
             out.append(d)
             onOutput?(String(decoding: d, as: UTF8.self))
         }
         errPipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil; return }
+            if d.isEmpty { h.readabilityHandler = nil; closed.leave(); return }
             err.append(d)
             onOutput?(String(decoding: d, as: UTF8.self))
         }
@@ -183,12 +180,11 @@ enum ProcessRunner {
         return await withTaskCancellationHandler {
             await withCheckedContinuation { (c: CheckedContinuation<ProcessResult, Never>) in
                 p.terminationHandler = { proc in
-                    // Drain remaining output.
-                    outPipe.fileHandleForReading.readabilityHandler = nil
-                    errPipe.fileHandleForReading.readabilityHandler = nil
-                    out.append(outPipe.fileHandleForReading.readDataToEndOfFile())
-                    err.append(errPipe.fileHandleForReading.readDataToEndOfFile())
+                    // The rest of the output, for as long as the pipes take to close. A child the program left running
+                    // (a server it started) holds them open: reading to the end waited for it forever.
+                    let lingering = closed.wait(timeout: .now() + 1.5) == .timedOut
                     var o = out.string
+                    if lingering { o += "\n[a process it started is still running; its output is not shown]" }
                     if out.dropped > 0 { o += "\n… [\(out.dropped) bytes of output dropped]" }
                     c.resume(returning: ProcessResult(stdout: o, stderr: err.string, exitCode: proc.terminationStatus, timedOut: timedOut.value))
                 }
@@ -201,14 +197,53 @@ enum ProcessRunner {
                 if let stdin { inPipe.fileHandleForWriting.write(Data(stdin.utf8)) }
                 try? inPipe.fileHandleForWriting.close()
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                    if p.isRunning { timedOut.value = true; p.interrupt(); p.terminate()
-                        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if p.isRunning { kill(p.processIdentifier, SIGKILL) } }
-                    }
+                    if p.isRunning { timedOut.value = true; p.interrupt(); endTree(p) }
                 }
             }
         } onCancel: {
-            if p.isRunning { p.terminate() }
+            if p.isRunning { endTree(p) }
         }
+    }
+
+    /// Ends a process and what it started: SIGTERM to the tree, SIGKILL two seconds later to what is left. A program's
+    /// children (`node` under `npm`, a compiled binary under `go run`) otherwise outlive it.
+    static func endTree(_ p: Process) {
+        let pid = p.processIdentifier
+        let tree = descendants(of: pid) + [pid]
+        for q in tree { kill(q, SIGTERM) }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 2) { for q in tree where kill(q, 0) == 0 { kill(q, SIGKILL) } }
+    }
+    private static func descendants(of root: Int32) -> [Int32] {
+        var all: [Int32] = [], frontier = [root]
+        for _ in 0..<6 where !frontier.isEmpty {   // a shell, its script, their children…
+            frontier = frontier.flatMap(children)
+            all = frontier + all                   // deepest first
+        }
+        return all
+    }
+    private static func children(of pid: Int32) -> [Int32] {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-P", String(pid)]
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return [] }
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit()
+        return String(decoding: data, as: UTF8.self).split(whereSeparator: \.isNewline).compactMap { Int32($0.trimmingCharacters(in: .whitespaces)) }
+    }
+
+    /// The learner's shell environment, made for output read by a model: no colours, pagers or prompts.
+    static func environment(_ base: [String: String]? = nil) -> [String: String] {
+        var e = base ?? ShellEnvironment.shared.all
+        e["TERM"] = "dumb"
+        e["NO_COLOR"] = "1"
+        e["FORCE_COLOR"] = "0"
+        e["PAGER"] = "cat"
+        e["GIT_PAGER"] = "cat"
+        e["CI"] = e["CI"] ?? "1"          // dev servers and test runners skip interactive prompts and keypress menus
+        e["BROWSER"] = "none"             // `npm start` and friends don't open the learner's browser
+        e["PYTHONUNBUFFERED"] = "1"       // a Python server's "Serving on…" line arrives when printed, not at exit
+        return e
     }
 
     /// Finds an executable on the user's PATH.

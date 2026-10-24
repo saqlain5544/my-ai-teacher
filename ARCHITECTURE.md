@@ -585,6 +585,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Claude Code tool | My AI Teacher | Notes |
 |---|---|---|
 | Bash | `bash` | zsh, persistent cwd per lesson, timeout (≤600 s), 30k-char head/tail truncation, huge output spilled to `.teacher/outputs` |
+| Background jobs | `bash_jobs` | each command runs in its own process group (`ShellJob`); a server or watcher (a known command, or a printed localhost URL), a `cmd &`, or `background: true` moves to the background as B1… and the call returns; list, read new output, stop (the whole group); stopped when the lesson is deleted or the app quits |
 | Read | `read` | `cat -n` lines, offset/limit, images (sent to the model), PDFs with page ranges, binary detection |
 | Write | `write` | creates parents; permission-gated by folder access |
 | Edit | `edit` | exact unique match or `replace_all`, helpful errors |

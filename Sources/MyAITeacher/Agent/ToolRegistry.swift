@@ -4,7 +4,7 @@ enum ToolRegistry {
     /// Every tool the app has. Which agent gets which comes from `AgentTree`: an agent has the tools on its path to the
     /// root, core ones with every request and the rest after `load_tools`.
     static let all: [Tool] = [
-        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), RunTestsTool(),
+        ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), BashJobsTool(), RunCodeTool(), RunTestsTool(),
         WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
         AskLearnerTool(), QuizTool(), MathTool(), MemoryTool(), MasteryTool(), FlashcardsTool(),
         ProjectMemoryTool(),

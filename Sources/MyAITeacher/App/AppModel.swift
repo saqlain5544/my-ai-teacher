@@ -231,6 +231,7 @@ final class AppModel: ObservableObject {
     func delete(_ id: String) {
         sessions[id]?.stop()
         sessions[id]?.detach(deleted: true)
+        ShellJobs.shared.stopAll(id)   // its servers and watchers
         sessions.removeValue(forKey: id)
         services.conversations.delete(id)
         conversations.removeAll { $0.id == id }
