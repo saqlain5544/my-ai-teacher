@@ -220,14 +220,22 @@
       const st = speakState.get(key) || {};
       const given = g ? g.given : F.answers[qi];
       const heard = (given && given.heard) || st.heard || '';
-      const m = heard ? match(target, heard, lang) : null;
-      let h = '<div class="q-speak"><div class="sp-target fl"' + langAttr(lang) + '>' + (m ? m.words.map(w => '<span class="' + (w.ok ? 'ok' : 'miss') + '">' + esc(w.w) + '</span>').join(CJK.test(target) && !/\s/.test(target.trim()) ? '' : ' ') : esc(target)) + '</div>' +
+      // The app's alignment (in order; Japanese by reading) when it has sent one, else the page's own.
+      const d = (g && g.diff) || st.diff || (heard && window.TeacherLangWork ? window.TeacherLangWork.align(target, heard) : null);
+      const m = heard && !d ? match(target, heard, lang) : null;
+      let h = '<div class="q-speak"><div class="sp-target fl"' + langAttr(lang) + '>' + esc(target) + '</div>' +
         (q.reading ? '<div class="sp-reading">' + esc(q.reading) + '</div>' : '') +
         '<div class="sp-row"><button class="btn mini ll-play" data-act="ll-play" data-text="' + esc(target) + '" data-lang="' + esc(lang) + '">🔊 Hear it</button>';
       if (active) h += '<button class="btn' + (st.recording ? ' recording' : '') + '" data-act="q-speak" data-q="' + qi + '" data-lang="' + esc(lang) + '">' + (st.recording ? '■ Stop' : '🎤 ' + (heard ? 'Try again' : 'Say it')) + '</button>' + (st.recording ? '<span class="sp-live">Listening…</span>' : '');
       h += '</div>';
-      if (heard) h += '<div class="sp-heard"><span class="sp-label">Heard:</span> <span class="fl"' + langAttr(lang) + '>' + esc(heard) + '</span>' + (m ? '<span class="sp-score' + (m.score >= 0.8 ? ' good' : '') + '">' + Math.round(m.score * 100) + '% of the words</span>' : '') + '</div>';
-      else if (active) h += '<div class="q-help">Say the sentence out loud; the Mac listens in ' + (lang ? esc(lang) : 'the target language') + ' and shows what it understood.</div>';
+      if (heard) {
+        const score = d ? d.score : m ? m.score : 0;
+        h += '<div class="sp-heard"><span class="sp-label">Heard:</span> <span class="fl"' + langAttr(lang) + '>' + esc(heard) + '</span><span class="sp-score' + (score >= 0.8 ? ' good' : '') + '">' + Math.round(score * 100) + '% matched</span></div>';
+        if (d && st.final !== false) h += '<div class="sp-diff"><span class="sp-label">Against the sentence:</span> ' + window.TeacherLangWork.diffHTML(d.ops, lang) + '</div>';
+        if (st.engine) h += '<div class="sp-engine">' + esc(st.engine) + (st.modelDownload ? ' <button class="btn mini link" data-act="sp-model" data-lang="' + esc(st.modelDownload) + '">Hear me on this Mac instead (download Apple\'s model)</button>' : '') + '</div>';
+        if (st.pitch) h += pitchHTML(st.pitch, lang);
+      } else if (active && st.silent && !st.recording) h += '<div class="q-help sp-silent">I didn\'t hear anything clear. Speak a little louder or closer to the microphone, then try again.</div>';
+      else if (active) h += '<div class="q-help">Say the sentence out loud; the Mac listens in ' + (lang ? esc(lang) : 'the target language') + ' and shows what it understood, word by word.</div>';
       return h + '</div>';
     },
   });
@@ -236,23 +244,98 @@
     const id = card.getAttribute('data-tool-id'), qi = +el.getAttribute('data-q'), key = id + ':' + qi;
     const st = speakState.get(key) || {};
     if (st.recording) { ctx.post({ type: 'dictate', id: key, op: 'stop' }); st.recording = false; }
-    else { st.recording = true; st.heard = ''; ctx.post({ type: 'dictate', id: key, lang: el.getAttribute('data-lang') || null, op: 'start' }); }
+    else {
+      st.recording = true; st.heard = ''; st.diff = null; st.pitch = null; st.final = false; st.silent = false;
+      const q = (questionsFor(card) || [])[qi] || {};
+      ctx.post({ type: 'dictate', id: key, lang: el.getAttribute('data-lang') || null, op: 'start', target: String(q.target || q.text || '') });
+    }
     speakState.set(key, st);
     ctx.refreshCard(id);
   });
   /** From the app: recognised speech for a `speak` question (key "toolId:qi"); `final` ends the recording. */
-  R.dictation = function (key, text, final) {
+  const questionsFor = card => card && card._block && card._block.input && card._block.input.questions;
+  R.dictation = function (key, text, final, info) {
     const st = speakState.get(key) || {};
     st.heard = text || st.heard || '';
+    st.final = !!final;
+    st.silent = !!final && !st.heard;   // the take had no voice in it: say so instead of resetting without a word
+    if (info) { if (info.diff) st.diff = info.diff; if (info.engine) st.engine = info.engine; if (info.pitch) st.pitch = info.pitch; if (info.modelDownload) st.modelDownload = info.modelDownload; }
     if (final) st.recording = false;
     speakState.set(key, st);
     const [id, qi] = [key.slice(0, key.lastIndexOf(':')), +key.slice(key.lastIndexOf(':') + 1)];
     const F = window.TeacherForms && window.TeacherForms.state(id);
     const card = document.querySelector('[data-tool-id="' + CSS.escape(id) + '"]');
     const q = card && card._block && card._block.input && card._block.input.questions ? card._block.input.questions[qi] : null;
-    if (F && st.heard) F.answers[qi] = { heard: st.heard, target: q ? String(q.target || q.text || '') : '' };
+    if (F && st.heard) F.answers[qi] = Object.assign({ heard: st.heard, target: q ? String(q.target || q.text || '') : '' }, st.engine ? { engine: st.engine } : {},
+      st.pitch && st.pitch.prosody ? { prosody: st.pitch.prosody } : {});
     if (R._ctx) R._ctx.refreshCard(id);
   };
+
+  R.registerAction('sp-model', (el, e, ctx) => {
+    ctx.post({ type: 'speechModel', lang: el.getAttribute('data-lang') });
+    el.disabled = true; el.textContent = 'Downloading…';
+    speakState.forEach(st => { if (st.modelDownload === el.getAttribute('data-lang')) st.modelDownload = null; });
+  });
+
+  // Pitch: the learner's voice against the synthetic voice saying the same sentence, both as semitones over time
+  // (each voice centred on its own median, time stretched to the same length). It shows the shape of the melody —
+  // rises, falls, Mandarin tones, Japanese accent drops — not vowels or consonants, and the target is a synthetic voice.
+  function pitchHTML(p, lang) {
+    const W = 520, H = 120, pad = 6;
+    const line = (pts, cls) => {
+      if (!pts || !pts.length) return '';
+      let d = '', pen = false;
+      pts.forEach((v, i) => {
+        if (v == null) { pen = false; return; }
+        const x = pad + (W - 2 * pad) * (i / Math.max(1, pts.length - 1)), y = H / 2 - Math.max(-9, Math.min(9, v)) * (H / 2 - pad) / 9;
+        d += (pen ? 'L' : 'M') + x.toFixed(1) + ',' + y.toFixed(1) + ' '; pen = true;
+      });
+      return '<path d="' + d + '" class="' + cls + '"/>';
+    };
+    const sim = p.similarity != null ? '<span class="pt-sim' + (p.similarity >= 0.6 ? ' good' : '') + '">shape match ' + Math.round(p.similarity * 100) + '%</span>' : '';
+    return '<div class="sp-pitch"><div class="sp-label">Pitch: <span class="pt-key pt-you">you</span> <span class="pt-key pt-ref">synthetic voice</span> ' + sim + '</div>' +
+      '<svg viewBox="0 0 ' + W + ' ' + H + '" class="pt-svg" preserveAspectRatio="none"><line x1="0" x2="' + W + '" y1="' + H / 2 + '" y2="' + H / 2 + '" class="pt-mid"/>' +
+      line(p.target, 'pt-ref-line') + line(p.learner, 'pt-you-line') + '</svg>' +
+      '<div class="q-help">Only the melody (how your pitch rises and falls) is compared, against a synthetic voice; not your vowels or consonants.</div>' +
+      (p.prosody ? prosodyHTML(p.prosody) : '') + '</div>';
+  }
+
+  // What the pitch shows per syllable (from the app's Prosody): Mandarin tones against the dictionary's tones, the
+  // Japanese accent drop, or the stressed syllable of a single word. Each says what was measured and against what.
+  const TONE = ['neutral', '1 high', '2 rising', '3 low', '4 falling'];
+  function prosodyHTML(p) {
+    if (p.kind === 'tones') {
+      const rows = p.syllables || [];
+      const cells = rows.map(r => {
+        const cls = !r.measurable ? 'na' : r.ok ? 'ok' : 'miss';
+        const title = !r.measurable ? (r.expected ? 'Not judged: the method doesn\'t recover this tone from the synthetic voice either' : 'Neutral tone: not judged')
+          : r.ok ? 'Tone ' + TONE[r.expected] + ': your pitch had that shape' : 'Expected tone ' + TONE[r.expected] + '; your pitch looked like ' + (TONE[r.heard] || 'nothing clear');
+        return '<span class="pr-syl ' + cls + '" title="' + esc(title) + '"><span class="pr-char">' + esc(r.char) + '</span><span class="pr-pin">' + esc(r.pinyin) + '</span>' +
+          '<span class="pr-tone">' + (r.measurable ? (r.ok ? '✓ ' + r.expected : r.expected + ' → ' + (r.heard || '?')) : '–') + '</span></span>';
+      }).join('');
+      return '<div class="sp-prosody"><div class="sp-label">Tones: ' + (p.judged ? p.right + ' of ' + p.judged + ' judged syllables had the expected shape' : 'none could be judged') + '</div>' +
+        '<div class="pr-row">' + cells + '</div>' +
+        '<div class="q-help">Each syllable\'s pitch shape (high level, rising, low, falling) against the tone in the dictionary, after tone changes like 你好 → ní hǎo. A syllable is judged only when the same measurement recovers its tone from the synthetic voice (– otherwise). Connected speech blurs tones; one miss is a hint, not a verdict.</div></div>';
+    }
+    if (p.kind === 'accent') {
+      const m = p.morae || [];
+      const line = v => v == null ? '<span class="pr-na">unclear</span>' : m.map((x, i) => esc(x) + (i + 1 === v ? '<span class="pr-drop">ꜜ</span>' : '')).join('') + (v === 0 ? ' <span class="pr-na">(no fall)</span>' : '');
+      const same = p.learner != null && p.learner === p.reference;
+      return '<div class="sp-prosody"><div class="sp-label">Pitch accent (ꜜ = where the pitch falls)' + (p.learner != null && p.reference != null ? (same ? ' — <span class="pt-sim good">same as the synthetic voice</span>' : ' — <span class="pt-sim">differs from the synthetic voice</span>') : '') + '</div>' +
+        '<div class="pr-acc"><span class="pt-key pt-you">you</span> <span class="fl" lang="ja">' + line(p.learner) + '</span></div>' +
+        '<div class="pr-acc"><span class="pt-key pt-ref">synthetic voice</span> <span class="fl" lang="ja">' + line(p.reference) + '</span></div>' +
+        '<div class="q-help">Measured: where the pitch first drops sharply (2.5 semitones within 150 ms), in morae, in your voice and in the synthetic voice measured the same way — not from an accent dictionary, and the synthetic voice can be wrong too. A fall at the very end of a word isn\'t counted.</div></div>';
+    }
+    if (p.kind === 'stress') {
+      const syl = p.syllables || [];
+      const line = v => v == null ? '<span class="pr-na">unclear</span>' : syl.map((x, i) => i === v ? '<b class="pr-stress">' + esc(x) + '</b>' : esc(x)).join('·');
+      return '<div class="sp-prosody"><div class="sp-label">Stress (the most prominent syllable)</div>' +
+        '<div class="pr-acc"><span class="pt-key pt-you">you</span> ' + line(p.learner) + '</div>' +
+        '<div class="pr-acc"><span class="pt-key pt-ref">synthetic voice</span> ' + line(p.reference) + '</div>' +
+        '<div class="q-help">A rough measure: the syllable that is highest, loudest and longest, with syllables split from the spelling. Single words only.</div></div>';
+    }
+    return '';
+  }
 
   // Questions with `listen`: the audio comes first and the text stays hidden (dictation), whatever the question type.
   R.questionAudio = (q, ctx) => {
@@ -332,6 +415,25 @@
     .q-speak .sp-label { color: var(--muted); font-size: .85em; }
     .q-speak .sp-score { margin-left: auto; font-size: .82em; color: var(--muted); } .q-speak .sp-score.good { color: var(--good); }
     .quiz-q .ll-player { margin-bottom: 8px; }
+    .q-speak .sp-diff { margin-top: 6px; font-size: .95em; }
+    .q-speak .sp-engine { font-size: .75em; color: var(--faint); margin-top: 2px; }
+    .sp-pitch { margin-top: 8px; border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; }
+    .pt-svg { width: 100%; height: 120px; display: block; }
+    .pt-mid { stroke: var(--border); stroke-dasharray: 4 4; }
+    .pt-ref-line { fill: none; stroke: var(--faint); stroke-width: 2.5; stroke-dasharray: 5 3; }
+    .pt-you-line { fill: none; stroke: var(--accent); stroke-width: 2.5; }
+    .pt-key { font-size: .85em; padding: 0 4px; border-radius: 4px; }
+    .pt-you { color: var(--accent); } .pt-ref { color: var(--faint); }
+    .pt-sim { font-size: .85em; color: var(--muted); margin-left: 6px; } .pt-sim.good { color: var(--good); }
+    .sp-prosody { margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 6px; }
+    .pr-row { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0; }
+    .pr-syl { display: inline-flex; flex-direction: column; align-items: center; min-width: 40px; padding: 3px 6px; border-radius: 6px; border: 1px solid var(--border); }
+    .pr-syl.ok { border-color: var(--good); } .pr-syl.miss { border-color: var(--bad); background: color-mix(in srgb, var(--bad) 8%, transparent); }
+    .pr-syl.na { opacity: .6; }
+    .pr-char { font-size: 1.25em; } .pr-pin { font-size: .8em; color: var(--muted); } .pr-tone { font-size: .75em; color: var(--muted); }
+    .pr-syl.miss .pr-tone { color: var(--bad); } .pr-syl.ok .pr-tone { color: var(--good); }
+    .pr-acc { font-size: 1.05em; margin: 2px 0; } .pr-drop { color: var(--accent); font-weight: 700; } .pr-na { color: var(--faint); font-size: .85em; }
+    .pr-stress { color: var(--accent); text-decoration: underline; }
   `);
   window.TeacherLang = { player, match, tokens, toneOf, roleColor, glossWords };
 })();

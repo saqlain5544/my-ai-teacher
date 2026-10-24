@@ -89,7 +89,7 @@
         const attrs = ' maxlength="' + max + '"' + (q.min_length ? ' data-minlen="' + (+q.min_length) + '"' : '') + (q.pattern ? ' data-pattern="' + ctx.esc(q.pattern) + '"' : '');
         const val = v == null ? (multiline ? (q.starter || '') : '') : String(v);
         return (multiline
-          ? '<textarea class="q-text' + (mono ? ' mono' : '') + '" data-q-input="' + qi + '" placeholder="' + ph + '" spellcheck="' + !mono + '"' + (mono ? ' rows="8"' : '') + attrs + '>' + ctx.esc(val) + '</textarea>'
+          ? '<textarea class="q-text' + (mono ? ' mono' : '') + '" data-q-input="' + qi + '" placeholder="' + ph + '" spellcheck="false"' + (mono ? ' rows="8"' : '') + attrs + '>' + ctx.esc(val) + '</textarea>'
           : '<input type="text" class="q-text" data-q-input="' + qi + '" placeholder="' + ph + '" value="' + ctx.esc(val) + '"' + attrs + '>') +
           '<div class="q-meta"><span class="q-err" data-err="' + qi + '"></span>' + (mono ? '' : '<span class="q-count" data-count="' + qi + '">' + val.length + ' / ' + max + '</span>') + '</div>';
       },
@@ -224,7 +224,7 @@
       const pid = 'qp-' + String(id).replace(/[^\w-]/g, '_') + '-' + qi;
       const group = { single_choice: 'radiogroup', multiple_choice: 'group' }[q.type];
       const body = impl.render(q, qi, F, ctx, active, g, id);
-      h += '<div class="quiz-q" data-qi="' + qi + '"><div class="qn">' + (qs.length > 1 ? 'Question ' + (qi + 1) : '') + (q.concept ? (qs.length > 1 ? ' · ' : '') + ctx.esc(q.concept) : '') + '</div>' +
+      h += '<div class="quiz-q" data-qi="' + qi + '"' + (q.lang ? ' data-lang="' + ctx.esc(q.lang) + '"' : '') + '><div class="qn">' + (qs.length > 1 ? 'Question ' + (qi + 1) : '') + (q.concept ? (qs.length > 1 ? ' · ' : '') + ctx.esc(q.concept) : '') + '</div>' +
         (q.type !== 'fill_blanks' || q.text ? '<div class="prompt md" id="' + pid + '">' + ctx.md(q.prompt || '') + '</div>' : '') +
         (R.questionAudio ? R.questionAudio(q, ctx) : '') +   // `listen`: audio first, text hidden (dictation)
         (group ? '<div role="' + group + '" aria-labelledby="' + pid + '">' + body + '</div>' : body);

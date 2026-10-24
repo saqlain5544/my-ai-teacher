@@ -86,11 +86,12 @@ extension StudyStore {
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines), meaning = meaning.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !term.isEmpty, !meaning.isEmpty else { return nil }
         let clean = { (s: String?) -> String? in s.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
-        let existing = (try? db.query("SELECT card_id, reading, example, example_meaning FROM vocab WHERE lang=? AND term=?", lang, term))?.first
+        let existing = (try? db.query("SELECT card_id, reading, example, example_meaning, notes FROM vocab WHERE lang=? AND term=?", lang, term))?.first
         let r = clean(reading) ?? existing?.string("reading"), ex = clean(example) ?? existing?.string("example"), exm = clean(exampleMeaning) ?? existing?.string("example_meaning")
         let front = r.map { "\(term)\n\n*\($0)*" } ?? term
         var back = meaning
         if let e = ex { back += "\n\n> \(e)" + (exm.map { "\n> *\($0)*" } ?? "") }
+        if let n = clean(notes) ?? existing?.string("notes") { back += "\n\n" + n }   // register, collocations, word family
         var cardID = existing?.int("card_id").map(Int64.init)
         if let c = cardID { try? db.execute("UPDATE cards SET front=?, back=? WHERE id=?", front, back, c) }
         else { cardID = addCard(deck: Self.vocabDeck(lang), front: front, back: back, concept: nil, subject: lang, source: source) }
@@ -139,6 +140,21 @@ extension StudyStore {
         }
         return s
     }
+    /// Saved Japanese words written with kanji, with their reading in hiragana (from the saved reading, else the system's
+    /// tokenizer): the keyboards offer the kanji when the learner has typed its kana (たべる → 食べる).
+    func kanaWords(lang: String, limit: Int = 600) -> [(term: String, kana: String)] {
+        guard Languages.code(lang) == "ja" else { return [] }
+        return vocab(lang: "ja", limit: limit).compactMap { v in
+            guard v.term.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }) else { return nil }
+            let isKana: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { (0x3041...0x30FC).contains($0.value) } }
+            let saved = (v.reading ?? "").split(whereSeparator: { $0 == " " || $0 == "/" || $0 == "," || $0 == "（" || $0 == "(" })
+                .map(String.init).first { !$0.isEmpty && $0.allSatisfy(isKana) }
+            let kana = saved ?? TextAnalysis.japaneseTokens(v.term).compactMap { t in t.reading?.split(separator: " ").first.map(String.init) ?? (t.text.allSatisfy(isKana) ? t.text : nil) }.joined()
+            guard !kana.isEmpty, kana.allSatisfy(isKana) else { return nil }
+            return (v.term, ScriptComposer.toHiragana(kana))
+        }
+    }
+
     /// Languages with saved words, most recently added first.
     func vocabLanguages() -> [String] {
         ((try? db.query("SELECT lang, MAX(created_at) AS t FROM vocab GROUP BY lang ORDER BY t DESC")) ?? []).compactMap { $0.string("lang") }
@@ -184,4 +200,46 @@ enum Languages {
     static let rightToLeft: Set<String> = ["ar", "he", "fa", "ur", "ps", "yi", "dv", "ku", "sd", "ug"]
     /// Scripts that are not the Latin alphabet (the learner needs a keyboard or transliteration for them).
     static let scripted: Set<String> = ["ja", "ko", "zh", "yue", "ar", "he", "fa", "ur", "ru", "uk", "bg", "sr", "mk", "el", "hi", "mr", "ne", "sa", "bn", "ta", "te", "kn", "ml", "gu", "pa", "si", "th", "lo", "km", "my", "ka", "hy", "am", "yi", "ps", "ku", "sd", "ug", "mn", "grc"]
+}
+
+
+/// Writing systems a language's words are written in, to catch a slip into another script (a Korean word in a Japanese
+/// example sentence, Cyrillic in a Greek one). Latin, digits and punctuation are always allowed: names, romanisation
+/// and brand names are fine in any language.
+enum ScriptCheck {
+    static let scripts: [(name: String, ranges: [ClosedRange<UInt32>])] = [
+        ("Hiragana", [0x3040...0x309F]), ("Katakana", [0x30A0...0x30FF, 0x31F0...0x31FF, 0xFF66...0xFF9F]),
+        ("Han", [0x4E00...0x9FFF, 0x3400...0x4DBF, 0xF900...0xFAFF]), ("Hangul", [0xAC00...0xD7AF, 0x1100...0x11FF, 0x3130...0x318F]),
+        ("Arabic", [0x0600...0x06FF, 0x0750...0x077F, 0xFB50...0xFDFF, 0xFE70...0xFEFF]), ("Hebrew", [0x0590...0x05FF]),
+        ("Cyrillic", [0x0400...0x04FF]), ("Greek", [0x0370...0x03FF]), ("Devanagari", [0x0900...0x097F]), ("Bengali", [0x0980...0x09FF]),
+        ("Thai", [0x0E00...0x0E7F]),
+    ]
+    /// The non-Latin scripts each language uses.
+    static let allowed: [String: Set<String>] = [
+        "ja": ["Hiragana", "Katakana", "Han"], "zh": ["Han"], "yue": ["Han"], "ko": ["Hangul", "Han"],
+        "ar": ["Arabic"], "fa": ["Arabic"], "ur": ["Arabic"], "he": ["Hebrew"], "ru": ["Cyrillic"], "uk": ["Cyrillic"],
+        "el": ["Greek"], "hi": ["Devanagari"], "bn": ["Bengali"], "th": ["Thai"],
+    ]
+    /// Simplified Chinese characters that Japanese doesn't use (说 → 説, 时 → 時, 们 has none…): in a
+    /// Japanese text they are a slip into Chinese, a common garble of smaller models.
+    static let simplifiedOnly: Set<Character> = Set("么们这说时为对东车门问间关见长马鸟语认让请谢读买卖贵钱银铁话习书个几吗呢吧觉还现开进过动产业务员场电脑网页实际经济营销负责欢")
+    /// What is wrong with `text` as `lang`: another script, or simplified Chinese inside Japanese. nil when it fits.
+    static func slip(_ text: String, lang: String) -> String? {
+        if let s = foreign(text, lang: lang) { return "contains \(s), which \(Languages.englishName(lang)) isn't written in" }
+        if lang == "ja" {
+            let bad = text.filter { simplifiedOnly.contains($0) }
+            if !bad.isEmpty { return "contains Chinese (simplified) characters, not Japanese: \(String(Set(bad)).prefix(6))" }
+        }
+        return nil
+    }
+    /// The first script in `text` that `lang` isn't written in (nil when it fits, or the language isn't one we know).
+    static func foreign(_ text: String, lang: String) -> String? {
+        // Latin-script languages: any non-Latin script is foreign.
+        let ok = allowed[lang] ?? []
+        for u in text.unicodeScalars {
+            guard let s = scripts.first(where: { $0.ranges.contains { $0.contains(u.value) } }) else { continue }
+            if !ok.contains(s.name) { return s.name }
+        }
+        return nil
+    }
 }

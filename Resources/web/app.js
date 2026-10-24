@@ -699,9 +699,11 @@
     processMermaid(node);
   }
   /** A learner's answer is theirs: macOS writing suggestions would otherwise complete it, and its Math Results turn
-   *  "180.156/3=" into "180.156/3=60.052" as they type — the arithmetic an attempt-first problem asks them to do.
+   *  "180.156/3=" into "180.156/3=60.052" as they type — the arithmetic an attempt-first problem asks them to do. The
+   *  spell-checker is off too: a learner's misspelling is theirs to make and the teacher's to find (and its red line
+   *  under every word of a language being learned gave the answer away or was noise).
    *  Every text box the page renders opts out (set on insert, before it can take focus). */
-  const QUIET = { writingsuggestions: 'false', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off' };
+  const QUIET = { writingsuggestions: 'false', autocomplete: 'off', autocorrect: 'off', autocapitalize: 'off', spellcheck: 'false' };
   function quietInputs(root) {
     const list = root.matches && root.matches('textarea, input') ? [root] : Array.from(root.querySelectorAll('textarea, input'));
     for (const el of list) {
@@ -896,10 +898,10 @@
     el.hidden = !text && !imgs.length && !files.length;
     if (imgs.length || files.length) {
       html += '<div class="attachments">' + imgs.map(imageSrc).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
-        files.map(b => '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
+        files.map(b => (R.fileView && R.fileView(b, m)) || '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
-    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button></div>';
+    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button>' + (R.userActions ? R.userActions(m) : '') + '</div>';
     setHTML(el, html);
   }
 
@@ -1086,7 +1088,7 @@
     const title = typeof d.title === 'function' ? guard(b.name, () => d.title(tn), b.name) : (d.title || b.name);
     const running = pendingCall || p.status === 'running';
     const isErr = p.status === 'error';
-    const compact = !!d.compact && !pend;
+    const compact = !!(typeof d.compact === 'function' ? guard(b.name, () => d.compact(tn), false) : d.compact) && !pend;
     const open = S.openTools.has(b.id) || !!(d.open && guard(b.name, () => d.open(tn), false));
     let state = running ? '<span class="spinner"></span>' : (isErr ? 'failed' : (r && r.meta && r.meta.ms ? fmtMs(r.meta.ms) : '✓'));
     if (pend && pend.kind === 'permission') state = 'needs approval';
@@ -1392,7 +1394,9 @@
     /** The lesson's languages ({target, native, name, …}): the on-screen keyboard follows the target. */
     setLanguage(state) { if (R.setLanguage) R.setLanguage(state || null); },
     /** Recognised speech for a `speak` question ("toolId:qi"), partial until `final`. */
-    dictation(key, text, final) { if (R.dictation) R.dictation(key, text, !!final); },
+    dictation(key, text, final, info) { if (R.dictation) R.dictation(key, text, !!final, info || null); },
+    /** Language work answered by the app: a word's lookup, a passage's readings, a sentence translated, speech finished. */
+    lang(kind, key, data) { if (R.langEvent) R.langEvent(kind, key, data); },
     card(front, back, show) {
       document.body.classList.add('card-mode');
       unmountTree(thread);

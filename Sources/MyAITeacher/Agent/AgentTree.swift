@@ -6,7 +6,7 @@ import Foundation
 ///     root ── core for every agent: files, batch edit, web, sub-agents, the core visualisations
 ///     ├── teacher ── teaching: questions and quizzes, the course board, learner memory, math, code to show things
 ///     │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (their instructions differ, not their tools)
-///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones
+///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones, reading, correction
 ///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views
 ///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control
 ///
@@ -43,7 +43,7 @@ enum AgentTree {
         AgentNode(id: "research", parent: "teacher"),
         AgentNode(id: "language", parent: "teacher",
                   core: ["language", "vocab"],
-                  components: ["listen", "gloss", "dialogue", "conjugation", "tones"]),
+                  components: ["listen", "gloss", "dialogue", "conjugation", "tones", "reading", "correction"]),
         AgentNode(id: "code-mentor", parent: "teacher",
                   core: ["run_tests", "project_tests", "project_review", "symbols", "diagnostics", "source"],
                   deferred: ["glob", "grep"],

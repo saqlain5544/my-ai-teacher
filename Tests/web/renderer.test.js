@@ -1421,6 +1421,54 @@
     ok(card().textContent.includes('2 of 2 passing') && card().textContent.includes('re-run by you'), 'updated in place: ' + card().textContent.slice(0, 120));
   });
 
+
+  test('language tool cards: the words saved, and a compact profile line', () => {
+    const a = A([{ kind: 'toolUse', id: 'v1', name: 'vocab', input: { action: 'add', lang: 'ja', words: [{ term: 'はじめまして', reading: 'hajimemashite', meaning: 'pleased to meet you' }, { term: '営業部', meaning: 'sales department' }] } },
+                 { kind: 'toolUse', id: 'l1', name: 'language', input: { action: 'profile', target: 'ja', level: 'A2' } }]);
+    T.reset([U('q'), a, R('v1', 'vocab', 'Saved 2 word(s)'), R('l1', 'language', 'Target language: Japanese')], {});
+    const v = $('[data-tool-id="v1"]'); ok(v.textContent.includes('Vocabulary') && v.textContent.includes('2 words'), v.textContent.slice(0, 80));
+    const l = $('[data-tool-id="l1"]'); ok(l.textContent.includes('Language') && !/🔧/.test(l.textContent), 'its own card, not the generic one');
+  });
+
+  test('pronunciation: tones per syllable and the accent drop, each saying what was measured', () => {
+    const input = { questions: [{ type: 'speak', prompt: 'Say it', target: '妈麻马骂', lang: 'zh' }, { type: 'speak', prompt: 'Say it', target: '雨', lang: 'ja' }] };
+    const a = A([{ kind: 'toolUse', id: 'pr1', name: 'ask_learner', input }]);
+    T.reset([U('q'), a], {}); T.interaction({ id: 'pr1', kind: 'ask', payload: input }, true);
+    click($('[data-act="q-speak"]', $('[data-tool-id="pr1"]')));
+    const tones = { kind: 'tones', judged: 3, right: 2, syllables: [
+      { char: '妈', pinyin: 'mā', expected: 1, heard: 1, ok: true, measurable: true },
+      { char: '麻', pinyin: 'má', expected: 2, heard: 3, ok: false, measurable: true },
+      { char: '马', pinyin: 'mǎ', expected: 3, heard: 3, ok: false, measurable: false },
+      { char: '骂', pinyin: 'mà', expected: 4, heard: 4, ok: true, measurable: true }] };
+    window.TeacherUI.dictation('pr1:0', '妈麻马骂', true, { pitch: { learner: [0, 1, null, -1], target: [0, 1, 0, -1], similarity: 0.7, prosody: tones } });
+    let card = $('[data-tool-id="pr1"]');
+    noErrors(card, 'tones');
+    eq($$('.pr-syl', card).length, 4, 'a cell per syllable');
+    ok($('.pr-syl.miss', card).textContent.includes('2 → 3'), 'the miss says expected and heard');
+    ok($$('.pr-syl', card)[2].classList.contains('na'), 'a tone the synthetic voice does not show is not judged');
+    ok(/2 of 3 judged/.test(card.textContent) && /synthetic voice/.test(card.textContent), 'says what was judged, against what');
+    click($$('[data-act="q-speak"]', card)[1]);
+    window.TeacherUI.dictation('pr1:1', '雨', true, { pitch: { learner: [1, -2], target: [1, -2], prosody: { kind: 'accent', morae: ['あ', 'め'], learner: 0, reference: 1 } } });
+    card = $('[data-tool-id="pr1"]');
+    const acc = $$('.sp-prosody', card)[1];
+    ok(acc && /no fall/.test(acc.textContent) && /differs from the synthetic voice/.test(acc.textContent), acc && acc.textContent);
+    eq($$('.pr-drop', acc).length, 1, 'the synthetic voice falls after あ');
+    const F = window.TeacherForms.state('pr1');
+    eq(F.answers[0].prosody.kind, 'tones', 'the measurement goes with the answer to the lesson');
+    T.interaction({ id: 'pr1' }, false);
+  });
+
+  test('a speaking take with no voice says so, instead of resetting without a word', () => {
+    const input = { questions: [{ type: 'speak', prompt: 'Say it', target: 'こんにちは', lang: 'ja' }] };
+    const a = A([{ kind: 'toolUse', id: 'sp9', name: 'ask_learner', input }]);
+    T.reset([U('q'), a], {}); T.interaction({ id: 'sp9', kind: 'ask', payload: input }, true);
+    click($('[data-act="q-speak"]', $('[data-tool-id="sp9"]')));
+    window.TeacherUI.dictation('sp9:0', '', true, {});
+    const card = $('[data-tool-id="sp9"]');
+    ok(card.textContent.includes("didn't hear anything clear") && $('[data-act="q-speak"]', card).textContent.includes('Say it'), card.textContent.slice(0, 200));
+    T.interaction({ id: 'sp9' }, false);
+  });
+
   test('metrics footer expands', () => {
     const a = A('Done', { metrics: { model: 'm', duration: 2, timeToFirstToken: 0.5, usage: { input: 100, output: 300, cacheRead: 900 } }, turn: { duration: 2, steps: 1, usage: { input: 100, output: 300, cacheRead: 900 }, languages: ['en', 'ar'] } });
     T.reset([U('q'), a], {});
@@ -1554,6 +1602,58 @@
     T.interaction({ id: 'kb1', kind: 'quiz' }, false); T.status('', false);
   });
 
+  test('language mentor: the keyboard types with the Mac keys, marks tones by digit, offers kanji and the Mac input source', async () => {
+    const QZ = { title: 'Keys', graded: true, questions: [{ type: 'short_text', prompt: 'Write it', answer: 'x', lang: 'ru' }, { type: 'long_text', prompt: 'Essay' }] };
+    const a = A([{ kind: 'toolUse', id: 'kb2', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('quiz me'), a], {});
+    T.interaction({ id: 'kb2', kind: 'quiz', payload: QZ }, true);
+    const card = $('[data-tool-id="kb2"]');
+    for (const f of $$('input.q-text, textarea.q-text', card)) eq(f.getAttribute('spellcheck'), 'false', 'spell-check is off in every answer field');
+    T.setLanguage({ target: 'ru', native: 'en', inputSource: { id: 'com.apple.keylayout.RussianWin', name: 'Russian – PC', enabled: true, selected: false } });
+    const text = $('[data-q-input="0"]', card);
+    ok(/Русский/.test(text.nextElementSibling.textContent), 'the ⌨ toggle names the language: ' + text.nextElementSibling.textContent);
+    ok(parseFloat(getComputedStyle(text).paddingRight) >= 90, 'the field keeps room for the toggle (right-to-left text starts under it)');
+    text.value = ''; text.focus(); text.dispatchEvent(new FocusEvent('focusin', { bubbles: true }));
+    const kbd = $('#kbd'); ok(!kbd.hidden, 'open');
+    ok($('[data-setmode="keys"]', kbd), 'a "Mac keys" mode for a script with a standard layout');
+    click($('[data-setmode="keys"]', kbd));
+    for (const [code, key] of [['KeyG', 'g'], ['KeyH', 'h'], ['KeyB', 'b'], ['KeyD', 'd'], ['KeyT', 't'], ['KeyN', 'n']]) {
+      const ev = new KeyboardEvent('keydown', { code, key, bubbles: true, cancelable: true }); text.dispatchEvent(ev);
+      ok(ev.defaultPrevented, 'the key is taken over');
+    }
+    eq(text.value, 'привет', 'ЙЦУКЕН positions type Russian');
+    const sh = new KeyboardEvent('keydown', { code: 'KeyQ', key: 'Q', shiftKey: true, bubbles: true, cancelable: true }); text.dispatchEvent(sh);
+    eq(text.value.slice(-1), 'Й', 'shifted keys');
+    const cmd = new KeyboardEvent('keydown', { code: 'KeyA', key: 'a', metaKey: true, bubbles: true, cancelable: true }); text.dispatchEvent(cmd);
+    ok(!cmd.defaultPrevented, '⌘-shortcuts are left alone');
+    posts.length = 0; click($('[data-source="select"]', kbd));
+    eq(lastPost('inputSource'), { type: 'inputSource', op: 'select', lang: 'ru' }, 'asks the app to switch the Mac to its Russian input');
+    click($('[data-fn="compact"]', kbd)); ok(document.body.classList.contains('kbd-compact'), 'compact'); click($('[data-fn="compact"]', kbd));
+    // Pinyin: a digit after a syllable marks its tone.
+    T.setLanguage({ target: 'zh', native: 'en' });
+    text.value = ''; text.focus();
+    text.closest('[data-lang]').setAttribute('data-lang', 'zh');   // a Chinese question's field
+    for (const ch of 'ni3hao3') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'nǐhǎo', 'ni3hao3 → nǐhǎo');
+    click($('[data-fn="tone4"]', kbd)); eq(text.value, 'nǐhào', 'a tone key sets that tone');
+    // Hindi: a vowel letter after a consonant becomes its sign.
+    T.setLanguage({ target: 'hi', native: 'en' });
+    text.value = ''; text.focus();
+    click($('[data-key="क"]', kbd)); click($('[data-key="आ"]', kbd)); click($('[data-key="म"]', kbd));
+    eq(text.value, 'काम', 'क + आ → का');
+    // Japanese: kana that spell a saved word offer its kanji.
+    T.setLanguage({ target: 'ja', native: 'en', words: [{ term: '食べる', kana: 'たべる' }, { term: '担当', kana: 'たんとう' }] });
+    text.value = ''; text.focus();
+    for (const k of ['た', 'へ']) click($('[data-key="' + k + '"]', kbd));
+    click($('[data-fn="dakuten"]', kbd)); click($('[data-key="る"]', kbd));
+    eq(text.value, 'たべる');
+    const cand = $('.kbd-cands [data-cand]', kbd); ok(cand && cand.textContent === '食べる', 'candidate offered: ' + ($('.kbd-cands', kbd) || {}).innerHTML);
+    click(cand); eq(text.value, '食べる', 'the candidate replaces the kana');
+    eq($$('.kbd-grid .kbd-row', kbd).length, 6, 'the kana table is a grid'); ok($('.kbd-gap', kbd), 'with gaps');
+    T.setLanguage(null);
+    T.interaction({ id: 'kb2', kind: 'quiz' }, false); T.status('', false);
+  });
+
   test('language mentor: gloss, listen, dialogue, conjugation and tones render and speak', () => {
     const el = show([
       '```gloss\n{"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]}\n```',
@@ -1592,16 +1692,186 @@
     ok($('.q-speak .btn.recording', $('[data-tool-id="sp1"]')), 'recording state');
     T.dictation('sp1:0', 'buenos', false);
     ok($('.q-speak .sp-heard', $('[data-tool-id="sp1"]')).textContent.includes('buenos'), 'partial result shown');
-    T.dictation('sp1:0', 'buenos dias', true);
+    T.dictation('sp1:0', 'buenos dias', true, { engine: 'Apple speech recognition — online (the audio goes to Apple)', modelDownload: 'es' });
+    ok(/online/.test($('.sp-engine', $('[data-tool-id="sp1"]')).textContent), 'the card says the audio went online');
+    posts.length = 0; click($('[data-act="sp-model"]', $('[data-tool-id="sp1"]'))); eq(lastPost('speechModel'), { type: 'speechModel', lang: 'es' }, 'offers the on-device model');
     const c2 = $('[data-tool-id="sp1"]');
     ok(!$('.q-speak .btn.recording', c2), 'recording ended');
-    eq($$('.sp-target .ok', c2).length, 2, 'both words matched: ' + $('.sp-target', c2).innerHTML);
+    eq($$('.sp-diff .d-same', c2).length, 2, 'both words matched, in order: ' + ($('.sp-diff', c2) || {}).innerHTML);
+    ok(/100% matched/.test($('.sp-heard', c2).textContent), 'score shown');
     const dict = $('[data-q-input="1"]', c2); dict.value = 'Hasta luego'; dict.dispatchEvent(new Event('input', { bubbles: true }));
     posts.length = 0; click($('[data-act="q-submit"]', c2));
     const ans = lastPost('answer'); ok(ans, 'submitted');
     eq(ans.value.answers[0].heard, 'buenos dias', 'the recognised text is the answer'); eq(ans.value.answers[0].target, 'Buenos días');
     eq(ans.value.answers[1], 'Hasta luego');
     T.interaction({ id: 'sp1', kind: 'quiz' }, false); T.status('', false);
+  });
+
+  test('language work: dictation is checked word by word; translation, rewrite, sentence building and tables', async () => {
+    const QZ = { title: 'Work', graded: true, questions: [
+      { type: 'dictation', prompt: 'Write what you hear', listen: 'Hasta luego, Marta', lang: 'es' },
+      { type: 'translate', prompt: 'Into Spanish', text: 'I work in sales.', from: 'en', to: 'Spanish', lang: 'es', rubric: [{ criterion: 'Meaning', points: 2 }, { criterion: 'Grammar', points: 2 }] },
+      { type: 'rewrite', prompt: 'Formal', text: '¿Qué quieres?', instruction: 'Make it formal (usted).', lang: 'es' },
+      { type: 'build_sentence', prompt: 'Use them', words: ['perro', 'parque'], lang: 'es' },
+      { type: 'table', prompt: 'hablar', lang: 'es', rows: ['yo', 'tú'], columns: ['presente'], cells: [['hablo'], null] },
+    ] };
+    const a = A([{ kind: 'toolUse', id: 'lw1', name: 'quiz', input: QZ }]);
+    T.status('Waiting', true); T.reset([U('test me'), a], {});
+    T.interaction({ id: 'lw1', kind: 'quiz', payload: QZ }, true);
+    let card = $('[data-tool-id="lw1"]'); noErrors(card, 'language work quiz');
+    ok($('.quiz-q[data-qi="0"] .ll-player .ll-text[hidden]', card), 'dictation plays first, text hidden');
+    ok($('.quiz-q[data-qi="1"] .lw-source', card).textContent.includes('I work in sales.'), 'translation shows its source');
+    ok(/Meaning/.test($('.quiz-q[data-qi="1"] .lw-rubric-ask', card).textContent), 'the rubric is shown before they write');
+    ok(/usted/.test($('.quiz-q[data-qi="2"] .lw-instruction', card).textContent), 'rewrite instruction');
+    const typeIn = (sel, v) => { const f = $(sel, card); f.value = v; f.dispatchEvent(new Event('input', { bubbles: true })); return f; };
+    typeIn('[data-q-input="0"]', 'hasta lluego marta');
+    typeIn('[data-q-input="1"]', 'Trabajo en ventas.');
+    typeIn('[data-q-input="2"]', '¿Qué quiere usted?');
+    typeIn('[data-q-input="3"]', 'El perro juega en el parque.');
+    ok($$('.quiz-q[data-qi="3"] .lw-chip.used', card).length === 2, 'the given words light up as they are used');
+    ok(/6 words/.test($('[data-words="3"]', card).textContent), 'word count: ' + $('[data-words="3"]', card).textContent);
+    ok(!$('.quiz-q[data-qi="4"] input[data-q-cell="4:0:0"]', card), 'a shown cell is not a field');
+    typeIn('input[data-q-cell="4:1:0"]', 'hablas');
+    posts.length = 0; click($('[data-act="q-submit"]', card));
+    const ans = lastPost('answer'); ok(ans, 'submitted');
+    eq(ans.value.answers[0], 'hasta lluego marta'); eq(ans.value.answers[4][1][0], 'hablas', 'table cells: ' + JSON.stringify(ans.value.answers[4]));
+    // The graded card: the dictation drawn word by word.
+    const diff = { score: 2 / 3, ops: [{ k: 'same', t: 'Hasta', g: 'hasta' }, { k: 'wrong', t: 'luego', g: 'lluego' }, { k: 'same', t: 'Marta', g: 'marta' }] };
+    T.interaction({ id: 'lw1', kind: 'quiz' }, false);
+    T.reset([U('test me'), a, R('lw1', 'quiz', 'graded', { meta: { graded: [{ correct: false, score: 0.67, given: 'hasta lluego marta', diff }, { correct: null, given: 'Trabajo en ventas.' }, { correct: null }, { correct: null }, { correct: false, score: 0.5, given: [[''], ['hablas']], answer: [['hablo'], ['hablas']] }], score: 0.67, total: 2 } })], {});
+    card = $('[data-tool-id="lw1"]');
+    const check = $('.quiz-q[data-qi="0"] .lw-check', card); ok(check, 'dictation check view');
+    ok($('.d-wrong del', check).textContent === 'lluego' && $('.d-wrong ins', check).textContent === 'luego', check.innerHTML);
+    ok(/67% of the words/.test(check.textContent), check.textContent);
+    T.status('', false);
+  });
+
+  test('language work: a correction shows the changes, the errors and a check of the learner\'s second attempt', () => {
+    const el = show('```correction\n{"lang":"es","original":"Yo trabajo en ventas desde dos años.","corrected":"Trabajo en ventas desde hace dos años.","errors":[{"wrong":"desde dos años","right":"desde hace dos años","type":"grammar","why":"*desde hace* + a period of time"},{"wrong":"Yo trabajo","right":"Trabajo","type":"register","why":"the subject pronoun is usually dropped"}],"rubric":[{"criterion":"Grammar","score":3,"max":5},{"criterion":"Vocabulary","score":5,"max":5}],"better":"Llevo dos años trabajando en ventas.","recast":"Say: I have worked in sales for two years."}\n```');
+    noErrors(el, 'correction');
+    const c = $('.lw-correction', el); ok(c, 'correction card');
+    ok($('.lw-v-diff del', c) && $('.lw-v-diff ins', c), 'deletions and insertions drawn');
+    ok($$('.lw-v-diff ins', c).some(x => x.textContent === 'hace'), 'the missing word is inserted: ' + $('.lw-v-diff', c).innerHTML);
+    eq($$('.lw-errors li', c).length, 2); ok(/8 \/ 10/.test($('.lw-total', c).textContent), 'rubric total');
+    ok($('.lw-better', c).textContent.includes('Llevo'), 'a more natural version');
+    click($('[data-act="lw-view"][data-v="corrected"]', c)); ok(!$('.lw-v-corrected', c).hidden && $('.lw-v-diff', c).hidden, 'views switch');
+    const ta = $('.lw-again-input', c); ta.value = 'Trabajo en ventas desde dos años.';
+    click($('[data-act="lw-check"]', c)); ok($('.lw-again-result ins', c), 'the second attempt is checked against the correction');
+    ta.value = 'Trabajo en ventas desde hace dos años.'; click($('[data-act="lw-check"]', c));
+    ok(/Exactly right/.test($('.lw-again-result', c).textContent), $('.lw-again-result', c).textContent);
+    posts.length = 0; click($('[data-act="lw-send"]', c));
+    eq(lastPost('suggest').text, 'My corrected version: Trabajo en ventas desde hace dos años.');
+  });
+
+  test('language work: a reading passage — readings from the app, click a word, save it with its sentence', async () => {
+    posts.length = 0;
+    const text = '私は会社員です。毎日電車で行きます。';
+    const el = show('```reading\n{"lang":"ja","title":"通勤","level":"A2","text":"' + text + '","readings":"all"}\n```');
+    noErrors(el, 'reading');
+    const r = $('.lw-reading', el); ok(r, 'reading card');
+    const an = await until(() => lastPost('langwork'), 'analyze request');
+    eq(an.op, 'analyze'); eq(an.text, text);
+    const key = an.key;
+    T.lang('analysis', key, { tokens: [{ s: 0, e: 1, r: 'わたし' }, { s: 1, e: 2 }, { s: 2, e: 5, r: 'かいしゃいん', saved: true }, { s: 5, e: 7 }, { s: 8, e: 10, r: 'まいにち' }, { s: 10, e: 12, r: 'でんしゃ' }, { s: 12, e: 13 }, { s: 13, e: 17 }],
+      sentences: [[0, 8], [8, 18]] });
+    const body = $('.lw-reading .rd-body', el);
+    ok($$('ruby', body).length === 4, 'furigana over the kanji words: ' + body.innerHTML.slice(0, 300));
+    ok($('.rd-w.saved', body), 'a saved word is marked');
+    eq($$('.rd-s', body).length, 2, 'two sentences');
+    click($('[data-act="rd-mode"][data-v="none"]', el)); eq($$('.lw-reading .rd-body ruby', el).length, 0, 'readings off');
+    click($('[data-act="rd-mode"][data-v="new"]', el)); eq($$('.lw-reading .rd-body ruby', el).length, 4, 'new words: all of them (none known yet)');
+    posts.length = 0;
+    const w = $$('.lw-reading .rd-w', el).find(x => x.textContent.includes('電車')); ok(w, 'the word 電車');
+    click(w);
+    const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === '電車' && lk.sentence === '毎日電車で行きます。', JSON.stringify(lk));
+    const pop = $('.rd-pop:not([hidden])'); ok(pop && !pop.closest('.msg'), 'popover open, on the page (not clipped by the message)'); ok(/Looking it up/.test(pop.textContent));
+    T.lang('lookup', lk.key, { word: '電車', reading: 'でんしゃ', senses: [{ pos: 'Noun', text: 'train (electric)' }], source: 'Wiktionary',
+      kanji: [{ char: '電', status: 'known', words: [{ term: '電話', reading: 'でんわ', meaning: 'telephone', status: 'known' }] }, { char: '車', status: 'unseen', words: [] }] });
+    ok(/train/.test(pop.textContent) && /でんしゃ/.test(pop.textContent), pop.textContent);
+    const kj = $$('.rd-kanji .rk-row', pop); eq(kj.length, 2, 'a row per kanji');
+    ok(/電話/.test(kj[0].textContent) && $('.rk-char.st-known', kj[0]), 'the kanji with the saved words that share it');
+    ok(/not in your saved words yet/.test(kj[1].textContent), kj[1].textContent);
+    posts.length = 0; click($('[data-act="rd-translate"]', pop));
+    const tr = lastPost('langwork'); eq(tr.op, 'translate'); eq(tr.text, '毎日電車で行きます。');
+    T.lang('translation', lk.key, { text: 'I go by train every day.', source: 'On-device translation (Apple)' });
+    ok(/by train/.test(pop.textContent), 'the sentence translated');
+    posts.length = 0; click($('[data-act="rd-save"]', pop));
+    const v = lastPost('vocab'); ok(v && v.word.term === '電車' && v.word.example === '毎日電車で行きます。' && v.word.example_meaning === 'I go by train every day.' && v.word.meaning === 'train (electric)', JSON.stringify(v));
+    ok(w.classList.contains('saved'), 'marked saved in the passage');
+    posts.length = 0; click($('[data-act="rd-say"][data-si="1"]', el));
+    const sp = lastPost('speak'); ok(sp && sp.text === '毎日電車で行きます。' && sp.key, 'a sentence plays on its own: ' + JSON.stringify(sp));
+    ok($('.lw-reading .rd-s[data-si="1"]', el).classList.contains('speaking'), 'and is highlighted');
+    T.lang('spoken', sp.key, null);
+    ok(!$('.lw-reading .rd-s.speaking', el), 'highlight ends when spoken');
+    posts.length = 0; click($('[data-act="rd-done"]', el));
+    const done = lastPost('langwork'); ok(done && done.op === 'read' && done.words === 16 && done.unit === 'characters', JSON.stringify(done));
+  });
+
+  test('language work: your own texts read like a passage — a file, pasted text, a web page — and any selected word looks up', async () => {
+    T.setLanguage({ target: 'es', native: 'en' });
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Mira este artículo: https://example.es/teletrabajo y también este texto.' }, { kind: 'file', name: 'menu.txt', text: 'Menú del día: sopa de lentejas, merluza a la plancha y flan casero. Pan y bebida incluidos.' }] };
+    const u2 = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Ayer fui al mercado con mi hermana y compramos fruta, pan y queso para toda la semana.' }] };
+    T.status('', false); T.reset([u, A('Vale.'), u2, A('¡Muy bien!')], {});
+    const m1 = $('#m-' + u.id), m2 = $('#m-' + u2.id);
+    ok($('[data-act="read-own"][data-kind="file"]', m1), 'a file to read: ' + $('.msg-actions', m1).textContent);
+    ok($('[data-act="read-own"][data-kind="url"]', m1), 'a page to read');
+    ok($('[data-act="read-own"][data-kind="text"]', m2), 'pasted text to read');
+    posts.length = 0; click($('[data-act="read-own"][data-kind="file"]', m1));
+    const r1 = $('.own-read .lw-reading', m1); ok(r1, 'the file opens as a passage under the message');
+    ok(/menu\.txt/.test($('.rd-title', r1).textContent), 'titled with the file');
+    const an = lastPost('langwork'); ok(an && an.op === 'analyze' && /merluza/.test(an.text), 'analysed by the app like any passage');
+    click($('[data-act="read-own"][data-kind="url"]', m1));
+    const pg = lastPost('langwork'); ok(pg && pg.op === 'page' && pg.url === 'https://example.es/teletrabajo', JSON.stringify(pg));
+    T.lang('page', pg.key, { title: 'El teletrabajo en España', text: 'Cada vez más empresas permiten trabajar desde casa dos o tres días por semana.', truncated: false });
+    ok($$('.own-read .lw-reading', m1).length === 2 && /teletrabajo/.test($('#m-' + u.id).textContent), 'the page opens as a passage');
+    click($('[data-act="read-own"][data-kind="text"]', m2)); ok($('.own-read .lw-reading', m2), 'pasted text too');
+    click($('[data-act="read-own-close"]', m2)); ok(!$('.own-read', m2), 'closed');
+    // Select a word in a reply: a Look up button, then the same popover with its sentence.
+    const md = $('#m-' + u2.id + ' .bubble .md'); const tn = md.querySelector('p').firstChild;
+    const range = document.createRange(); range.setStart(tn, 5); range.setEnd(tn, 8);   // "fui"
+    const sel = window.getSelection(); sel.removeAllRanges(); sel.addRange(range);
+    md.dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
+    const btn = await until(() => $('.sel-lookup'), 'the look-up button');
+    posts.length = 0; click(btn);
+    const lk = lastPost('langwork'); ok(lk && lk.op === 'lookup' && lk.word === 'fui' && /Ayer fui al mercado/.test(lk.sentence) && lk.lang === 'es', JSON.stringify(lk));
+    ok(!$('.rd-pop').hidden, 'popover open');
+    T.lang('lookup', lk.key, { word: 'fui', lemma: 'ir', senses: [{ pos: 'Verb', text: 'first-person singular preterite of ir' }], source: 'Wiktionary' });
+    ok(/dictionary form/.test($('.rd-pop').textContent) && /preterite/.test($('.rd-pop').textContent), $('.rd-pop').textContent);
+    posts.length = 0; click($('.rd-pop [data-act="rd-save"]'));
+    const v = lastPost('vocab'); ok(v && v.word.term === 'ir' && /Ayer fui/.test(v.word.example), 'saved as its dictionary form with the sentence: ' + JSON.stringify(v));
+    click($('.rd-pop [data-act="rd-close"]')); sel.removeAllRanges();
+    T.setLanguage(null);
+  });
+
+  test('language work: real audio — a transcribed recording plays sentence by sentence, hidden or shown, looped, and checked as dictation', async () => {
+    T.setLanguage({ target: 'es', native: 'en' });
+    const meta = { media: 'abc123.mp3', duration: 12.4, engine: 'Whisper large-v3-turbo, on this Mac', lang: 'es',
+      segments: [[0.4, 2.1, 'Hola, me llamo Marta.'], [3.5, 6.2, 'Trabajo en una oficina en Madrid.'], [7.6, 10.9, 'Los viernes trabajo desde casa.']] };
+    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'text', text: 'Escucha esto' }, { kind: 'file', name: '🎧 clip.mp3', text: 'Audio “clip.mp3”…', meta }] };
+    T.status('', false); T.reset([u, A('¡Vamos!')], {});
+    const p = $('#m-' + u.id + ' .lw-listen'); ok(p, 'the player is on the message');
+    eq($$('.ls-row', p).length, 3); ok(/0:12/.test(p.textContent), 'duration');
+    ok(!/Marta/.test($('.ls-rows', p).textContent), 'text hidden at first (listen before you read)');
+    posts.length = 0; click($('[data-act="ls-play"][data-i="1"]', p));
+    const m = lastPost('media'); ok(m && m.file === 'abc123.mp3' && m.start === 3.5 && m.end === 6.2 && m.rate === 1, JSON.stringify(m));
+    let p2 = $('#m-' + u.id + ' .lw-listen'); ok($('.ls-row[data-i="1"]', p2).classList.contains('playing'), 'the sentence playing is marked');
+    click($('[data-act="ls-rate"][data-v="0.6"]', p2)); click($('[data-act="ls-loop"]', $('#m-' + u.id + ' .lw-listen')));
+    posts.length = 0; T.lang('mediaDone', m.key, null); await sleep(700);
+    const again = lastPost('media'); ok(again && again.start === 3.5 && again.rate === 0.6, 'looped, slowed: ' + JSON.stringify(again));
+    click($('[data-act="ls-loop"]', $('#m-' + u.id + ' .lw-listen')));
+    posts.length = 0; click($('[data-act="ls-all"]', $('#m-' + u.id + ' .lw-listen')));
+    const first = lastPost('media'); posts.length = 0; T.lang('mediaDone', first.key, null); await sleep(400);
+    ok(lastPost('media') && lastPost('media').start > first.start, 'play all goes on to the next sentence: ' + JSON.stringify(lastPost('media')));
+    click($('[data-act="ls-all"]', $('#m-' + u.id + ' .lw-listen'))); ok(lastPost('media').op === 'stop', 'and stops');
+    click($('[data-act="ls-write"][data-i="2"]', $('#m-' + u.id + ' .lw-listen')));
+    const f = $('#m-' + u.id + ' [data-ls-input="2"]'); ok(f, 'a dictation field'); f.value = 'Los viernes trabajo de casa'; f.dispatchEvent(new Event('input', { bubbles: true }));
+    click($('[data-act="ls-check"][data-i="2"]', $('#m-' + u.id + ' .lw-listen')));
+    const res = $('#m-' + u.id + ' .ls-result'); ok(res && $('.d-wrong', res) && /de/.test($('.d-wrong del', res).textContent), 'checked word by word: ' + (res && res.innerHTML));
+    ok(/viernes/.test($('#m-' + u.id + ' .ls-row[data-i="2"] .ls-text').textContent), 'the sentence is shown once checked');
+    posts.length = 0; click($('[data-act="ls-report"]', $('#m-' + u.id + ' .lw-listen')));
+    ok(/My dictation from the audio/.test(lastPost('suggest').text) && /de casa/.test(lastPost('suggest').text), 'results go to the teacher on request');
+    click($('[data-act="ls-text"]', $('#m-' + u.id + ' .lw-listen'))); ok(/Marta/.test($('#m-' + u.id + ' .ls-rows').textContent), 'text shown');
+    T.setLanguage(null);
   });
 
   test('language mentor: a vocab card saves a word to the learner\'s vocabulary', () => {

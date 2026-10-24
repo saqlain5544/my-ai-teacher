@@ -257,7 +257,13 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func language(_ state: LanguageState?) {
-            run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))")
+            guard let state, let target = state.target, let s = session else { run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))"); return }
+            // The keyboard's extras: the learner's kanji words (candidates while typing kana) and the Mac's own input source.
+            var j = state.json.object ?? [:]
+            let words = s.services.study.kanaWords(lang: target)
+            if !words.isEmpty { j["words"] = .array(words.map { ["term": .string($0.term), "kana": .string($0.kana)] }) }
+            if let src = InputSources.best(for: target) { j["inputSource"] = src.json }
+            run("T.setLanguage(\(JSON.object(j).compact))")
         }
 
         func trimBefore(_ messageID: String, earlier: Int) {
@@ -358,15 +364,80 @@ struct TranscriptView: NSViewRepresentable {
                 NSPasteboard.general.clearContents()
                 NSPasteboard.general.setString(j["text"]?.string ?? "", forType: .string)
             case "speak":
+                if j["stop"]?.bool == true { app.speech.stop(); return }
                 if app.speech.isSpeaking && j["lang"] == nil { app.speech.stop() }
-                else { app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier,
-                                        rate: app.settings.value.speechRate * min(1.5, max(0.3, j["rate"]?.double ?? 1))) }
+                else {
+                    // A reading's sentence (`key`): the page hears when it has been spoken, to play the next or pause for shadowing.
+                    let key = j["key"]?.string
+                    app.speech.speak(j["text"]?.string ?? "", language: j["lang"]?.string, voice: app.settings.value.voiceIdentifier,
+                                     rate: app.settings.value.speechRate * min(1.5, max(0.3, j["rate"]?.double ?? 1)),
+                                     onFinish: key.map { k in { [weak self] in self?.run("T.lang('spoken', \(JSON.string(k).compact), null)") } })
+                }
+            case "langwork":
+                // The reading and lookup components (components/langwork.js): analysis, dictionary, translation, the reading log.
+                guard let s = session, let key = j["key"]?.string else { return }
+                let lang = j["lang"]?.string ?? s.language?.target
+                let study = s.services.study
+                let reply = { [weak self] (kind: String, data: JSON) in self?.run("T.lang(\(JSON.string(kind).compact), \(JSON.string(key).compact), \(data.compact))") }
+                switch j["op"]?.string {
+                case "analyze":
+                    reply("analysis", LanguageWork.analyze(j["text"]?.string ?? "", lang: lang, study: study))
+                case "lookup":
+                    let word = j["word"]?.string ?? "", lemma = j["lemma"]?.string
+                    Task { reply("lookup", await LanguageWork.lookup(word, lemma: lemma, lang: lang, study: study)) }
+                case "translate":
+                    let to = s.language?.native ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")
+                    let text = j["text"]?.string ?? ""
+                    Task { reply("translation", await LanguageWork.translate(text, from: lang, to: to)) }
+                case "mediaURL":
+                    // An audio file on the web the learner wants to listen to (an openly licensed podcast, a news clip):
+                    // downloaded at their click, then transcribed and attached like a file they dropped in.
+                    guard let url = URL(string: j["url"]?.string ?? ""), ["http", "https"].contains(url.scheme ?? "") else { return }
+                    Task { @MainActor in
+                        do {
+                            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-audio-\(UUID().uuidString.prefix(8))", isDirectory: true)
+                            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                            let dest = dir.appendingPathComponent(url.lastPathComponent.isEmpty ? "audio.mp3" : url.lastPathComponent)
+                            try await Downloader.fetch(url, to: dest) { _ in }
+                            let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
+                            guard size < 500_000_000 else { self.run("T.notice('That audio is over 500 MB.')"); return }
+                            Composer.attachMedia(dest, to: s)
+                            try? FileManager.default.removeItem(at: dir)
+                            self.run("T.notice(\(JSON.string("Transcribing \(url.lastPathComponent)… it will be attached to your next message.").compact))")
+                        } catch { self.run("T.notice(\(JSON.string("The audio didn't download: \(error.localizedDescription)").compact))") }
+                    }
+                case "page":
+                    let url = j["url"]?.string ?? ""
+                    Task { reply("page", await LanguageWork.page(url)) }
+                case "read":
+                    guard let lang else { return }
+                    let words = j["words"]?.int ?? 0
+                    study.logReading(lang: lang, title: j["title"]?.string, words: words, unit: j["unit"]?.string, conversationID: s.id)
+                    let st = study.readingStats(lang: lang)
+                    EventBus.publish(.studyDataChanged)
+                    run("T.notice(\(JSON.string("Logged \(words) \(j["unit"]?.string ?? "words") read — \(st.words) \(st.unit) of \(Languages.englishName(lang)) in \(st.passages) passage\(st.passages == 1 ? "" : "s") this week.").compact))")
+                default: break
+                }
             case "dictate":
                 // A `speak` question: the Mac listens in the target language and the card shows what it heard.
                 guard let key = j["id"]?.string else { return }
                 if j["op"]?.string == "stop" { app.speech.stopListening(); return }
-                app.speech.dictate(language: j["lang"]?.string) { [weak self] text, final in
-                    self?.run("T.dictation(\(JSON.string(key).compact),\(JSON.string(text).compact),\(final))")
+                let lang = j["lang"]?.string, target = j["target"]?.string
+                app.speech.dictate(language: lang, target: target) { [weak self] text, final, info in
+                    // The final result carries the engine that heard it, the pitch against the synthetic voice, and the
+                    // word-by-word alignment with the target (the app's: Japanese is compared by reading).
+                    var extra = info?.object ?? [:]
+                    if final, let target, !text.isEmpty { extra["diff"] = Questions.diffJSON(TextDiff.align(target: target, given: text, lang: lang)) }
+                    if extra["engine"] == nil, !app.speech.engineName.isEmpty { extra["engine"] = .string(app.speech.engineName) }
+                    let send = { (x: [String: JSON]) in self?.run("T.dictation(\(JSON.string(key).compact),\(JSON.string(text).compact),\(final),\(JSON.object(x).compact))") }
+                    // Heard online while Apple's on-device model for the language could be downloaded: offer it on the card.
+                    if final, extra["pitch"] == nil, app.speech.engineName.contains("online"), let lang {
+                        Task { @MainActor in
+                            var x = extra
+                            if await SpeechEngines.appleModelStatus(lang) == .downloadable { x["modelDownload"] = .string(lang) }
+                            send(x)
+                        }
+                    } else { send(extra) }
                 }
             case "vocab":
                 // The Save button on a ```vocab card: into the learner's vocabulary and its flashcard deck.
@@ -375,10 +446,41 @@ struct TranscriptView: NSViewRepresentable {
                     run("T.notice('Which language is this word in? Ask the teacher to set your language profile, then save it again.')"); return
                 }
                 if s.services.study.addVocab(lang: lang, term: term, reading: w["reading"]?.string, meaning: meaning, pos: w["pos"]?.string, example: w["example"]?.string,
-                                             exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, source: s.id) != nil {
+                                             exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: s.id) != nil {
                     EventBus.publish(.studyDataChanged)
                     run("T.notice(\(JSON.string("Saved “\(term)” to your \(Languages.englishName(lang)) vocabulary (reviewed as a flashcard).").compact))")
                 }
+            case "media":
+                // The listening player: a stretch of the learner's audio, from the lesson's media folder only.
+                guard let s = session else { return }
+                if j["op"]?.string == "stop" { MediaPlayer.shared.stop(); return }
+                guard let name = j["file"]?.string, !name.contains("/"), !name.hasPrefix(".") else { return }
+                let url = s.services.workspace.attachmentsDir.appendingPathComponent("media").appendingPathComponent(name)
+                guard FileManager.default.fileExists(atPath: url.path) else { run("T.notice('The audio file is no longer with this lesson.')"); return }
+                let key = j["key"]?.string ?? ""
+                app.speech.stop()
+                MediaPlayer.shared.play(url, from: j["start"]?.double ?? 0, to: j["end"]?.double ?? 0, rate: j["rate"]?.double ?? 1) { [weak self] in
+                    self?.run("T.lang('mediaDone', \(JSON.string(key).compact), null)")
+                }
+            case "speechModel":
+                // "Hear me on this Mac": Apple's on-device recognition model for the language, from the speak card.
+                guard let lang = j["lang"]?.string else { return }
+                run("T.notice(\(JSON.string("Downloading Apple's \(Languages.englishName(lang)) speech model (on-device recognition)…").compact))")
+                Task { @MainActor in
+                    do {
+                        try await SpeechEngines.installAppleModel(lang) { _ in }
+                        self.run("T.notice(\(JSON.string("\(Languages.englishName(lang)) speech recognition now runs on this Mac.").compact))")
+                    } catch { self.run("T.notice(\(JSON.string("The \(Languages.englishName(lang)) speech model didn't download: \(error.localizedDescription)").compact))") }
+                }
+            case "inputSource":
+                // The keyboard panel's "Use Mac input": switch to the language's installed input source, or open Keyboard settings.
+                guard let lang = j["lang"]?.string else { return }
+                switch j["op"]?.string {
+                case "select": InputSources.select(for: lang)
+                case "restore": InputSources.restore()
+                default: InputSources.openSettings()
+                }
+                if let s = session { language(AppModel.shared.extensions.get(LanguageExtension.self)?.state(for: s)) }
             case "memory":
                 app.selection = .memory
             case "older":

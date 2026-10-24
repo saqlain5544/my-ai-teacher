@@ -1,4 +1,5 @@
 import SwiftUI
+import Speech
 import AVFoundation
 
 struct SettingsView: View {
@@ -322,19 +323,151 @@ struct MemorySettings: View {
 
 struct VoiceSettings: View {
     @EnvironmentObject var settings: SettingsStore
+    @ObservedObject private var open = OpenSpeech.shared
     private let voices = AVSpeechSynthesisVoice.speechVoices().sorted { ($0.language, $0.name) < ($1.language, $1.name) }
+    @State private var models: [String: SpeechEngines.ModelStatus] = [:]
+    @State private var modelProgress: [String: Double] = [:]
+    @State private var modelError: [String: String] = [:]
+
+    /// The languages the learner is learning (profiles and saved words), else a few common ones.
+    private var languages: [String] {
+        let study = AppModel.shared.services.study
+        var l = study.languageProfiles().filter { $0.role == "target" }.map(\.code)
+        for v in study.vocabLanguages() where !l.contains(v) { l.append(v) }
+        return l.isEmpty ? ["ja", "zh", "ko", "ar", "es", "fr", "de", "ru", "hi"] : l
+    }
+
     var body: some View {
         Form {
-            Picker("Voice", selection: Binding(get: { settings.value.voiceIdentifier ?? "" }, set: { settings.value.voiceIdentifier = $0.isEmpty ? nil : $0 })) {
-                Text("System default").tag("")
-                ForEach(voices, id: \.identifier) { v in Text("\(v.name) (\(v.language))\(v.quality == .premium ? " ★" : (v.quality == .enhanced ? " +" : ""))").tag(v.identifier) }
+            Section("Reading aloud") {
+                Picker("Voice", selection: Binding(get: { settings.value.voiceIdentifier ?? "" }, set: { settings.value.voiceIdentifier = $0.isEmpty ? nil : $0 })) {
+                    Text("System default").tag("")
+                    ForEach(voices, id: \.identifier) { v in Text("\(v.name) (\(v.language))\(v.quality == .premium ? " ★" : (v.quality == .enhanced ? " +" : ""))").tag(v.identifier) }
+                }
+                Slider(value: $settings.value.speechRate, in: 0.3...0.8) { Text("Speed") }
+                Button("Preview") {
+                    AppModel.shared.speech.speak("Hello! I'm your teacher. Let's learn something wonderful today.", voice: settings.value.voiceIdentifier, rate: settings.value.speechRate)
+                }
             }
-            Slider(value: $settings.value.speechRate, in: 0.3...0.8) { Text("Speed") }
-            Button("Preview") {
-                AppModel.shared.speech.speak("Hello! I'm your teacher. Let's learn something wonderful today.", voice: settings.value.voiceIdentifier, rate: settings.value.speechRate)
+            Section {
+                ForEach(languages, id: \.self) { lang in languageRow(lang) }
+                HStack {
+                    Button("Get better Mac voices…") { Self.openSpokenContent() }
+                    Text("System Settings › Accessibility › Spoken Content › System Voice › Manage Voices: download an Enhanced or Premium voice for each language.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            } header: { Text("Your languages") } footer: {
+                Text("Voice: the best voice the Mac has (compact voices are small and robotic; Enhanced and Premium ones are much clearer). Hearing you: Apple's on-device model for the language when installed — otherwise the Mac sends your audio to Apple for recognition, or Whisper (below) hears it on this Mac.")
             }
-            Text("Tip: download higher-quality voices in System Settings → Accessibility → Spoken Content.").font(.caption).foregroundStyle(.secondary)
+            Section("Which engine") {
+                Picker("Speaking the language", selection: $settings.value.speechOutput) {
+                    Text("Best available").tag("auto"); Text("The Mac's voices").tag("apple"); Text("Open-source voice when installed").tag("open")
+                }
+                Picker("Hearing you", selection: $settings.value.speechInput) {
+                    Text("Best available (on device first)").tag("auto"); Text("Whisper when installed").tag("whisper"); Text("Apple speech recognition").tag("online")
+                }
+            }
+            Section {
+                ForEach(OpenSpeech.catalog) { c in componentRow(c) }
+            } header: { Text("Open-source engines (optional, on this Mac)") } footer: {
+                Text("Downloaded only when you ask, checked against published checksums, and run on this Mac — nothing you say or read leaves it. Stored in \(OpenSpeech.root.path). The Mac's own engines are used whenever these aren't installed or fail.")
+            }
         }
         .formStyle(.grouped)
+        .task { for l in languages { models[l] = await SpeechEngines.appleModelStatus(l) } }
+    }
+
+    @ViewBuilder private func languageRow(_ lang: String) -> some View {
+        let v = SpeechEngines.bestVoice(lang)
+        let openVoice = OpenSpeech.voice(for: lang), whisper = OpenSpeech.recognizer(for: lang)
+        let sfOnDevice = Speech.recognizerLocale(lang).flatMap(SFSpeechRecognizer.init(locale:))?.supportsOnDeviceRecognition ?? false
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(Languages.englishName(lang)).bold()
+                Text(Languages.nativeName(lang)).foregroundStyle(.secondary)
+                Spacer()
+                Button("Hear it") {
+                    AppModel.shared.speech.speak(Self.sample[lang] ?? Languages.nativeName(lang), language: lang, voice: nil, rate: settings.value.speechRate)
+                }.controlSize(.small)
+            }
+            HStack(spacing: 6) {
+                Image(systemName: "speaker.wave.2").foregroundStyle(.secondary)
+                if let v { Text("\(v.name) — \(v.quality)").foregroundStyle(v.quality == "compact" ? .orange : .green) } else { Text("no Mac voice").foregroundStyle(.red) }
+                if openVoice { Text("· Supertonic installed").foregroundStyle(.green) }
+            }.font(.caption)
+            HStack(spacing: 6) {
+                Image(systemName: "mic").foregroundStyle(.secondary)
+                switch models[lang] {
+                case .installed?: Text("Apple on-device model installed").foregroundStyle(.green)
+                case .downloadable?, .downloading?:
+                    if let p = modelProgress[lang] { ProgressView(value: p).frame(width: 120); Text("\(Int(p * 100))%") }
+                    else {
+                        // With Whisper installed the learner is already heard on this Mac: Apple's model is an option, not a fix.
+                        if whisper { Text("on this Mac (Whisper); Apple's model is optional:").foregroundStyle(.green) }
+                        else { Text(sfOnDevice ? "on device (older recogniser)" : "online (Apple servers) until you download:").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
+                        Button("Download Apple model") { installModel(lang) }.controlSize(.small)
+                    }
+                case .unsupported?:
+                    if whisper { Text("on this Mac (Whisper)").foregroundStyle(.green) }
+                    else { Text(sfOnDevice ? "on device (older recogniser)" : "online only (Apple servers)").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
+                case nil: Text("checking…").foregroundStyle(.secondary)
+                }
+                if whisper, case .installed? = models[lang] { Text("· Whisper installed").foregroundStyle(.green) }
+                if let e = modelError[lang] { Text(e).foregroundStyle(.red) }
+            }.font(.caption)
+        }
+        .padding(.vertical, 2)
+    }
+
+    private func installModel(_ lang: String) {
+        modelProgress[lang] = 0; modelError[lang] = nil
+        Task {
+            do {
+                try await SpeechEngines.installAppleModel(lang) { p in Task { @MainActor in modelProgress[lang] = p } }
+                modelProgress[lang] = nil
+            } catch { modelProgress[lang] = nil; modelError[lang] = error.localizedDescription }
+            models[lang] = await SpeechEngines.appleModelStatus(lang)
+        }
+    }
+
+    @ViewBuilder private func componentRow(_ c: OpenSpeech.Component) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                Text(c.title).bold()
+                Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file)).foregroundStyle(.secondary)
+                Spacer()
+                switch open.states[c.id] ?? .absent {
+                case .absent: Button("Download") { open.install(c.id) }.controlSize(.small)
+                case .failed(let e):
+                    Text(e).font(.caption).foregroundStyle(.red).lineLimit(2)
+                    Button("Retry") { open.install(c.id) }.controlSize(.small)
+                case .downloading(let p, let note):
+                    VStack(alignment: .trailing) { ProgressView(value: p).frame(width: 160); Text(note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
+                    Button("Cancel") { open.cancel(c.id) }.controlSize(.small)
+                case .installed:
+                    Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
+                    Button("Remove") { open.remove(c.id) }.controlSize(.small)
+                }
+            }
+            // One height in every state: a progress bar appearing used to push the rows below it down, so a click aimed
+            // at the next Download button landed on nothing.
+            .frame(height: 34)
+            Text(c.detail).font(.caption).foregroundStyle(.secondary)
+            if !c.languages.isEmpty {
+                Text("Languages: " + c.languages.prefix(12).map(Languages.englishName).joined(separator: ", ") + (c.languages.count > 12 ? " and \(c.languages.count - 12) more" : ""))
+                    .font(.caption2).foregroundStyle(.secondary)
+            }
+            Text("Licence: \(c.license)" + (c.requires.isEmpty ? "" : " · needs the runtime")).font(.caption2).foregroundStyle(.tertiary)
+        }
+        .padding(.vertical, 2)
+    }
+
+    static let sample: [String: String] = [
+        "ja": "はじめまして。どうぞよろしくお願いします。", "zh": "你好，很高兴认识你。", "ko": "안녕하세요. 만나서 반갑습니다.", "ar": "مرحبا، تشرفت بمعرفتك.",
+        "es": "Hola, encantado de conocerte.", "fr": "Bonjour, ravi de vous rencontrer.", "de": "Hallo, schön, Sie kennenzulernen.", "ru": "Здравствуйте, приятно познакомиться.",
+        "hi": "नमस्ते, आपसे मिलकर खुशी हुई।", "it": "Ciao, piacere di conoscerti.", "pt": "Olá, prazer em conhecê-lo.",
+    ]
+    static func openSpokenContent() {
+        if let u = URL(string: "x-apple.systempreferences:com.apple.Accessibility-Settings.extension?SpokenContent") { NSWorkspace.shared.open(u) }
     }
 }

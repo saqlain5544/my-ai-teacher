@@ -47,9 +47,11 @@ final class LanguageExtension: AgentExtension {
 
     /// The language-learning components and question fields, sent to lessons that teach a language.
     static let componentGuide = """
-    - Language-learning components (JSON fences): ```gloss {"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I (topic)","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple (object)","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]} — an interlinear sentence with word roles and word-order lines to the translation; ```listen {"lang":"es","text":"…","translation":"…","hide":true} — play / play slowly, text hidden for dictation; ```dialogue {"lang":"fr","title":"…","lines":[{"who":"Serveur","text":"…","translation":"…"},{"who":"Vous","text":"…"}],"you":"Vous"} — role-play: the learner's lines stay hidden until they say them; ```conjugation {"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"él","form":"es","irregular":true}]} — stem and endings told apart; ```tones {"text":"nǐ hǎo"} — Mandarin pitch contours. ```vocab cards carry a Save button (the learner's vocabulary, reviewed as flashcards).
-    - Questions for language tests: type "speak" {"target":"こんにちは","lang":"ja","reading":"konnichiwa"} — they say it, on-device recognition in that language shows what was heard, graded by words matched; any question may carry "listen":"…" (+ "listen_lang") to play audio first with the text hidden (dictation); "accents":"strict" makes diacritics count in short_text and fill_blanks (default: lenient); "lang" on a question picks the on-screen keyboard. The learner has an on-screen keyboard for the target language's script on every text field, so ask for the script, not romanisation, from A2 on.
-    - `language` (profile, transliterate, analyze, dictionary) and `vocab` (the learner's words: add, due, list, search, stats).
+    - Language-learning components (JSON fences): ```gloss {"lang":"ja","words":[{"w":"私は","r":"わたしは","m":"I (topic)","role":"topic"},{"w":"りんごを","r":"ringo o","m":"apple (object)","role":"object"},{"w":"食べる","r":"taberu","m":"eat","role":"verb"}],"translation":"I eat an apple.","align":[[0,0],[1,3],[2,1]]} — an interlinear sentence with word roles and word-order lines to the translation; ```listen {"lang":"es","text":"…","translation":"…","hide":true} — play / play slowly, text hidden for dictation; ```dialogue {"lang":"fr","title":"…","lines":[{"who":"Serveur","text":"…","translation":"…"},{"who":"Vous","text":"…"}],"you":"Vous"} — role-play: the learner's lines stay hidden until they say them; ```conjugation {"lang":"es","verb":"hablar","meaning":"to speak","tense":"presente","stem":"habl","forms":[{"person":"yo","form":"hablo"},{"person":"él","form":"es","irregular":true}]} — stem and endings told apart; ```tones {"text":"nǐ hǎo"} — Mandarin pitch contours; ```reading {"lang","title","level":"A2","text":"the passage (paragraphs with \\n\\n)","readings":"all|new|none","translation":"optional"} — click-a-word lookup (reading, dictionary, save with its sentence), sentence-by-sentence audio and shadowing, readings over kanji/hanzi; the app logs what they finish; ```correction {"lang","original":"their text, verbatim","corrected":"…","errors":[{"wrong","right","type","why"}],"rubric":[{"criterion","score","max","note"}],"better":"a more natural version","recast":"a cue to produce it again"} — the app draws the changes word by word and checks their second attempt. ```vocab cards carry a Save button (the learner's vocabulary, reviewed as flashcards).
+    - Questions for language tests: type "speak" {"target":"こんにちは","lang":"ja","reading":"konnichiwa"} — they say it, speech recognition shows what was heard word by word (and the pitch of their voice against a synthetic one; their answer also carries measured Mandarin tones per syllable, the Japanese accent drop, or the stressed syllable of a single word — measured hints: name a clear miss and model it, don't grade on one syllable); "dictation" {"listen":"the text","lang"} — they write what they hear, checked word by word; "translate" {"text","from","to"}, "rewrite" {"text","instruction"}, "build_sentence" {"words":[…]}, long_text with "rubric" and "min_words" — you grade them and answer with ```correction; "table" {"rows","columns","answer":[[…]],"cells":[[shown or null]]}; any question may carry "listen":"…" (+ "listen_lang") to play audio first with the text hidden (dictation); "accents":"strict" makes diacritics count in short_text and fill_blanks (default: lenient); "lang" on a question picks the on-screen keyboard. The learner has an on-screen keyboard for the target language's script on every text field, so ask for the script, not romanisation, from A2 on.
+    - Real audio: the learner attaches an audio or video file (or pastes a direct link to one: suggest openly licensed sources) and the app transcribes it with times and gives them a sentence-by-sentence player (slow, loop, shadowing, dictation checked against it); the transcript reaches you in their message. Build the listening work on it; never fetch or convert audio yourself. Their own texts, files and pages open as reading passages from their message, and any word they select can be looked up.
+    - `language` (profile, transliterate, analyze, dictionary; skills, syllabus, grammar) and `vocab` (the learner's words: add, due, list, search, stats).
+    - Structure: place the learner per skill (reading, listening, writing, speaking, vocabulary, grammar) from evidence — a short text, audio, a paragraph, a spoken answer — and set each with `language` action=skills and the evidence; a skill with no sample yet is left unplaced or set `provisional` (shown A2?) until a real task replaces it. Keep a grammar syllabus per CEFR level (action=syllabus) and work from its "next" points. When the learner writes or says something that uses a syllabus point, record it with action=grammar (correct or not, their sentence as evidence): production, not recognition, is what counts as mastery of grammar.
     """
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
@@ -78,8 +80,25 @@ final class LanguageExtension: AgentExtension {
             parts.append("keyboard: on-screen \(kb.english) keyboard on every answer field" + (kb.modes.contains("romaji") ? " (kana or romaji)" : kb.compose == "pinyin" ? " (pinyin with tone marks; 汉字 via the Mac's input source)" : ""))
         }
         let v = study.vocabStats(lang: t)
-        if v.total > 0 { parts.append("vocabulary: \(v.total) words saved, \(v.due) due, \(v.known) known") }
+        if v.total > 0 {
+            parts.append("vocabulary: \(v.total) words saved, \(v.due) due, \(v.known) known")
+            // The words due now, so new sentences can reuse them without a call (review in use, not as a list).
+            let due = study.dueVocab(lang: t, limit: 8).map(\.term)
+            if !due.isEmpty { parts.append("due to reuse: " + due.joined(separator: ", ")) }
+        }
         else { parts.append("vocabulary: none saved yet (`vocab` add)") }
+        // Levels per skill and the grammar to work on: a lesson builds on them without a call.
+        let skills = study.skills(lang: t)
+        if !skills.isEmpty { parts.append("by skill: " + skills.map { "\($0.skill) \($0.level)" }.joined(separator: ", ")) }
+        else if st.profiled { parts.append("skills not placed yet (`language` action=skills, from evidence)") }
+        let grammar = study.grammarSyllabus(lang: t)
+        if grammar.isEmpty { if st.profiled { parts.append("no grammar syllabus yet (`language` action=syllabus)") } }
+        else {
+            let next = study.nextGrammar(lang: t).map { $0.name + ($0.seen ? " (shaky)" : "") }
+            parts.append("grammar: \(grammar.filter(\.mastered).count)/\(grammar.count) points mastered" + (next.isEmpty ? "" : "; next: " + next.joined(separator: "; ")))
+        }
+        let r = study.readingStats(lang: t)
+        if r.passages > 0 { parts.append("read this week: \(r.words) \(r.unit) in \(r.passages) passage\(r.passages == 1 ? "" : "s")") }
         return "<language_state>" + parts.joined(separator: " · ") + "</language_state>"
     }
 
@@ -156,7 +175,7 @@ final class LanguageExtension: AgentExtension {
         return l.rawValue
     }
 
-    private static let askPattern = try! NSRegularExpression(pattern: #"(?i)\b(learn(?:ing)?|teach(?:\s+me)?|practi[cs](?:e|ing)|stud(?:y|ying)|speak(?:ing)?|improve(?:\s+my)?|lessons?\s+(?:in|on|of)|tutor(?:\s+me)?\s+in|help\s+me\s+with|my)\b([^.!?\n]{0,50})"#)
+    nonisolated private static let askPattern = try! NSRegularExpression(pattern: #"(?i)\b(learn(?:ing)?|teach(?:\s+me)?|practi[cs](?:e|ing)|stud(?:y|ying)|speak(?:ing)?|improve(?:\s+my)?|lessons?\s+(?:in|on|of)|tutor(?:\s+me)?\s+in|help\s+me\s+with|my)\b([^.!?\n]{0,50})"#)
     /// "I want to learn Japanese", "teach me some Spanish", "practise my Arabic" → the language named last.
     nonisolated static func asked(_ texts: [String]) -> String? {
         let names = Languages.names.keys.sorted { $0.count > $1.count }

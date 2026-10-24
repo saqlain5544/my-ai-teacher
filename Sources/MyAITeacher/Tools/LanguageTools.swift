@@ -31,6 +31,8 @@ enum TextAnalysis {
     /// Words with lemma and part of speech where the on-device tagger knows the language, and a Latin reading for
     /// other scripts. Japanese and Chinese are segmented into words (no spaces in the source).
     static func tokens(_ text: String, language: String?) -> [Token] {
+        let code = language.flatMap(Languages.code) ?? (text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) } ? "ja" : nil)
+        if code == "ja" { return japaneseTokens(text) }
         let tagger = NLTagger(tagSchemes: [.lexicalClass, .lemma])
         tagger.string = text
         if let l = language.flatMap(Languages.code) { tagger.setLanguage(NLLanguage(l), range: text.startIndex..<text.endIndex) }
@@ -39,11 +41,66 @@ enum TextAnalysis {
             let w = String(text[range])
             let lemma = tagger.tag(at: range.lowerBound, unit: .word, scheme: .lemma).0?.rawValue
             let latin = ScriptRuns.runs(w).contains { $0.script != .latin && $0.script != .neutral } ? w.applyingTransform(.toLatin, reverse: false) : nil
-            out.append(Token(text: w, lemma: lemma == w ? nil : lemma, pos: tag?.rawValue.lowercased(), reading: latin == w ? nil : latin))
+            let pos = tag?.rawValue.lowercased()
+            out.append(Token(text: w, lemma: lemma == w ? nil : lemma, pos: pos == "otherword" ? nil : pos, reading: latin == w ? nil : latin))
             return true
         }
         return out
     }
+
+    /// Japanese words with Japanese readings. The generic path read kanji as Mandarin (担当 [dān dāng]) and tagged every
+    /// word "otherword"; the system's Japanese tokenizer segments the sentence and gives each word's reading in romaji,
+    /// shown with its hiragana (担当 [たんとう tantou]).
+    static func japaneseTokens(_ text: String) -> [Token] {
+        let ns = text as NSString
+        guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
+                                                Locale(identifier: "ja") as CFLocale) else { return [] }
+        var out: [Token] = []
+        while CFStringTokenizerAdvanceToNextToken(tok) != [] {
+            let r = CFStringTokenizerGetCurrentTokenRange(tok)
+            let w = ns.substring(with: NSRange(location: r.location, length: r.length))
+            guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }   // punctuation, spaces
+            let latin = (CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String)?.lowercased()
+            let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            let kana = hasKanji ? latin.flatMap { $0.applyingTransform(.latinToHiragana, reverse: false) } : nil
+            // は, へ and を standing alone are the particles, read wa, e and o (the tokenizer spells them ha, he, wo).
+            if let particle = ["は": "wa", "へ": "e", "を": "o"][w] { out.append(Token(text: w, lemma: nil, pos: "particle", reading: particle)); continue }
+            let reading = [kana, latin == w.lowercased() ? nil : latin].compactMap { $0 }.joined(separator: " ")
+            out.append(Token(text: w, lemma: nil, pos: nil, reading: reading.isEmpty ? nil : reading))
+        }
+        return out
+    }
+    /// The whole text's reading in hiragana (words with kanji by the tokenizer's reading, kana as written, punctuation
+    /// and spaces dropped): 私は食べる → わたしはたべる. Dictation and speech are compared on this.
+    static func japaneseKana(_ text: String) -> String {
+        let ns = text as NSString
+        guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
+                                                Locale(identifier: "ja") as CFLocale) else { return text }
+        var out = "", lastWord = "", lastKana = 0
+        while CFStringTokenizerAdvanceToNextToken(tok) != [] {
+            let r = CFStringTokenizerGetCurrentTokenRange(tok)
+            let w = ns.substring(with: NSRange(location: r.location, length: r.length))
+            guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }
+            let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
+            if w == "時", let r = LanguageWork.hours[lastWord] { out.removeLast(lastKana); out += r; lastWord = ""; continue }   // 七時 しちじ
+            let before = out.count
+            defer { lastWord = w; lastKana = out.count - before }
+            if let common = commonReadings[w] { out += common; continue }
+            if hasKanji, let latin = CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String,
+               let kana = latin.lowercased().applyingTransform(.latinToHiragana, reverse: false), !kana.unicodeScalars.contains(where: { $0.isASCII && $0.properties.isAlphabetic }) {
+                out += kana
+            } else {
+                out += ScriptComposer.toHiragana(w).filter { $0.isLetter || $0.isNumber || $0 == "ー" }
+            }
+        }
+        return out
+    }
+    /// Everyday readings where the system's tokenizer picks the formal or rarer one (私 → わたくし): a learner writing
+    /// わたし is right.
+    static let commonReadings: [String: String] = [
+        "私": "わたし", "今日": "きょう", "明日": "あした", "昨日": "きのう", "何": "なに", "一人": "ひとり", "二人": "ふたり", "大人": "おとな",
+        "今年": "ことし", "今朝": "けさ", "上手": "じょうず", "下手": "へた", "眼鏡": "めがね", "部屋": "へや", "時計": "とけい", "果物": "くだもの",
+    ]
     static func sentences(_ text: String) -> [String] {
         let tok = NLTokenizer(unit: .sentence); tok.string = text
         return tok.tokens(for: text.startIndex..<text.endIndex).map { String(text[$0]).trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
@@ -64,15 +121,23 @@ struct LanguageTool: Tool {
     Language-learning utilities. action="profile": set or read which language the learner is learning (`target`, e.g. \
     "ja"), their own language (`native`), and a CEFR `level` (A1–C2) — the app shows the right on-screen keyboard and \
     tells you the state on every request. action="transliterate": convert `text` to a script (`to`: latin, hiragana, \
-    katakana, hangul, arabic, cyrillic, greek, hebrew, thai, pinyin, ascii). action="analyze": segment `text` into words \
-    with lemma, part of speech and a Latin reading (Japanese and Chinese are segmented without spaces), plus sentence \
+    katakana, hangul, arabic, cyrillic, greek, hebrew, thai, pinyin, ascii) — romanised text only: write foreign names by \
+    sound yourself. action="analyze": segment `text` into words with their readings (Japanese in kana and romaji, \
+    Chinese in pinyin, other scripts in Latin), lemma and part of speech where the system knows them, plus sentence \
     count and detected languages. action="dictionary": Wiktionary definitions of `word` (with `lang` to pick the language \
-    section). Use these to check readings and forms before teaching them; the learner never sees the calls.
+    section). action="skills": a CEFR level per skill (`skills`: [{skill: reading|listening|writing|speaking|vocabulary|\
+    grammar, level, evidence}]) — set each from what you saw the learner do (a placement or real work), with that \
+    evidence (a level with no sample of that skill yet is `provisional`, shown as A2?); without `skills` it lists them. action="syllabus": the grammar syllabus — `points` [{name, level, \
+    description}] adds points (draft one per level from the CEFR descriptors once you know the language and level); \
+    without points it shows the syllabus with mastery and what's next. action="grammar": evidence from production — the \
+    learner used a grammar point (`point`, exactly as named in the syllabus) in something they wrote or said, `correct` \
+    true/false, `sentence` their words; this is what moves grammar mastery. Use these to check readings and forms before \
+    teaching them; the learner never sees the calls.
     """
     let risk = ToolRisk.network
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("Action.", enum: ["profile", "transliterate", "analyze", "dictionary"]),
+            "action": Schema.string("Action.", enum: ["profile", "transliterate", "analyze", "dictionary", "skills", "syllabus", "grammar"]),
             "target": Schema.string("profile: the language being learned (name or ISO code)."),
             "native": Schema.string("profile: the learner's own language."),
             "level": Schema.string("profile: CEFR level estimate (A1, A2, B1, B2, C1, C2), optionally with a note (\"A2, strong reading\")."),
@@ -81,6 +146,19 @@ struct LanguageTool: Tool {
             "to": Schema.string("transliterate: target script.", enum: Array(Transliteration.targets.keys).sorted()),
             "lang": Schema.string("analyze/dictionary: the text's language (ISO code or name)."),
             "word": Schema.string("dictionary: the word or phrase to look up."),
+            "skills": Schema.array(Schema.object([
+                "skill": Schema.string("The skill.", enum: StudyStore.skills), "level": Schema.string("CEFR level (A1…C2)."),
+                "evidence": Schema.string("What the learner did that shows it."),
+                "provisional": Schema.boolean("An estimate without a sample of this skill yet (self-report, one sentence): shown as A2?."),
+            ], required: ["skill", "level"]), "skills: levels to set."),
+            "points": Schema.array(Schema.object([
+                "name": Schema.string("The grammar point, short and specific (\"pretérito indefinido: regular verbs\")."),
+                "level": Schema.string("CEFR level (A1…C2)."), "description": Schema.string("One line: form and use."),
+            ], required: ["name", "level"]), "syllabus: points to add."),
+            "point": Schema.string("grammar: the grammar point, as named in the syllabus."),
+            "correct": Schema.boolean("grammar: used correctly?"),
+            "sentence": Schema.string("grammar: the learner's words (the evidence)."),
+            "assisted": Schema.boolean("grammar: they needed a prompt or correction to get it right."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
@@ -116,13 +194,22 @@ struct LanguageTool: Tool {
             }
             lines.append("Profiles: " + all.map { p in
                 let st = p.role == "target" ? study.vocabStats(lang: p.code) : nil
+                let skills = p.role == "target" ? study.skills(lang: p.code) : []
+                let grammar = p.role == "target" ? study.grammarSyllabus(lang: p.code) : []
                 return "\(Languages.englishName(p.code)) (\(p.code), \(p.role)\(p.level.map { ", \($0)" } ?? ""))" + (st.map { " — \($0.total) words saved, \($0.due) due, \($0.known) known" } ?? "")
+                    + (skills.isEmpty ? "" : "; by skill: " + skills.map { "\($0.skill) \($0.level)" }.joined(separator: ", "))
+                    + (grammar.isEmpty ? "" : "; grammar syllabus \(grammar.filter(\.mastered).count)/\(grammar.count) mastered")
             }.joined(separator: "; ") + ".")
             return ToolOutput(text: lines.joined(separator: "\n"), meta: ["profiles": .array(all.map { ["code": .string($0.code), "role": .string($0.role), "level": $0.level.map { .string($0) } ?? .null] })])
         case "transliterate":
             let text = try input.req("text")
             let to = input["to"]?.string?.lowercased() ?? "latin"
             guard let out = Transliteration.apply(text, to: to) else { return .error("Unknown target script “\(to)”. One of: \(Transliteration.targets.keys.sorted().joined(separator: ", ")).") }
+            // Letters left over mean the text wasn't romanisation of that script (an English name to katakana gave
+            // "サm Cアrテr"): say so instead of handing back a half-converted word.
+            if !["latin", "ascii", "pinyin", "halfwidth"].contains(to), out.unicodeScalars.contains(where: { $0.isASCII && $0.properties.isAlphabetic }) {
+                return .error("“\(text)” isn't a romanisation of \(to), so it can't be converted letter by letter (it would give “\(out)”). Write foreign words and names by sound yourself (Sam Carter → サム・カーター in katakana), then check the reading with action=analyze.")
+            }
             return ToolOutput(text: out, meta: ["text": .string(out)])
         case "analyze":
             let text = try input.req("text")
@@ -141,8 +228,73 @@ struct LanguageTool: Tool {
         case "dictionary":
             let word = try input.req("word")
             return await Self.dictionary(word, lang: input["lang"]?.string)
+        case "skills", "syllabus", "grammar":
+            guard let lang = input["lang"]?.string.flatMap(Languages.code) ?? study.languageProfiles().first(where: { $0.role == "target" })?.code else {
+                return .error("Which language? Give `lang`, or set the target language with action=profile first.")
+            }
+            return Self.structure(input, lang: lang, study: study)
         default:
-            return .error("Unknown action. Use profile, transliterate, analyze or dictionary.")
+            return .error("Unknown action. Use profile, transliterate, analyze, dictionary, skills, syllabus or grammar.")
+        }
+    }
+
+    /// Levels per skill, the grammar syllabus, and grammar evidence from what the learner produced.
+    static func structure(_ input: JSON, lang: String, study: StudyStore) -> ToolOutput {
+        let name = Languages.englishName(lang)
+        switch input["action"]?.string {
+        case "skills":
+            var set: [String] = [], bad: [String] = []
+            for s in input["skills"]?.array ?? [] {
+                let skill = s["skill"]?.string ?? ""
+                var level = (s["level"]?.string ?? "").trimmingCharacters(in: .whitespaces)
+                // A provisional level carries a "?" until a real sample of the skill replaces it.
+                if s["provisional"]?.bool == true, !level.isEmpty, !level.hasSuffix("?") { level += "?" }
+                if s["provisional"]?.bool == false, level.hasSuffix("?") { level.removeLast() }
+                if study.setSkill(lang: lang, skill: skill, level: level, evidence: s["evidence"]?.string) { set.append("\(skill) \(level)") } else { bad.append(skill) }
+            }
+            if !set.isEmpty { EventBus.publish(.studyDataChanged) }
+            let all = study.skills(lang: lang)
+            var out = set.isEmpty ? "" : "Set: \(set.joined(separator: ", ")).\n"
+            if !bad.isEmpty { out += "Not set (skill must be one of \(StudyStore.skills.joined(separator: ", ")), with a level): \(bad.joined(separator: ", ")).\n" }
+            out += all.isEmpty ? "No skill levels for \(name) yet. Place each from evidence: a short text to read, audio to listen to, a paragraph to write, a spoken answer."
+                : "\(name) by skill: " + all.map { "\($0.skill) \($0.level)" + ($0.evidence.map { " (\($0))" } ?? "") }.joined(separator: "; ") + "."
+            let missing = StudyStore.skills.filter { s in !all.contains { $0.skill == s } }
+            if !all.isEmpty, !missing.isEmpty { out += "\nNot placed yet: \(missing.joined(separator: ", "))." }
+            return ToolOutput(text: out, meta: ["skills": .array(all.map { ["skill": .string($0.skill), "level": .string($0.level), "evidence": $0.evidence.map { .string($0) } ?? .null] })])
+        case "syllabus":
+            let pts = (input["points"]?.array ?? []).compactMap { p -> (String, String, String?)? in
+                guard let n = p["name"]?.string, let l = p["level"]?.string else { return nil }
+                return (n, l, p["description"]?.string)
+            }
+            var out = ""
+            if !pts.isEmpty {
+                let n = study.addGrammarPoints(lang: lang, pts.map { (name: $0.0, level: $0.1, description: $0.2) })
+                out += "Added or updated \(n) grammar point\(n == 1 ? "" : "s").\n"
+                EventBus.publish(.studyDataChanged)
+            }
+            let all = study.grammarSyllabus(lang: lang)
+            guard !all.isEmpty else { return ToolOutput(text: out + "No grammar syllabus for \(name) yet. Draft one: the core points per CEFR level (A1 up to a level above theirs), as `points`.") }
+            for lv in StudyStore.cefr {
+                let at = all.filter { $0.level == lv }
+                guard !at.isEmpty else { continue }
+                out += "\n\(lv) — \(at.filter(\.mastered).count)/\(at.count) mastered\n"
+                out += at.map { g in
+                    "• \(g.name): " + (g.seen ? "\(Int((g.pKnown * 100).rounded()))% (\(g.mastery?.correct ?? 0)/\(g.mastery?.attempts ?? 0) right)" + (g.mastery?.notes.map { ", last: \($0)" } ?? "") : "not seen yet")
+                }.joined(separator: "\n") + "\n"
+            }
+            let next = study.nextGrammar(lang: lang)
+            if !next.isEmpty { out += "\nNext: " + next.map { "\($0.name) (\($0.level)\($0.seen ? ", shaky" : ""))" }.joined(separator: "; ") }
+            return ToolOutput(text: out.trimmingCharacters(in: .whitespacesAndNewlines))
+        default:   // grammar
+            guard let point = input["point"]?.string, !point.isEmpty, let correct = input["correct"]?.bool else {
+                return .error("grammar needs `point` (as named in the syllabus) and `correct`, with `sentence` as the evidence.")
+            }
+            let known = study.grammarSyllabus(lang: lang).contains { $0.name.compare(point, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+            guard let g = study.recordGrammar(lang: lang, point: point, correct: correct, evidence: input["sentence"]?.string, level: input["level"]?.string,
+                                              assisted: input["assisted"]?.bool == true) else { return .error("Couldn't record it.") }
+            EventBus.publish(.studyDataChanged)
+            return ToolOutput(text: "\(g.name) (\(g.level)): \(correct ? "used correctly" : "used wrongly")\(input["assisted"]?.bool == true ? " with help (no gain)" : ""); mastery \(Int((g.pKnown * 100).rounded()))%, \(g.mastery?.correct ?? 0)/\(g.mastery?.attempts ?? 0) right."
+                              + (known ? "" : " It wasn't in the syllabus: added at \(g.level)."))
         }
     }
 
@@ -193,7 +345,8 @@ struct VocabTool: Tool {
     let name = "vocab"
     let description = """
     The learner's vocabulary for the language they are learning. action="add": save words (`words`: term, reading, \
-    meaning, pos, example, example_meaning, notes, tags) — each becomes a flashcard in the language's deck; the learner \
+    meaning, pos, example, example_meaning, notes, tags) — each becomes a flashcard in the language's deck; adding a word \
+    already saved updates it (no need to remove it first); the learner \
     also saves words themselves from ```vocab cards. action="due": words due for review now (start lessons with these). \
     action="list" (recent, or by `tag`), "search" (`query`), "stats" (counts: new, learning, known, due), "remove" (`term`). \
     Save the words you teach, with an example sentence from the lesson; don't save what they already knew.
@@ -207,7 +360,10 @@ struct VocabTool: Tool {
                 "term": Schema.string("The word or phrase, in its script."), "reading": Schema.string("Pronunciation: kana, pinyin, romanisation (non-Latin scripts)."),
                 "meaning": Schema.string("Meaning in the learner's language."), "pos": Schema.string("Part of speech."),
                 "example": Schema.string("An example sentence in the target language."), "example_meaning": Schema.string("Its translation."),
-                "notes": Schema.string("Usage, register, collocations, a mnemonic."), "tags": Schema.array(Schema.string("Tag"), "Topic tags."),
+                "notes": Schema.string("Usage notes, a mnemonic."), "tags": Schema.array(Schema.string("Tag"), "Topic tags."),
+                "register": Schema.string("Where it fits: formal, polite, casual, written, slang…"),
+                "collocations": Schema.array(Schema.string("Collocation"), "Words it goes with (電話をかける, make a decision)."),
+                "family": Schema.array(Schema.string("Related word"), "Its word family: same root or kanji (書く, 書類, 読書)."),
             ], required: ["term", "meaning"]), "add: the words."),
             "tag": Schema.string("list: only words with this tag."),
             "query": Schema.string("search: text in the term, reading or meaning."),
@@ -216,6 +372,31 @@ struct VocabTool: Tool {
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String { (input["action"]?.string ?? "") + (input["words"]?.array.map { " · \($0.count) words" } ?? "") + (input["query"]?.string.map { " \($0)" } ?? "") }
+
+    /// The saved reading against the system's for a Japanese word with kanji, or a Chinese word's pinyin; nil when they
+    /// agree (or there is nothing to compare). Some words have more than one reading, so it is a question, not an error.
+    static func readingMismatch(_ v: VocabItem, lang: String) -> String? {
+        guard let reading = v.reading, !reading.isEmpty else { return nil }
+        let isKana: (Character) -> Bool = { c in c.unicodeScalars.allSatisfy { (0x3041...0x30FC).contains($0.value) } }
+        if lang == "ja", v.term.unicodeScalars.contains(where: { (0x4E00...0x9FFF).contains($0.value) }) {
+            guard let given = reading.split(whereSeparator: { " /,(（・".contains($0) }).map(String.init).first(where: { !$0.isEmpty && $0.allSatisfy(isKana) }) else { return nil }
+            let expected = TextAnalysis.japaneseKana(v.term)
+            guard !expected.isEmpty, ScriptComposer.toHiragana(given) != expected else { return nil }
+            return "“\(v.term)”: the reading “\(given)” isn't the dictionary's (“\(expected)”) — check it; if the word has two readings, say which in notes"
+        }
+        if lang == "zh", let expected = v.term.applyingTransform(.mandarinToLatin, reverse: false) {
+            // Letters and the sequence of tones, however they are written (marks or numbers, spaced or not).
+            func parts(_ p: String) -> (String, [Int]) {
+                let spaced = p.lowercased().replacingOccurrences(of: "([āáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜ])", with: "$1 ", options: .regularExpression)
+                let n = Questions.pinyinNumbers(spaced)
+                return (n.filter(\.isLetter), n.compactMap { $0.wholeNumberValue }.filter { (1...4).contains($0) })
+            }
+            let (la, ta) = parts(reading), (lb, tb) = parts(expected)
+            guard !la.isEmpty, la != lb || (!ta.isEmpty && ta != tb) else { return nil }
+            return "“\(v.term)”: the pinyin “\(reading)” isn't the dictionary's (“\(expected)”) — check it (tone sandhi aside)"
+        }
+        return nil
+    }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let study = ctx.services.study
@@ -230,18 +411,36 @@ struct VocabTool: Tool {
             var added: [VocabItem] = []
             for w in input["words"]?.array ?? [] {
                 guard let term = w["term"]?.string ?? w["word"]?.string, let meaning = w["meaning"]?.string ?? w["translation"]?.string else { continue }
+                // Register, collocations and the word family go on the card with the notes (the back of the flashcard).
+                var notes = [w["notes"]?.string].compactMap { $0 }.filter { !$0.isEmpty }
+                if let r = w["register"]?.string, !r.isEmpty { notes.append("Register: \(r)") }
+                if let c = w["collocations"]?.array?.compactMap(\.string), !c.isEmpty { notes.append("Goes with: " + c.joined(separator: ", ")) }
+                if let f = w["family"]?.array?.compactMap(\.string), !f.isEmpty { notes.append("Family: " + f.joined(separator: ", ")) }
                 if let v = study.addVocab(lang: lang, term: term, reading: w["reading"]?.string, meaning: meaning, pos: w["pos"]?.string, example: w["example"]?.string,
-                                          exampleMeaning: w["example_meaning"]?.string, notes: w["notes"]?.string, tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: ctx.conversationID) { added.append(v) }
+                                          exampleMeaning: w["example_meaning"]?.string, notes: notes.isEmpty ? nil : notes.joined(separator: " · "), tags: w["tags"]?.array?.compactMap(\.string) ?? [], source: ctx.conversationID) { added.append(v) }
             }
             guard !added.isEmpty else { return .error("No words saved: each needs `term` and `meaning`.") }
             EventBus.publish(.studyDataChanged)
             let st = study.vocabStats(lang: lang)
-            return ToolOutput(text: "Saved \(added.count) word(s) to \(Languages.englishName(lang)) (\(st.total) in all, \(st.due) due for review):\n" + added.map(line).joined(separator: "\n"),
+            // A slip into another script (a Korean word in a Japanese example) is easy to miss in a long list: name it.
+            var slips = added.compactMap { v -> String? in
+                for (field, text) in [("term", v.term), ("example", v.example ?? "")] {
+                    if let s = ScriptCheck.slip(text, lang: lang) { return "“\(v.term)”: its \(field) \(s)" }
+                }
+                return nil
+            }
+            // A reading that isn't the dictionary's (出社 saved as しゅくしゃ): readings are what the learner memorises.
+            slips += added.compactMap { v in VocabTool.readingMismatch(v, lang: lang) }
+            let check = slips.isEmpty ? "" : "\nCheck and re-add (adding again updates the word):\n" + slips.map { "- " + $0 }.joined(separator: "\n")
+            return ToolOutput(text: "Saved \(added.count) word(s) to \(Languages.englishName(lang)) (\(st.total) in all, \(st.due) due for review):\n" + added.map(line).joined(separator: "\n") + check,
                               meta: ["count": .number(Double(added.count)), "lang": .string(lang)])
         case "due":
             let due = study.dueVocab(lang: lang, limit: limit)
             if due.isEmpty { return ToolOutput(text: "No \(lang.map(Languages.englishName) ?? "") words are due right now.") }
-            return ToolOutput(text: "\(due.count) word(s) due for review — bring them back in use (a sentence to complete, a quick translation, a dictation), not as a list:\n" + due.map(line).joined(separator: "\n"))
+            // Leeches (forgotten again and again) need a new way in, not another repetition.
+            let leeches = due.filter { $0.lapses >= 3 }.map(\.term)
+            return ToolOutput(text: "\(due.count) word(s) due for review — bring them back in use (a sentence to complete, a quick translation, a dictation), not as a list:\n" + due.map(line).joined(separator: "\n")
+                              + (leeches.isEmpty ? "" : "\nForgotten 3+ times: \(leeches.joined(separator: ", ")) — teach these differently (a contrast with the word it's confused with, a mnemonic, the kanji's parts, a vivid sentence)."))
         case "list":
             let items = study.vocab(lang: lang, tag: input["tag"]?.string, limit: limit)
             if items.isEmpty { return ToolOutput(text: "No words saved yet\(lang.map { " for \(Languages.englishName($0))" } ?? "").") }

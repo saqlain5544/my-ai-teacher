@@ -62,6 +62,13 @@ enum Schema_ {
     CREATE TABLE IF NOT EXISTS vocab(id INTEGER PRIMARY KEY AUTOINCREMENT, lang TEXT NOT NULL, term TEXT NOT NULL, reading TEXT, meaning TEXT NOT NULL,
         pos TEXT, example TEXT, example_meaning TEXT, notes TEXT, tags TEXT, card_id INTEGER, source TEXT, created_at REAL NOT NULL, UNIQUE(lang, term));
     CREATE INDEX IF NOT EXISTS vocab_lang ON vocab(lang, created_at);
+    CREATE TABLE IF NOT EXISTS reading_log(id INTEGER PRIMARY KEY AUTOINCREMENT, lang TEXT NOT NULL, title TEXT, words INTEGER NOT NULL,
+        unit TEXT, at REAL NOT NULL, conversation_id TEXT);
+    CREATE INDEX IF NOT EXISTS reading_log_lang ON reading_log(lang, at);
+    CREATE TABLE IF NOT EXISTS language_skills(code TEXT NOT NULL, skill TEXT NOT NULL, level TEXT NOT NULL, evidence TEXT, at REAL NOT NULL,
+        PRIMARY KEY(code, skill));
+    CREATE TABLE IF NOT EXISTS grammar_points(lang TEXT NOT NULL, name TEXT NOT NULL COLLATE NOCASE, level TEXT NOT NULL, description TEXT,
+        position INTEGER NOT NULL, created_at REAL NOT NULL, PRIMARY KEY(lang, name));
     """
 }
 

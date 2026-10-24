@@ -67,6 +67,41 @@ enum DebugHooks {
                 s.send(t, attachments: img.map { [$0.block] } ?? [])
                 AppLog.write("sent: \(t.prefix(80))\(img == nil ? "" : " + image")")
             }
+        case "attach":   // {"action":"attach","path":"/tmp/clip.mp3"}: into the composer, as a learner's drop (audio is transcribed)
+            guard let s = session, let p = cmd["path"]?.string else { return }
+            Composer.attach([URL(fileURLWithPath: p)], to: s)
+            AppLog.write("attach: \(p)")
+        case "talk":   // {"action":"talk","op":"start"|"heard"|"end","text":"…"}: the spoken conversation, a turn as if heard
+            guard let s = session else { return }
+            switch cmd["op"]?.string {
+            case "start": s.talk.quiet = cmd["quiet"]?.bool == true; s.talk.start(s, listenNow: !s.talk.quiet)
+            case "heard": s.talk.simulateHeard(cmd["text"]?.string ?? "")
+            case "end": s.talk.end()
+            default: AppLog.write("talk: phase \(s.talk.phase) turns \(s.talk.turns) heard \(s.talk.heard)")
+            }
+        case "speakFile":   // {"action":"speakFile","key":"toolId:qi","path":"/tmp/take.aiff","target":"…","lang":"zh"}: a speak take from a file
+            guard let key = cmd["key"]?.string, let p = cmd["path"]?.string, let target = cmd["target"]?.string, let lang = cmd["lang"]?.string else { return }
+            let web = transcript
+            Task { @MainActor in
+                guard let s = try? await MediaTranscript.samples(URL(fileURLWithPath: p)) else { AppLog.write("speakFile: unreadable"); return }
+                let info = await Speech.pitchInfo(samples: s, rate: 16_000, target: target, lang: lang)
+                let x: JSON = ["engine": "audio file (debug)", "pitch": info ?? .null]
+                web?.evaluateJavaScript("T.dictation(\(JSON.string(key).compact),\(JSON.string(cmd["heard"]?.string ?? target).compact),true,\(x.compact))", completionHandler: nil)
+                AppLog.write("speakFile: \(info?["prosody"]?.compact.prefix(300) ?? "no prosody")")
+            }
+        case "importVocab":   // {"action":"importVocab","path":"/tmp/words.txt","lang":"es"}: what the Progress screen's Import does
+            guard let p = cmd["path"]?.string, let lang = cmd["lang"]?.string.flatMap(Languages.code) else { return }
+            let study = app.services.study
+            Task { @MainActor in
+                do { AppLog.write("importVocab: " + (try await VocabTransfer.importFile(URL(fileURLWithPath: p), lang: lang, into: study))) }
+                catch { AppLog.write("importVocab: \(error.localizedDescription)") }
+            }
+        case "sendDraft":   // sends what the composer holds (text and attachments), once nothing is still being transcribed
+            guard let s = session, s.pendingMedia.isEmpty, !s.isRunning else { AppLog.write("sendDraft: not ready"); return }
+            let blocks = s.attachments.map(\.block); let text = cmd["text"]?.string ?? s.draft
+            s.attachments = []; s.draft = ""
+            s.send(text, attachments: blocks)
+            AppLog.write("sent draft with \(blocks.count) attachment(s)")
         case "answer":
             // Only answers an interaction named explicitly (by tool-call id or title), never the learner's own.
             let match = app.interactions.pending.values.first { p in

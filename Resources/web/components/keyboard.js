@@ -2,13 +2,17 @@
 // quiz, form or problem card takes focus and the lesson's target language has a layout (keyboard-layouts.js), and types
 // into that field. Composition runs here, not in the OS: Hangul jamo combine into syllables, kana take ゛゜ and small
 // forms, romaji turn into kana as they are typed, a tone key cycles pinyin tone marks, and combining marks (Vietnamese
-// tones, niqqud, harakat) fold into the letter before the caret. The app tells the page the target language
-// (T.setLanguage); the learner can pick any layout from the panel's menu.
+// tones, niqqud, harakat) fold into the letter before the caret, tone keys or digits mark pinyin (ni3 → nǐ), and a vowel
+// letter after a Devanagari or Bengali consonant becomes its vowel sign. Modes: tapping, romaji (Japanese), and "Mac keys"
+// (the physical keys type the script in its standard layout, lighting the key up). Kana before the caret that spell a word
+// the learner saved offer its kanji. The Mac's own input source for the language is offered when it is installed. The
+// app tells the page the target language (T.setLanguage); the learner can pick any layout from the panel's menu.
 (function () {
   'use strict';
   const R = window.TeacherUI;
   const LAYOUTS = window.TeacherKeyboardLayouts || {};
-  const K = { lang: null, native: null, layout: null, code: null, shift: false, kata: false, mode: null, auto: true, open: false, target: null, pinned: false };
+  const K = { lang: null, native: null, layout: null, code: null, shift: false, kata: false, mode: null, auto: true, open: false, target: null, pinned: false,
+    compact: false, words: [], source: null, cands: [] };
 
   // ── Hangul: jamo → syllables ───────────────────────────────────────────
   const CHO = 'ㄱㄲㄴㄷㄸㄹㅁㅂㅃㅅㅆㅇㅈㅉㅊㅋㅌㅍㅎ';
@@ -119,10 +123,29 @@
   // ── Pinyin tone marks ────────────────────────────────────────────────
   const TONES = { a: 'āáǎà', e: 'ēéěè', i: 'īíǐì', o: 'ōóǒò', u: 'ūúǔù', ü: 'ǖǘǚǜ', A: 'ĀÁǍÀ', E: 'ĒÉĚÈ', I: 'ĪÍǏÌ', O: 'ŌÓǑÒ', U: 'ŪÚǓÙ', Ü: 'ǕǗǙǛ' };
   const TONED = {}; Object.keys(TONES).forEach(v => { for (let t = 0; t < 4; t++) TONED[TONES[v][t]] = [v, t + 1]; });
-  /** The syllable before the caret with its tone advanced (1 → 2 → 3 → 4 → none): "ma" → "mā", "mǎ" → "mà". */
-  function cycleTone(text) {
+  // Pinyin syllables: an initial and a final. The syllable before the caret is the longest such ending of the letters
+  // there ("nǐhao" ends in "hao", not "nǐhao"), so a tone lands on its own syllable.
+  const INITIALS = ['zh', 'ch', 'sh', 'b', 'p', 'm', 'f', 'd', 't', 'n', 'l', 'g', 'k', 'h', 'j', 'q', 'x', 'r', 'z', 'c', 's', 'y', 'w', ''];
+  const FINALS = new Set(('a o e i u ü v ai ei ao ou an en ang eng ong er ia ie iao iu ian in iang ing iong ua uo uai ui uan un uang ueng ' +
+    'üe ve ue üan van ün vn').split(' '));
+  const isSyllable = s => INITIALS.some(i => s.startsWith(i) && FINALS.has(s.slice(i.length)) && (!i || s.slice(i.length) !== 'er'));
+  function lastSyllable(text) {
     const m = /[A-Za-züÜāáǎàēéěèīíǐìōóǒòūúǔùǖǘǚǜĀÁǍÀĒÉĚÈĪÍǏÌŌÓǑÒŪÚǓÙǕǗǙǛ]+$/.exec(text);
     if (!m) return null;
+    const chars = Array.from(m[0]);
+    const plain = chars.map(ch => (TONED[ch] ? TONED[ch][0] : ch).toLowerCase()).join('');
+    // The whole run must be pinyin, syllable after syllable: "Chapter3" and "level2" stay as typed.
+    const ok = new Array(plain.length + 1).fill(false); ok[0] = true;
+    for (let e = 1; e <= plain.length; e++) for (let n = 1; n <= Math.min(6, e); n++) if (ok[e - n] && isSyllable(plain.slice(e - n, e))) { ok[e] = true; break; }
+    if (!ok[plain.length]) return null;
+    for (let n = Math.min(6, chars.length); n >= 1; n--) if (ok[plain.length - n] && isSyllable(plain.slice(-n))) return chars.slice(-n).join('');
+    return null;
+  }
+  /** The syllable before the caret with its tone advanced (1 → 2 → 3 → 4 → none): "ma" → "mā", "mǎ" → "mà". */
+  function cycleTone(text) {
+    const s = lastSyllable(text);
+    if (!s) return null;
+    const m = [s];
     let tone = 0, plain = '';
     for (const ch of m[0]) { const t = TONED[ch]; if (t) { plain += t[0]; tone = t[1]; } else plain += ch; }
     const next = (tone + 1) % 5;
@@ -137,8 +160,38 @@
     return { remove: m[0].length, text: plain.slice(0, pos) + marked + plain.slice(pos + 1) };
   }
 
+  /** The syllable before the caret with tone `n` (1–4; 0 or 5 = neutral, no mark): "ni" + 3 → "nǐ", "hǎo" + 4 → "hào". */
+  function setTone(text, n) {
+    const s = lastSyllable(text);
+    if (!s) return null;
+    const m = [s];
+    let plain = '';
+    for (const ch of m[0]) { const t = TONED[ch]; plain += t ? t[0] : ch; }
+    const low = plain.toLowerCase();
+    let pos = -1;
+    if (low.includes('a')) pos = low.indexOf('a'); else if (low.includes('e')) pos = low.indexOf('e');
+    else if (low.includes('ou')) pos = low.indexOf('o');
+    else { for (let i = low.length - 1; i >= 0; i--) if ('iouü'.includes(low[i])) { pos = i; break; } }
+    if (pos < 0) return null;
+    const v = plain[pos], k = n % 5;
+    return { remove: m[0].length, text: plain.slice(0, pos) + (k ? TONES[v][k - 1] : v) + plain.slice(pos + 1) };
+  }
+
+  // ── Abugidas: a vowel letter typed after a consonant becomes its vowel sign (क + आ → का) ─────────
+  const MATRA = {
+    'आ': 'ा', 'इ': 'ि', 'ई': 'ी', 'उ': 'ु', 'ऊ': 'ू', 'ऋ': 'ृ', 'ए': 'े', 'ऐ': 'ै', 'ओ': 'ो', 'औ': 'ौ', 'ऍ': 'ॅ', 'ऑ': 'ॉ',
+    'আ': 'া', 'ই': 'ি', 'ঈ': 'ী', 'উ': 'ু', 'ঊ': 'ূ', 'ঋ': 'ৃ', 'এ': 'ে', 'ঐ': 'ৈ', 'ও': 'ো', 'ঔ': 'ৌ',
+  };
+  const CONSONANT = /[क-हक़-य़ক-হড়-য়़়]$/;
+  /** What typing `ch` after `prev` inserts in an abugida: a vowel sign after a consonant, अ there adds nothing (the inherent vowel). */
+  function abugida(prev, ch) {
+    if (!prev || !CONSONANT.test(prev)) return null;
+    if (ch === 'अ' || ch === 'অ') return '';
+    return MATRA[ch] || null;
+  }
+
   // ── Editing the focused field ─────────────────────────────────────────
-  const FIELDS = 'input.q-text, input.blank, textarea.q-text, textarea[data-ask-text], input[data-q-other], textarea.pb-attempt, .edit-box textarea';
+  const FIELDS = 'input.q-text, input.blank, textarea.q-text, textarea[data-ask-text], input[data-q-other], textarea.pb-attempt, .edit-box textarea, [data-kbd]';
   const eligible = el => !!(el && el.matches && el.matches(FIELDS) && !el.hasAttribute('data-numeric') && !el.hasAttribute('data-math') && !el.classList.contains('mono'));
   function replaceBefore(el, remove, text) {
     const start = el.selectionStart, end = el.selectionEnd;
@@ -155,6 +208,10 @@
       const p = before(el, 1); const v = (p + text).normalize('NFC');
       if (p && v.length === 1) { replaceBefore(el, 1, v); return; }
     }
+    if (layout.compose === 'abugida' && el.selectionStart === el.selectionEnd) {
+      const m = abugida(before(el, 1), text);
+      if (m != null) { if (m) replaceBefore(el, 0, m); return; }
+    }
     if (/^[֑-ׇً-ْٰ]$/.test(text)) { replaceBefore(el, 0, text); return; }   // niqqud, harakat: combining as they are
     if (K.shift && layout.upper && !layout.shift) text = text.toUpperCase();
     if (K.kata && layout.compose === 'kana') text = toKatakana(text);
@@ -162,13 +219,16 @@
     if (K.shift && !K.pinned) { K.shift = false; render(); }
   }
   function special(el, k) {
-    if (!el && k !== 'shift' && k !== 'mode' && k !== 'kana') return;
+    if (!el && !['shift', 'mode', 'kana'].includes(k)) return;
+    const tone = /^tone([1-4])$/.exec(k);
+    if (tone) { const r = setTone(before(el, 12), +tone[1]); if (r) replaceBefore(el, r.remove, r.text); return; }
     switch (k) {
       case 'bksp': {
         if (el.selectionStart !== el.selectionEnd) { replaceBefore(el, 0, ''); return; }
         const p = before(el, 1);
         if ((K.layout || {}).compose === 'hangul' && p) { const [n, t] = hangulBackspace(p); replaceBefore(el, n, t); return; }
-        replaceBefore(el, 1, ''); return;
+        const last = Array.from(before(el, 2)).pop() || '';
+        replaceBefore(el, last.length || 1, ''); return;
       }
       case 'space': replaceBefore(el, 0, ' '); return;
       case 'enter': replaceBefore(el, 0, '\n'); return;
@@ -177,19 +237,102 @@
       case 'small': { const p = before(el, 1); const t = SMALL[p] || BIG[p]; if (t) replaceBefore(el, 1, t); return; }
       case 'kana': K.kata = !K.kata; render(); return;
       case 'tone': { const r = cycleTone(before(el, 12)); if (r) replaceBefore(el, r.remove, r.text); return; }
-      case 'mode': { const modes = (K.layout || {}).modes || []; if (modes.length) { K.mode = modes[(modes.indexOf(K.mode) + 1) % modes.length]; render(); } return; }
+      case 'mode': { const modes = modesOf(K.layout); if (modes.length > 1) { K.mode = modes[(modes.indexOf(K.mode) + 1) % modes.length]; render(); } return; }
     }
   }
-  // Romaji mode: Latin letters typed on the physical keyboard become kana as soon as a syllable is complete.
+  /** The input modes a layout offers: its own (kana/romaji), else tapping; "keys" when the Mac's keys can type it. */
+  function modesOf(l) {
+    if (!l) return [];
+    const m = (l.modes && l.modes.length ? l.modes.slice() : ['tap']);
+    if (l.physical && !m.includes('keys')) m.push('keys');
+    return m;
+  }
+  const MODE_LABEL = { kana: 'かな', romaji: 'ローマ字', tap: 'Tap', keys: 'Mac keys' };
+  const MODE_HELP = {
+    romaji: 'Type romaji on your Mac keyboard: <b>konnichiha</b> → こんにちは',
+    keys: 'Your Mac keys type this script in its standard layout; the key lights up here',
+  };
+
+  // Typed on the Mac's own keyboard: romaji → kana, pinyin digits → tone marks, and the kanji candidates below.
   document.addEventListener('input', e => {
     const el = e.target;
-    if (!K.open || K.mode !== 'romaji' || el !== K.target || !eligible(el) || e.inputType !== 'insertText') return;
-    const m = /[A-Za-z'\-,.?!]+$/.exec(el.value.slice(0, el.selectionStart));
-    if (!m) return;
-    const { kana, rest } = romajiToKana(m[0], K.kata);
-    if (kana === '' && rest === m[0]) return;
-    replaceBefore(el, m[0].length, kana + rest);
+    if (!K.layout || el !== K.target || !eligible(el) || e.inputType !== 'insertText') return;
+    if (K.open && K.mode === 'romaji') {
+      const m = /[A-Za-z'\-,.?!]+$/.exec(el.value.slice(0, el.selectionStart));
+      if (m) {
+        const { kana, rest } = romajiToKana(m[0], K.kata);
+        if (!(kana === '' && rest === m[0])) replaceBefore(el, m[0].length, kana + rest);
+      }
+    }
+    if (K.auto && K.layout.compose === 'pinyin' && /^[0-5]$/.test(e.data || '') && wants(el)) {
+      const head = el.value.slice(0, el.selectionStart);
+      const r = /[A-Za-züÜĀ-ǜ]$/.test(head.slice(0, -1)) ? setTone(head.slice(0, -1), +e.data) : null;
+      if (r) { el.setRangeText(r.text, el.selectionStart - 1 - r.remove, el.selectionStart, 'end'); el.dispatchEvent(new Event('input', { bubbles: true })); }
+    }
+    if (K.open) candidates(el);
   }, true);
+
+  // "Mac keys": the physical key's position types the script's character (Arabic PC, ЙЦУКЕН, 2-set Korean…).
+  const CODES = [
+    ['KeyQ', 'KeyW', 'KeyE', 'KeyR', 'KeyT', 'KeyY', 'KeyU', 'KeyI', 'KeyO', 'KeyP', 'BracketLeft', 'BracketRight'],
+    ['KeyA', 'KeyS', 'KeyD', 'KeyF', 'KeyG', 'KeyH', 'KeyJ', 'KeyK', 'KeyL', 'Semicolon', 'Quote'],
+    ['KeyZ', 'KeyX', 'KeyC', 'KeyV', 'KeyB', 'KeyN', 'KeyM', 'Comma', 'Period', 'Slash'],
+  ];
+  /** The character the Mac key `code` types in "keys" mode (shifted or not), or null. */
+  function physicalChar(l, code, shift) {
+    if (!l || !l.physical) return null;
+    for (let r = 0; r < CODES.length; r++) {
+      const c = CODES[r].indexOf(code);
+      if (c < 0) continue;
+      const rows = shift && l.physical_shift ? l.physical_shift : l.physical;
+      const row = rows[r] || [];
+      const ch = row[c];
+      return ch == null || ch === '' ? null : ch;
+    }
+    return null;
+  }
+  document.addEventListener('keydown', e => {
+    const el = e.target;
+    if (!K.layout || el !== K.target || !eligible(el) || e.metaKey || e.ctrlKey || e.altKey || e.isComposing) return;
+    if (e.key === 'Backspace' && K.open && K.layout.compose === 'hangul' && el.selectionStart === el.selectionEnd && /[가-힣]$/.test(before(el, 1))) {
+      e.preventDefault(); special(el, 'bksp'); return;
+    }
+    if (!K.open || K.mode !== 'keys') return;
+    const ch = physicalChar(K.layout, e.code, e.shiftKey);
+    if (!ch) return;
+    e.preventDefault();
+    insert(el, ch);
+    flash(ch);
+  }, true);
+  function flash(ch) {
+    if (!panel) return;
+    const b = panel.querySelector('[data-key="' + CSS.escape(ch) + '"]');
+    if (!b) return;
+    b.classList.remove('hit'); void b.offsetWidth; b.classList.add('hit');
+    setTimeout(() => b.classList.remove('hit'), 220);
+  }
+
+  // ── Kanji from the learner's own words: the kana before the caret that spell a word they've saved ──
+  function candidates(el) {
+    const bar = panel && panel.querySelector('.kbd-cands');
+    if (!bar) return;
+    const list = K.layout && K.layout.compose === 'kana' && el ? matchWords(before(el, 16)) : [];
+    K.cands = list;
+    bar.innerHTML = list.map((w, i) => '<button data-cand="' + i + '" lang="ja" title="' + esc(w.kana) + '">' + esc(w.term) + '</button>').join('');
+    bar.hidden = !list.length;
+  }
+  /** Words whose reading ends the kana run before the caret, longest reading first (たべる → 食べる). */
+  function matchWords(head) {
+    const run = (/[ぁ-ゖァ-ヺー]+$/.exec(head) || [''])[0];
+    if (!run) return [];
+    const hira = toHiragana(run), seen = new Set(), out = [];
+    for (const w of (K.words || []).slice().sort((a, b) => b.kana.length - a.kana.length)) {
+      if (!w.kana || w.kana === w.term || seen.has(w.term)) continue;
+      if (hira.endsWith(toHiragana(w.kana))) { seen.add(w.term); out.push(w); }
+      if (out.length >= 6) break;
+    }
+    return out;
+  }
 
   // ── The panel ─────────────────────────────────────────────────────────
   let panel = null;
@@ -205,12 +348,28 @@
     panel.addEventListener('click', e => {
       const b = e.target.closest('button'); if (!b) return;
       const el = K.target && document.contains(K.target) ? K.target : null;
-      if (b.hasAttribute('data-key')) insert(el, b.getAttribute('data-key'));
-      else if (b.hasAttribute('data-fn')) {
+      if (b.hasAttribute('data-key')) { insert(el, b.getAttribute('data-key')); if (el) candidates(el); }
+      else if (b.hasAttribute('data-cand')) {
+        const w = (K.cands || [])[+b.getAttribute('data-cand')];
+        if (w && el) {
+          const run = (/[ぁ-ゖァ-ヺー]+$/.exec(before(el, 16)) || [''])[0];
+          replaceBefore(el, Math.min(run.length, w.kana.length), w.term); candidates(el);
+        }
+      } else if (b.hasAttribute('data-setmode')) { K.mode = b.getAttribute('data-setmode'); render(); }
+      else if (b.hasAttribute('data-source')) {
+        if (R._ctx) R._ctx.post({ type: 'inputSource', op: b.getAttribute('data-source'), lang: K.code });
+      } else if (b.hasAttribute('data-fn')) {
         const fn = b.getAttribute('data-fn');
-        if (fn === 'close') { K.open = false; K.auto = false; render(); return; }
+        if (fn === 'close') {
+          K.open = false; K.auto = false; render();
+          // The Mac's input source goes back to what the learner had, if the panel switched it.
+          if (K.source && K.source.selected && R._ctx) R._ctx.post({ type: 'inputSource', op: 'restore', lang: K.code });
+          return;
+        }
         if (fn === 'pin') { K.pinned = !K.pinned; render(); return; }
+        if (fn === 'compact') { K.compact = !K.compact; store('kbd.compact.' + K.code, K.compact ? '1' : ''); render(); return; }
         special(el, fn);
+        if (el) candidates(el);
       }
     });
     panel.addEventListener('change', e => {
@@ -221,56 +380,99 @@
     document.body.appendChild(panel);
     return panel;
   }
+  // Per-viewer conveniences (compact or full, the intro seen): local storage, which may be unavailable.
+  const load = k => { try { return localStorage.getItem(k); } catch (_) { return null; } };
+  const store = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (_) {} };
   // A language whose entry has no rows (plain Latin alphabet) needs no panel.
   const usable = code => { const l = LAYOUTS[code]; return l && l.rows && l.rows.length ? l : null; };
   function setLayout(code) {
     const l = usable(code);
     K.code = l ? code : null; K.layout = l; K.shift = false; K.kata = false;
-    K.mode = l && l.modes ? l.modes[0] : null;
+    K.mode = l ? modesOf(l)[0] : null;
+    K.compact = !!(l && load('kbd.compact.' + code));
   }
   const esc = s => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const FN_LABEL = { shift: '⇧', bksp: '⌫', space: '␣', enter: '⏎', dakuten: '゛', handakuten: '゜', small: '小', kana: 'カナ', tone: 'ā→á', mode: 'ローマ字' };
+  const FN_LABEL = { shift: '⇧', bksp: '⌫', space: 'space', enter: '⏎', dakuten: '゛', handakuten: '゜', small: '小', kana: 'カナ', tone: 'ā→á', mode: 'ローマ字',
+    tone1: 'ˉ 1', tone2: 'ˊ 2', tone3: 'ˇ 3', tone4: 'ˋ 4' };
+  const FN_TITLE = { shift: 'Shift', bksp: 'Delete', space: 'Space', dakuten: 'Voiced mark (か → が)', handakuten: 'Semi-voiced mark (は → ぱ)', small: 'Small kana (つ → っ)',
+    kana: 'Katakana', tone: 'Cycle the tone of the syllable before the caret', mode: 'Input mode', tone1: 'First tone (high level)', tone2: 'Second tone (rising)',
+    tone3: 'Third tone (dipping)', tone4: 'Fourth tone (falling)' };
+  const COMBINING = /^[̀-֑ͯ-ׇً-़゙゚ْٰु-्ँ-ःा-ीা-্ঁ-ঃัิ-ฺ็-๎]$/;
   function render() {
     const p = ensurePanel();
     const l = K.layout;
     const show = K.open && !!l;
     p.hidden = !show;
     document.body.classList.toggle('kbd-open', show);
+    document.body.classList.toggle('kbd-compact', show && K.compact);
     if (!show) return;
     let rows = (K.shift && l.shift) ? l.shift : l.rows;
     if (K.mode === 'romaji') rows = [[{ k: 'kana' }, '、', '。', 'ー', '？', '！', '「', '」', { k: 'bksp' }, { k: 'mode' }]];
+    else if (K.compact) {
+      // Compact: only the helpers (marks, tone and function keys) — the letters come from the Mac's keys.
+      const keep = rows.filter(r => r.some(k => typeof k !== 'string' || COMBINING.test(k)));
+      rows = keep.length ? keep : rows.slice(-1);
+    }
     const options = Object.keys(LAYOUTS).filter(usable).sort((a, b) => LAYOUTS[a].english.localeCompare(LAYOUTS[b].english))
       .map(c => '<option value="' + c + '"' + (c === K.code ? ' selected' : '') + '>' + esc(LAYOUTS[c].name) + ' · ' + esc(LAYOUTS[c].english) + '</option>').join('');
+    const modes = modesOf(l);
+    const hint = MODE_HELP[K.mode] || (l.compose === 'hangul' ? 'Jamo join into syllables as you type' : l.compose === 'pinyin' ? 'Type the syllable, then its tone (a key below, or the digit: ni3 → nǐ)'
+      : l.compose === 'abugida' ? 'A vowel after a consonant becomes its sign: क + आ → का' : l.compose === 'marks' && l.rtl ? 'Harakat attach to the letter before them' : '');
+    const src = K.source;
     let h = '<div class="kbd-head"><select data-layout aria-label="Keyboard language">' + options + '</select>' +
-      (K.mode === 'romaji' ? '<span class="kbd-hint">Type romaji: <b>konnichiha</b> → こんにちは</span>' : l.compose === 'hangul' ? '<span class="kbd-hint">Jamo join into syllables as you type</span>' : l.compose === 'pinyin' ? '<span class="kbd-hint">Type the syllable, then ā→á for its tone</span>' : '') +
-      '<span class="kbd-sp"></span><button data-fn="pin" class="kbd-fn' + (K.pinned ? ' on' : '') + '" title="Keep shift on">⇧ lock</button><button data-fn="close" class="kbd-fn" title="Hide (click a field\'s ⌨ to show it again)">✕</button></div>';
-    h += '<div class="kbd-rows"' + (l.rtl ? ' dir="rtl"' : '') + '>';
+      (modes.length > 1 ? '<span class="kbd-modes" role="radiogroup" aria-label="Input mode">' + modes.map(m => '<button data-setmode="' + m + '" role="radio" aria-checked="' + (m === K.mode) + '" class="' + (m === K.mode ? 'on' : '') + '">' + esc(MODE_LABEL[m] || m) + '</button>').join('') + '</span>' : '') +
+      (hint ? '<span class="kbd-hint">' + hint + '</span>' : '') + '<span class="kbd-sp"></span>' +
+      (src ? (src.enabled ? (src.selected ? '<span class="kbd-src on" title="The Mac is typing with ' + esc(src.name) + '">✓ ' + esc(src.name) + '</span>'
+        : '<button data-source="select" class="kbd-src" title="Switch the Mac to its own ' + esc(src.name) + ' input (kanji conversion, full layout)">Use Mac input: ' + esc(src.name) + '</button>')
+        : '<button data-source="settings" class="kbd-src" title="Add the Mac\'s own input source for this language in System Settings">Add Mac input…</button>') : '') +
+      (l.upper && !l.shift ? '<button data-fn="pin" class="kbd-fn' + (K.pinned ? ' on' : '') + '" title="Keep shift on">⇧ lock</button>' : '') +
+      '<button data-fn="compact" class="kbd-fn" title="' + (K.compact ? 'Show every key' : 'Only the helper keys') + '">' + (K.compact ? '▴ Full' : '▾ Compact') + '</button>' +
+      '<button data-fn="close" class="kbd-fn" title="Hide (the ⌨ beside a field brings it back)">✕</button></div>';
+    h += '<div class="kbd-cands" hidden aria-label="Kanji from your words"></div>';
+    h += '<div class="kbd-rows' + (l.compose === 'kana' && K.mode !== 'romaji' && !K.compact ? ' kbd-grid' : '') + '" dir="ltr">';   // keys where they are on the Mac's keyboard, even for right-to-left scripts
     for (const row of rows) {
       h += '<div class="kbd-row">';
       for (const key of row) {
         if (typeof key === 'string') {
+          if (key === '') { h += '<span class="kbd-gap"></span>'; continue; }
           let label = key;
           if (K.shift && l.upper && !l.shift) label = key.toUpperCase();
           if (K.kata && l.compose === 'kana') label = toKatakana(key);
-          const combining = /^[̀-֑ͯ-ׇً-゙゚ْٰ]$/.test(key);
+          const combining = COMBINING.test(key);
           h += '<button data-key="' + esc(key) + '" class="kbd-key' + (combining ? ' kbd-mark' : '') + '"' + (K.code ? ' lang="' + esc(K.code) + '"' : '') + '>' + (combining ? '◌' : '') + esc(label) + '</button>';
         } else {
           const on = (key.k === 'shift' && K.shift) || (key.k === 'kana' && K.kata);
           const label = key.k === 'mode' ? (K.mode === 'romaji' ? 'かな' : FN_LABEL.mode) : FN_LABEL[key.k] || key.k;
-          h += '<button data-fn="' + esc(key.k) + '" class="kbd-key kbd-fn' + (key.k === 'space' ? ' kbd-space' : '') + (on ? ' on' : '') + '">' + esc(label) + '</button>';
+          h += '<button data-fn="' + esc(key.k) + '" class="kbd-key kbd-fn' + (key.k === 'space' ? ' kbd-space' : '') + (/^tone\d$/.test(key.k) ? ' kbd-tone' : '') + (on ? ' on' : '') + '" title="' + esc(FN_TITLE[key.k] || key.k) + '">' + esc(label) + '</button>';
         }
       }
       h += '</div>';
     }
     p.innerHTML = h + '</div>';
+    if (K.target && document.contains(K.target)) candidates(K.target);
   }
 
+  // Whether a field is for the target language: its question's `lang` says so; without one, the question's own text
+  // has the script or names the language. A profile question answered in the learner's language ("What do you do?")
+  // keeps the ⌨ toggle but doesn't pop the panel open.
+  const SCRIPT = { ja: /[぀-ヿ一-鿿]/, zh: /[一-鿿]/, ko: /[가-힯ㄱ-ㆎ]/, ar: /[؀-ۿ]/, fa: /[؀-ۿ]/, ur: /[؀-ۿ]/, he: /[֐-׿]/, ru: /[Ѐ-ӿ]/, uk: /[Ѐ-ӿ]/,
+    el: /[Ͱ-Ͽ]/, hi: /[ऀ-ॿ]/, bn: /[ঀ-৿]/, th: /[฀-๿]/ };
+  function wants(el) {
+    const tagged = el.closest('[data-lang]');
+    if (tagged) return String(tagged.getAttribute('data-lang')).slice(0, 2).toLowerCase() === K.code;
+    const l = K.layout; if (!l) return false;
+    if (!SCRIPT[K.code]) return true;   // Latin languages: the accent row is small and always fits
+    const box = el.closest('.quiz-q, .ask, .problem, .comp, .msg');
+    const prompt = box ? (box.querySelector('.prompt, .q, .pb-q') || box).textContent : '';
+    return SCRIPT[K.code].test(prompt) || new RegExp(l.english.split(' ')[0] + '|' + String(l.name).split(' ')[0], 'i').test(prompt);
+  }
   // A field that can take the target language shows the keyboard (unless the learner closed it) and gets a ⌨ toggle.
   document.addEventListener('focusin', e => {
     const el = e.target;
     if (!eligible(el)) return;
     K.target = el;
-    if (K.layout && K.auto && !K.open) { K.open = true; render(); }
+    if (K.layout && K.auto && !K.open && wants(el)) { K.open = true; render(); }
+    if (K.open) candidates(el);
   });
   function addToggles(root) {
     if (!K.layout) return;
@@ -278,48 +480,87 @@
     for (const el of list) {
       if (!eligible(el) || el._kbdToggle || !el.parentNode) continue;
       el._kbdToggle = true;
-      el.setAttribute('lang', K.code);
+      if (wants(el)) el.setAttribute('lang', K.code);
+      el.setAttribute('spellcheck', 'false');
       if (K.layout.rtl) el.setAttribute('dir', 'auto');
       const b = document.createElement('button');
-      b.type = 'button'; b.className = 'kbd-toggle'; b.textContent = '⌨'; b.title = 'On-screen keyboard: ' + K.layout.english;
-      b.setAttribute('aria-label', 'On-screen keyboard');
+      b.type = 'button'; b.className = 'kbd-toggle';
+      b.innerHTML = '⌨ <span lang="' + esc(K.code) + '">' + esc(shortName(K.layout)) + '</span>';
+      b.title = 'On-screen ' + K.layout.english + ' keyboard';
+      b.setAttribute('aria-label', 'On-screen ' + K.layout.english + ' keyboard');
       b.addEventListener('mousedown', ev => ev.preventDefault());
       b.addEventListener('click', () => { K.target = el; K.open = !K.open; K.auto = K.open; render(); el.focus(); });
       el.insertAdjacentElement('afterend', b);
+      el.classList.add('kbd-has-toggle');   // room for the toggle, which sits over the field's right edge (RTL text starts there)
     }
   }
+  const shortName = l => String(l.name || '').split(' · ')[0];
   R.registerProcessor(root => addToggles(root));
 
-  /** From the app: the lesson's language state ({target, native, …}); the panel follows the target language's layout. */
+  // The first time a language's keyboard is ready, say so once: where it appears and how to type.
+  function intro() {
+    if (!K.layout || load('kbd.intro.' + K.code)) return;
+    store('kbd.intro.' + K.code, '1');
+    if (!window.TeacherToast) return;
+    const how = K.layout.modes && K.layout.modes.includes('romaji') ? 'tap kana, or type romaji on your Mac keyboard'
+      : K.layout.physical ? 'tap the keys, or type with your Mac keys in “Mac keys” mode' : 'tap the keys';
+    window.TeacherToast('⌨ ' + K.layout.english + ' keyboard ready: it opens under any answer field (' + how + '). The ⌨ ' + shortName(K.layout) + ' button beside a field shows or hides it.');
+  }
+
+  /** From the app: the lesson's language state ({target, native, words, inputSource, …}); the panel follows the target. */
   R.setLanguage = function (state) {
     const target = state && state.target ? String(state.target).slice(0, 2).toLowerCase() : null;
     K.lang = target; K.native = state && state.native || null;
-    if (target !== K.code) { setLayout(target); K.auto = true; K.open = K.open && !!K.layout; }
+    K.words = state && Array.isArray(state.words) ? state.words.filter(w => w && w.term && w.kana) : [];
+    K.source = state && state.inputSource || null;
+    if (target !== K.code) {
+      if (K.code && K.source && K.source.selected && R._ctx) R._ctx.post({ type: 'inputSource', op: 'restore', lang: K.code });
+      setLayout(target); K.auto = true; K.open = K.open && !!K.layout; if (K.layout) intro();
+    }
     render();
-    document.querySelectorAll(FIELDS).forEach(el => { if (el._kbdToggle) { el._kbdToggle = false; const t = el.nextElementSibling; if (t && t.classList.contains('kbd-toggle')) t.remove(); } });
+    document.querySelectorAll(FIELDS).forEach(el => { if (el._kbdToggle) { el._kbdToggle = false; el.classList.remove('kbd-has-toggle'); const t = el.nextElementSibling; if (t && t.classList.contains('kbd-toggle')) t.remove(); } });
     if (K.layout) addToggles(document.body);
   };
 
   R.injectStyles('keyboard', `
-    #kbd { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: var(--card); border-top: 1px solid var(--border); box-shadow: 0 -4px 18px rgba(0,0,0,.08); padding: 6px 10px 10px; user-select: none; font-size: var(--font-size); }
-    body.kbd-open #thread { padding-bottom: 300px; }
-    .kbd-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--muted); font-size: .85em; }
-    .kbd-head select { font: inherit; max-width: 260px; }
+    #kbd { position: fixed; left: 0; right: 0; bottom: 0; z-index: 40; background: color-mix(in srgb, var(--card) 92%, transparent); backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+      border-top: 1px solid var(--border); box-shadow: 0 -6px 24px rgba(0,0,0,.08); padding: 6px 12px 10px; user-select: none; font-size: var(--font-size); }
+    body.kbd-open #thread { padding-bottom: 320px; }
+    body.kbd-open.kbd-compact #thread { padding-bottom: 150px; }
+    .kbd-head { display: flex; align-items: center; gap: 8px; margin: 0 auto 6px; max-width: 900px; color: var(--muted); font-size: .84em; flex-wrap: wrap; }
+    .kbd-head select { font: inherit; max-width: 220px; }
     .kbd-sp { flex: 1; }
+    .kbd-hint { min-width: 0; }
     .kbd-hint b { color: var(--fg); }
-    .kbd-rows { display: flex; flex-direction: column; gap: 4px; max-width: 820px; margin: 0 auto; }
-    .kbd-row { display: flex; justify-content: center; gap: 4px; flex-wrap: wrap; }
-    .kbd-key { min-width: 38px; height: 38px; padding: 0 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--fg); font-size: 1.1em; cursor: pointer; line-height: 1; }
+    .kbd-modes { display: inline-flex; border: 1px solid var(--border); border-radius: 7px; overflow: hidden; }
+    .kbd-modes button { border: 0; background: var(--bg); color: var(--muted); padding: 2px 9px; font: inherit; cursor: pointer; }
+    .kbd-modes button + button { border-left: 1px solid var(--border); }
+    .kbd-modes button.on { background: var(--accent); color: #fff; }
+    .kbd-src { border: 1px solid var(--border); background: var(--bg); color: var(--fg); border-radius: 6px; padding: 2px 8px; font: inherit; cursor: pointer; }
+    .kbd-src.on { color: var(--good); border-color: transparent; background: transparent; cursor: default; }
+    .kbd-cands { display: flex; gap: 6px; justify-content: center; margin: 0 auto 6px; flex-wrap: wrap; }
+    .kbd-cands button { border: 1px solid var(--accent); background: var(--accent-soft); color: var(--fg); border-radius: 8px; padding: 2px 10px; font-size: 1.15em; cursor: pointer; }
+    .kbd-rows { display: flex; flex-direction: column; gap: 5px; max-width: 900px; margin: 0 auto; }
+    .kbd-row { display: flex; justify-content: center; gap: 5px; flex-wrap: wrap; }
+    .kbd-grid .kbd-row { flex-wrap: nowrap; }
+    .kbd-gap { min-width: 40px; height: 40px; }
+    .kbd-key { min-width: 40px; height: 40px; padding: 0 8px; border: 1px solid var(--border); border-radius: 9px; background: var(--bg); color: var(--fg); font-size: 1.15em; cursor: pointer; line-height: 1;
+      box-shadow: 0 1px 0 var(--border); transition: transform .06s ease, background .12s ease, border-color .12s ease; }
     .kbd-key:hover { border-color: var(--accent); }
-    .kbd-key:active { background: var(--accent-soft); }
-    .kbd-key.kbd-fn { background: var(--card-2); font-size: .9em; color: var(--muted); }
+    .kbd-key:active, .kbd-key.hit { transform: translateY(1px) scale(.96); background: var(--accent-soft); border-color: var(--accent); }
+    .kbd-key.kbd-fn { background: var(--card-2); font-size: .86em; color: var(--muted); }
     .kbd-key.kbd-fn.on, .kbd-head .kbd-fn.on { background: var(--accent); color: #fff; border-color: var(--accent); }
-    .kbd-key.kbd-space { min-width: 180px; }
+    .kbd-key.kbd-space { min-width: 200px; }
     .kbd-key.kbd-mark { color: var(--accent); }
-    .kbd-head .kbd-fn { border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 8px; cursor: pointer; }
-    .kbd-toggle { border: 0; background: transparent; color: var(--faint); cursor: pointer; font-size: 1em; padding: 2px 4px; margin-left: 2px; vertical-align: middle; }
-    .kbd-toggle:hover { color: var(--accent); }
-    .quiz-q .kbd-toggle, .ask .kbd-toggle { float: right; margin-top: -30px; margin-right: 6px; position: relative; z-index: 1; }
+    .kbd-key.kbd-tone { color: var(--fg); font-size: .95em; }
+    .kbd-key[data-fn="dakuten"], .kbd-key[data-fn="handakuten"] { font-size: 1.5em; color: var(--fg); }
+    body.kbd-open #toast { bottom: 340px; z-index: 50; }   /* notices stay readable above the panel */
+    body.kbd-open.kbd-compact #toast { bottom: 170px; }
+    .kbd-head .kbd-fn { border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 2px 8px; cursor: pointer; font: inherit; }
+    .kbd-toggle { border: 1px solid var(--border); background: var(--bg); color: var(--muted); cursor: pointer; font-size: .78em; padding: 1px 7px; border-radius: 999px; margin-left: 4px; vertical-align: middle; white-space: nowrap; }
+    .kbd-toggle:hover { color: var(--accent); border-color: var(--accent); }
+    .quiz-q .kbd-toggle, .ask .kbd-toggle { float: right; margin-top: -32px; margin-right: 6px; position: relative; z-index: 1; }
+    .quiz-q input.q-text.kbd-has-toggle, .quiz-q textarea.q-text.kbd-has-toggle, .ask textarea.kbd-has-toggle { padding-right: 104px; }
   `);
-  window.TeacherKeyboard = { state: K, layouts: LAYOUTS, hangul, hangulBackspace, romajiToKana, cycleTone, voicing, insert, special, setLayout, render, eligible };
+  window.TeacherKeyboard = { wants, state: K, layouts: LAYOUTS, hangul, hangulBackspace, romajiToKana, cycleTone, setTone, abugida, voicing, insert, special, setLayout, render, eligible, physicalChar, matchWords, modesOf };
 })();

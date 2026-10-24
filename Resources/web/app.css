@@ -642,3 +642,6 @@ button:focus-visible, .btn:focus-visible, summary:focus-visible, a:focus-visible
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: .001ms !important; animation-iteration-count: 1 !important; transition-duration: .001ms !important; scroll-behavior: auto !important; }
 }
+/* vocab tool card */
+.vocab-saved td { padding: 3px 10px 3px 0; vertical-align: top; }
+.vocab-saved .muted { color: var(--muted); font-size: .9em; }

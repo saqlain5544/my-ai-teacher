@@ -257,6 +257,7 @@ struct StudyProgressView: View {
                                 }
                                 ProgressView(value: l.stats.total == 0 ? 0 : Double(l.stats.known) / Double(l.stats.total)).tint(.green)
                                 if let n = l.profile.notes { Text(n).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+                                LanguageStructureView(code: l.profile.code)
                             }
                         }
                     }
@@ -472,4 +473,114 @@ struct StudyProgressView: View {
     }
 
     static func hours(_ s: Double) -> String { s < 3600 ? "\(Int(s / 60))m" : String(format: "%.1fh", s / 3600) }
+}
+
+
+/// A language's structure on the Progress screen: CEFR levels per skill (with their evidence), the grammar syllabus
+/// by level with mastery from what the learner produced, and vocabulary in and out (Anki, spreadsheets).
+struct LanguageStructureView: View {
+    @EnvironmentObject var app: AppModel
+    let code: String
+    @State private var skills: [SkillLevel] = []
+    @State private var grammar: [GrammarPoint] = []
+    @State private var openLevel: String? = nil
+    @State private var han: [HanCharacter] = []
+    @State private var message: String? = nil
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            if !skills.isEmpty {
+                HStack(spacing: 6) {
+                    ForEach(skills, id: \.skill) { s in
+                        Text("\(s.skill.capitalized) \(s.level)").font(.caption).padding(.horizontal, 7).padding(.vertical, 2)
+                            .background(Capsule().fill(Color.primary.opacity(0.06)))
+                            .help((s.level.hasSuffix("?") ? "Provisional: no sample of this skill yet. " : "") + (s.evidence.map { "Evidence: \($0)" } ?? "No evidence noted"))
+                    }
+                }
+            }
+            if !grammar.isEmpty {
+                HStack(spacing: 6) {
+                    Text("Grammar").font(.caption.bold()).foregroundStyle(.secondary)
+                    ForEach(StudyStore.cefr, id: \.self) { lv in
+                        let at = grammar.filter { $0.level == lv }
+                        if !at.isEmpty {
+                            Button { openLevel = openLevel == lv ? nil : lv } label: {
+                                Text("\(lv) \(at.filter(\.mastered).count)/\(at.count)").font(.caption.monospacedDigit())
+                                    .padding(.horizontal, 7).padding(.vertical, 2)
+                                    .background(Capsule().fill(openLevel == lv ? Color.accentColor.opacity(0.18) : Color.primary.opacity(0.06)))
+                            }.buttonStyle(.plain).help("Grammar points at \(lv): mastered / in the syllabus")
+                        }
+                    }
+                }
+                if let lv = openLevel {
+                    VStack(alignment: .leading, spacing: 3) {
+                        ForEach(grammar.filter { $0.level == lv }) { g in
+                            HStack {
+                                Text(g.name).frame(width: 300, alignment: .leading).lineLimit(1).help(g.description ?? g.name)
+                                ProgressView(value: g.pKnown).tint(g.mastered ? .green : (g.pKnown > 0.6 ? .blue : .orange)).opacity(g.seen ? 1 : 0.3)
+                                Text(g.seen ? "\(g.mastery?.correct ?? 0)/\(g.mastery?.attempts ?? 0)" : "not seen").font(.caption).foregroundStyle(.secondary)
+                                    .frame(width: 60, alignment: .trailing)
+                            }
+                            .help(g.mastery?.notes.map { "Last evidence: \($0)" } ?? "Not used in your writing or speaking yet")
+                        }
+                    }.padding(.leading, 6)
+                }
+            }
+            if !han.isEmpty {
+                let known = han.filter { $0.status == "known" }.count, learning = han.filter { $0.status == "learning" }.count
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("\(code == "zh" ? "Hanzi" : "Kanji") in your words: \(han.count) · \(known) known · \(learning) learning")
+                        .font(.caption.bold()).foregroundStyle(.secondary)
+                    han.prefix(300).reduce(Text("")) { t, h in
+                        t + Text(h.char).foregroundColor(h.status == "known" ? .green : h.status == "learning" ? .accentColor : .secondary)
+                    }
+                    .font(.title3).lineSpacing(2).textSelection(.enabled)
+                    .help("Green: in a word you know · blue: in a word you're reviewing · grey: only in new words")
+                }
+            }
+            HStack(spacing: 10) {
+                Button("Import words…") { importWords() }
+                Menu("Export words") {
+                    Button("For Anki (tab-separated)…") { export(csv: false) }
+                    Button("Spreadsheet (CSV)…") { export(csv: true) }
+                }.fixedSize()
+                if let m = message { Text(m).font(.caption).foregroundStyle(.secondary).lineLimit(2) }
+            }.controlSize(.small).padding(.top, 2)
+        }
+        .onAppear(perform: reload)
+        .onReceive(EventBus.subject.filter { if case .studyDataChanged = $0 { return true }; return false }) { _ in reload() }
+    }
+
+    private func reload() {
+        let s = app.services.study
+        skills = s.skills(lang: code); grammar = s.grammarSyllabus(lang: code)
+        han = code == "ja" || code == "zh" ? s.hanCharacters(lang: code) : []
+    }
+
+    private func export(csv: Bool) {
+        let items = app.services.study.vocab(lang: code, limit: 100_000)
+        guard !items.isEmpty else { message = "No words saved yet."; return }
+        let panel = NSSavePanel()
+        panel.nameFieldStringValue = "\(Languages.englishName(code)) vocabulary.\(csv ? "csv" : "txt")"
+        panel.allowedContentTypes = csv ? [.commaSeparatedText] : [.plainText]
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let text = csv ? VocabTransfer.csv(items) : VocabTransfer.tsv(items, lang: code)
+        do {
+            try text.write(to: url, atomically: true, encoding: .utf8)
+            message = "Exported \(items.count) words" + (csv ? "." : " — in Anki: File › Import, it lands in the “\(StudyStore.vocabDeck(code))” deck.")
+        } catch { message = "Couldn't save: \(error.localizedDescription)" }
+    }
+
+    private func importWords() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [.plainText, .commaSeparatedText, .tabSeparatedText, .init(filenameExtension: "apkg") ?? .data, .init(filenameExtension: "tsv") ?? .plainText]
+        panel.allowsMultipleSelection = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        let study = app.services.study, code = code
+        message = "Reading \(url.lastPathComponent)…"
+        Task { @MainActor in
+            do { message = try await VocabTransfer.importFile(url, lang: code, into: study) }
+            catch { message = error.localizedDescription }
+        }
+    }
 }

@@ -194,24 +194,75 @@ In **Language mentor** mode, say which language you want to learn and where you 
 school"). The mentor places you with a few questions, sets your profile, and from then on knows the language, your level
 and which words are due.
 
-* **The keyboard for the script.** A ⌨ button appears next to every answer field in a quiz or form, and in the message
-  box's toolbar, when the language needs one: Japanese (kana, or type romaji and get kana), Korean (jamo join into
-  syllables; backspace removes one jamo), Chinese pinyin with an ā→á key that cycles the tone mark, Arabic, Persian,
-  Urdu, Hebrew, Russian, Ukrainian, Greek, Hindi, Bengali and Thai, plus accent rows for Spanish, French, German,
-  Portuguese, Italian, Vietnamese and many more. The panel's menu switches to any other layout; ✕ hides it until you
-  press ⌨ again. For 汉字 use the Mac's own input source.
+* **The keyboard for the script.** Once the language is known, a **⌨ 日本語** (or العربية, Русский…) button sits next
+  to every answer field and in the message box; the panel opens by itself when you click into a field that asks for the
+  language (not for questions you answer in your own language). It has the same layouts and modes in both places:
+  * **Tap** the keys, or **Mac keys**: your own keyboard types the script in its standard layout (Arabic PC, ЙЦУКЕН,
+    2-set Korean, InScript Hindi, Thai Kedmanee, Greek, Hebrew), and the key you pressed lights up on the panel.
+  * Japanese: a gojūon table (゛ ゜ and 小 for voiced and small kana, カナ for katakana) or **ローマ字** — type romaji,
+    get kana. Kana that spell a word you saved offer its kanji (たべる → 食べる).
+  * Chinese pinyin: type the syllable then its tone — a tone key or simply the digit (ni3 → nǐ).
+  * Hindi and Bengali: a vowel typed after a consonant becomes its vowel sign (क + आ → का); Arabic harakat attach to the
+    letter before them; Korean jamo join into syllables and backspace removes one jamo.
+  * **Compact** keeps only the helper keys (marks, tones) when you type with your own keyboard; **✕** hides the panel.
+  * **Use Mac input** switches the Mac to its own input source for the language (kanji/hanzi conversion, the full
+    layout) when it is installed, and back when you close the keyboard; **Add Mac input…** opens Keyboard settings.
+  * Spell-check and autocorrect are off in every answer field: your mistakes are yours to make and the teacher's to find.
+* **Reading.** Passages come as a reading card: click any word for its reading, meaning and dictionary entry
+  (Wiktionary, or your Mac's dictionaries), **Translate sentence** (Apple's on-device translation when the language pair
+  is installed in System Settings › General › Language & Region › Translation Languages, else Apple's on-device model,
+  marked as such), and **＋ Save with this sentence** to keep it in your words. Readings over kanji/hanzi show for every
+  word, only for words you don't know yet, or not at all. **▶ Read aloud** plays sentence by sentence (the sentence
+  being read is highlighted), **🗣 Shadow** pauses after each one for you to repeat it, and **✓ Done reading** counts the
+  passage toward what you read this week.
 * **In the lesson:** glossed sentences (click a word to see where it lands in the translation; click any foreign
   word anywhere to hear it), listening cards with **Slowly** and hidden text for dictation, role-play dialogues where
   your lines stay hidden until you reveal them, conjugation tables with the stem and the ending in different colours,
   and tone diagrams for Mandarin.
-* **Tests:** **Say it** questions listen through the microphone in the target language (the Mac asks for permission the
-  first time) and show which words it understood; dictation questions play the audio first; where accents matter, the
-  mentor grades them strictly.
+* **Tests are real work:** dictation (checked word by word — a wrong word struck through with the right one beside it;
+  Japanese is compared by reading, so kana for kanji counts), **Say it** (the microphone; the card shows what was heard
+  against the sentence, word by word, which engine heard you and whether the audio left your Mac, and the pitch of your
+  voice against a synthetic voice saying the same sentence — the melody only, not your vowels or consonants),
+  translation both ways, rewriting a text in another register, one sentence from given words, a paradigm table to fill,
+  and essays marked on a rubric. Accents are graded strictly where the mentor says they matter; Arabic short vowels and
+  Hebrew points are optional unless it does.
+* **Corrections.** Your writing comes back as a correction card: your text against the corrected one, word by word, each
+  error with its type and why, the rubric scores, a more natural version, and a box to write it again — **Check**
+  compares your new attempt on the spot, **Send to teacher** sends it.
 * **Dictation in the target language.** With a target language set, the microphone button in the message box offers to
   dictate in it as well as in your own language.
 * **Your words.** Every vocabulary card has **＋ Save**. Saved words (and the words the mentor saves for you) are
   flashcards in a "<Language> vocabulary" deck, reviewed in Flashcards; the mentor opens lessons with the ones due.
   **Progress › Languages** shows each language's level and how many words are new, learning and known.
+* **Your own texts.** Paste a passage, attach a text file or PDF (or a photo of a page), or paste a link to a web page,
+  then click **📖 Read** under your message: it opens as a reading card with every word clickable. Anywhere in a lesson,
+  select a word (or a short phrase) and click **Look up**.
+* **Real audio.** Attach an audio or video file (or paste a direct link to an audio file, then **🎧 Listen with a
+  transcript**). The app transcribes it with times — with Whisper on your Mac if you installed it in Settings › Voice,
+  otherwise with Apple's recognizer — and gives you a player: each sentence on its own, **Loop**, slower speeds that
+  keep the pitch, the text hidden or shown, and **Write what you hear**, checked word by word. Use recordings you're
+  allowed to use (podcasts with an open licence, your own).
+* **Talk.** **Talk** in the message box starts a spoken conversation in the language: you speak, the mentor answers
+  aloud, turn by turn, and keeps its corrections until you press **End conversation** — then it goes through them. Nothing is
+  recorded until you press Talk; the bar says which engine is listening and whether audio leaves your Mac.
+* **Pronunciation.** After **Say it**, besides the melody chart: for Mandarin, each syllable's tone — the shape your
+  pitch had against the tone in the dictionary (syllables the measurement can't judge even on the synthetic voice are
+  shown as –); for Japanese words, where your pitch falls (ꜜ) against where the synthetic voice's falls; for a single
+  word in other languages, which syllable you stressed. These are measurements of pitch and loudness, not of your
+  vowels and consonants, and a single miss is a hint rather than a verdict.
+* **Levels and grammar.** The mentor places you per skill (reading, listening, writing, speaking, vocabulary, grammar)
+  from real work and notes the evidence; a level marked **?** is provisional until you've done a task in that skill. It
+  keeps a grammar syllabus by CEFR level, and a point counts as learned when you use it right in what you write or say.
+  **Progress › Languages** shows the levels (hover for the evidence) and the grammar per level (click a level).
+* **Kanji and hanzi.** Looking up a word written in kanji (hanzi) shows each character with the other saved words that
+  use it. **Progress › Languages** shows the characters of your saved words in the order you met them, green once a word
+  with them is known. (Stroke order and components aren't included yet.)
+* **Words in and out.** **Progress › Languages › Import words…** takes an Anki package (.apkg — from Anki 2.1.50 on,
+  export with "Support older Anki versions" ticked), Anki's "Notes in Plain Text", or a spreadsheet saved as CSV/TSV
+  (term and meaning, optionally reading, example, tags…). **Export words** writes a file for Anki (File › Import puts it
+  in the "<Language> vocabulary" deck with tags) or a CSV for spreadsheets. Review history stays in the app.
+* **After a test** the mentor gives its feedback and stops there: you answer, ask, or say you're ready before the next
+  questions.
 
 ## Practice tools
 
@@ -316,7 +367,7 @@ Stop the agent any time with ⌘. or Esc twice.
 | Agents | Sub-agent defaults, limits and custom agent types |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor, code agent), the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
-| Voice | Read-aloud voice and speed |
+| Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |
 
 ## Your data
 

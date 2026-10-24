@@ -124,7 +124,8 @@
   R.registerAction('__fl', () => {});
   document.addEventListener('click', (e) => {
     const fl = e.target.closest && e.target.closest('.fl');
-    if (!fl || e.target.closest('a, button, input, textarea, select')) return;
+    // A reading passage's words open their own popover (with its own 🔊): a click there isn't "read the passage".
+    if (!fl || e.target.closest('a, button, input, textarea, select, .rd-body')) return;
     if (window.getSelection && String(window.getSelection()).length > 0) return;
     const text = Array.from(fl.childNodes).filter(c => !(c.nodeType === 1 && c.tagName === 'RT')).map(c => c.nodeType === 1 && c.tagName === 'RUBY'
       ? Array.from(c.childNodes).filter(x => !(x.nodeType === 1 && (x.tagName === 'RT' || x.tagName === 'RP'))).map(x => x.textContent).join('') : c.textContent).join('');

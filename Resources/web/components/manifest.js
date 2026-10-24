@@ -5,6 +5,7 @@ window.TeacherManifest = { version: 1, modules: [
   {src: "components/keyboard.js"},
   {src: "components/langlearn.js"},
   {src: "components/language.js"},
+  {src: "components/langwork.js"},
   {src: "components/metrics.js"},
   {src: "components/plot.js", lazy: ["plot", "graph", "function-plot"]},
   {src: "components/practice.js"},

@@ -81,7 +81,7 @@ final class LanguageMentorTests: XCTestCase {
         XCTAssertNil(KeyboardLayouts.layout(for: "sw"), "a plain-Latin language shows no panel")
         XCTAssertNil(KeyboardLayouts.layout(for: "xx")); XCTAssertNotNil(KeyboardLayouts.layout(for: "ja-JP"))
         for (code, l) in layouts {
-            for row in l.rows + (l.shift ?? []) { for k in row { if case .fn(let f) = k { XCTAssertTrue(["shift", "bksp", "space", "enter", "dakuten", "handakuten", "small", "kana", "tone", "mode"].contains(f), "\(code): unknown key \(f)") } } }
+            for row in l.rows + (l.shift ?? []) { for k in row { if case .fn(let f) = k { XCTAssertTrue(["shift", "bksp", "space", "enter", "dakuten", "handakuten", "small", "kana", "tone", "tone1", "tone2", "tone3", "tone4", "mode"].contains(f), "\(code): unknown key \(f)") } } }
         }
         XCTAssertTrue(KeyboardLayouts.parse("// x = y\nwindow.TeacherKeyboardLayouts = {\"xx\": {\"name\": \"X\", \"english\": \"X\", \"rows\": [[\"a\", {\"k\": \"bksp\"}]]}};")["xx"]!.rows[0] == [.text("a"), .fn("bksp")])
     }
@@ -110,6 +110,8 @@ final class LanguageMentorTests: XCTestCase {
         XCTAssertEqual(ScriptComposer.romaji("konnichiha", katakana: false), "こんにちは")
         XCTAssertEqual(ScriptComposer.romaji("kyou", katakana: false), "きょう")
         XCTAssertEqual(ScriptComposer.romaji("kitte", katakana: false), "きって")
+        XCTAssertEqual(ScriptComposer.romaji("desu.", katakana: false), "です。", "punctuation converts like an input method's")
+        XCTAssertEqual(ScriptComposer.romaji(",", katakana: false), "、")
         XCTAssertEqual(ScriptComposer.romaji("k", katakana: false), "k", "an unfinished syllable stays Latin")
         XCTAssertEqual(ScriptComposer.romaji("kon", katakana: false), "こn", "a lone n waits for the next letter")
         XCTAssertEqual(ScriptComposer.romaji("koohii", katakana: true), "コオヒイ")
@@ -136,7 +138,11 @@ final class LanguageMentorTests: XCTestCase {
         XCTAssertTrue(toks.contains { $0.text == "食べる" || $0.text == "食べ" }, toks.map(\.text).joined(separator: "|"))
         let es = TextAnalysis.tokens("Los niños comieron manzanas", language: "es")
         XCTAssertEqual(es.map(\.text), ["Los", "niños", "comieron", "manzanas"])
-        XCTAssertTrue(es.contains { $0.pos != nil }, "parts of speech where the tagger knows the language: \(es.map { $0.pos ?? "-" })")
+        // The system tagger tags English; for languages it has no model for it says "OtherWord" for every word, which
+        // is noise, not a part of speech: dropped.
+        XCTAssertFalse(es.contains { $0.pos == "otherword" }, "no empty tags: \(es.map { $0.pos ?? "-" })")
+        let en = TextAnalysis.tokens("The children ate apples", language: "en")
+        XCTAssertEqual(en.map { $0.pos ?? "-" }, ["determiner", "noun", "verb", "noun"])
         XCTAssertEqual(TextAnalysis.sentences("Hola. ¿Qué tal? Bien.").count, 3)
         XCTAssertEqual(TextAnalysis.languages("Bonjour, je voudrais un café s'il vous plaît.").first?.0, "fr")
     }
@@ -233,5 +239,38 @@ final class LanguageMentorTests: XCTestCase {
         XCTAssertEqual(study.vocab(lang: "ko").count, 1, "the profile's target is the default language")
         let due = try await VocabTool().run(["action": "due"], ctx)
         XCTAssertTrue(due.text.contains("안녕"))
+        // Adding again updates the word (live runs removed every word before re-adding it).
+        let again = try await VocabTool().run(["action": "add", "words": [["term": "안녕", "meaning": "hi (casual)", "example": "안녕, 민수야!"]]], ctx)
+        XCTAssertFalse(again.isError); XCTAssertEqual(study.vocab(lang: "ko").count, 1); XCTAssertEqual(study.vocab(lang: "ko").first?.meaning, "hi (casual)")
+        // A slip into another script is named, so it gets fixed in one go.
+        let slip = try await VocabTool().run(["action": "add", "words": [["term": "학교", "meaning": "school", "example": "学校に行きます"]]], ctx)
+        XCTAssertTrue(slip.text.contains("“학교”: its example contains Hiragana"), slip.text)
+    }
+
+    func testJapaneseAnalysisReadsJapaneseNotMandarin() {
+        let toks = TextAnalysis.tokens("設備の設置を担当しております。", language: "ja")
+        let tantou = toks.first { $0.text == "担当" }
+        XCTAssertNotNil(tantou, toks.map(\.text).joined(separator: "|"))
+        XCTAssertTrue(tantou?.reading?.contains("たんとう") == true && tantou?.reading?.contains("tantou") == true, tantou?.reading ?? "nil")
+        XCTAssertFalse(toks.contains { ($0.reading ?? "").contains("dān") || $0.pos == "otherword" }, "no pinyin, no empty tags")
+        XCTAssertFalse(toks.contains { $0.text == "。" }, "punctuation isn't a word")
+        XCTAssertEqual(toks.first { $0.text == "を" }?.reading, "o", "particles read as spoken")
+        XCTAssertEqual(TextAnalysis.tokens("私は学生です", language: "ja").first { $0.text == "は" }?.reading, "wa")
+    }
+
+    @MainActor func testTransliterationRefusesWhatIsntRomanisation() async throws {
+        let ctx = ToolContext(conversationID: "L", workspace: dir, services: services, interactions: InteractionCenter(), toolCallID: "t1",
+                              client: ScriptedLLM([]), model: "m", progress: { _ in })
+        let name = try await LanguageTool().run(["action": "transliterate", "text": "Sam Carter", "to": "katakana"], ctx)
+        XCTAssertTrue(name.isError && name.text.contains("サム・カーター"), name.text)
+        let ok = try await LanguageTool().run(["action": "transliterate", "text": "konnichiha", "to": "hiragana"], ctx)
+        XCTAssertFalse(ok.isError); XCTAssertEqual(ok.text, "こんにちは")
+    }
+
+    func testScriptCheckFindsWordsFromAnotherScript() {
+        XCTAssertNil(ScriptCheck.foreign("担当しています。Sam です", lang: "ja"), "kanji, kana and Latin names are Japanese text")
+        XCTAssertEqual(ScriptCheck.foreign("担当は 새로", lang: "ja"), "Hangul")
+        XCTAssertEqual(ScriptCheck.foreign("Hola, мир", lang: "es"), "Cyrillic")
+        XCTAssertNil(ScriptCheck.foreign("مرحبا Sam", lang: "ar"))
     }
 }

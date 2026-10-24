@@ -43,6 +43,10 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Composer state lives with the lesson so switching lessons keeps drafts.
     @Published var draft = ""
     @Published var attachments: [Attachment] = []
+    /// The spoken conversation in the language being learned (Composer's 🗣 Talk).
+    lazy var talk = ConversationController()
+    /// Audio or video being transcribed before it can be sent (file name → what's happening).
+    @Published var pendingMedia: [String: String] = [:]
     /// What the learner did in the transcript that the tutor should hear with their next message (e.g. opening a
     /// problem's solution without trying it).
     var studyNotes: [String] = []

@@ -4,23 +4,32 @@
 //
 //   name     the language's own name (shown on the panel), english: its English name
 //   rows     rows of keys: a string inserts itself; {"k": …} is a function key: shift, bksp, space, enter,
-//            dakuten (゛), handakuten (゜), small (ぁ), kana (ひら/カタ), tone (pinyin tone cycle), mode (compose mode)
+//            dakuten (゛), handakuten (゜), small (ぁ), kana (ひら/カタ), tone (pinyin tone cycle), tone1…tone4 (that tone
+//            on the syllable before the caret; a digit typed after a syllable does the same), mode (compose mode)
 //   shift    the rows under shift (absent: shift uppercases letters when `upper` is true)
 //   compose  how typed keys combine: "hangul" (jamo → syllables), "kana" (゛゜ and small forms), "pinyin" (tone marks),
-//            "marks" (combining marks fold into the previous letter, e.g. Vietnamese tones)
-//   modes    alternative input modes the panel offers, e.g. ["kana", "romaji"] (romaji: type Latin, get kana)
+//            "marks" (combining marks fold into the previous letter, e.g. Vietnamese tones, Arabic harakat),
+//            "abugida" (a vowel letter typed after a consonant becomes its vowel sign: क + आ → का, as Devanagari is written)
+//   modes    alternative input modes the panel offers, e.g. ["kana", "romaji"] (romaji: type Latin, get kana); a layout
+//            with `physical` also offers "keys"
+//   physical what the Mac's own keys type in "keys" mode: one list per row of the physical keyboard (Q…], A…', Z…/),
+//            following the standard layout for the script (Arabic PC, ЙЦУКЕН, 2-set Korean, InScript, Kedmanee…), and
+//            `physical_shift` for the shifted keys. The on-screen key lights up as it is typed.
 //   rtl      right-to-left script
+//   An empty string "" in a row is a gap that keeps a grid (the kana table) aligned.
 window.TeacherKeyboardLayouts = {
   "ja": { "name": "日本語", "english": "Japanese", "compose": "kana", "modes": ["kana", "romaji"],
     "rows": [
-      ["あ", "い", "う", "え", "お", "か", "き", "く", "け", "こ"],
-      ["さ", "し", "す", "せ", "そ", "た", "ち", "つ", "て", "と"],
-      ["な", "に", "ぬ", "ね", "の", "は", "ひ", "ふ", "へ", "ほ"],
-      ["ま", "み", "む", "め", "も", "や", "ゆ", "よ", "ら", "り"],
-      ["る", "れ", "ろ", "わ", "を", "ん", "ー", "、", "。", "っ"],
+      ["あ", "か", "さ", "た", "な", "は", "ま", "や", "ら", "わ", "ん"],
+      ["い", "き", "し", "ち", "に", "ひ", "み", "", "り", "", "ー"],
+      ["う", "く", "す", "つ", "ぬ", "ふ", "む", "ゆ", "る", "を", "、"],
+      ["え", "け", "せ", "て", "ね", "へ", "め", "", "れ", "", "。"],
+      ["お", "こ", "そ", "と", "の", "ほ", "も", "よ", "ろ", "っ", "？"],
       [{"k": "dakuten"}, {"k": "handakuten"}, {"k": "small"}, {"k": "kana"}, {"k": "space"}, {"k": "bksp"}, {"k": "mode"}]
     ] },
   "ko": { "name": "한국어", "english": "Korean", "compose": "hangul",
+    "physical": [["ㅂ", "ㅈ", "ㄷ", "ㄱ", "ㅅ", "ㅛ", "ㅕ", "ㅑ", "ㅐ", "ㅔ"], ["ㅁ", "ㄴ", "ㅇ", "ㄹ", "ㅎ", "ㅗ", "ㅓ", "ㅏ", "ㅣ"], ["ㅋ", "ㅌ", "ㅊ", "ㅍ", "ㅠ", "ㅜ", "ㅡ"]],
+    "physical_shift": [["ㅃ", "ㅉ", "ㄸ", "ㄲ", "ㅆ", "ㅛ", "ㅕ", "ㅑ", "ㅒ", "ㅖ"], ["ㅁ", "ㄴ", "ㅇ", "ㄹ", "ㅎ", "ㅗ", "ㅓ", "ㅏ", "ㅣ"], ["ㅋ", "ㅌ", "ㅊ", "ㅍ", "ㅠ", "ㅜ", "ㅡ"]],
     "rows": [
       ["ㅂ", "ㅈ", "ㄷ", "ㄱ", "ㅅ", "ㅛ", "ㅕ", "ㅑ", "ㅐ", "ㅔ"],
       ["ㅁ", "ㄴ", "ㅇ", "ㄹ", "ㅎ", "ㅗ", "ㅓ", "ㅏ", "ㅣ"],
@@ -38,9 +47,11 @@ window.TeacherKeyboardLayouts = {
       ["q", "w", "e", "r", "t", "y", "u", "i", "o", "p"],
       ["a", "s", "d", "f", "g", "h", "j", "k", "l", "ü"],
       [{"k": "shift"}, "z", "x", "c", "v", "b", "n", "m", "'", {"k": "bksp"}],
-      [{"k": "tone"}, {"k": "space"}, "，", "。", "？"]
+      [{"k": "tone1"}, {"k": "tone2"}, {"k": "tone3"}, {"k": "tone4"}, {"k": "tone"}, {"k": "space"}, "，", "。", "？"]
     ] },
-  "ar": { "name": "العربية", "english": "Arabic", "rtl": true,
+  "ar": { "name": "العربية", "english": "Arabic", "rtl": true, "compose": "marks",
+    "physical": [["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "د"], ["ش", "س", "ي", "ب", "ل", "ا", "ت", "ن", "م", "ك", "ط"], ["ئ", "ء", "ؤ", "ر", "لا", "ى", "ة", "و", "ز", "ظ"]],
+    "physical_shift": [["َ", "ً", "ُ", "ٌ", "لإ", "إ", "‘", "÷", "×", "؛", "<", ">"], ["ِ", "ٍ", "]", "[", "لأ", "أ", "ـ", "،", "/", ":", "\""], ["~", "ْ", "}", "{", "لآ", "آ", "’", ",", ".", "؟"]],
     "rows": [
       ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "د"],
       ["ش", "س", "ي", "ب", "ل", "ا", "ت", "ن", "م", "ك", "ط"],
@@ -49,6 +60,7 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, "،", "؛", "؟", "."]
     ] },
   "fa": { "name": "فارسی", "english": "Persian", "rtl": true,
+    "physical": [["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "چ"], ["ش", "س", "ی", "ب", "ل", "ا", "ت", "ن", "م", "ک", "گ"], ["ظ", "ط", "ز", "ر", "ذ", "د", "پ", "و", ".", "/"]],
     "rows": [
       ["ض", "ص", "ث", "ق", "ف", "غ", "ع", "ه", "خ", "ح", "ج", "چ"],
       ["ش", "س", "ی", "ب", "ل", "ا", "ت", "ن", "م", "ک", "گ"],
@@ -65,6 +77,7 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, "،", "۔", "؟"]
     ] },
   "he": { "name": "עברית", "english": "Hebrew", "rtl": true,
+    "physical": [["/", "'", "ק", "ר", "א", "ט", "ו", "ן", "ם", "פ", "]", "["], ["ש", "ד", "ג", "כ", "ע", "י", "ח", "ל", "ך", "ף", ","], ["ז", "ס", "ב", "ה", "נ", "מ", "צ", "ת", "ץ", "."]],
     "rows": [
       ["/", "'", "ק", "ר", "א", "ט", "ו", "ן", "ם", "פ"],
       ["ש", "ד", "ג", "כ", "ע", "י", "ח", "ל", "ך", "ף"],
@@ -73,6 +86,8 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, ",", ".", "?", "״", "׳"]
     ] },
   "ru": { "name": "Русский", "english": "Russian", "upper": true,
+    "physical": [["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"], ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"], ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "."]],
+    "physical_shift": [["Й", "Ц", "У", "К", "Е", "Н", "Г", "Ш", "Щ", "З", "Х", "Ъ"], ["Ф", "Ы", "В", "А", "П", "Р", "О", "Л", "Д", "Ж", "Э"], ["Я", "Ч", "С", "М", "И", "Т", "Ь", "Б", "Ю", ","]],
     "rows": [
       ["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ъ"],
       ["ф", "ы", "в", "а", "п", "р", "о", "л", "д", "ж", "э"],
@@ -80,6 +95,8 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, ",", ".", "?", "!", "—"]
     ] },
   "uk": { "name": "Українська", "english": "Ukrainian", "upper": true,
+    "physical": [["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ї"], ["ф", "і", "в", "а", "п", "р", "о", "л", "д", "ж", "є"], ["я", "ч", "с", "м", "и", "т", "ь", "б", "ю", "."]],
+    "physical_shift": [["Й", "Ц", "У", "К", "Е", "Н", "Г", "Ш", "Щ", "З", "Х", "Ї"], ["Ф", "І", "В", "А", "П", "Р", "О", "Л", "Д", "Ж", "Є"], ["Я", "Ч", "С", "М", "И", "Т", "Ь", "Б", "Ю", ","]],
     "rows": [
       ["й", "ц", "у", "к", "е", "н", "г", "ш", "щ", "з", "х", "ї"],
       ["ф", "і", "в", "а", "п", "р", "о", "л", "д", "ж", "є"],
@@ -87,6 +104,8 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, ",", ".", "?", "!", "'"]
     ] },
   "el": { "name": "Ελληνικά", "english": "Greek", "upper": true,
+    "physical": [[";", "ς", "ε", "ρ", "τ", "υ", "θ", "ι", "ο", "π", "[", "]"], ["α", "σ", "δ", "φ", "γ", "η", "ξ", "κ", "λ", "΄", "'"], ["ζ", "χ", "ψ", "ω", "β", "ν", "μ", ",", ".", "/"]],
+    "physical_shift": [[":", "΅", "Ε", "Ρ", "Τ", "Υ", "Θ", "Ι", "Ο", "Π", "{", "}"], ["Α", "Σ", "Δ", "Φ", "Γ", "Η", "Ξ", "Κ", "Λ", "¨", "\""], ["Ζ", "Χ", "Ψ", "Ω", "Β", "Ν", "Μ", "<", ">", "?"]],
     "rows": [
       ["ς", "ε", "ρ", "τ", "υ", "θ", "ι", "ο", "π"],
       ["α", "σ", "δ", "φ", "γ", "η", "ξ", "κ", "λ"],
@@ -94,7 +113,9 @@ window.TeacherKeyboardLayouts = {
       ["ά", "έ", "ή", "ί", "ό", "ύ", "ώ", "ϊ", "ϋ", "ΐ", "ΰ"],
       [{"k": "space"}, ",", ".", ";", "·"]
     ] },
-  "hi": { "name": "हिन्दी", "english": "Hindi",
+  "hi": { "name": "हिन्दी", "english": "Hindi", "compose": "abugida",
+    "physical": [["ौ", "ै", "ा", "ी", "ू", "ब", "ह", "ग", "द", "ज", "ड", "़"], ["ो", "े", "्", "ि", "ु", "प", "र", "क", "त", "च", "ट"], ["ॆ", "ं", "म", "न", "व", "ल", "स", ",", ".", "य"]],
+    "physical_shift": [["औ", "ऐ", "आ", "ई", "ऊ", "भ", "ङ", "घ", "ध", "झ", "ढ", "ञ"], ["ओ", "ए", "अ", "इ", "उ", "फ", "ऱ", "ख", "थ", "छ", "ठ"], ["ऎ", "ँ", "ण", "ऩ", "ऴ", "ळ", "श", "ष", "।", "य़"]],
     "rows": [
       ["क", "ख", "ग", "घ", "ङ", "च", "छ", "ज", "झ", "ञ"],
       ["ट", "ठ", "ड", "ढ", "ण", "त", "थ", "द", "ध", "न"],
@@ -104,7 +125,7 @@ window.TeacherKeyboardLayouts = {
       ["ा", "ि", "ी", "ु", "ू", "े", "ै", "ो", "ौ", "ृ", "्", "ं", "ः", "ँ"],
       [{"k": "space"}, ",", "?", "!"]
     ] },
-  "bn": { "name": "বাংলা", "english": "Bengali",
+  "bn": { "name": "বাংলা", "english": "Bengali", "compose": "abugida",
     "rows": [
       ["ক", "খ", "গ", "ঘ", "ঙ", "চ", "ছ", "জ", "ঝ", "ঞ"],
       ["ট", "ঠ", "ড", "ঢ", "ণ", "ত", "থ", "দ", "ধ", "ন"],
@@ -115,6 +136,8 @@ window.TeacherKeyboardLayouts = {
       [{"k": "space"}, ",", "?", "!"]
     ] },
   "th": { "name": "ไทย", "english": "Thai",
+    "physical": [["ๆ", "ไ", "ำ", "พ", "ะ", "ั", "ี", "ร", "น", "ย", "บ", "ล"], ["ฟ", "ห", "ก", "ด", "เ", "้", "่", "า", "ส", "ว", "ง"], ["ผ", "ป", "แ", "อ", "ิ", "ื", "ท", "ม", "ใ", "ฝ"]],
+    "physical_shift": [["๐", "\"", "ฎ", "ฑ", "ธ", "ํ", "๊", "ณ", "ฯ", "ญ", "ฐ", ","], ["ฤ", "ฆ", "ฏ", "โ", "ฌ", "็", "๋", "ษ", "ศ", "ซ", "."], ["(", ")", "ฉ", "ฮ", "ฺ", "์", "?", "ฒ", "ฬ", "ฦ"]],
     "rows": [
       ["ๅ", "/", "-", "ภ", "ถ", "ุ", "ึ", "ค", "ต", "จ", "ข", "ช"],
       ["ๆ", "ไ", "ำ", "พ", "ะ", "ั", "ี", "ร", "น", "ย", "บ", "ล"],
