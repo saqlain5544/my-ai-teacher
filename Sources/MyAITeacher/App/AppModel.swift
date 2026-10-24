@@ -157,6 +157,8 @@ final class AppModel: ObservableObject {
         if level == .read && !isQuick(ws) { settings.value.folderAccess.removeValue(forKey: ws.url.path) }
         else { settings.value.folderAccess[ws.url.path] = level }
         objectWillChange.send()
+        // An empty lesson's welcome names the folder's access: redrawn, or it kept saying "Read only".
+        if case .lesson(let id) = selection, let s = sessions[id] { s.refreshWelcome() }
     }
 
     func openFolderPanel() {

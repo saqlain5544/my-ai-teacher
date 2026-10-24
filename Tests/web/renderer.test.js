@@ -1094,6 +1094,13 @@
     ok($('[data-tool-id="ms1"]').textContent.includes('localhost:5173'), 'same text, new meta: redrawn');
   });
 
+  test('a reading passage with language tags shows its words, not the tags', async () => {
+    const el = show('```reading\n{"lang":"es","text":"Compra queso a buen precio. <span lang=\\"es\\">Sam</span> paga con efectivo."}\n```', {});
+    const body = await until(() => $('.lw-reading .rd-body', el), 'reading renders');
+    ok(!body.textContent.includes('<span') && body.textContent.includes('Sam paga'), body.textContent);
+    ok($$('.rd-w', body).some(w => w.textContent === 'precio'), 'precio is a word on its own');
+  });
+
   test('practice cards written one object per line render as a list', () => {
     const code = '{"q":"6 and 8: hypotenuse?","a":"10"}\n{"q":"Is 7, 8, 9 a triple?","a":"No: 49 + 64 = 113, not 81."}';
     T.reset([U('q'), A([{ kind: 'text', text: '```practice\n' + code + '\n```' }])], {});

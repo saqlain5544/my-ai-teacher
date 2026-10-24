@@ -125,6 +125,24 @@ final class ShellJobsTests: XCTestCase {
         XCTAssertEqual(msg.blocks[0].meta?["backgroundTask"]?.string, "B1")
     }
 
+    /// What models call it: `wait` reads after waiting; a job read to its end isn't reported again.
+    func testWaitIsOutputAndAnEndAlreadySeenIsNotReported() async throws {
+        let c = try await ctx()
+        let out = try await BashTool().run(["command": "sleep 7; echo done-here", "background": true], c)
+        let h = try XCTUnwrap(out.meta?["background"]?.string)
+        let job = try XCTUnwrap(ShellJobs.shared.job(conv, h))
+        var read = ""
+        for _ in 0..<3 where !read.contains("exited") {   // a wait can return with the output just before the exit
+            read = try await BashJobsTool().run(["action": "wait", "handle": .string(h), "wait": 15], c).text
+        }
+        XCTAssertTrue(read.contains("done-here") || job.exitCode == 0, read)
+        while job.isRunning { try await Task.sleep(for: .milliseconds(100)) }
+        _ = try await BashJobsTool().run(["action": "list"], c)
+        XCTAssertTrue(job.exitSeen, "the agent saw it end")
+        let kill = try await BashJobsTool().run(["action": "kill", "handle": .string(h)], c)
+        XCTAssertTrue(kill.text.contains("already exited"), kill.text)
+    }
+
     func testRecognisingServersAndTheirURLs() {
         for cmd in ["npm run dev", "pnpm dev", "yarn start", "bun run dev -- --port 3000", "npx vite", "vite", "python3 -m http.server 8000",
                     "python manage.py runserver", "flask run", "uvicorn app:app --reload", "rails s", "php -S localhost:8000", "next dev", "tail -f log.txt"] {

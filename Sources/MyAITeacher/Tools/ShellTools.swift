@@ -110,9 +110,19 @@ struct BashJobsTool: Tool {
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let conv = ctx.conversationID
-        let action = input["action"]?.string ?? "list"
+        // The words models reach for: "wait" is output after waiting, "read"/"logs"/"tail" are output, "kill" is stop.
+        var action = input["action"]?.string?.lowercased() ?? "list"
+        switch action {
+        case "wait": action = "output"
+        case "read", "logs", "log", "tail", "status": action = "output"
+        case "kill", "end", "terminate": action = "stop"
+        case "jobs", "ls": action = "list"
+        default: break
+        }
+        let waitDefault = input["action"]?.string?.lowercased() == "wait" ? 60 : 0
         if action == "list" {
             let all = ShellJobs.shared.list(conv)
+            for j in all where !j.isRunning { j.exitSeen = true }
             return ToolOutput(text: all.isEmpty ? "No background jobs." : all.map(ShellJobs.line).joined(separator: "\n"))
         }
         guard let h = input["handle"]?.string, let job = ShellJobs.shared.job(conv, h) else {
@@ -127,7 +137,7 @@ struct BashJobsTool: Tool {
             return ToolOutput(text: wasRunning ? "Stopped \(job.handle ?? h) (`\(job.command.prefix(80))`) and everything it started." : "\(job.handle ?? h) had already exited (code \(job.exitCode ?? -1)).")
         case "output":
             var text = job.readNew()
-            let wait = Double(min(60, max(0, input["wait"]?.int ?? 0)))
+            let wait = Double(min(60, max(0, input["wait"]?.int ?? waitDefault)))
             if text.isEmpty, wait > 0 {
                 let until = Date().addingTimeInterval(wait)
                 while text.isEmpty, job.isRunning, Date() < until, !Task.isCancelled {
@@ -137,6 +147,7 @@ struct BashJobsTool: Tool {
                 if text.isEmpty { text = job.readNew() }
             }
             text = truncateMiddle(text, max: 30_000).trimmingTrailingNewlines
+            if !job.isRunning { job.exitSeen = true }   // the agent knows it ended: no report of it afterwards
             return ToolOutput(text: (text.isEmpty ? "(nothing new)" : text) + "\n[" + ShellJobs.line(job) + "]")
         default:
             throw ToolError("Unknown action \(action): use list, output or stop.")

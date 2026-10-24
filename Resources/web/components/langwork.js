@@ -261,7 +261,9 @@
     pending: () => '<div class="comp"><div class="diagram-pending">Preparing the passage…</div></div>',
     validate: p => { if (typeof p === 'string') p = { text: p }; R.check(p, 'object'); if (!String(p.text || p.passage || '').trim()) throw new Error('needs text'); return p; },
     render(p, ctx, env) {
-      const text = String(p.text || p.passage), lang = p.lang || p.language || '';
+      // Models tag words inside a passage (<span lang="es">Sam</span>): the passage is plain text, so markup is reduced to
+      // its words (it showed as raw tags, and the tagger split it into "words" and kept "precio." whole beside it).
+      const text = String(p.text || p.passage).replace(/<\/?[a-z][^<>]*>/gi, ''), lang = p.lang || p.language || '';
       const key = 'rd' + ctx.hash(env.code);
       let st = readers.get(key);
       if (!st) {
@@ -346,6 +348,8 @@
     return p;
   }
   function openLookup(L, rect) {
+    // A word with punctuation stuck to it (a tagger's "precio.") finds no dictionary entry: looked up without it.
+    L.word = String(L.word || '').replace(/^[\s\p{P}]+|[\s\p{P}]+$/gu, '') || L.word;
     L.key = nextKey('lk');
     lookups.set(L.key, L); currentLookup = L;
     if (lookups.size > 60) lookups.delete(lookups.keys().next().value);

@@ -24,6 +24,9 @@ final class ShellJob: @unchecked Sendable {
     private var lastOutputAt = Date()
     private var _stopped = false
     private var _toBackground = false
+    private var _exitSeen = false
+    /// The agent has seen this job end (bash_jobs showed it exited): its end isn't reported to the lesson again.
+    var exitSeen: Bool { get { lock.lock(); defer { lock.unlock() }; return _exitSeen } set { lock.lock(); _exitSeen = newValue; lock.unlock() } }
     private let limit = 1_000_000
     /// Live output while the call that started it is waiting (the tool card's progress); nil once it is backgrounded.
     var onOutput: (@Sendable (String) -> Void)? {
@@ -240,7 +243,9 @@ final class ShellJobs: @unchecked Sendable {
         // message: read at the next step of a running turn, or in a turn of its own when the lesson is idle.
         Task.detached(priority: .utility) { [weak self] in
             while job.isRunning { try? await Task.sleep(for: .seconds(1)) }
-            guard let self, !job.stopped, self.job(conv, h) != nil else { return }
+            // Read to its end already (bash_jobs waited for it): a report would only start a turn to say so again.
+            try? await Task.sleep(for: .milliseconds(300))
+            guard let self, !job.stopped, !job.exitSeen, self.job(conv, h) != nil else { return }
             let msg = Self.finishedMessage(job, handle: h)
             await MainActor.run { AppModel.shared.session(for: conv)?.deliver(msg) }
         }

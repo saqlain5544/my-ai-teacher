@@ -144,6 +144,9 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
+    /// Redraws the welcome of a lesson with no messages yet (it shows the folder and its access).
+    func refreshWelcome() { if messages.isEmpty { sink?.reset(messages, conversation: conversation) } }
+
     func setModel(providerID: String, model: String) {
         conversation.providerID = providerID
         conversation.model = model
