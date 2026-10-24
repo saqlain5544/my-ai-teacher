@@ -3,13 +3,13 @@ import WebKit
 import PDFKit
 import Combine
 
-/// Right-side panel: the lesson folder's files, an in-app web page viewer and the lesson's sub-agents.
+/// Right-side panel: the lesson folder's files, the in-app browser (links from lessons open there too) and the lesson's sub-agents.
 /// Nothing here opens another app.
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, plan, changes, page, browser, agents
+    case files, plan, changes, browser, agents
     var id: String { rawValue }
     var title: String {
-        switch self { case .files: "Files"; case .plan: "Plan"; case .changes: "Changes"; case .page: "Page"; case .browser: "Browser"; case .agents: "Agents" }
+        switch self { case .files: "Files"; case .plan: "Plan"; case .changes: "Changes"; case .browser: "Browser"; case .agents: "Agents" }
     }
 }
 
@@ -31,7 +31,6 @@ struct InspectorPanel: View {
                 case .files: FileExplorer(root: app.workspace.url, session: session)
                 case .plan: BoardPanel(session: session)
                 case .changes: ChangesPanel()
-                case .page: PageViewer()
                 case .browser: BrowserPanel()
                 case .agents: SubAgentPanel(conversationID: session?.id)
                 }
@@ -275,85 +274,5 @@ struct PDFKitView: NSViewRepresentable {
     func updateNSView(_ v: PDFView, context: Context) { if v.document !== document { v.document = document } }
 }
 
-// MARK: Page viewer
 
-/// In-app browser for links from lessons. Ephemeral storage (no cookies kept), downloads and popups stay inside.
-struct PageViewer: View {
-    @EnvironmentObject var app: AppModel
-    @StateObject private var page = PageModel()
 
-    var body: some View {
-        VStack(spacing: 0) {
-            HStack(spacing: 6) {
-                Button { page.web.goBack() } label: { Image(systemName: "chevron.left") }.disabled(!page.canGoBack).accessibilityLabel("Back").help("Back")
-                Button { page.web.goForward() } label: { Image(systemName: "chevron.right") }.disabled(!page.canGoForward).accessibilityLabel("Forward").help("Forward")
-                // While loading the icon is a stop sign, so the button stops (it used to reload again).
-                Button { if page.loading { page.web.stopLoading() } else { page.web.reload() } } label: { Image(systemName: page.loading ? "xmark" : "arrow.clockwise") }
-                    .accessibilityLabel(page.loading ? "Stop loading" : "Reload").help(page.loading ? "Stop loading" : "Reload")
-                Text(page.url?.host() ?? "No page").font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.middle)
-                    .frame(maxWidth: .infinity, alignment: .leading).help(page.url?.absoluteString ?? "")
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(page.url?.absoluteString ?? "", forType: .string)
-                } label: { Image(systemName: "link") }.help("Copy link").disabled(page.url == nil)
-            }
-            .buttonStyle(.borderless).padding(.horizontal, 10).padding(.vertical, 6)
-            Divider()
-            if app.webURL == nil {
-                Text("Links you open in a lesson appear here.").font(.callout).foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                WebPageView(web: page.web)
-            }
-        }
-        .onAppear { if let u = app.webURL { page.load(u) } }
-        .onChange(of: app.webURL) { _, u in if let u { page.load(u) } }
-    }
-}
-
-@MainActor
-final class PageModel: NSObject, ObservableObject, WKNavigationDelegate, WKUIDelegate {
-    let web: WKWebView
-    @Published var url: URL?
-    @Published var loading = false
-    @Published var canGoBack = false
-    @Published var canGoForward = false
-    private var observers: [NSKeyValueObservation] = []
-
-    override init() {
-        let cfg = WKWebViewConfiguration()
-        cfg.websiteDataStore = .nonPersistent()
-        web = WKWebView(frame: .zero, configuration: cfg)
-        super.init()
-        web.navigationDelegate = self
-        web.uiDelegate = self
-        observers = [
-            web.observe(\.url) { [weak self] w, _ in MainActor.assumeIsolated { self?.url = w.url } },
-            web.observe(\.isLoading) { [weak self] w, _ in MainActor.assumeIsolated { self?.loading = w.isLoading } },
-            web.observe(\.canGoBack) { [weak self] w, _ in MainActor.assumeIsolated { self?.canGoBack = w.canGoBack } },
-            web.observe(\.canGoForward) { [weak self] w, _ in MainActor.assumeIsolated { self?.canGoForward = w.canGoForward } },
-        ]
-    }
-
-    func load(_ u: URL) { if web.url != u { web.load(URLRequest(url: u)) } }
-
-    func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction, decisionHandler: @escaping @MainActor (WKNavigationActionPolicy) -> Void) {
-        let scheme = action.request.url?.scheme ?? ""
-        decisionHandler(["http", "https", "about", "data", "blob"].contains(scheme) ? .allow : .cancel)
-    }
-
-    func webView(_ webView: WKWebView, decidePolicyFor response: WKNavigationResponse, decisionHandler: @escaping @MainActor (WKNavigationResponsePolicy) -> Void) {
-        decisionHandler(response.canShowMIMEType ? .allow : .cancel)   // no downloads
-    }
-
-    // target=_blank and window.open load here instead of a new window.
-    func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration, for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
-        if let u = action.request.url { webView.load(URLRequest(url: u)) }
-        return nil
-    }
-}
-
-struct WebPageView: NSViewRepresentable {
-    let web: WKWebView
-    func makeNSView(context: Context) -> WKWebView { web }
-    func updateNSView(_ nsView: WKWebView, context: Context) {}
-}

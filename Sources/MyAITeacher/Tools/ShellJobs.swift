@@ -23,6 +23,7 @@ final class ShellJob: @unchecked Sendable {
     private var urlSeenAt: Date?
     private var lastOutputAt = Date()
     private var _stopped = false
+    private var _toBackground = false
     private let limit = 1_000_000
     /// Live output while the call that started it is waiting (the tool card's progress); nil once it is backgrounded.
     var onOutput: (@Sendable (String) -> Void)? {
@@ -132,6 +133,10 @@ final class ShellJob: @unchecked Sendable {
     }
     func markRead() { lock.lock(); cursor = total; lock.unlock() }
 
+    /// The learner pressed Background on the running card: the waiting call returns and the job carries on.
+    func moveToBackground() { lock.lock(); _toBackground = true; lock.unlock() }
+    private var toBackground: Bool { lock.lock(); defer { lock.unlock() }; return _toBackground }
+
     /// Ends the whole group: SIGTERM, then SIGKILL two seconds later to whatever is left.
     func stop() {
         lock.lock(); _stopped = true; lock.unlock()
@@ -146,6 +151,7 @@ final class ShellJob: @unchecked Sendable {
         let serverLike = ShellJob.looksLikeServer(command)
         while true {
             if Task.isCancelled { return .cancelled }
+            if toBackground { return .learner }
             let t = timings, now = Date()
             if let exited = t.leaderExitedAt {
                 if t.eof && kill(-pid, 0) != 0 { return .finished }
@@ -166,7 +172,7 @@ final class ShellJob: @unchecked Sendable {
     }
 
     enum WaitMode { case foreground, auto, background }
-    enum WaitOutcome { case finished, timedOut, cancelled, server, left, background }
+    enum WaitOutcome { case finished, timedOut, cancelled, server, left, background, learner }
 
     // MARK: Recognising servers
 
@@ -211,6 +217,8 @@ final class ShellJobs: @unchecked Sendable {
     private let lock = NSLock()
     private var jobs: [String: [String: ShellJob]] = [:]
     private var counters: [String: Int] = [:]
+    /// Commands a call is still waiting on, by tool call id (the card's Background button finds them here).
+    private var waiting: [String: ShellJob] = [:]
 
     init() {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("NSApplicationWillTerminateNotification"), object: nil, queue: nil) { _ in
@@ -229,6 +237,15 @@ final class ShellJobs: @unchecked Sendable {
         jobs[job.conversationID, default: [:]][h] = job
         return h
     }
+    func waitingOn(_ callID: String, _ job: ShellJob?) { lock.lock(); waiting[callID] = job; lock.unlock() }
+    /// Background for a running call's command; false when it has already finished.
+    @discardableResult
+    func moveToBackground(callID: String) -> Bool {
+        lock.lock(); let j = waiting[callID]; lock.unlock()
+        j?.moveToBackground()
+        return j != nil
+    }
+
     func job(_ conv: String, _ handle: String) -> ShellJob? {
         lock.lock(); defer { lock.unlock() }
         return jobs[conv]?[handle.uppercased()]

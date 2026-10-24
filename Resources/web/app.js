@@ -1179,6 +1179,8 @@
       case 'older': el.disabled = true; el.textContent = 'Loading…'; post({ type: 'older' }); break;
       case 'newer': el.disabled = true; el.textContent = 'Loading…'; post({ type: 'newer' }); break;
       case 'agent-open': post({ type: 'agent', op: 'open', id: el.getAttribute('data-agent') || toolId }); break;
+      case 'tool-background': post({ type: 'toolBackground', id: toolId }); el.disabled = true; el.textContent = 'Moving…'; break;
+      case 'job-stop': post({ type: 'jobStop', handle: el.getAttribute('data-job') }); el.disabled = true; el.textContent = 'Stopping…'; break;
       case 'agent-stop': post({ type: 'agent', op: 'stop', id: el.getAttribute('data-agent') || toolId }); el.disabled = true; el.textContent = 'Stopping…'; break;
     }
   });

@@ -43,7 +43,9 @@ struct BashTool: Tool {
         let job = try ShellJob(command: command, title: input["description"]?.string ?? String(command.prefix(80)), conversationID: ctx.conversationID,
                                shell: shell, script: script, cwd: cwd, env: ProcessRunner.environment())
         job.onOutput = ctx.progress
+        ShellJobs.shared.waitingOn(ctx.toolCallID, job)
         let outcome = await job.wait(timeout: timeout, mode: input["background"]?.bool == true ? .background : .auto)
+        ShellJobs.shared.waitingOn(ctx.toolCallID, nil)
         job.onOutput = nil
         if let newDir = try? String(contentsOf: cwdFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !newDir.isEmpty {
             await ShellState.shared.set(session, URL(fileURLWithPath: newDir))
@@ -61,12 +63,13 @@ struct BashTool: Tool {
             let jobs = ShellJobs.shared.summary(ctx.conversationID)
             if !jobs.isEmpty { text += "\n" + jobs }
             return ToolOutput(text: text, isError: outcome == .timedOut, meta: ["exit": .number(Double(code))])
-        case .server, .left, .background:
+        case .server, .left, .background, .learner:
             let handle = ShellJobs.shared.adopt(job)
             job.markRead()
             let why = switch outcome {
             case .server: job.urls.isEmpty ? "It keeps running (a server or watcher), so it" : "It is serving at \(job.urls.joined(separator: ", ")), so it"
             case .left: "The command finished but left a process running, which"
+            case .learner: "The learner moved it to the background (carry on with other work; don't wait for it), so it"
             default: "It"
             }
             var text = truncateMiddle(job.output, max: 12_000).trimmingTrailingNewlines

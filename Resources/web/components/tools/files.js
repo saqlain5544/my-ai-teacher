@@ -8,6 +8,14 @@
   const output = (n, ctx, label) => n.props.output ? (label ? '<div class="label">' + label + '</div>' : '') + ctx.pre(n.props.output) : '';
 
   R.defineTool({ name: 'bash', icon: '⌘', title: 'Terminal', summary: n => input(n).command || '',
+    // Running: the learner can send it to the background (the agent carries on). Backgrounded: its handle, and Stop.
+    headActions(n, ctx) {
+      const m = (n.props.result && n.props.result.meta) || {};
+      if (n.props.status === 'running') return '<span class="tool-acts"><button class="btn mini" data-act="tool-background" title="Let it run in the background; the agent carries on">Background</button></span>';
+      if (!m.background || n.props.status === 'pending') return '';
+      return '<span class="tool-acts"><span class="agent-handle">' + ctx.esc(m.background) + ' · background' + (m.url ? ' · ' + ctx.esc(m.url) : '') + '</span>' +
+        '<button class="btn mini danger" data-act="job-stop" data-job="' + ctx.esc(m.background) + '">Stop</button></span>';
+    },
     body: (n, ctx) => '<div class="label">Command</div>' + ctx.pre(input(n).command || '') + output(n, ctx, 'Output') });
   R.defineTool({ name: 'read', icon: '📄', title: 'Read', summary: path });
   R.defineTool({ name: 'write', icon: '✏️', title: 'Write', summary: path,
