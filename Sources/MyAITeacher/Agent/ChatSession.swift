@@ -512,53 +512,17 @@ final class ChatSession: ObservableObject, Identifiable {
         switch ev { case .text, .thinking, .toolCallStarted, .toolCall: true; default: false }
     }
 
+    /// Applies one stream event to the reply (`ReplyBuilder`) and carries out what it asks of the transcript.
     private func handle(_ ev: StreamEvent, _ m: inout ChatMessage) {
-        switch ev {
-        case .text(let t):
-            if let last = m.blocks.indices.last, m.blocks[last].kind == .text {
-                m.blocks[last].text! += t
-                sink?.delta(m.id, index: last, kind: .text, text: t)
-            } else {
-                m.blocks.append(.text(t))
-                sink?.delta(m.id, index: m.blocks.count - 1, kind: .text, text: t)
+        for effect in ReplyBuilder.apply(ev, to: &m) {
+            switch effect {
+            case .delta(let index, let kind, let text): sink?.delta(m.id, index: index, kind: kind, text: text)
+            case .upsert: sink?.upsert(m)
+            case .clearStatus: if status != nil { setStatus(nil) }
+            case .thinking: setStatus("Thinking…")
+            case .toolStarted(let name): setStatus(Self.toolVerb(name))
+            case .todos(let list): todos = list
             }
-            if status != nil { setStatus(nil) }
-        case .thinking(let t):
-            if let last = m.blocks.indices.last, m.blocks[last].kind == .thinking, m.blocks[last].signature == nil {
-                m.blocks[last].text! += t
-                sink?.delta(m.id, index: last, kind: .thinking, text: t)
-            } else {
-                m.blocks.append(.thinking(t))
-                sink?.delta(m.id, index: m.blocks.count - 1, kind: .thinking, text: t)
-            }
-            setStatus("Thinking…")
-        case .thinkingSignature(let s):
-            if let last = m.blocks.indices.last, m.blocks[last].kind == .thinking, m.blocks[last].signature == nil {
-                m.blocks[last].signature = s
-            } else {
-                m.blocks.append(.thinking("", signature: s))
-            }
-        case .toolCallStarted(let id, let name):
-            var b = Block.toolUse(id: id, name: name, input: .object([:]))
-            b.meta = ["pending": true]
-            m.blocks.append(b)
-            sink?.upsert(m)
-            setStatus(Self.toolVerb(name))
-        case .toolCallArgs:
-            break
-        case .toolCall(let block):
-            if let i = m.blocks.firstIndex(where: { $0.kind == .toolUse && $0.id == block.id }) { m.blocks[i] = block }
-            else { m.blocks.append(block) }
-            sink?.upsert(m)
-            if block.name == "todo_write" { todos = block.input?["todos"]?.array ?? [] }
-        case .textWasThinking:
-            // The reply so far was reasoning (a bare </think>): move its text into one thinking block.
-            let t = m.blocks.filter { $0.kind == .text }.compactMap(\.text).joined()
-            m.blocks.removeAll { $0.kind == .text }
-            if !t.isEmpty { m.blocks.insert(.thinking(t), at: 0) }
-            sink?.upsert(m)
-        case .usage, .stop:
-            break
         }
     }
 

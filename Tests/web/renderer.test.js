@@ -1026,6 +1026,17 @@
     T.status('', false);
   });
 
+  test('quiz choices are a group named by their question', () => {
+    const input = { title: 'T', questions: [{ type: 'single_choice', prompt: 'Pick one', options: ['a', 'b'] }, { type: 'multiple_choice', prompt: 'Pick some', options: ['x', 'y'] }] };
+    const b = A([{ kind: 'toolUse', id: 'g1', name: 'quiz', input }]);
+    T.reset([U('q'), b], {}); T.interaction({ id: 'g1', kind: 'quiz', payload: input }, true);
+    const card = $('[data-tool-id="g1"]'), rg = $('[role="radiogroup"]', card), grp = $('[role="group"][aria-labelledby]', card);
+    ok(rg && rg.querySelectorAll('[role="radio"]').length === 2, 'radios inside a radiogroup');
+    ok(document.getElementById(rg.getAttribute('aria-labelledby')).textContent.includes('Pick one'), 'named by its prompt');
+    ok(grp && document.getElementById(grp.getAttribute('aria-labelledby')).textContent.includes('Pick some'), 'checkbox group named');
+    T.interaction({ id: 'g1' }, false);
+  });
+
   test('permission prompt: approve and deny post answers', () => {
     const a = A([{ kind: 'toolUse', id: 'pm1', name: 'bash', input: { command: 'rm -rf build' } }]);
     T.reset([U('q'), a], {});

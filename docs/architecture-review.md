@@ -65,9 +65,10 @@ extension points.
   force-unwrap, the follow-up scheduler, Gemini thought-signature round trips, sub-agent handles.
 
 ## Left open
-* `ChatSession.swift` (~950 lines) could be split further (tool execution, the step loop). Not done during the review:
-  another session had uncommitted edits in it.
+* `ChatSession.swift`: stream handling moved out into `ReplyBuilder` (pure, unit tested). Tool execution and the step
+  loop could follow; they were left in place because another session's uncommitted edits sit in `execute`.
 * Computer use and the course board are `Features.Module`s; testing and language could follow. A module's hooks
   register right after the permission gate, so each move needs the check done for the board: the hooks it implements
   must keep their order relative to the other extensions that implement the same hooks.
-* Renderer checks added during the review ran from a copy of `renderer.test.js` (the same reason); they belong in it.
+* The quiz-grouping check is in `renderer.test.js`. The late-progress change has no renderer test: the page API can't see
+  the memory it frees, and a visible check would pass without it.

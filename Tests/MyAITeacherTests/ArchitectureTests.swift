@@ -402,3 +402,40 @@ final class ReflectionFailureTests: XCTestCase {
         XCTAssertFalse(prose.failed, "an unusable answer is not retried every turn")
     }
 }
+
+/// The stream → reply rules, without a transcript.
+final class ReplyBuilderTests: XCTestCase {
+    private func run(_ events: [StreamEvent]) -> (ChatMessage, [ReplyBuilder.Effect]) {
+        var m = ChatMessage(role: .assistant, blocks: [])
+        let effects = events.flatMap { ReplyBuilder.apply($0, to: &m) }
+        return (m, effects)
+    }
+
+    func testTextJoinsOneBlockAndClearsTheStatus() {
+        let (m, fx) = run([.text("Hel"), .text("lo")])
+        XCTAssertEqual(m.blocks.map(\.text), ["Hello"])
+        XCTAssertEqual(fx, [.delta(index: 0, kind: .text, text: "Hel"), .clearStatus, .delta(index: 0, kind: .text, text: "lo"), .clearStatus])
+    }
+
+    func testASignatureClosesThinkingSoNewReasoningStartsAnotherBlock() {
+        let (m, _) = run([.thinking("a"), .thinkingSignature("s1"), .thinking("b"), .text("answer")])
+        XCTAssertEqual(m.blocks.map(\.kind), [.thinking, .thinking, .text])
+        XCTAssertEqual(m.blocks.map(\.signature), ["s1", nil, nil])
+        XCTAssertEqual(m.blocks.map(\.text), ["a", "b", "answer"])
+    }
+
+    func testAToolCallIsPendingUntilItCompletes() {
+        let done = Block.toolUse(id: "c1", name: "todo_write", input: ["todos": .array(["x"])])
+        let (m, fx) = run([.toolCallStarted(id: "c1", name: "todo_write"), .toolCall(done)])
+        XCTAssertEqual(m.blocks.count, 1, "the completed call replaces its placeholder")
+        XCTAssertNil(m.blocks[0].meta?["pending"])
+        XCTAssertEqual(fx, [.upsert, .toolStarted("todo_write"), .upsert, .todos(["x"])])
+    }
+
+    func testTextThatWasReasoningBecomesOneThinkingBlock() {
+        let (m, fx) = run([.text("let me think"), .text(" more"), .textWasThinking, .text("Answer")])
+        XCTAssertEqual(m.blocks.map(\.kind), [.thinking, .text])
+        XCTAssertEqual(m.blocks.map(\.text), ["let me think more", "Answer"])
+        XCTAssertTrue(fx.contains(.upsert))
+    }
+}
