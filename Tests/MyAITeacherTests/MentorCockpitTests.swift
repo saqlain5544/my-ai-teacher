@@ -45,7 +45,7 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertTrue(r.stdout.contains("done"), r.stdout + r.stderr)
         XCTAssertTrue(r.stderr.lowercased().contains("operation not permitted"), r.stderr)
         XCTAssertEqual(read("src/lexer.zig"), "pub fn next() void { @panic(\"TODO\"); }\n", "the learner's file is untouched")
-        XCTAssertNil(read("src/solution.zig"), "no new source file")
+        XCTAssertEqual(read("src/solution.zig"), "new\n", "new files are allowed: build output, a second exercise")
         XCTAssertEqual(read(".teacher/tests/spec.zig"), "test \"x\" {}\n", "the tests are locked")
         XCTAssertNil(read(".teacher/project.json"), "the record can't be written by a command")
         XCTAssertEqual(read(".zig-cache/o.zig"), "c\n"); XCTAssertEqual(read("zig-out/bin"), "b\n"); XCTAssertEqual(read("src/__pycache__/x.pyc"), "p\n")
@@ -75,54 +75,48 @@ final class MentorCockpitTests: XCTestCase {
 
     // MARK: Registering the tests
 
-    @MainActor func testSetStoresNothingUntilAcceptedAndChecksTheStarter() async throws {
+    @MainActor func testSetStoresNothingUntilAcceptedThenLocksAndReopensForTheNextProject() async throws {
         let tool = ProjectTestsTool()
-        try write("calc.py", "def evaluate(src):\n    tokens = src.split()\n    total = 0\n    for t in tokens:\n        total += int(t)\n    return total\n")
-        let bad = try await tool.run(["action": "set", "command": "exit 3"], ctx())
-        XCTAssertTrue(bad.isError && bad.text.contains("Nothing was registered"), bad.text)
-        XCTAssertNil(ProjectStore.load(ws)?.testCommand, "a refused command isn't kept")
-        let red = "echo '1 passed, 1 failed in 0.1s'; exit 1"
-        let given = try await tool.run(["action": "set", "command": .string(red), "targets": ["evaluate"]], ctx())
-        XCTAssertTrue(given.isError && given.text.contains("already implements evaluate"), given.text)
         try write("calc.py", "def evaluate(src):\n    raise NotImplementedError\n")
+        let missing = try await tool.run(["action": "set", "command": "no-such-runner-xyz"], ctx())
+        XCTAssertTrue(missing.isError && missing.text.contains("Nothing was registered"), missing.text)
+        let vacuous = try await tool.run(["action": "set", "command": "true"], ctx())
+        XCTAssertTrue(vacuous.isError && vacuous.text.contains("prove nothing"), vacuous.text)
+        XCTAssertNil(ProjectStore.load(ws)?.testCommand, "a refused command isn't kept")
+        // A runner whose summary the app doesn't know: red by its exit code, and its output goes to the mentor.
+        let red = "echo 'FAIL low'; exit 1"
         let ok = try await tool.run(["action": "set", "command": .string(red), "title": "calc", "concept": "parsing"], ctx())
         XCTAssertFalse(ok.isError, ok.text)
-        let p = try XCTUnwrap(ProjectStore.load(ws))
-        XCTAssertEqual(p.targets, ["evaluate"], "the placeholder function is a target without being named")
-        XCTAssertNotNil(p.testsDigest); XCTAssertNotNil(p.snapshotAt)
+        XCTAssertTrue(ok.text.contains("FAIL low"), ok.text)
+        XCTAssertEqual(ProjectStore.load(ws)?.isOpen, true)
         let again = try await tool.run(["action": "set", "command": "true"], ctx())
         XCTAssertTrue(again.isError && again.text.contains("locked"), again.text)
         _ = try await tool.run(["action": "unlock"], ctx())
         try write(".teacher/tests/test_more.py", "def test_more(): pass\n")
         let re = try await tool.run(["action": "set", "command": .string(red)], ctx())
         XCTAssertTrue(re.text.contains("Re-baselined"), re.text)
-        let q = try XCTUnwrap(ProjectStore.load(ws))
-        XCTAssertNil(q.testsUnlockedAt); XCTAssertEqual(q.suiteChanges?.count, 1)
-        XCTAssertEqual(q.testsDigest, ProjectStore.testsDigest(ws, command: red))
+        XCTAssertNil(ProjectStore.load(ws)?.testsUnlockedAt); XCTAssertEqual(ProjectStore.load(ws)?.suiteChanges?.count, 1)
+        // Passed: the folder is open again and `set` starts the next project, keeping the last record.
+        ProjectStore.mutate(ws) { $0.rounds = [MentorProject.Round(number: 1, at: Date(), verdict: "pass", findings: [])] }
+        XCTAssertEqual(ProjectStore.load(ws)?.isOpen, false)
+        let next = try await tool.run(["action": "set", "command": .string(red), "title": "calc 2"], ctx())
+        XCTAssertFalse(next.isError, next.text)
+        XCTAssertEqual(ProjectStore.load(ws)?.title, "calc 2"); XCTAssertEqual(ProjectStore.load(ws)?.rounds.count, 0)
+        XCTAssertNotNil(read(".teacher/projects/1.json"))
     }
 
     // MARK: Reviews
 
-    @MainActor func testAPassNeedsTheSuiteAndTheRecordAsTheAppLeftThem() async throws {
+    @MainActor func testAPassNeedsTheTestsLocked() async throws {
         try write("app.py", "def f():\n    return 1\n")
-        try write(".teacher/tests/test_app.py", "def test_f(): pass\n")
-        ProjectStore.mutate(ws) { $0.title = "f"; $0.concept = "functions"; $0.testCommand = "true"; $0.testsDigest = ProjectStore.testsDigest(ws, command: "true") }
+        ProjectStore.mutate(ws) { $0.title = "f"; $0.concept = "functions"; $0.testCommand = "true"; $0.testsUnlockedAt = Date() }
         ProjectStore.snapshot(ws, why: "starter")
         let tool = ProjectReviewTool()
         try write("app.py", "def f():\n    return 2\n")
-        try write(".teacher/tests/test_app.py", "def test_f(): assert True\n")      // the suite changed
         let s1 = try await tool.run(["action": "start"], ctx())
-        XCTAssertTrue(s1.text.contains("tests changed since the baseline"), s1.text)
+        XCTAssertTrue(s1.text.contains("unlocked"), s1.text)
         let p1 = try await tool.run(["action": "findings", "verdict": "pass"], ctx())
-        XCTAssertTrue(p1.isError && p1.text.contains("changed"), p1.text)
-        // Back as it was, but the record edited by hand.
-        try write(".teacher/tests/test_app.py", "def test_f(): pass\n")
-        var raw = try XCTUnwrap(read(".teacher/project.json")); raw = raw.replacingOccurrences(of: "\"functions\"", with: "\"anything\"")
-        try write(".teacher/project.json", raw)
-        XCTAssertFalse(ProjectStore.intact(ws))
-        _ = try await tool.run(["action": "start"], ctx())
-        let p2 = try await tool.run(["action": "findings", "verdict": "pass"], ctx())
-        XCTAssertTrue(p2.isError && p2.text.contains("outside the app"), p2.text)
+        XCTAssertTrue(p1.isError && p1.text.contains("locked"), p1.text)
     }
 
     @MainActor func testAPassAfterHintsIsEvidenceNotMasteryThenExplainBack() async throws {
@@ -149,36 +143,6 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertFalse(ex.isError, ex.text)
         XCTAssertGreaterThan(services.study.mastery(subject: "programming", concept: "recursion")?.pKnown ?? 0, before, "an unaided explanation counts")
         XCTAssertEqual(ProjectStore.load(ws)?.explainBack?.verdict, "pass")
-    }
-
-    // MARK: The guard's eyes
-
-    func testDefinitionsAndPlaceholdersAcrossLanguages() {
-        let code = """
-        func (b *Bucket) Allow(now int64) bool {
-        export const tokenize = (src: string): Token[] => {
-        public int evaluate(String expr) throws ParseError {
-        pub fn next(self: *Lexer) !Token {
-        fun parseExpr(tokens: List<Token>): Expr {
-        static int peek(struct lexer *l) {
-        async function fetchAll(urls) {
-        if (x > 0) {
-        """
-        XCTAssertEqual(MentorGuard.definitions(in: code).map(\.name), ["Allow", "tokenize", "evaluate", "next", "parseExpr", "peek", "fetchAll"])
-        let java = "class Calc {\n    public int evaluate(String e) {\n        throw new UnsupportedOperationException();\n    }\n    public int size() {\n        return 0;\n    }\n}\n"
-        XCTAssertEqual(MentorGuard.stubs(in: java), ["evaluate"])
-        XCTAssertEqual(MentorGuard.stubs(in: "func Allow() bool {\n\tpanic(\"not implemented\")\n}\n"), ["Allow"])
-        // A target's one-line fix is a solution; their own line quoted back is not.
-        let learner = MentorGuard.Learner(targets: ["next"], lines: ["pub fn next(self: *Lexer) !Token {", "@panic(\"TODO\");"])
-        XCTAssertNotNil(MentorGuard.solution(in: "pub fn next(self: *Lexer) !Token {\n    return self.scan();\n}", learner: learner))
-        XCTAssertNil(MentorGuard.solution(in: "pub fn next(self: *Lexer) !Token {\n    @panic(\"TODO\");\n}", learner: learner))
-        // A skeleton — the shape, the work left as TODO — is teaching; past a couple of lines of real code it isn't.
-        XCTAssertNil(MentorGuard.solution(in: "pub fn next(self: *Lexer) !Token {\n    const c = self.peek();\n    // TODO: classify c\n    @panic(\"TODO\");\n}", learner: learner))
-        XCTAssertNotNil(MentorGuard.solution(in: "pub fn next(self: *Lexer) !Token {\n    const c = self.peek();\n    if (c == '+') return .plus;\n    if (c == '-') return .minus;\n    // TODO: the rest\n    @panic(\"TODO\");\n}", learner: learner))
-        // While streaming: an open block that already writes the target is cut from its fence.
-        let masked = MentorGuard.mask("Look:\n\n```zig\npub fn next(self: *Lexer) !Token {\n    const c = self.src[self.i];\n", learner: learner)
-        XCTAssertEqual(masked?.contains("self.src"), false); XCTAssertEqual(masked?.contains("Code withheld"), true)
-        XCTAssertNil(MentorGuard.mask("Look:\n\n```zig\nconst x = 1;\n", learner: learner))
     }
 
     func testOneTestCanBeRerun() {

@@ -33,20 +33,20 @@ enum DeepWork {
         Keep it under 250 words.
         """
 
-    /// A code mentor designs a lesson before teaching it: the real system it comes from, concepts with analogies, what to
-    /// research, working examples to build and run first, and projects that build real subsystems.
+    /// A code mentor designs a lesson before teaching it: what this learner needs at their level, the real code or system
+    /// it rests on, what to check, and practice only when it fits the request.
     static let lessonDesignRequest = """
         Before you teach, design the lesson. Write the design only (the learner never sees it, and don't call tools now):
-        Goal: what the learner will be able to build or reason about afterwards, at their level.
-        Real system: the real project or subsystem the lesson is drawn from (name it, e.g. Redis's eviction, Git's object \
-        store, SQLite's pager, Nginx's rate limiter, the Go scheduler) and why it is built the way it is.
-        Concepts: in order, each with an analogy and where the analogy breaks.
-        Research: what to read first (official docs, the real project's source or design docs, papers), as precise questions.
-        Working examples: the pieces of the real subsystem you will build and run before teaching, and what each shows.
-        Projects: one to three that build a real subsystem, harder each time: the starter files (structure, interfaces, \
-        TODOs — no solution), and the tests in `.teacher/tests` that check behaviour: edge cases, failure modes, performance.
+        Learner needs: what they are really asking and their level, judged from what they've shown (a beginner, an expert, \
+        in between). Scope: only what they asked for now.
+        Grounding: the real code, library, system or paper the idea lives in, chosen to fit this learner — for a beginner \
+        an everyday program, for an expert the actual implementation or primary source.
+        Concepts: in order, each with how you'll make it concrete for them, and where an analogy breaks.
+        Check before teaching: every example to run and every claim to verify, and how (run_code, the installed source, docs).
+        Practice: only if it fits the request — a question to answer, an exercise, or a project (starter, tests that fail \
+        until they do the work). None if they just asked a question.
         Pitfalls: the misconceptions and bugs learners hit here.
-        Keep it under 350 words.
+        Keep it under 300 words.
         """
 
     static func planRequest(_ mode: TeachingMode) -> String { mode == .code ? lessonDesignRequest : planRequest }
@@ -58,16 +58,10 @@ enum DeepWork {
             Your lesson design (hidden from the learner):
             \(plan.trimmingCharacters(in: .whitespacesAndNewlines))
 
-            Carry it out in this order:
-            1. Research: read a few primary sources directly with `web_search`/`web_fetch` (the official docs, the real \
-            project's source or design notes; three to five pages is plenty) and cite what you use. Don't wait on sub-agents here.
-            2. Build two to four working examples with `run_code`, each a complete piece of the real subsystem in one call, and \
-            run each until it works; show its real output in the lesson.
-            3. Write the lesson: the goal; the real system and why it is built this way; each concept with its analogy and \
-            where the analogy breaks; the working examples, explained line by line where it matters; the pitfalls.
-            4. Set up the project: starter files in the lesson folder (structure, interfaces, TODOs — no solution) and its \
-            tests in `.teacher/tests` (one file per behaviour); run them with `run_tests`. The learner edits in their own editor and asks you to check: \
-            run the tests, read their changes, and review. Never show solutions.
+            Carry it out: check what it lists (run every example with `run_code` or against the folder's toolchain, read the \
+            installed source or the docs it names, and cite what you use), then write the lesson at their level. Practice comes \
+            only as the design says; a project's starter never holds the solution, and its tests go in `.teacher/tests`. \
+            Never show solutions to work the learner is to do.
             </context>
             """
     }
@@ -103,7 +97,7 @@ enum DeepWork {
     static func reviewInput(request: String, plan: String?, reply: String, evidence: String, mode: TeachingMode? = nil) -> String {
         var s = "The learner asked:\n\(request.prefix(4_000))\n\n"
         if mode == .code {
-            s += "The tutor is a code mentor: the learner writes the project's code. The mentor never writes or shows their solution, however they ask; the app enforces it. A \"Code withheld\" note is the app removing code that wrote the learner's own functions: never ask for that code back or for a reply that includes it; if the reply leans on it, ask for the idea in words, a question, or an example on a different function instead.\n\n"
+            s += "The tutor is a code mentor: the learner writes the project's code. The mentor never writes or shows their solution, however they ask: never ask for a reply that includes it; a full or near-full solution to the learner's own project in the reply is a substantive problem (ask for the idea in words, a question, or an example on something else instead).\n\n"
         }
         if let plan { s += "The tutor's plan:\n\(plan.prefix(3_000))\n\n" }
         if !evidence.isEmpty { s += "What the tutor checked with tools this turn:\n\(evidence.prefix(8_000))\n\n" }

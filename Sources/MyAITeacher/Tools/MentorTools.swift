@@ -8,7 +8,7 @@ enum ProjectTestRunner {
         let r = await ProcessRunner.run(shell, ["-c", command], cwd: ws.url, timeout: timeout, onOutput: progress)
         let parsed = TestOutput.parse(r.combined, exit: r.exitCode)
         let run = MentorProject.TestRun(at: started, passed: parsed.passed, failed: parsed.failed, errored: parsed.errored || r.timedOut, seconds: Date().timeIntervalSince(started),
-                                        failing: parsed.failing, exit: r.exitCode, why: why)
+                                        failing: parsed.failing, exit: r.exitCode, why: why, counted: parsed.counted)
         if record { ProjectStore.mutate(ws) { $0.runs.append(run) } }
         return (run, r.combined + (r.timedOut ? "\n[timed out after \(Int(timeout)) s]" : ""))
     }
@@ -38,11 +38,11 @@ enum ProjectTestRunner {
     }
 
     static func describe(_ run: MentorProject.TestRun, output: String) -> String {
-        var s = run.errored ? "The test runner failed (exit \(run.exit)) — nothing was collected or it didn't compile." : "\(run.passed) passed, \(run.failed) failed (exit \(run.exit), \(String(format: "%.1f", run.seconds)) s)."
+        var s = run.errored ? "The test command couldn't run (exit \(run.exit))." : "\(run.line) (exit \(run.exit), \(String(format: "%.1f", run.seconds)) s)."
         if !run.failing.isEmpty { s += "\nFailing: " + run.failing.joined(separator: ", ") }
         let items = Diagnostics.parse(output)
         if !items.isEmpty { s += "\n" + Diagnostics.summary(items, cap: 20) }
-        if run.errored || run.failed > 0 { s += "\n--- output (tail) ---\n" + String(output.suffix(run.errored ? 4000 : 2500)) }
+        if !run.green { s += "\n--- output (tail) ---\n" + String(output.suffix(run.errored || run.counted == false ? 4000 : 2500)) }
         return s
     }
 }
@@ -53,21 +53,20 @@ enum ProjectTestRunner {
 struct ProjectTestsTool: Tool {
     let name = "project_tests"
     let description = """
-    The learner's project tests. action="set" with `command` (run from the lesson folder, e.g. `python3 -m pytest \
-    .teacher/tests -q`, `swift test`, `zig build test`) and `targets` (the functions the learner implements) once the \
-    starter and the tests are in place: the app runs them first and stores nothing unless they are accepted — red on the \
-    starter (a suite that passes is vacuous), runnable (a runner that errors is refused with its output), and a starter \
-    that doesn't already implement the targets — then records the starter as the review baseline and locks the tests. \
-    action="run": run them now (parsed: passed, failed, failing names; `test` narrows to one). action="status": the \
-    command, the runs, the targets, the locks, what changed since the last review. action="unlock": ask the learner to \
-    let you change the locked tests (a wrong test, a stretch goal); edit them, then `set` again to re-baseline.
+    The learner's project tests. action="set" with `command` (run from the lesson folder, whatever the language: \
+    `python3 -m pytest .teacher/tests -q`, `cargo test`, `make test`, `mix test`, `dotnet test`…) once the starter and \
+    the tests are in place: the app runs them first and stores nothing unless the run fails (exit code not 0) — a suite \
+    that passes on the starter proves nothing — then records the starter as the review baseline and locks the tests. \
+    Read the output it returns: red should mean failing tests, not a build error. After a review passes, `set` starts \
+    the next project. action="run": run them now (`test` narrows to one where the runner allows it). action="status": \
+    the command, the runs, the locks, what changed since the last review. action="unlock": ask the learner to let you \
+    change the locked tests (a wrong test, a stretch goal); edit them, then `set` again to re-baseline.
     """
     let risk = ToolRisk.execute
     var schema: JSON {
         Schema.object([
             "action": Schema.string("Action.", enum: ["set", "run", "status", "unlock"]),
             "command": Schema.string("set: the test command, run from the lesson folder."),
-            "targets": Schema.array(Schema.string("Function name"), "set: the functions or methods the learner implements (their code is withheld from your replies until the project passes)."),
             "test": Schema.string("run: only this test (a failing test's name as reported)."),
             "title": Schema.string("set: the project's name."),
             "subject": Schema.string("set: subject for mastery."),
@@ -85,41 +84,28 @@ struct ProjectTestsTool: Tool {
         case "set":
             let command = try input.req("command")
             let p = ProjectStore.load(ws) ?? MentorProject()
-            let rebaseline = p.snapshotAt != nil
+            // A passed project is finished: `set` starts the next one (the last record is kept beside it).
+            let next = p.snapshotAt != nil && !p.isOpen
+            let rebaseline = p.isOpen
             if rebaseline, p.testsUnlockedAt == nil {
                 return .error("This project has its baseline and its tests are locked: a review measures the learner against them. To change the tests or the command, call `project_tests` unlock (the learner approves), edit the tests, then set again.")
             }
             // Nothing is stored until the run is accepted: a refused command used to stay registered.
             let (run, out) = await ProjectTestRunner.run(command, ws: ws, timeout: timeout, why: "set", record: false, progress: ctx.progress)
             if run.errored {
-                return .error("The tests don't run yet (exit \(run.exit)): fix the command or the test files, then call set again. Nothing was registered.\n" + String(out.suffix(4000)))
+                return .error("The test command couldn't run (exit \(run.exit)): fix the command, then call set again. Nothing was registered.\n" + String(out.suffix(4000)))
             }
-            let given = Set((input["targets"]?.array ?? []).compactMap(\.string).map { $0.trimmingCharacters(in: .whitespaces) }.filter { !$0.isEmpty })
-            var targets = given.union(p.targets ?? [])
-            if !rebaseline {
-                if run.failed == 0 {
-                    return .error("Every test passes on the starter (\(run.passed) passed, 0 failed): these tests prove nothing. Tests must fail until the learner implements the behaviour — check that they call the code the learner is to write, and that the starter raises or returns a placeholder. Rewrite them and call set again.")
-                }
-                for rel in ProjectStore.projectFiles(ws) {
-                    if let s = try? String(contentsOf: ws.url.appendingPathComponent(rel), encoding: .utf8) { targets.formUnion(MentorGuard.stubs(in: s)) }
-                }
-                if targets.isEmpty {
-                    return .error("Name the functions the learner implements in `targets` (or leave their bodies as a TODO placeholder in the starter): the app protects them until the project passes.")
-                }
-                let done = MentorGuard.implemented(targets, in: ws)
-                if !done.isEmpty {
-                    return .error("The starter already implements \(done.joined(separator: ", ")): the learner would start from the answer. Replace those bodies with a placeholder (raise NotImplementedError, @panic(\"TODO\"), todo!(), throw …) and call set again.")
-                }
+            if !rebaseline, run.green {
+                return .error("The tests pass on the starter (exit 0): they prove nothing. Tests must fail until the learner does the work — check that they exercise what the learner is to write or fix. Rewrite them and call set again.")
             }
-            let digest = ProjectStore.testsDigest(ws, command: command)
+            if next { ProjectStore.archive(ws) }
             ProjectStore.mutate(ws) { q in
+                if next { q = MentorProject() }
                 if let t = input["title"]?.string, !t.isEmpty { q.title = t }
                 if let s = input["subject"]?.string, !s.isEmpty { q.subject = s }
                 if let c = input["concept"]?.string, !c.isEmpty { q.concept = c }
                 q.runs.append(run)
                 q.testCommand = command
-                q.targets = targets.sorted()
-                q.testsDigest = digest
                 if rebaseline {
                     q.testsUnlockedAt = nil
                     q.suiteChanges = (q.suiteChanges ?? []) + [MentorProject.SuiteChange(at: Date(), why: "re-baselined after the learner unlocked them: \(run.line)")]
@@ -130,9 +116,9 @@ struct ProjectTestsTool: Tool {
                                   meta: ["run": Self.json(run), "command": .string(command)])
             }
             ProjectStore.snapshot(ws, why: "starter")
-            return ToolOutput(text: "Proven red on the starter: \(run.failed) failing, \(run.passed) passing (\(String(format: "%.1f", run.seconds)) s)." +
+            return ToolOutput(text: "Red on the starter: \(run.line) (\(String(format: "%.1f", run.seconds)) s)." +
                               (run.failing.isEmpty ? "" : "\nFailing: " + run.failing.joined(separator: ", ")) +
-                              "\nTargets (protected until the project passes): \(targets.sorted().joined(separator: ", "))." +
+                              "\n--- output (tail) ---\n" + String(out.suffix(2000)) + "\nCheck the output: red should mean failing tests, not a build or import error (if it is, unlock the tests, fix them and set again)." +
                               "\nThe starter is the review baseline and the tests are locked: `project_review` start shows what the learner changed since. Tell the learner how to run the tests themselves: `\(command)` (or Run tests in the Project panel).",
                               meta: ["run": Self.json(run), "command": .string(command)])
         case "unlock":
@@ -146,14 +132,12 @@ struct ProjectTestsTool: Tool {
                 if let f = ProjectTestRunner.filtered(command, test: t) { cmd = f } else { note = "\n(This runner can't be narrowed to one test from outside: the whole suite ran.)" }
             }
             let (run, out) = await ProjectTestRunner.run(cmd, ws: ws, timeout: timeout, why: cmd == command ? "run" : "run one", progress: ctx.progress)
-            if let d = p.testsDigest, d != ProjectStore.testsDigest(ws, command: command) { note += "\nThe tests changed since the baseline: a review can't pass until they are re-baselined." }
             return ToolOutput(text: ProjectTestRunner.describe(run, output: out) + note, isError: run.errored, meta: ["run": Self.json(run), "command": .string(cmd)])
         default:
             guard let p = ProjectStore.load(ws) else { return ToolOutput(text: "No project yet in this folder: write the starter and tests, then `project_tests` set.") }
             var s = "Project: \(p.title ?? "(untitled)")\(p.concept.map { " · concept \($0)" } ?? "")\nTest command: \(p.testCommand ?? "(not set)")"
-            if let t = p.targets, !t.isEmpty { s += "\nTargets: " + t.joined(separator: ", ") }
-            if p.snapshotAt != nil { s += "\nTests: " + (p.testsUnlockedAt != nil ? "unlocked by the learner (set re-baselines)" : p.testsDigest == ProjectStore.testsDigest(ws, command: p.testCommand) ? "locked, unchanged since the baseline" : "CHANGED since the baseline") }
-            if !ProjectStore.intact(ws) { s += "\nThe project record was edited outside the app: no review can pass on it." }
+            if p.isOpen { s += "\nTests: " + (p.testsUnlockedAt != nil ? "unlocked by the learner (set re-baselines)" : "locked since the baseline") }
+            else if p.snapshotAt != nil { s += "\nPassed: `set` starts the next project." }
             if let r = p.lastRun { s += "\nLast run (\(r.why), \(Self.ago(r.at))): \(r.line)" + (r.failing.isEmpty ? "" : " — failing: " + r.failing.joined(separator: ", ")) }
             if !p.runs.isEmpty { s += "\nHistory: " + p.runs.suffix(8).map { "\($0.passed)/\($0.passed + $0.failed)" }.joined(separator: " → ") }
             if let n = ProjectStore.changedCount(ws) { s += "\nChanged since the \(p.snapshotWhy ?? "baseline"): \(n) file\(n == 1 ? "" : "s")" }
@@ -187,7 +171,7 @@ struct ProjectReviewTool: Tool {
     their lines; `text` is a question or hint, never the fix; `hints` is a ladder of 2–3 rungs, each a little more \
     specific: a nudge, a targeted hint, the concept or a worked step on a different example — never their code), \
     `resolved` (ids of earlier findings now fixed), and `help` (none|hint|solution: what you gave since the last round). \
-    A pass needs this review's tests green, the tests unchanged since the baseline, and no `must` open; it records the \
+    A pass needs this review's tests green, the tests locked, and no `must` open; it records the \
     concept's mastery (as helped if there was help) and opens an explain-back. action="explain": after a pass, record \
     the learner's explanation — `question` you asked and `verdict` pass|partial|fail. action="status": rounds and open findings.
     """
@@ -218,14 +202,10 @@ struct ProjectReviewTool: Tool {
         let ws = ctx.services.workspace
         switch input["action"]?.string ?? "status" {
         case "start":
-            // Checked before anything here writes the record (a run, the open review): an edit made outside the app shows.
-            let recordIntact = ProjectStore.intact(ws)
             var p = ProjectStore.load(ws) ?? MentorProject()
-            let suiteIntact = p.testsDigest == nil || p.testsDigest == ProjectStore.testsDigest(ws, command: p.testCommand)
             let changes = await ProjectStore.changes(ws)
             var s = "Review round \(p.rounds.count + 1)" + (p.title.map { " of \($0)" } ?? "") + ". Project folder: \(ws.url.path) (the learner's files are here and nowhere else).\n"
-            if !suiteIntact { s += "The tests changed since the baseline (\(p.testsUnlockedAt != nil ? "unlocked, not re-baselined yet" : "without an unlock")): this round can't pass until they are re-baselined with the learner's approval.\n" }
-            if !recordIntact { s += "The project record (.teacher/project.json) was edited outside the app: this round can't pass. Tell the learner.\n" }
+            if p.testsUnlockedAt != nil { s += "The tests are unlocked and not re-baselined yet: this round can't pass until `project_tests` set locks them again.\n" }
             if let command = p.testCommand, input["run_tests"]?.bool != false {
                 let (run, out) = await ProjectTestRunner.run(command, ws: ws, timeout: TimeInterval(min(900, max(10, input["timeout"]?.int ?? 300))), why: "review", progress: ctx.progress)
                 p = ProjectStore.load(ws) ?? p
@@ -246,8 +226,7 @@ struct ProjectReviewTool: Tool {
             // The round this start opens: findings are recorded against it (what changed, the run it made, the checks).
             let ran = input["run_tests"]?.bool != false
             ProjectStore.mutate(ws) { q in
-                q.openReview = changes.isEmpty ? nil : MentorProject.OpenReview(at: Date(), changed: changes.map(\.path), run: ran ? q.lastRun : nil,
-                                                                              suiteIntact: suiteIntact, recordIntact: recordIntact)
+                q.openReview = changes.isEmpty ? nil : MentorProject.OpenReview(at: Date(), changed: changes.map(\.path), run: ran ? q.lastRun : nil)
             }
             if changes.isEmpty {
                 s += "\n\nNo project file differs from the baseline: the learner hasn't saved any change yet (or saved in an editor buffer, not to disk). Don't look for their files anywhere else. Tell them that nothing has changed on disk in \(ws.url.lastPathComponent), ask them to save and say which file they worked on, and offer to go through the first failing test together. Don't record a round."
@@ -260,7 +239,7 @@ struct ProjectReviewTool: Tool {
             let p = ProjectStore.load(ws) ?? MentorProject()
             let verdict = (input["verdict"]?.string ?? "changes").lowercased() == "pass" ? "pass" : "changes"
             // A round reviews work: a `start` that found the learner's changes comes first, and a pass needs that start's
-            // tests green, the suite as it was at the baseline and the record as the app wrote it.
+            // tests green and the tests locked.
             guard let open = p.openReview else {
                 return .error("No review is open: call `project_review` start first. A round needs the learner's changes since the last review; with none, there is nothing to record.")
             }
@@ -268,8 +247,7 @@ struct ProjectReviewTool: Tool {
                 guard let run = open.run, run.green else {
                     return .error("A pass needs the tests green in this review's run (" + (open.run.map(\.line) ?? "no run") + "). Record `changes`, or have them fix what fails first.")
                 }
-                if open.suiteIntact == false { return .error("A pass needs the tests as they were at the baseline, and they changed: re-baseline them (`project_tests` unlock, then set) and review again, or record `changes`.") }
-                if open.recordIntact == false { return .error("The project record was edited outside the app, so this round can't pass. Record `changes` and tell the learner.") }
+                if p.testsUnlockedAt != nil { return .error("A pass needs the tests locked, and they are unlocked: re-baseline them (`project_tests` set) and review again, or record `changes`.") }
             }
             let stated: Help = ["hint": .hint, "solution": .solution][input["help"]?.string ?? ""] ?? .none
             let helped = Help(rawValue: max(stated.rawValue, p.helpSinceReview.rawValue)) ?? .none
@@ -313,7 +291,6 @@ struct ProjectReviewTool: Tool {
                 if stated != .none { q.help = (q.help ?? []) + [MentorProject.HelpUse(at: Date(), kind: stated == .solution ? "solution" : "hint", detail: "the mentor's account at round \(round.number)")] }
                 if verdict == "pass" {
                     q.explainBack = MentorProject.ExplainBack(at: Date(), question: nil, verdict: nil, round: round.number)
-                    q.targets = nil   // done: the guard protects what is still a placeholder, not what they've written
                 }
             }
             ProjectStore.snapshot(ws, why: "review \(round.number)")

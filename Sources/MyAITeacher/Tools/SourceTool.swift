@@ -207,7 +207,7 @@ struct SourceTool: Tool {
     Read the real source of a language's standard library or an installed package, by name, wherever it lives on \
     this Mac. `library`: "zig std", "zig std.ArrayList", "rust core", "rust std collections", "go net/http", \
     "go:golang.org/x/net", "python asyncio", "pip:requests", "npm:react", "cargo:serde", "swift:swift-collections", \
-    or a folder path. action="locate" (where it is and its top-level files), "find" (`query`: a file name or part of \
+    or a folder path — any language's source works by path (find it with the toolchain's own command). action="locate" (where it is and its top-level files), "find" (`query`: a file name or part of \
     a path), "outline" (`path`: a file's definitions with lines), "read" (`path`, `from`, `to`: numbered lines, up to \
     400), "grep" (`query`: a regex over the library). Teach from this — the installed version — not from memory; cite \
     file and line when you explain how something is implemented.
@@ -228,7 +228,7 @@ struct SourceTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let spec = try input.req("library")
         guard let lib = await LibrarySources.resolve(spec, folder: ctx.workspace) else {
-            return .error("Couldn't find the source of “\(spec)” on this Mac. Known forms: zig std, rust core|std|alloc, go <package>, go:<module>, python <module>, pip:<pkg>, npm:<pkg>, cargo:<crate>, swift:<package>, or a folder path. Is the toolchain or package installed? (`bash` can check; never search the whole disk.)")
+            return .error("Couldn't find the source of “\(spec)” on this Mac. Known forms: zig std, rust core|std|alloc, go <package>, go:<module>, python <module>, pip:<pkg>, npm:<pkg>, cargo:<crate>, swift:<package>, or a folder path. For any other language, ask its own toolchain where its sources live with `bash` (e.g. `gem contents <gem>`, `ghc --print-libdir`, `opam var lib`, `mix deps`, the JDK's lib/src.zip, `julia -e 'println(Sys.STDLIB)'`) and pass that folder as `library`. Never search the whole disk.")
         }
         let root = lib.path
         let fm = FileManager.default

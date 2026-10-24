@@ -9,8 +9,6 @@ import UniformTypeIdentifiers
 final class ProjectModel: ObservableObject {
     @Published private(set) var project: MentorProject?
     @Published private(set) var changes: [ProjectStore.Change] = []
-    @Published private(set) var intact = true
-    @Published private(set) var suiteIntact = true
     @Published var running: String?
     @Published var output: String?
     private(set) weak var session: ChatSession?
@@ -21,8 +19,6 @@ final class ProjectModel: ObservableObject {
     func reload() {
         guard let ws else { project = nil; return }
         project = ProjectStore.load(ws)
-        intact = ProjectStore.intact(ws)
-        suiteIntact = project.map { $0.testsDigest == nil || $0.testsDigest == ProjectStore.testsDigest(ws, command: $0.testCommand) } ?? true
         Task { [weak self] in
             let c = await ProjectStore.changes(ws)
             self?.changes = c
@@ -99,7 +95,6 @@ final class ProjectModel: ObservableObject {
         var s = "# \(p.title ?? "Project")\n\n"
         if let c = p.concept { s += "Concept: **\(c)**" + (p.subject.map { " (\($0))" } ?? "") + "\n\n" }
         s += "Started \(df.string(from: p.createdAt)). Tests: `\(p.testCommand ?? "—")`.\n\n"
-        if let t = p.targets, !t.isEmpty { s += "Implemented by the learner: " + t.map { "`\($0)`" }.joined(separator: ", ") + "\n\n" }
         s += "## Test runs\n\n" + p.runs.map { "- \(df.string(from: $0.at)) (\($0.why)): \($0.line)" }.joined(separator: "\n") + "\n\n"
         s += "## Reviews\n\n"
         for r in p.rounds {
@@ -339,16 +334,12 @@ struct ProjectPanel: View {
 
     private func guardBox(_ p: MentorProject) -> some View {
         section("Protection") {
-            if p.snapshotAt != nil {
+            if p.isOpen {
                 Label("Your files are yours: the mentor can't edit them\(p.snapshotAt.map { " (since \(ProjectTestsTool.ago($0)))" } ?? "").", systemImage: "lock.shield").font(.caption)
             }
-            Label(p.testsUnlockedAt != nil ? "Tests unlocked: the mentor may change them until it re-baselines." : model.suiteIntact ? "Tests unchanged since the baseline." : "Tests changed since the baseline: a review can't pass until they are re-baselined.",
-                  systemImage: p.testsUnlockedAt != nil ? "lock.open" : model.suiteIntact ? "checkmark.seal" : "exclamationmark.triangle")
-                .font(.caption).foregroundStyle(model.suiteIntact || p.testsUnlockedAt != nil ? Color.secondary : Color.orange)
-            if !model.intact {
-                Label("The project record was edited outside the app: reviews can't pass on it.", systemImage: "exclamationmark.triangle").font(.caption).foregroundStyle(.orange)
-            }
-            if p.testsUnlockedAt == nil, p.snapshotAt != nil {
+            Label(p.testsUnlockedAt != nil ? "Tests unlocked: the mentor may change them until it re-baselines." : "Tests locked since the baseline.",
+                  systemImage: p.testsUnlockedAt != nil ? "lock.open" : "checkmark.seal").font(.caption).foregroundStyle(.secondary)
+            if p.testsUnlockedAt == nil, p.isOpen {
                 Button("Unlock the tests for the mentor") { model.unlockTests() }.buttonStyle(.link).font(.caption)
                     .help("For a wrong test or a stretch goal: the mentor changes them, then re-baselines")
             }

@@ -268,8 +268,6 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Reports from background sub-agents not yet read by the teacher; folded in at the next step of a running turn.
     private var inbox: [ChatMessage] = []
-    /// Replies drawn through `streamMask` (redrawn whole), not streamed as deltas.
-    private var masking: Set<String> = []
 
     /// A background sub-agent finished: the teacher reads its report at the next step, or in a new turn if the lesson is idle.
     func deliver(_ report: ChatMessage) {
@@ -452,11 +450,9 @@ final class ChatSession: ObservableObject, Identifiable {
             turn.usage = turn.usage + step.usage
             turn.generationSeconds += max(0, step.duration - (step.timeToFirstToken ?? 0))
             if turn.timeToFirstToken == nil, let t = step.timeToFirstToken { turn.timeToFirstToken = Date().timeIntervalSince(turn.startedAt) - step.duration + t }
-            host.willStoreReply(&assistant, self)
             messages[idx] = assistant
             persist(idx)
             sink?.upsert(assistant)
-            masking.remove(assistant.id)
             conversation.usage = Usage(input: step.usage.promptTotal, output: (conversation.usage?.output ?? 0) + step.usage.output)
             if assistant.error != nil { break }
             let calls = assistant.toolUses
@@ -599,17 +595,8 @@ final class ChatSession: ObservableObject, Identifiable {
         for effect in ReplyBuilder.apply(ev, to: &m) {
             switch effect {
             case .delta(let index, let kind, let text):
-                // A reply an extension masks while it streams (the code mentor's withheld code) is redrawn whole at each
-                // line end once it needs masking; until then it streams as deltas.
-                if masking.contains(m.id) {
-                    if text.contains("\n") { sink?.upsert(host.streamMask(m, self) ?? m) }
-                } else if text.contains("\n"), let masked = host.streamMask(m, self) {
-                    masking.insert(m.id)
-                    sink?.upsert(masked)
-                } else {
-                    sink?.delta(m.id, index: index, kind: kind, text: text)
-                }
-            case .upsert: sink?.upsert(masking.contains(m.id) ? host.streamMask(m, self) ?? m : m)
+                sink?.delta(m.id, index: index, kind: kind, text: text)
+            case .upsert: sink?.upsert(m)
             case .clearStatus: if status != nil { setStatus(nil) }
             case .thinking: setStatus("Thinking…")
             case .toolStarted(let name): setStatus(Self.toolVerb(name))
@@ -728,8 +715,7 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         EventBus.publish(.toolStarted(conversationID: id, tool: name, callID: callID))
         let progress = ProgressThrottle { [weak self] text in
-            guard let self, let shown = self.host.filterProgress(callID, text, self) else { return }
-            self.sink?.toolProgress(callID, text: shown)
+            self?.sink?.toolProgress(callID, text: text)
         }
         var ctx = ToolContext(conversationID: id, workspace: services.workspace.url, services: services, interactions: app.interactions,
                               toolCallID: callID, client: client, model: conversation.model, progress: { t in progress.push(t) }, subAgentModels: subAgentModels(), agentHost: agentHost)

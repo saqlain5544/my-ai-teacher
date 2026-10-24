@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// A code mentor's project in the lesson folder: the test command, every test run, the review rounds with their
 /// findings, and a snapshot of the learner's files at the last review (so the next review sees only what changed).
@@ -9,14 +8,21 @@ struct MentorProject: Codable, Sendable, Equatable {
         var at: Date
         var passed: Int
         var failed: Int
-        /// The runner itself failed (nothing collected, a compile error): neither green nor red.
+        /// The command itself couldn't run (not found, not executable, timed out): neither green nor red.
         var errored: Bool
         var seconds: Double
         var failing: [String]
         var exit: Int32
         var why: String          // set | run | review
-        var green: Bool { !errored && failed == 0 && exit == 0 }
-        var line: String { errored ? "the tests could not run" : "\(passed) passed, \(failed) failed" }
+        /// The runner's summary was read into `passed`/`failed`; otherwise only the exit code speaks.
+        var counted: Bool? = nil
+        /// Green is the exit code: every test runner, in any language, exits 0 when its tests pass.
+        var green: Bool { !errored && exit == 0 }
+        var line: String {
+            if errored { return "the tests could not run" }
+            if counted == false { return exit == 0 ? "passed (exit 0)" : "failed (exit \(exit))" }
+            return "\(passed) passed, \(failed) failed"
+        }
     }
     struct Finding: Codable, Sendable, Equatable, Identifiable {
         var id: Int
@@ -58,16 +64,8 @@ struct MentorProject: Codable, Sendable, Equatable {
     var openReview: OpenReview?
     struct OpenReview: Codable, Sendable, Equatable {
         var at: Date; var changed: [String]; var run: TestRun?
-        /// The tests and the project record were as the app left them when this review started; a pass needs both.
-        var suiteIntact: Bool? = nil
-        var recordIntact: Bool? = nil
     }
 
-    /// The functions the learner implements (named at `set`, or the starter's TODO stubs then): the guard withholds
-    /// code that writes them, from the baseline until the project passes.
-    var targets: [String]?
-    /// A digest of the test command and `.teacher/tests` at the baseline: a review sees whether the suite changed.
-    var testsDigest: String?
     /// The learner unlocked the tests for the mentor to change (`project_tests` unlock): open until the next `set`.
     var testsUnlockedAt: Date?
     struct SuiteChange: Codable, Sendable, Equatable { var at: Date; var why: String }
@@ -99,6 +97,8 @@ struct MentorProject: Codable, Sendable, Equatable {
     }
 
     var lastRun: TestRun? { runs.last }
+    /// Baselined and not yet passed: the learner is working on it, so its files are theirs.
+    var isOpen: Bool { snapshotAt != nil && rounds.last?.verdict != "pass" }
     var openFindings: [Finding] { rounds.last?.findings.filter { !$0.resolved } ?? [] }
     var nextFindingID: Int { (rounds.flatMap(\.findings).map(\.id).max() ?? 0) + 1 }
 }
@@ -118,7 +118,7 @@ enum ProjectStore {
         guard let d = try? Data(contentsOf: file(ws)) else { return nil }
         return try? dec.decode(MentorProject.self, from: d)
     }
-    /// Every change to a project goes through here: the record is read fresh and written with its seal, under one lock
+    /// Every change to a project goes through here: the record is read fresh and written under one lock
     /// (the mentor's tools, the guard and the Project panel all write it).
     static let writes = NSRecursiveLock()
     @discardableResult
@@ -136,42 +136,8 @@ enum ProjectStore {
         try? FileManager.default.createDirectory(at: ws.stateDir, withIntermediateDirectories: true)
         guard let d = try? enc.encode(p) else { return }
         try? d.write(to: file(ws), options: .atomic)
-        try? Data(ProjectSeal.sign(d).utf8).write(to: sealURL(ws), options: .atomic)
         EventBus.publish(.projectChanged(folder: ws.url.path))
     }
-    static func sealURL(_ ws: Workspace) -> URL { ws.stateDir.appendingPathComponent("project.seal") }
-    /// The record is as the app last wrote it (nobody edited project.json by hand or with a script).
-    static func intact(_ ws: Workspace) -> Bool {
-        guard let d = try? Data(contentsOf: file(ws)) else { return true }
-        guard let seal = try? String(contentsOf: sealURL(ws), encoding: .utf8) else { return false }
-        return ProjectSeal.sign(d) == seal.trimmingCharacters(in: .whitespacesAndNewlines)
-    }
-
-    /// The test command and every file under `.teacher/tests`, as one digest (content, not dates).
-    static func testsDigest(_ ws: Workspace, command: String?) -> String {
-        var h = SHA256()
-        h.update(data: Data((command ?? "").utf8))
-        let fm = FileManager.default
-        let root = ws.testsDir.resolvingSymlinksInPath()
-        var files: [String] = []
-        if let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey]) {
-            while let u = e.nextObject() as? URL {
-                let r = u.resolvingSymlinksInPath()
-                if (try? r.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true {
-                    if ["__pycache__", ".pytest_cache", "node_modules", ".zig-cache", "zig-cache"].contains(r.lastPathComponent) { e.skipDescendants() }
-                    continue
-                }
-                if r.pathExtension == "pyc" || r.lastPathComponent == ".DS_Store" { continue }
-                files.append(String(r.path.dropFirst(root.path.count)))
-            }
-        }
-        for rel in files.sorted() {
-            h.update(data: Data(rel.utf8))
-            h.update(data: (try? Data(contentsOf: root.appendingPathComponent(rel))) ?? Data())
-        }
-        return h.finalize().map { String(format: "%02x", $0) }.joined()
-    }
-
     /// The learner's project files: text files under the folder, outside the app's state and build folders, bounded.
     static func projectFiles(_ ws: Workspace) -> [String] {
         let fm = FileManager.default
@@ -206,6 +172,15 @@ enum ProjectStore {
     private static func snapshotted(_ ws: Workspace) -> Set<String> {
         guard let d = try? Data(contentsOf: manifestURL(ws)), let m = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { return [] }
         return Set(m.keys)
+    }
+
+    /// Keeps a finished project's record as `.teacher/projects/<n>.json`, before the next project replaces it.
+    static func archive(_ ws: Workspace) {
+        writes.lock(); defer { writes.unlock() }
+        let dir = ws.stateDir.appendingPathComponent("projects", isDirectory: true)
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let n = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).count + 1
+        try? FileManager.default.copyItem(at: file(ws), to: dir.appendingPathComponent("\(n).json"))
     }
 
     /// Records the project's files as the baseline for the next review.
@@ -286,7 +261,9 @@ enum ProjectStore {
 /// Test runners' own summaries, read into numbers and the names of the failing tests: pytest, jest/vitest, mocha,
 /// go test, swift test, cargo test, zig test, rspec, mix test, ctest, and anything that prints "N passed, M failed".
 enum TestOutput {
-    struct Result: Sendable, Equatable { var passed: Int; var failed: Int; var failing: [String]; var errored: Bool }
+    /// `counted`: a runner's summary was recognised. Red or green never depends on it — the exit code decides — so a
+    /// runner this list doesn't know (any language's) works the same, with only the counts missing.
+    struct Result: Sendable, Equatable { var passed: Int; var failed: Int; var failing: [String]; var errored: Bool; var counted = true }
 
     private static func int(_ s: Substring) -> Int { Int(s) ?? 0 }
     private static func first(_ pattern: String, in text: String) -> [String]? {
@@ -298,7 +275,11 @@ enum TestOutput {
         return re.matches(in: text, range: NSRange(text.startIndex..., in: text)).compactMap { m in Range(m.range(at: group), in: text).map { String(text[$0]).trimmingCharacters(in: .whitespaces) } }
     }
 
-    static func parse(_ output: String, exit: Int32) -> Result {
+    static func parse(_ raw: String, exit: Int32) -> Result {
+        // Colour codes (deno, ExUnit, bun) would hide every summary below.
+        let output = raw.replacingOccurrences(of: "\u{1B}\\[[0-9;?]*[A-Za-z]", with: "", options: .regularExpression)
+        // 126/127: the shell couldn't find or run the command — nothing ran.
+        let couldNotRun = exit == 126 || exit == 127
         var passed = 0, failed = 0, found = false
         // pytest: "3 passed, 1 failed in 0.1s" / "4 passed" / "1 failed, 3 passed, 2 errors"
         // pytest's banner line, or a bare summary line ("4 passed in 0.1s"): never a count buried in a log line.
@@ -344,25 +325,11 @@ enum TestOutput {
         var failing = all(#"^FAILED (\S+)"#, in: output) + goFails + all(#"^\s*[✕×] (.+)$"#, in: output) + all(#"Test Case '-\[\S+ (\S+)\]' failed"#, in: output)
             + all(#"^test (\S+) \.\.\. FAILED"#, in: output) + all(#"^rspec \S+ # (.+)$"#, in: output) + all(#"^error: '([^']+)' (?:failed|terminated)"#, in: output)
         failing = Array(NSOrderedSet(array: failing)).compactMap { $0 as? String }.prefix(30).map { $0 }
-        if !found { return Result(passed: 0, failed: 0, failing: failing, errored: exit != 0) }
+        if !found { return Result(passed: 0, failed: 0, failing: failing, errored: couldNotRun, counted: false) }
         if failing.count > failed { failed = max(failed, failing.count) }
-        return Result(passed: passed, failed: failed, failing: failing, errored: false)
+        // A summary that disagrees with the exit code (cargo's first "test result" is the lib's own, often 0/0) isn't trusted.
+        if (exit == 0) != (failed == 0) { return Result(passed: 0, failed: 0, failing: failing, errored: couldNotRun, counted: false) }
+        return Result(passed: passed, failed: failed, failing: failing, errored: couldNotRun)
     }
 }
 
-/// Signs the project record with a key kept in the app's support folder (never in the lesson folder): an edit made
-/// outside the app shows, and a review won't pass on it.
-enum ProjectSeal {
-    static let key: SymmetricKey = {
-        let url = AppPaths.support.appendingPathComponent("project-seal.key")
-        if let d = try? Data(contentsOf: url), d.count == 32 { return SymmetricKey(data: d) }
-        let k = SymmetricKey(size: .bits256)
-        let d = k.withUnsafeBytes { Data($0) }
-        try? d.write(to: url, options: [.atomic])
-        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
-        return k
-    }()
-    static func sign(_ d: Data) -> String {
-        HMAC<SHA256>.authenticationCode(for: d, using: key).map { String(format: "%02x", $0) }.joined()
-    }
-}

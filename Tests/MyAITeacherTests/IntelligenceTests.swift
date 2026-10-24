@@ -60,16 +60,17 @@ final class IntelligenceTests: XCTestCase {
     }
 }
 
-/// The code mentor designs, researches and tests a lesson before teaching it; the learner works in their own editor.
+/// The code mentor designs a lesson for this learner's level before teaching it; practice only when the request wants it.
 final class MentorLessonTests: XCTestCase {
     func testTheMentorDesignsTheLessonFirst() {
         let ask = DeepWork.planRequest(.code)
-        for part in ["Real system", "Concepts", "analogy", "Research", "Working examples", "Projects", ".teacher/tests", "Pitfalls"] { XCTAssertTrue(ask.contains(part), part) }
+        for part in ["Learner needs", "their level", "Grounding", "Concepts", "Check before teaching", "Practice: only if it fits", "Pitfalls"] { XCTAssertTrue(ask.contains(part), part) }
+        for anchor in ["Redis", "Nginx", "SQLite", "Git's object"] { XCTAssertFalse(ask.contains(anchor), "no fixed systems to steer every lesson: \(anchor)") }
         XCTAssertEqual(DeepWork.planRequest(.tutor), DeepWork.planRequest, "other modes keep the general plan")
-        let note = DeepWork.planNote("Real system: Redis eviction", mode: .code)
-        XCTAssertTrue(note.contains("working examples with `run_code`") && note.contains("`.teacher/tests`") && note.contains("Never show solutions"), note)
+        let note = DeepWork.planNote("Grounding: a shopping list", mode: .code)
+        XCTAssertTrue(note.contains("`run_code`") && note.contains("`.teacher/tests`") && note.contains("Never show solutions"), note)
         let prompt = SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m")
-        XCTAssertTrue(prompt.contains("design the lesson from the real system") && prompt.contains("`.teacher/tests`") && prompt.contains("own editor"), prompt)
+        XCTAssertTrue(prompt.contains("first-time programmer") && prompt.contains("`.teacher/tests`") && prompt.contains("own editor"), prompt)
     }
 
     func testTheMentorWorksInTheFolderWithTestsInTheTeacherDirectory() {

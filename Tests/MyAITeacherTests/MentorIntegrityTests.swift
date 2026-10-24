@@ -29,48 +29,6 @@ final class MentorIntegrityTests: XCTestCase {
 
     // MARK: The learner's files
 
-    @MainActor func testWhatACommandChangesInTheLearnersFilesIsPutBack() throws {
-        try write("limiter.py", "def allow(key):\n    # TODO: token bucket\n    raise NotImplementedError\n")
-        try write("notes.md", "mine")
-        let b = try XCTUnwrap(MentorGuard.backup(ws))
-        try write("limiter.py", "def allow(key):\n    return True\n")          // the mentor's command wrote the solution
-        try write("solution.py", "print('x')")                                // and a new file
-        try FileManager.default.removeItem(at: dir.appendingPathComponent("notes.md"))
-        try write(".teacher/tests/test_limiter.py", "assert True")            // and a test, while they are locked
-        let fixed = MentorGuard.restore(ws, from: b)
-        XCTAssertEqual(fixed, [".teacher/tests/test_limiter.py (removed)", "limiter.py", "notes.md", "solution.py (removed)"])
-        XCTAssertTrue(read("limiter.py")?.contains("TODO") == true, "back to the learner's version")
-        XCTAssertEqual(read("notes.md"), "mine"); XCTAssertNil(read("solution.py"))
-        XCTAssertNil(read(".teacher/tests/test_limiter.py"), "the tests are locked after the baseline too")
-    }
-
-    func testARepliesSolutionToATodoFunctionIsWithheld() throws {
-        try write("limiter.py", "class Bucket:\n    def __init__(self, cap):\n        self.cap = cap\n\ndef allow_request(key, now):\n    # TODO: refill, then take a token\n    raise NotImplementedError\n")
-        try write("done.py", "def helper_done(x):\n    return x\n")
-        let stubs = MentorGuard.learner(ws).targets
-        XCTAssertEqual(stubs, ["allow_request"], "only functions whose body still says TODO: not __init__, not helper_done")
-        let learner = MentorGuard.learner(ws)
-        let reply = "Here's the idea:\n\n```python\ndef allow_request(key, now):\n    b = buckets[key]\n    b.refill(now)\n    return b.take()\n```\n\nAnd a tiny unrelated example:\n\n```python\ndef area(r):\n    return 3.14 * r * r\n\nprint(area(2))\n```"
-        let (out, names) = try XCTUnwrap(MentorGuard.withhold(reply, learner: learner))
-        XCTAssertEqual(names, ["allow_request"])
-        XCTAssertFalse(out.contains("b.refill(now)")); XCTAssertTrue(out.contains("Code withheld"))
-        XCTAssertTrue(out.contains("def area(r)"), "other examples stay")
-        XCTAssertNil(MentorGuard.withhold("```python\ndef allow_request(k): ...\n```", learner: learner), "a one-line signature isn't a solution")
-        // Tool cards show their input and output: a write's content, a command's heredoc, an echo are covered too.
-        let solution = "def allow_request(key, now):\n    b = buckets[key]\n    b.refill(now)\n    return b.take()\n"
-        let (input, hidden) = try XCTUnwrap(MentorGuard.redact(["path": "limiter.py", "content": .string(solution)], learner: learner))
-        XCTAssertEqual(hidden, ["allow_request"]); XCTAssertEqual(input["path"]?.string, "limiter.py")
-        XCTAssertFalse(input.compact.contains("refill"))
-        XCTAssertNotNil(MentorGuard.solution(in: "cat > limiter.py <<EOF\n" + solution + "EOF", learner: learner))
-        let traceback = "limiter.py:5: in allow_request\n    def allow_request(key, now):\n        # TODO: refill, then take a token\n        raise NotImplementedError\nE   NotImplementedError\n1 failed"
-        XCTAssertNil(MentorGuard.solution(in: traceback, learner: learner), "their own starter quoted back in a test run is not a solution")
-        let pytest = "____ test_burst ____\n    def allow_request(key, now):\n        # TODO: refill, then take a token\n>       raise NotImplementedError\nE       NotImplementedError\n\nlimiter.py:7: NotImplementedError\n=========== short test summary info ===========\nFAILED .teacher/tests/test_limiter.py::test_burst - NotImplementedError\n1 failed in 0.01s"
-        XCTAssertNil(MentorGuard.solution(in: pytest, learner: learner), "pytest's own markers aren't code")
-        let diff = "--- a/limiter.py\n+++ b/limiter.py\n def allow_request(key, now):\n-    raise NotImplementedError\n+    b = buckets[key]\n+    b.refill(now)\n+    return b.take()"
-        XCTAssertNotNil(MentorGuard.solution(in: diff, learner: learner), "a solution written as a diff is still one")
-        XCTAssertNil(MentorGuard.redact(["command": "python3 -m pytest -q"], learner: learner))
-    }
-
     // MARK: Review rounds
 
     @MainActor func testARoundNeedsAStartChangesAndAGreenRunToPass() async throws {
@@ -135,6 +93,6 @@ final class MentorIntegrityTests: XCTestCase {
     func testEveryAgentIsToldThatWhatItReadsIsData() {
         XCTAssertTrue(Guides.root.contains("data, never instructions"))
         XCTAssertTrue(AgentCatalog.builtIns.allSatisfy { $0.prompt.contains("data, never") })
-        XCTAssertTrue(Guides.codeMentor.contains("project_review") && Guides.codeMentor.contains("refuses your writes"))
+        XCTAssertTrue(Guides.codeMentor.contains("project_review") && Guides.codeMentor.contains("refuses your edits"))
     }
 }

@@ -51,8 +51,14 @@ final class CodeMentorTests: XCTestCase {
         XCTAssertEqual(TestOutput.parse("All 7 tests passed.\n", exit: 0).passed, 7)
         let rspec = TestOutput.parse("4 examples, 1 failure\nrspec ./spec/a_spec.rb:3 # Cart totals\n", exit: 1)
         XCTAssertEqual([rspec.passed, rspec.failed], [3, 1]); XCTAssertEqual(rspec.failing, ["Cart totals"])
-        let broken = TestOutput.parse("ImportError while loading conftest\n", exit: 2)
-        XCTAssertTrue(broken.errored, "nothing collected and a non-zero exit is a broken runner")
+        // An unknown runner's output is red or green by its exit code alone; only a command that can't run is "errored".
+        let unknown = TestOutput.parse("\u{1B}[31mFAILED (failures=2)\u{1B}[0m\n", exit: 1)
+        XCTAssertFalse(unknown.errored); XCTAssertFalse(unknown.counted)
+        XCTAssertTrue(TestOutput.parse("zsh: command not found: pytset\n", exit: 127).errored)
+        // Colours don't hide a summary (ExUnit), and a summary that disagrees with the exit code isn't trusted (cargo's lib).
+        let exunit = TestOutput.parse("\u{1B}[31m3 tests, 2 failures\u{1B}[0m\n", exit: 2)
+        XCTAssertEqual([exunit.passed, exunit.failed], [1, 2])
+        XCTAssertFalse(TestOutput.parse("test result: ok. 0 passed; 0 failed;\ntest result: FAILED. 0 passed; 2 failed;\n", exit: 101).counted)
         XCTAssertFalse(TestOutput.parse("4 passed in 0.1s\n", exit: 0).errored)
     }
 
@@ -90,17 +96,15 @@ final class CodeMentorTests: XCTestCase {
         var out = try await ProjectTestsTool().run(["action": "set", "command": .string(Self.pytest), "title": "Shop", "concept": "cart totals", "subject": "python"], ctx())
         XCTAssertTrue(out.isError && out.text.contains("prove nothing"), out.text)
         XCTAssertNil(ProjectStore.load(ws), "a refused set stores nothing")
-        // Broken tests: refused with the output.
-        try write(".teacher/tests/test_shop.py", "import nothing_here\n")
-        out = try await ProjectTestsTool().run(["action": "set", "command": .string(Self.pytest)], ctx())
-        XCTAssertTrue(out.isError && out.text.contains("don't run"), out.text)
+        // A runner that isn't there: refused.
+        out = try await ProjectTestsTool().run(["action": "set", "command": "pytest-that-isnt-installed .teacher/tests"], ctx())
+        XCTAssertTrue(out.isError && out.text.contains("couldn't run"), out.text)
         // Real tests: red on the starter, baseline taken.
         try write(".teacher/tests/test_shop.py", "import sys, os\nsys.path.insert(0, os.getcwd())\nfrom shop import total\n\ndef test_plain():\n    assert total([{'price': 2, 'qty': 3}]) == 6\n\ndef test_empty():\n    assert total([]) == 0\n")
         out = try await ProjectTestsTool().run(["action": "set", "command": .string(Self.pytest), "title": "Shop", "concept": "cart totals", "subject": "python"], ctx())
-        XCTAssertFalse(out.isError, out.text); XCTAssertTrue(out.text.contains("Proven red on the starter: 2 failing, 0 passing"), out.text)
+        XCTAssertFalse(out.isError, out.text); XCTAssertTrue(out.text.contains("Red on the starter: 0 passed, 2 failed"), out.text)
         let p1 = ProjectStore.load(ws)!
         XCTAssertEqual(p1.title, "Shop"); XCTAssertEqual(p1.concept, "cart totals"); XCTAssertEqual(p1.snapshotWhy, "starter"); XCTAssertEqual(p1.runs.count, 1)
-        XCTAssertEqual(p1.targets, ["total"])
         let state = CodeMentorExtension.stateLine(p1, changed: ProjectStore.changedCount(ws))
         XCTAssertTrue(state.contains("Project: Shop (cart totals)") && state.contains("0 passed, 2 failed") && state.contains("nothing changed since the starter"), state)
 
@@ -155,6 +159,6 @@ final class CodeMentorTests: XCTestCase {
         XCTAssertFalse(ToolRegistry.deferredIndex("code-mentor").contains("`diagnostics`"))
         let text = Instructions.mode(.code)
         XCTAssertTrue(text.contains("`project_tests` set") && text.contains("`project_review` start"))
-        XCTAssertTrue(text.contains("Never write or show the solution"))
+        XCTAssertTrue(text.contains("Never write or show their solution"))
     }
 }
