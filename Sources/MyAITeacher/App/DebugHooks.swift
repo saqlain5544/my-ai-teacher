@@ -6,7 +6,7 @@ import WebKit
 /// then post a distributed notification "com.saqlain.myaiteacher.debug" with a JSON string object:
 ///   {"action":"snapshot","path":"/tmp/x.png"} | {"action":"eval","js":"…"} | {"action":"send","text":"…"}
 ///   {"action":"answer","value":{…}}  (resolves the first pending interaction) | {"action":"select","item":"memory"}
-///   {"action":"newLesson"} | {"action":"setModel","provider":"minimax","model":"MiniMax-M3"} | {"action":"openFolder","path":"…"}
+///   {"action":"newLesson"} | {"action":"setModel","provider":"minimax","model":"MiniMax-M3"} | {"action":"openFolder","path":"…"} | {"action":"allSessions"} | {"action":"openSession","id":"<prefix>"}
 ///   perf: {"action":"seedLesson","messages":4000} | {"action":"seedMemories","count":10000} | {"action":"recall"} | {"action":"runTool",…} | {"action":"mark",…}
 /// Results are appended to ~/Library/Logs/MyAITeacher.log.
 @MainActor
@@ -82,8 +82,20 @@ enum DebugHooks {
             AppLog.write("sessions: " + app.conversations.prefix(10).map { c in
                 "\(c.id.prefix(8)) \(c.title.prefix(30)) running=\(app.isRunning(c.id))"
             }.joined(separator: " | "))
+        case "allSessions":
+            app.refreshSessions()
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(600))
+                AppLog.write("allSessions: folder=\(app.workspace.url.path) active=\(app.activeCount) " + app.allSessions.prefix(20).map { e in
+                    "\(e.id.prefix(8)) [\(e.folderName)] \(e.conversation.mode.rawValue) \(e.conversation.title.prefix(30)) \(app.activity(e.id))"
+                }.joined(separator: " | "))
+            }
+        case "openSession":
+            if let id = cmd["id"]?.string, let e = app.allSessions.first(where: { $0.id.hasPrefix(id) }) { app.openSession(e.id, folder: e.folder) }
+            else { AppLog.write("openSession: no session \(cmd["id"]?.string ?? "") in the list (run allSessions first)") }
         case "select":
             switch cmd["item"]?.string {
+            case "sessions": app.selection = .sessions
             case "memory": app.selection = .memory
             case "progress": app.selection = .progress
             case "flashcards": app.selection = .flashcards
