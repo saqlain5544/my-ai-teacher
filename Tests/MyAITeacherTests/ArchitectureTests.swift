@@ -350,3 +350,28 @@ final class SqueezeInputTests: XCTestCase {
         XCTAssertEqual(out[1].blocks[1].input, msgs[1].blocks[1].input, "editing a call would invalidate the replayed reasoning")
     }
 }
+
+final class CacheBreakpointTests: XCTestCase {
+    /// Anthropic refuses a request with more than 4 cache_control breakpoints: two system blocks, the tools and the last
+    /// message use all four, so a new breakpoint (or a third system section) has to give one up.
+    func testARequestNeverCarriesMoreThanFourBreakpoints() {
+        let system = "Shared instructions." + SystemPrompt.dynamicMarker + "Today, memory, folder."
+        let msgs = [ChatMessage(role: .user, blocks: [.text("hi")]),
+                    ChatMessage(role: .assistant, blocks: [.toolUse(id: "r", name: "read", input: ["path": "a"])]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "r", name: "read", content: "x")]),
+                    ChatMessage(role: .assistant, blocks: [.text("done")]),
+                    ChatMessage(role: .user, blocks: [.text("next")])]
+        let req = LLMRequest(model: "claude-opus-5-5", system: system, messages: msgs, tools: ToolRegistry.all.map(\.spec))
+        for base in ["https://api.anthropic.com/v1", "https://api.minimax.io/anthropic/v1"] {
+            let cfg = ProviderConfig(id: "a", name: "A", api: .anthropic, baseURL: base, envKeys: [], defaultModel: "claude-opus-5-5")
+            let body = AnthropicClient(config: cfg, apiKey: nil).buildBody(req)
+            let n = body.compact.components(separatedBy: "\"cache_control\"").count - 1
+            XCTAssertEqual(n, 4, base)
+            let texts = body["system"]?.array?.compactMap { $0["text"]?.string } ?? []
+            XCTAssertEqual(texts.count, 2)
+            XCTAssertFalse(texts.contains { $0.isEmpty }, "an empty system block is refused too")
+        }
+        XCTAssertEqual(SystemPrompt.split(SystemPrompt.dynamicMarker + "Only context."), ["# Environment\nOnly context."],
+                       "nothing before the marker: one block, not an empty one")
+    }
+}

@@ -12,7 +12,8 @@ enum SystemPrompt {
     /// Splits a built prompt into [shared instructions, lesson context] for providers with explicit cache breakpoints.
     static func split(_ system: String) -> [String] {
         guard let r = system.range(of: dynamicMarker) else { return [system] }
-        return [String(system[..<r.lowerBound]), String(system[r.lowerBound...]).trimmingCharacters(in: .newlines)]
+        // A prompt with nothing before the marker has one part: an empty (cached) text block is refused by Anthropic.
+        return [String(system[..<r.lowerBound]), String(system[r.lowerBound...]).trimmingCharacters(in: .newlines)].filter { !$0.isEmpty }
     }
 
     private static func today() -> String {
