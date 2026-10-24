@@ -353,46 +353,48 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   solution, no leak detector and no CodeMirror bundle. The folder access grant and approval prompts are the boundary.
 * **The review loop as mechanism** (`Study/MentorProject.swift`, `Tools/MentorTools.swift`, `Extensions/CodeMentorExtension.swift`).
   `.teacher/project.json` holds the project: title, concept, test command, every test run, the review rounds.
-  `project_tests` set registers the command and proves the suite red on the starter — a run with no failures is refused
-  (vacuous), a runner that errors is refused with its output — then snapshots the learner's files (`.teacher/review/
-  snapshot/`, text files only, bounded) as the baseline. `project_review` start runs the tests, diffs the files against
-  the snapshot (`/usr/bin/diff -u` per changed file, capped) and returns the diffs, the parsed run (`TestOutput.parse`:
-  pytest, jest/vitest, mocha, go test, swift test, cargo, zig, rspec, mix, ctest) and the open findings; `findings`
-  records the round (file, line, severity, text, concept), carries unresolved findings forward, marks resolved ids, takes
-  a new snapshot, refuses a pass that still carries a `must`, and on a pass with the last run green records the project's
-  concept with `StudyStore.recordAttempt`. A round belongs to a `start` that found changes (`openReview`: when, which
-  files, its run): without one `findings` is refused, a pass needs that run green, and a `must` counts as resolved only
-  when its file is among the changed ones.
-  `project_tests` set stores nothing until its run is accepted, takes `targets` (the functions the learner writes, plus
-  every placeholder-bodied function it finds) and refuses a starter that already implements one (three or more lines
-  of code, no placeholder). The record (`ProjectStore.mutate`, one lock) is sealed with an HMAC whose key lives in the
-  app's support folder (`project.seal`): `ProjectStore.intact` shows an edit made outside the app. The baseline stores
-  `testsDigest` (the command and every file under `.teacher/tests`); `start` records whether the suite and the record
-  are intact, and a pass needs both. After the baseline the tests are locked; `project_tests` unlock (an approval the
-  learner gives, or the Project panel) opens them until the next `set`, which re-baselines and logs the change.
-  `findings` carries a hint ladder per finding and the help the mentor gave; the learner's revealed hints and hint
-  requests are `help` on the record, so a pass after help is recorded with `Help.hint`/`.solution` (evidence, not
-  unaided mastery) and schedules a reimplementation follow-up; a pass opens an explain-back (`explain` grades it).
-  `MentorGuard` holds the boundary after the baseline: `write`/`edit` into the learner's files or `.teacher/` (except
-  `.teacher/mentor/`, and the tests while unlocked) are refused. Every command tool (bash, run_code, run_tests,
-  diagnostics, project_tests, project_review) runs under a `WriteFence` (`Core/WriteFence.swift`): a `sandbox-exec`
-  profile, set as a task-local around the call, that `ProcessRunner` and `ShellJob` start their programs under. It
-  denies writing each learner file, creating files outside dot and build folders, and anything under `.teacher/`
-  but `mentor/` (and `tests/` while unlocked), so nothing has to be put back and a learner's own save is never
-  touched; a refused write gets a note to the mentor. Without `sandbox-exec` the old fallback runs: the protected
-  files are cloned before the call and put back after it. `task` starts only read-only types. Code that defines a
-  target with a line of new code (not one already in the learner's files) is masked while the reply streams
-  (`streamMask`: the reply is redrawn whole once it needs masking, an open code block cut from its fence), withheld
-  from the stored reply, tool inputs, tool output and live progress (`filterProgress`), and a signed thinking block
-  keeps its text for the provider but is drawn as `meta.shown`. Definitions are found in Python, Go (methods),
-  Rust, Zig, Swift, Kotlin, JS/TS (functions, arrows, methods) and C-family code. What the guard stops is logged on
-  the project (no code). Its limits: a solution described in prose, or in a language whose definitions it can't see.
+  `project_tests` set registers the command and runs it: red on the starter is the exit code (any runner, any
+  language — `TestOutput.parse` reads pytest, jest/vitest, go, cargo, swift, zig, rspec/ExUnit, ctest summaries into
+  counts for display, with colour codes stripped, and a summary that disagrees with the exit code is ignored). A suite
+  that exits 0 on the starter is refused (vacuous); a command the shell can't run (126/127) or that times out is
+  refused with its output; otherwise the output tail goes back to the mentor, which judges whether red means failing
+  tests rather than a build error. Then it snapshots the learner's files (`.teacher/review/snapshot/`, text files only,
+  bounded) as the baseline. `project_review` start runs the tests, diffs the files against the snapshot (`/usr/bin/diff
+  -u` per changed file, capped) and returns the diffs, the run and the open findings; `findings` records the round
+  (file, line, severity, text, concept), carries unresolved findings forward, marks resolved ids, takes a new snapshot,
+  refuses a pass that still carries a `must`, and on a pass with the last run green records the project's concept with
+  `StudyStore.recordAttempt`. A round belongs to a `start` that found changes (`openReview`); a pass needs that run
+  green and the tests locked, and a `must` counts as resolved only when its file is among the changed ones. A project is
+  **open** from its baseline until a review passes (`MentorProject.isOpen`); after a pass `set` starts the next project
+  (the finished record is kept in `.teacher/projects/<n>.json`). After the baseline the tests are locked;
+  `project_tests` unlock (an approval the learner gives, or the Project panel) opens them until the next `set`, which
+  re-baselines and logs the change. `findings` carries a hint ladder per finding and the help the mentor gave; the
+  learner's revealed hints and hint requests are `help` on the record, so a pass after help is recorded with
+  `Help.hint`/`.solution` (evidence, not unaided mastery) and schedules a reimplementation follow-up; a pass opens an
+  explain-back (`explain` grades it).
+  `MentorGuard` holds the boundary while a project is open, and knows no language: `write`/`edit` of the learner's
+  existing files or `.teacher/` (except `.teacher/mentor/`, and the tests while unlocked) are refused; new files are
+  allowed. Every command tool (bash, run_code, run_tests, diagnostics, project_tests, project_review) runs under a
+  `WriteFence` (`Core/WriteFence.swift`): a `sandbox-exec` profile, set as a task-local around the call, that
+  `ProcessRunner` and `ShellJob` start their programs under. It denies writing each learner file and anything under
+  `.teacher/` but `mentor/` (and `tests/` while unlocked); everything else stays writable, so every toolchain's build
+  output works (`cc -o runner`, `javac -d classes`, `cargo`'s target/…). A refused write gets a note to the mentor.
+  `task` starts only read-only types. What the guard stops is logged on the project.
+  *Removed after measurement (2026-10-25):* a regex detector that withheld "solution code" from replies, tool inputs,
+  tool output and thinking. It recognised function definitions in 10 of 24 languages tried, withheld the original
+  source in 4 of 4 reimplementation projects (std's `array_list.zig`, Go's `container/list`, `container/heap`,
+  `sort/search.go`), and with it `targets`, the starter-stub check, the HMAC seal on the record and the tests digest.
+  The solution rule is the mentor's instruction and the DeepWork reviewer's check, which read any language.
   The Project panel (Inspector → Project, `UI/ProjectPanel.swift`) reads the record: the test trend, failing tests
   (rerun one via `ProjectTestRunner.filtered`: pytest -k, jest -t, go -run, cargo, swift --filter, zig test
   --test-filter; a hint request), open findings by file (hint rungs, open in an editor at the line, show in Files,
   copy path:line), the diff since the baseline, the protection state and the guard's log; Run tests, Request review
   (after a self-review sheet, kept with the round), Unlock the tests, Restore (the learner's files back to the last
   review, current versions to the Trash) and a Markdown report.
+  `scripts/eval-mentor.py` runs mentor lessons through the built app (beginner, expert, an unfamiliar language,
+  seeded C and Elixir projects reviewed after the learner's solution, a non-programming lesson), records friction
+  (tool errors, seconds, registration, passes) and has a judge score level fit and responsiveness; `--repo` compares
+  two builds. `MentorProbeTests` (MENTOR_PROBE=1) registers and passes a project in every toolchain installed.
   `CodeMentorExtension` appends a `<project_state>` line to every request
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax

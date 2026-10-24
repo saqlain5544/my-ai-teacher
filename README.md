@@ -87,20 +87,20 @@ You can see and edit all of it in **Memory**. **Progress** shows your activity, 
 you're right when you're sure) and what's coming back for review.
 
 ### A code mentor that builds with you
-In **Code mentor** mode you learn by building real software, not toy snippets.
+In **Code mentor** mode you learn programming — any language, framework, algorithm, data structure or system, from your
+first program to research-level work — by understanding it and building with it.
 
-* **Lessons designed first.** Before teaching, the mentor makes a hidden lesson design: the real system the topic comes
-  from (nginx's `limit_req`, Redis eviction, Git's object store, …), the concepts with analogies and where they break,
-  and what to read. It then reads the real docs and source, builds and runs working examples, and only then writes the
-  lesson. Every example in it has actually run.
-* **A real project in your folder.** The mentor creates the starter files — real structure, interfaces, TODOs, never the
-  solution — and writes the tests to `.teacher/tests`, versioned with the project. It might be a CLI tool, a parser, a
-  cache or a data pipeline, always at the edge of what you can do.
+* **Pitched at your level.** Before teaching, the mentor makes a hidden lesson design from what you've shown it: a
+  first-time programmer gets one idea at a time and tiny programs to run; an expert gets the real implementation, the
+  trade-offs and primary sources. Every example in the lesson has actually run on your Mac. A question gets an answer;
+  a project comes when you want to build or practise.
+* **A real project in your folder.** The mentor creates the starter files (structure, interfaces, TODOs, never the
+  solution) and writes the tests to `.teacher/tests`, versioned with the project, sized to where you are.
 * **Your own editor.** There is no built-in editor: use Helix, VS Code, Zed, Xcode, anything. The files are right there
   in the folder; save, then ask the mentor to check. `bash` runs the tests and the mentor reads your changes.
 * **Tests that are proven.** When the mentor registers the project's test command, the app runs the tests on the
-  starter: a suite that already passes is refused as vacuous, one that cannot run is sent back with its output, and a
-  red suite becomes the baseline for review.
+  starter. Any test runner works, in any language: red or green is the runner's exit code. A suite that already passes is
+  refused as vacuous, and a red suite becomes the baseline for review.
 * **The review.** Ask for a review and the app hands the mentor exactly what you changed since the last one (unified
   diffs), the test run, and the findings still open from the last round. The review comes back as a card: findings by
   file and line, `must` / `should` / `nit`, fixed ones struck through, the verdict. Like a demanding senior engineer:
@@ -109,16 +109,14 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
 * **The engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files and the project
   profile, like the code agent, so it reads your code precisely and builds its examples against your real toolchain.
 * **Languages and libraries from their source.** Ask to master Zig's standard library, Rust's `core`, Go's `net/http`,
-  Python's `asyncio`, or a package in your project, and the mentor teaches from the source installed on your Mac: it
+  Python's `asyncio`, a package in your project, or any other language's installed sources, and the mentor teaches from the source installed on your Mac: it
   finds it by name (`source`), outlines it, reads the real implementation and cites file and line. The projects then
   reimplement a real piece of it against the original's behaviour.
-* **No solution, enforced.** The mentor writes the starter and the tests; once the tests are registered, your project's
-  files are yours and the tests are locked. The app refuses the mentor's writes to them, runs its commands inside a
-  write fence the operating system enforces (so nothing is undone behind your back and your own saves are never
-  touched), lets it start only read-only helpers, and withholds code that writes one of your functions, even while
-  the reply streams. To change a test the mentor asks you to unlock them, and the change is recorded. It teaches with
-  questions, a ladder of hints and the concepts so you find the fix. It's a strong safety net, not a proof: a mentor
-  could still describe an answer in words.
+* **Your files stay yours.** Once the tests are registered, the app refuses the mentor's edits to your files and to the
+  locked tests, runs its commands inside a write fence the operating system enforces (so your own saves are never
+  touched), and lets it start only read-only helpers. To change a test the mentor asks you to unlock them, and the
+  change is recorded. It teaches with questions, a ladder of hints and the concepts so you find the fix. After a pass the
+  folder opens for the next project.
 * **Your Project panel.** Inspector → Project: the test history, failing tests (rerun one, ask for a hint), the open
   findings by file with hints you reveal one at a time and a link that opens the line in your editor, what you
   changed since the last review, and what the guard stopped. Run the tests or request a review yourself; a review
