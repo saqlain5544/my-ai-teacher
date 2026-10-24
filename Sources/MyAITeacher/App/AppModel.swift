@@ -88,10 +88,11 @@ final class AppModel: ObservableObject {
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
     }
 
-    /// Built-in features are extensions; add new ones here without touching the agent loop.
+    /// Built-in features are extensions; add new ones here without touching the agent loop. A feature with its own
+    /// tools is a `Features.Module` instead: its hooks are registered here, right after the permission gate.
     private func registerExtensions() {
         extensions.register(PermissionExtension(app: self))
-        extensions.register(ComputerUseExtension(app: self))
+        for module in Features.all { module.extensions(self).forEach(extensions.register) }
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
         extensions.register(CourseBoardExtension())

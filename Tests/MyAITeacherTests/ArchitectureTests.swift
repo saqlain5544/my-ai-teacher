@@ -204,6 +204,17 @@ final class ToolRegistryTests: XCTestCase {
         XCTAssertFalse(ToolRegistry.subagentPool.contains { $0.risk == .interactive }, "sub-agents can't wait for the learner")
     }
 
+    func testFeatureModulesAddTheirToolsWithoutReordering() {
+        // The order before modules existed: a change here reorders tool lists and so cached prompt prefixes.
+        XCTAssertEqual(ToolRegistry.all.map(\.name), [
+            "read", "write", "edit", "ls", "glob", "grep", "bash", "run_code", "run_tests", "web_search", "web_fetch", "task",
+            "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "lesson_plan", "mastery",
+            "flashcards", "project_memory", "browser", "mac", "computer"])
+        XCTAssertEqual(Set(Features.all.map(\.id)).count, Features.all.count, "module ids are unique")
+        for t in Features.tools { XCTAssertNotNil(ToolRegistry.byName[t.name], "\(t.name) reaches the registry") }
+        XCTAssertEqual(Features.computerUse.tools.map(\.name), ["browser", "mac", "computer"])
+    }
+
     func testEveryToolAnAgentCanGetExists() {
         XCTAssertEqual(ToolRegistry.byName.count, ToolRegistry.all.count, "tool names are unique")
         for node in AgentTree.nodes {

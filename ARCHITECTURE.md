@@ -142,6 +142,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 | You want to… | Do this | Core changes |
 |---|---|---|
 | React to the agent loop (inject context, gate tools, observe results, act after a turn) | Implement `AgentExtension` (all hooks optional) and register it in `AppModel.registerExtensions()` | none |
+| Add a feature with its own tools and hooks | One `Features.Module` (id, `tools`, `extensions`) in its folder, listed in `Features.all` (see `ComputerUse/ComputerUseFeature.swift`); name its tools in `AgentTree` for the agents that may use them | none |
 | Listen to app events (UI badges, logging, sync) | `EventBus.subject.sink { … }` (`AppEvent`) | none |
 | Add a tool | Conform to `Tool` (name, description, JSON schema, `risk`, `run`) and add it to `ToolRegistry.all`. Sub-agents get it only if it returns `self` (or a restricted variant) from `subAgentVariant`. `risk` drives permissions; interactive tools await `ctx.interactions.request(…)` | none |
 | Add a provider | Add a `ProviderConfig` preset (Anthropic/OpenAI/Gemini wire format + quirks) to `ProviderCatalog`, or add a custom provider in Settings | none |

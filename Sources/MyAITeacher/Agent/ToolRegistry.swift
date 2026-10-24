@@ -7,8 +7,8 @@ enum ToolRegistry {
         ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), RunCodeTool(), RunTestsTool(),
         WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
         AskLearnerTool(), QuizTool(), MathTool(), MemoryTool(), LessonPlanTool(), MasteryTool(), FlashcardsTool(),
-        ProjectMemoryTool(), BrowserTool(), MacTool(), ComputerTool(),
-    ]
+        ProjectMemoryTool(),
+    ] + Features.tools   // optional features' tools (computer use: browser, mac, computer)
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
     static func enabled(_ settings: AppSettings) -> [Tool] {
