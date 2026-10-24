@@ -103,7 +103,7 @@ extension StudyStore {
             let lv = level.flatMap(Self.cefrLevel) ?? languageProfile(code)?.level.flatMap(Self.cefrLevel) ?? "A1"
             addGrammarPoints(lang: code, [(name, lv, nil)])
         }
-        recordAttempt(subject: Self.grammarSubject(code), concept: name, correct: correct, note: evidence.map { "“\($0)”" }, help: assisted ? .hint : .none)
+        recordAttempt(subject: Self.grammarSubject(code), concept: name, correct: correct, note: evidence.map { "“\($0)”" }, help: assisted ? .hint : .none, evidence: nil)
         return grammarSyllabus(lang: code).first { $0.name == name }
     }
 

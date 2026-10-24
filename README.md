@@ -86,6 +86,35 @@ A learner model rather than a chat log:
 You can see and edit all of it in **Memory**. **Progress** shows your activity, mastery, a confidence check (how often
 you're right when you're sure) and what's coming back for review.
 
+### A school, not a bigger prompt
+Open **School** in the sidebar. Behind it is a curriculum-and-evidence system with the teacher inside.
+
+* **A competency graph.** Programming as about 55 competencies with prerequisites, outcomes at each level and common
+  misconceptions, from values and control flow through data structures, systems, concurrency, compilers, context-free
+  grammars and type systems to research methods. Each of eleven languages (Python, JavaScript, TypeScript, C, C++,
+  Rust, Go, Zig, Swift, Java, Kotlin) is an overlay on the concepts it builds on: knowing recursion in Python leaves
+  Zig's syntax, errors, memory, toolchain and idioms to learn, not recursion again. The teacher can propose what the
+  curriculum lacks (a library, a topic); the app checks it fits the graph.
+* **Your level is per topic and comes from evidence.** School, college, university, research and expert, for each
+  competency separately. Every quiz answer, project review, explanation and placement question is evidence, weighed
+  by how much it can be trusted (an unseen task or tests on your own code count fully, a practice question less, a
+  self-report little) and by how much help you had (a hint counts a little, a solution not at all). A level is held
+  only with enough unaided evidence across two kinds of skill, one of them using it (applying, debugging, designing,
+  transferring); old evidence asks for a re-check rather than fading away. The teacher never declares your level.
+* **Teaching that follows the evidence.** The same topic is taught concretely with worked examples at school level,
+  through principles and labs at college, through trade-offs, primary sources and defences at university, and as an
+  advisor's critique at research level. Each request carries a short contract for the topic at hand: the level to
+  aim for (one above what you hold), prerequisites to check first, misconceptions to watch for, the evidence still
+  needed, and, after repeated failure, an instruction to find the cause before explaining again.
+* **Placement in a few minutes.** Say your goal, track, time and the evidence you want; a short adaptive placement
+  starts at your track, moves up on a success and down on a miss, and looks underneath when even the basics miss.
+* **Courses, progression and a transcript.** A catalog from Programming Fundamentals to Compilers, Systems,
+  Concurrency, Research Methods and a Research Apprenticeship, plus a course per language. Prerequisites are met by
+  completing a course or by showing its outcomes. The app completes a course (Pass, Merit, Distinction) when the
+  evidence shows every outcome at its level with at least one summative task. The transcript lists competencies,
+  courses and learning measures (help used, retention after 30 days, transfer) and exports as Markdown. It is an
+  internal record, not an accredited qualification, and the app says so.
+
 ### A code mentor that builds with you
 In **Code mentor** mode you learn by building real software, not toy snippets.
 

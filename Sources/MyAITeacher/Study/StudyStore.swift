@@ -129,7 +129,10 @@ struct LessonPlan: Identifiable, Hashable, Sendable {
 
 final class StudyStore: @unchecked Sendable {
     let db: Database
-    init(db: Database) { self.db = db }
+    /// The school's record (evidence per competency) in the same database: every attempt on a concept the curriculum
+    /// knows is evidence there too.
+    let school: SchoolStore
+    init(db: Database) { self.db = db; school = SchoolStore(db: db) }
 
     // MARK: Cards
     private func card(_ r: Row) -> Flashcard? {
@@ -182,7 +185,7 @@ final class StudyStore: @unchecked Sendable {
                            c.id, rating.rawValue, now, elapsed, days)
         }
         logActivity(reviews: 1)
-        if let concept = c.concept { recordAttempt(subject: c.subject ?? c.deck, concept: concept, correct: rating != .again, note: nil) }
+        if let concept = c.concept { recordAttempt(subject: c.subject ?? c.deck, concept: concept, correct: rating != .again, note: nil, evidence: (.practice, .recall)) }
         // A forgotten card is the next lesson's business: the tutor sees it and can teach it another way.
         let key = c.concept ?? String(c.front.prefix(80))
         if rating == .again {
@@ -216,7 +219,9 @@ final class StudyStore: @unchecked Sendable {
     /// Due follow-ups on the concept are settled by answers without help; reaching mastery schedules a transfer check.
     @discardableResult
     func recordAttempt(subject: String, concept: String, correct: Bool, note: String?, help: Help = .none,
-                       certainty: Certainty? = nil, now: Date = Date()) -> MasteryItem {
+                       certainty: Certainty? = nil, now: Date = Date(), evidence: (source: Evidence.Source, skill: Skill)? = (.mastery, .recall),
+                       conversationID: String? = nil) -> MasteryItem {
+        if let ev = evidence { school.bridge(subject: subject, concept: concept, correct: correct, help: help, source: ev.source, skill: ev.skill, conversationID: conversationID, now: now) }
         let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
         // One row per concept whatever its casing ("Chain rule" = "chain rule"): reuse the stored spelling.
         let cur = mastery(subject: s, concept: concept.trimmingCharacters(in: .whitespaces))

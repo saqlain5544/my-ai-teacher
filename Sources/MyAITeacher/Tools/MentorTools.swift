@@ -324,7 +324,10 @@ struct ProjectReviewTool: Tool {
                 if let r = open.run, r.green, let concept = p.concept {
                     let study = ctx.services.study
                     let m = study.recordAttempt(subject: p.subject ?? "programming", concept: concept, correct: true,
-                                                note: helped == .none ? "project review passed with green tests" : "project review passed with green tests, after \(helped == .solution ? "seeing a solution" : "hints")", help: helped)
+                                                note: helped == .none ? "project review passed with green tests" : "project review passed with green tests, after \(helped == .solution ? "seeing a solution" : "hints")", help: helped,
+                                                evidence: (.tests, .application), conversationID: ctx.conversationID)
+                    // The review judged its design too: the second skill a level needs.
+                    study.school.bridge(subject: p.subject ?? "programming", concept: concept, correct: true, help: helped, source: .review, skill: .design, conversationID: ctx.conversationID)
                     text += helped == .none ? " Mastery of \(concept): \(Int(m.pKnown * 100))%." : " Recorded as a helped pass (they had \(helped == .solution ? "a solution" : "hints")): evidence, not unaided mastery (\(Int(m.pKnown * 100))%)."
                     // Durable knowledge, not one green run: a smaller reimplementation in a few days, in a new context.
                     study.scheduleFollowUp(subject: p.subject ?? "programming", concept: concept, kind: .transfer,
@@ -348,7 +351,8 @@ struct ProjectReviewTool: Tool {
             var text = "Explain-back recorded: \(v)."
             if let concept = p.concept {
                 let m = ctx.services.study.recordAttempt(subject: p.subject ?? "programming", concept: concept, correct: v == "pass",
-                                                        note: "explain-back after the project passed: \(v)", help: v == "partial" ? .hint : .none)
+                                                        note: "explain-back after the project passed: \(v)", help: v == "partial" ? .hint : .none,
+                                                        evidence: (.defence, .explanation), conversationID: ctx.conversationID)
                 text += " Mastery of \(concept): \(Int(m.pKnown * 100))%."
                 EventBus.publish(.studyDataChanged)
             }

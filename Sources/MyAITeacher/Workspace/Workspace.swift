@@ -125,6 +125,7 @@ final class GlobalStore: @unchecked Sendable {
     let db: Database
     let memory: MemoryStore
     let study: StudyStore
+    let school: SchoolStore
 
     init() {
         do { db = try Database(path: AppPaths.database.path) }
@@ -132,6 +133,7 @@ final class GlobalStore: @unchecked Sendable {
         try? db.script(Schema_.sql)
         memory = MemoryStore(db: db, scope: .learner)
         study = StudyStore(db: db)
+        school = study.school
     }
 
     /// Over an explicit database (tests, tools) — never touches the app's real learner DB.
@@ -140,6 +142,7 @@ final class GlobalStore: @unchecked Sendable {
         try? db.script(Schema_.sql)
         memory = MemoryStore(db: db, scope: .learner)
         study = StudyStore(db: db)
+        school = study.school
     }
 
     /// Lessons created before folder workspaces existed lived in the global DB; move them to the default folder.
@@ -174,6 +177,7 @@ final class Services: @unchecked Sendable {
 
     var conversations: ConversationStore { workspace.conversations }
     var study: StudyStore { global.study }
+    var school: SchoolStore { global.school }
 
     func logUsage(provider: String, model: String, usage: Usage) {
         let day = StudyStore.dayFormatter.string(from: Date())

@@ -91,7 +91,7 @@ struct MasteryTool: Tool {
             let help = Self.help(input)
             let assisted = help != .none
             let m = study.recordAttempt(subject: subject, concept: concept, correct: input["correct"]?.bool ?? false, note: input["note"]?.string,
-                                        help: help)
+                                        help: help, evidence: (.practice, input["skill"]?.string.flatMap(Skill.init(rawValue:)) ?? .application), conversationID: ctx.conversationID)
             post()
             return ToolOutput(text: "\(concept): mastery \(Int(m.pKnown * 100))% (\(m.correct)/\(m.attempts) correct, streak \(m.streak))\(m.mastered ? " — mastered ✓" : "")\(assisted && input["correct"]?.bool == true ? " · with help, so mastery didn't rise" : "")")
         case "set":

@@ -133,6 +133,7 @@ enum DebugHooks {
             case "sessions": app.selection = .sessions
             case "memory": app.selection = .memory
             case "progress": app.selection = .progress
+            case "school": app.selection = .school
             case "flashcards": app.selection = .flashcards
             case "insights": app.selection = .insights
             default: if let id = cmd["id"]?.string ?? app.conversations.first?.id { app.selection = .lesson(id) }
