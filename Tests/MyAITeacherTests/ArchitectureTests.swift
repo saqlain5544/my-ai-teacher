@@ -266,3 +266,16 @@ final class BlobCacheTests: XCTestCase {
         XCTAssertNil(BlobStore.base64(ref), "after memory pressure it is read from disk again")
     }
 }
+
+final class FetchCacheTests: XCTestCase {
+    func testAPageLargerThanTheCacheDoesNotEvictEverything() async {
+        let c = FetchCache()
+        await c.put("a", "small page", nil)
+        await c.put("huge", String(repeating: "x", count: FetchCache.maxChars + 1), nil)
+        let a = await c.get("a"), huge = await c.get("huge")
+        XCTAssertNotNil(a, "the other pages stay")
+        XCTAssertNil(huge, "an oversized page isn't cached")
+        let n = await c.cachedChars
+        XCTAssertLessThanOrEqual(n, FetchCache.maxChars)
+    }
+}

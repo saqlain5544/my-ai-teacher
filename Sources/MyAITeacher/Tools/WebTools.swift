@@ -164,12 +164,16 @@ actor FetchCache {
     }
     func put(_ k: String, _ md: String, _ title: String?) {
         if let old = store.removeValue(forKey: k) { chars -= old.1.utf8.count }
+        // A page bigger than the whole cache (a large PDF) used to evict every other page and then be kept anyway, over
+        // the cap; it isn't cached (a second fetch converts it again).
+        guard md.utf8.count <= Self.maxChars else { return }
         while chars + md.utf8.count > Self.maxChars, let oldest = store.min(by: { $0.value.0 < $1.value.0 }) {
             chars -= oldest.value.1.utf8.count; store[oldest.key] = nil
         }
         store[k] = (Date(), md, title); chars += md.utf8.count
     }
     func clear() { store = [:]; chars = 0 }
+    var cachedChars: Int { chars }
 }
 
 struct WebFetchTool: Tool {
