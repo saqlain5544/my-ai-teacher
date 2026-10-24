@@ -152,12 +152,22 @@ final class InteractionCenter: ObservableObject {
 
     var onChange: ((Pending, Bool) -> Void)?
 
+    /// Waits for the learner's answer. A cancelled task gets `{"cancelled": true}` at once, and its card goes: only an
+    /// explicit `cancelAll` used to end a wait, so a task cancelled any other way (a stopped sub-agent, a closed lesson)
+    /// waited forever with its card still open.
     func request(id: String, kind: String, conversationID: String, payload: JSON) async -> JSON {
-        await withCheckedContinuation { c in
-            continuations[id] = c
-            let p = Pending(id: id, kind: kind, conversationID: conversationID, payload: payload)
-            pending[id] = p
-            onChange?(p, true)
+        if Task.isCancelled { return ["cancelled": true] }
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { c in
+                // A second request under the same id would orphan the first waiter (never resumed): it is cancelled instead.
+                if continuations[id] != nil { resolve(id, ["cancelled": true]) }
+                continuations[id] = c
+                let p = Pending(id: id, kind: kind, conversationID: conversationID, payload: payload)
+                pending[id] = p
+                onChange?(p, true)
+            }
+        } onCancel: {
+            Task { @MainActor [weak self] in self?.resolve(id, ["cancelled": true]) }
         }
     }
 

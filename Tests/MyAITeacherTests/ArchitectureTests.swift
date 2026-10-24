@@ -38,7 +38,7 @@ final class ArchitectureTests: XCTestCase {
         })
         XCTAssertEqual(try count(), 0)
         // The connection is usable afterwards (no transaction left open).
-        try db.transaction { try db.execute("INSERT INTO t VALUES(4)") }
+        _ = try db.transaction { try db.execute("INSERT INTO t VALUES(4)") }
         XCTAssertEqual(try count(), 1)
     }
 
@@ -277,5 +277,31 @@ final class FetchCacheTests: XCTestCase {
         XCTAssertNil(huge, "an oversized page isn't cached")
         let n = await c.cachedChars
         XCTAssertLessThanOrEqual(n, FetchCache.maxChars)
+    }
+}
+
+@MainActor
+final class InteractionWaitTests: XCTestCase {
+    func testCancellingTheWaitingTaskEndsTheWaitAndClosesTheCard() async {
+        let center = InteractionCenter()
+        let waiter = Task { await center.request(id: "c1", kind: "quiz", conversationID: "L", payload: [:]) }
+        while center.pending["c1"] == nil { await Task.yield() }
+        waiter.cancel()
+        let reply = await waiter.value
+        XCTAssertEqual(reply["cancelled"]?.bool, true)
+        XCTAssertNil(center.pending["c1"], "the card goes with the wait")
+    }
+
+    func testASecondRequestUnderTheSameIdReleasesTheFirst() async {
+        let center = InteractionCenter()
+        let first = Task { await center.request(id: "c1", kind: "permission", conversationID: "L", payload: [:]) }
+        while center.pending["c1"] == nil { await Task.yield() }
+        let second = Task { await center.request(id: "c1", kind: "permission", conversationID: "L", payload: [:]) }
+        let r1 = await first.value
+        XCTAssertEqual(r1["cancelled"]?.bool, true, "the first waiter is not orphaned")
+        while center.pending["c1"] == nil { await Task.yield() }
+        center.resolve("c1", ["decision": "once"])
+        let r2 = await second.value
+        XCTAssertEqual(r2["decision"]?.string, "once")
     }
 }
