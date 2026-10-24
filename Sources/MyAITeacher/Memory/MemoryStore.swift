@@ -494,20 +494,26 @@ final class MemoryStore: @unchecked Sendable {
             // Exact: every memory sharing a stem, every cosine above semLow, every memory on a routed concept. The index's
             // ranking fields pick the best `limit`; their rows then give the exact scores.
             let n = Double(max(1, ix.live))
-            var lex = [Double](repeating: 0, count: ix.ids.count), cos = [Float](repeating: 0, count: ix.ids.count)
+            var lex = [Double](repeating: 0, count: ix.ids.count)
             for t in terms {
                 guard let s = ix.vocab[t.stem], case let p = ix.postings[Int(s)], !p.isEmpty else { continue }
                 let idf = log(1 + n / Double(p.count)) / log(1 + n)
                 for x in p { lex[Int(x)] += idf }
             }
-            if let qv { _ = scan([qv], into: ()) { _, c in for i in 0..<c.count { cos[c.first + i] = c.cos[i] } } }
-            var best = TopK<(id: Int64, lex: Double, cos: Double)>(k: limit)
-            for s in ix.ids.indices where ix.ids[s] != 0 {
-                let id = ix.ids[s], x = Double(cos[s]), con = members[id] ?? 0
-                guard lex[s] > 0 || x > MemoryTuning.semLow || con > 0, allowed?.contains(ix.kinds[s]) ?? true else { continue }
+            typealias Hit = (id: Int64, lex: Double, cos: Double)
+            func consider(_ best: inout TopK<Hit>, _ s: Int, _ x: Double) {
+                let id = ix.ids[s], con = members[id] ?? 0
+                guard id != 0, lex[s] > 0 || x > MemoryTuning.semLow || con > 0, allowed?.contains(ix.kinds[s]) ?? true else { return }
                 let rel = Self.relevance(lex[s], x, con)
-                guard rel >= minRelevance else { continue }
+                guard rel >= minRelevance else { return }
                 best.add(Self.score(rel, Double(ix.importance[s]), age: now - Double(ix.updated[s])), (id, lex[s], x))
+            }
+            // Each row is ranked as its cosine comes out of the scan: no index-sized cosine array, and one pass, not two.
+            var best = TopK<Hit>(k: limit)
+            if let qv, let scanned = scan([qv], into: best, { acc, c in for i in 0..<c.count { consider(&acc, c.first + i, Double(c.cos[i])) } }).first {
+                best = scanned
+            } else {
+                for s in ix.ids.indices { consider(&best, s, 0) }
             }
             let ev = Dictionary(best.items.map { ($0.value.id, ($0.value.lex, $0.value.cos)) }, uniquingKeysWith: { a, _ in a })
             return rank(ev.keys, limit: limit, kinds: kinds, minRelevance: minRelevance, conceptBoost: conceptBoost) { ev[$0.rowid] ?? (0, 0) }

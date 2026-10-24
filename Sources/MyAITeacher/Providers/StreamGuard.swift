@@ -130,6 +130,9 @@ struct TextProtocolParser {
         while !buf.isEmpty {
             switch mode {
             case .text:
+                // Every marker starts with '<', '[' or ']': prose without them is emitted whole, without searching for
+                // each of the ~25 markers (most chunks of most replies).
+                if !buf.utf8.contains(where: { $0 == 0x3C || $0 == 0x5B || $0 == 0x5D }) { emitText(buf, &out); buf = ""; return }
                 guard let (r, marker) = earliestMarker() else {
                     // Hold back a tail that could still become a marker.
                     let keep = final ? 0 : heldTail()

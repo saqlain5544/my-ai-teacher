@@ -64,15 +64,83 @@ enum JSON: Codable, Sendable, Equatable, Hashable {
     var isNull: Bool { if case .null = self { return true }; return false }
 
     // MARK: Conversion
-    static func parse(_ data: Data) -> JSON? { try? JSONDecoder().decode(JSON.self, from: data) }
+    /// Every SSE event and tool input is parsed here. Foundation's parser, then one walk into the enum: the Codable path
+    /// tried Bool, Double, String, array and object in turn at every value (about 19 µs per small event).
+    static func parse(_ data: Data) -> JSON? {
+        guard let any = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) else { return nil }
+        return JSON(any: any)
+    }
     static func parse(_ string: String) -> JSON? { parse(Data(string.utf8)) }
 
-    var data: Data {
-        let enc = JSONEncoder()
-        enc.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
-        return (try? enc.encode(self)) ?? Data("null".utf8)
+    var data: Data { Data(compact.utf8) }
+    /// About the size of `compact`, without building it: the window budget and the token cache's key ask for it on every
+    /// step, for every message, and serialising each tool input to measure it cost more than the estimate it keyed.
+    var approxBytes: Int {
+        switch self {
+        case .null: return 4
+        case .bool: return 5
+        case .number: return 8
+        case .string(let s): return s.utf8.count + 2
+        case .array(let a): return a.reduce(2) { $0 + $1.approxBytes + 1 }
+        case .object(let o): return o.reduce(2) { $0 + $1.key.utf8.count + 4 + $1.value.approxBytes }
+        }
     }
-    var compact: String { String(decoding: data, as: UTF8.self) }
+    /// Sorted keys, no escaped slashes, integral numbers without a fraction — what JSONEncoder wrote, without building an
+    /// encoder per call (tool inputs, dedup keys, request bodies and token estimates all go through here).
+    var compact: String {
+        var out: [UInt8] = []
+        out.reserveCapacity(approxBytes + 16)
+        write(into: &out)
+        return String(decoding: out, as: UTF8.self)
+    }
+    private func write(into out: inout [UInt8]) {
+        switch self {
+        case .null: out += "null".utf8
+        case .bool(let b): out += (b ? "true" : "false").utf8
+        case .number(let n):
+            if !n.isFinite { out += "null".utf8 }
+            else if n.rounded() == n, abs(n) < 1e15 { out += String(Int64(n)).utf8 }
+            else { out += "\(n)".utf8 }
+        case .string(let s): JSON.quote(s, into: &out)
+        case .array(let a):
+            out.append(0x5B)
+            for (i, v) in a.enumerated() { if i > 0 { out.append(0x2C) }; v.write(into: &out) }
+            out.append(0x5D)
+        case .object(let o):
+            out.append(0x7B)
+            for (i, k) in o.keys.sorted().enumerated() {
+                if i > 0 { out.append(0x2C) }
+                JSON.quote(k, into: &out); out.append(0x3A); o[k]!.write(into: &out)
+            }
+            out.append(0x7D)
+        }
+    }
+    /// A JSON string literal: quotes, backslashes and control characters escaped, runs of other bytes copied whole.
+    static func quote(_ s: String, into out: inout [UInt8]) {
+        out.append(0x22)
+        var s = s
+        s.withUTF8 { bytes in
+            var run = 0
+            for i in 0..<bytes.count {
+                let c = bytes[i]
+                guard c < 0x20 || c == 0x22 || c == 0x5C else { continue }
+                out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[run..<i]))
+                switch c {
+                case 0x22: out += [0x5C, 0x22]
+                case 0x5C: out += [0x5C, 0x5C]
+                case 0x0A: out += [0x5C, 0x6E]
+                case 0x0D: out += [0x5C, 0x72]
+                case 0x09: out += [0x5C, 0x74]
+                case 0x08: out += [0x5C, 0x62]
+                case 0x0C: out += [0x5C, 0x66]
+                default: out += String(format: "\\u%04x", c).utf8
+                }
+                run = i + 1
+            }
+            out.append(contentsOf: UnsafeBufferPointer(rebasing: bytes[run...]))
+        }
+        out.append(0x22)
+    }
     var pretty: String {
         let enc = JSONEncoder()
         enc.outputFormatting = [.sortedKeys, .prettyPrinted, .withoutEscapingSlashes]

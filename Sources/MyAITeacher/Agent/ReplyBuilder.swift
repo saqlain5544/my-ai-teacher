@@ -52,7 +52,8 @@ enum ReplyBuilder {
     /// Text joins the last block of its kind while one is open (thinking: until it is signed); otherwise a new block.
     private static func append(_ t: String, kind: Block.Kind, to m: inout ChatMessage) -> Effect {
         if let last = m.blocks.indices.last, m.blocks[last].kind == kind, kind == .text || m.blocks[last].signature == nil {
-            m.blocks[last].text = (m.blocks[last].text ?? "") + t
+            // In place: `text + t` copied the whole growing block for every delta (quadratic over a long reply).
+            if m.blocks[last].text == nil { m.blocks[last].text = t } else { m.blocks[last].text!.append(t) }
             return .delta(index: last, kind: kind, text: t)
         }
         m.blocks.append(kind == .text ? .text(t) : .thinking(t))

@@ -1571,6 +1571,21 @@
   });
 
   // ───────────── Performance ─────────────
+  test('performance: a long English lesson with components renders and leaves quickly', () => {
+    const para = 'The scheduler picks the next runnable task from the queue, and the cost of a context switch is what makes the time slice matter. ';
+    const msgs = [];
+    for (let i = 0; i < 100; i++) {
+      msgs.push(U('Question ' + i));
+      msgs.push(A('## Part ' + i + '\n\n' + para.repeat(6) + '\n\n- one point\n- another point\n- a third\n\n' + para.repeat(3) +
+        '\n\n```steps\n[{"title":"Pick","text":"take the head"},{"title":"Run","text":"for a slice"}]\n```\n\n```chart\n{"type":"bar","labels":["a","b"],"series":[{"name":"s","data":[' + i + ',2]}]}\n```'));
+    }
+    T.status('', false);
+    const t0 = performance.now(); T.reset(msgs, { lesson: 'perf-en' }); const ms = performance.now() - t0;
+    const t1 = performance.now(); T.reset([U('x')], { lesson: 'perf-en-2' }); const out = performance.now() - t1;
+    log('English lesson with 200 components: ' + ms.toFixed(0) + ' ms in, ' + out.toFixed(0) + ' ms out');
+    ok(ms < 4000, 'took ' + ms.toFixed(0) + ' ms');
+  });
+
   test('performance: 200-message lesson renders quickly', () => {
     const msgs = [];
     for (let i = 0; i < 100; i++) {

@@ -18,6 +18,8 @@
   ];
   const RTL_LANGS = /^(ar|he|fa|ur|ps|yi|dv|ku|sd|ug)\b/;
   const STRONG_RTL = /[֐-ࣿיִ-﷿ﹰ-﻿]/g;
+  const HAS_RTL = new RegExp(STRONG_RTL.source);            // not global: .test keeps no lastIndex between calls
+  const BEYOND_LATIN = /[^\x00-\u024f]/;                     // the same test wrapRuns starts with
   const STRONG_LTR = /[A-Za-zÀ-ɏͰ-ϿЀ-ӿऀ-෿฀-๿぀-鿿가-힯]/g;
   const SKIP = 'code, pre, .katex, .math-display, .math-inline, .fl, [lang]:not(html), svg, .code-block, .mermaid-block, .plot-block, .comp, textarea, input, select, button, rt';
 
@@ -70,12 +72,15 @@
   /** Explicit direction per block, from strong-character counts (dir="auto" would follow only the first letter). */
   function setDirection(block) {
     if (block.hasAttribute('dir') && !block._autoDir) return;
+    // No right-to-left letter at all (every English block): nothing to count, so no clone of the block.
+    if (!HAS_RTL.test(block.textContent)) { if (block._autoDir) { block.removeAttribute('dir'); block.removeAttribute('data-autodir'); block._autoDir = false; } return; }
     const clone = block.cloneNode(true);
     clone.querySelectorAll('code, pre, .katex, .math-inline, .math-display, rt').forEach(n => n.remove());
     const t = clone.textContent;
     const rtl = (t.match(STRONG_RTL) || []).length, ltr = (t.match(STRONG_LTR) || []).length;
-    if (rtl === 0) { if (block._autoDir) { block.removeAttribute('dir'); block._autoDir = false; } return; }
+    if (rtl === 0) { if (block._autoDir) { block.removeAttribute('dir'); block.removeAttribute('data-autodir'); block._autoDir = false; } return; }
     block.setAttribute('dir', rtl > ltr ? 'rtl' : 'ltr');
+    block.setAttribute('data-autodir', '');
     block._autoDir = true;
   }
 
@@ -88,6 +93,10 @@
       el.classList.add('fl');
       if (RTL_LANGS.test(lang) && !el.hasAttribute('dir')) el.setAttribute('dir', 'rtl');
     });
+    // A subtree with no letter beyond Latin (most of an English lesson): no foreign runs to wrap and no direction to
+    // set — unless it holds a block that was set right-to-left before and must be reset.
+    const text = root.textContent || '';
+    if (!BEYOND_LATIN.test(text) && !(root.querySelector && root.querySelector('[data-autodir]'))) return;
     // 2) Auto-detected foreign-script runs.
     const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
       acceptNode: n => (n.parentElement && n.parentElement.closest(SKIP)) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT,

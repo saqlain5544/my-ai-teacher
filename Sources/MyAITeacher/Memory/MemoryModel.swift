@@ -140,9 +140,16 @@ final class Embedder: @unchecked Sendable {
     /// the mean ranks related memories at least as well as one long vector.
     static let pieceLength = 400
 
+    /// Recent texts' vectors: the same query is embedded again by the turn's recall, the memory tool's search and a
+    /// regenerated reply (~25 ms a piece, on the main thread for recall). Bounded; about 2 KB an entry.
+    private var recent: [String: [Float]] = [:]
+    private var recentOrder: [String] = []
+    static let recentLimit = 128
+
     /// NLEmbedding is not thread-safe (concurrent calls crash inside BNNS), so every call is serialised.
     func vector(_ text: String) -> [Float]? {
         lock.lock(); defer { lock.unlock() }
+        if let v = recent[text] { return v }
         if !loaded { model = NLEmbedding.sentenceEmbedding(for: .english); loaded = true }
         guard let model, Self.isLatinScript(text) else { return nil }
         var sum: [Double]?, n = 0.0
@@ -150,7 +157,12 @@ final class Embedder: @unchecked Sendable {
             guard let v = model.vector(for: String(p)) else { continue }
             sum = sum.map { zip($0, v).map(+) } ?? v; n += 1
         }
-        return sum?.map { Float($0 / n) }
+        guard let out = sum?.map({ Float($0 / n) }) else { return nil }
+        if text.utf8.count <= 4_000 {
+            if recent.count >= Self.recentLimit, let old = recentOrder.first { recent[old] = nil; recentOrder.removeFirst() }
+            recent[text] = out; recentOrder.append(text)
+        }
+        return out
     }
 
     /// Apple ships sentence embeddings for English, French, German and Italian at different dimensions, and the store

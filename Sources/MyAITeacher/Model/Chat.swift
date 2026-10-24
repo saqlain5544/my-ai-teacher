@@ -91,7 +91,7 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
     /// Roughly what this message costs in memory (text, payloads and tool input), for the lesson's window budget.
     var approxBytes: Int {
         blocks.reduce(256) { n, b in
-            n + (b.text?.utf8.count ?? 0) + (b.data?.utf8.count ?? 0) + (b.input.map { $0.compact.utf8.count } ?? 0) + 128
+            n + (b.text?.utf8.count ?? 0) + (b.data?.utf8.count ?? 0) + (b.input?.approxBytes ?? 0) + 128
         }
     }
 

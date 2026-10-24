@@ -13,6 +13,11 @@ final class ConceptGraph: @unchecked Sendable {
     private var postings: [String: Set<Int64>] = [:]
     private var aliasesOf: [Int64: [String]] = [:]
     private var loadedVersion: Int?
+    /// `all()` sorted by name: the core block, the Memory screen and `subjects`/`fading` each asked for it and sorted the
+    /// whole graph again. Dropped whenever the index changes.
+    private var sortedCache: [Concept]?
+    /// Whole-word patterns for very short concept names (C, R, Go), compiled once each instead of per routed message.
+    private var shortNamePatterns: [String: NSRegularExpression] = [:]
 
     static let sql = """
     CREATE TABLE IF NOT EXISTS concepts(id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL, summary TEXT, status TEXT,
@@ -39,7 +44,7 @@ final class ConceptGraph: @unchecked Sendable {
     private func ensureLoaded() {
         let v = MemorySchema.dataVersion(db)
         if loadedVersion == v { return }
-        nodes = [:]; alias = [:]; keyStems = [:]; postings = [:]; aliasesOf = [:]
+        nodes = [:]; alias = [:]; keyStems = [:]; postings = [:]; aliasesOf = [:]; sortedCache = nil
         var subjects: [Int64: [String]] = [:]
         for r in (try? db.query("SELECT concept_id, subject FROM concept_subjects ORDER BY subject")) ?? [] {
             if let c = r.int("concept_id"), let s = r.string("subject") { subjects[Int64(c), default: []].append(s) }
@@ -74,6 +79,7 @@ final class ConceptGraph: @unchecked Sendable {
     private func refresh(_ ids: [Int64]) {
         lock.lock(); defer { lock.unlock() }
         guard loadedVersion != nil else { ensureLoaded(); return }
+        sortedCache = nil
         for id in Set(ids) {
             nodes[id] = nil
             for k in aliasesOf.removeValue(forKey: id) ?? [] where alias[k] == id { alias[k] = nil }
@@ -103,7 +109,14 @@ final class ConceptGraph: @unchecked Sendable {
 
     // MARK: Reads
 
-    func all() -> [Concept] { lock.lock(); defer { lock.unlock() }; ensureLoaded(); return nodes.values.sorted { $0.name < $1.name } }
+    func all() -> [Concept] {
+        lock.lock(); defer { lock.unlock() }
+        ensureLoaded()
+        if let c = sortedCache { return c }
+        let c = nodes.values.sorted { $0.name < $1.name }
+        sortedCache = c
+        return c
+    }
     func count() -> Int { lock.lock(); defer { lock.unlock() }; ensureLoaded(); return nodes.count }
     func concept(_ id: Int64) -> Concept? { lock.lock(); defer { lock.unlock() }; ensureLoaded(); return nodes[id] }
     func find(_ name: String) -> Int64? {
@@ -210,8 +223,12 @@ final class ConceptGraph: @unchecked Sendable {
                 // learning cue ("no energy today" isn't about physics; "explain kinetic energy" is).
                 if st.count == 1, let name = nodes[id]?.name {
                     if name.count <= 2 {
-                        let pat = "(?<![\\w#+])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\w#+])"
-                        if text.range(of: pat, options: .regularExpression) == nil { continue }
+                        let re = shortNamePatterns[name] ?? {
+                            let r = try! NSRegularExpression(pattern: "(?<![\\w#+])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\w#+])")
+                            shortNamePatterns[name] = r
+                            return r
+                        }()
+                        if re.firstMatch(in: text, range: NSRange(text.startIndex..., in: text)) == nil { continue }
                     } else if q.count < 2 && !asking { continue }
                 }
                 let cov = Double(st.intersection(q).count) / Double(st.count)
