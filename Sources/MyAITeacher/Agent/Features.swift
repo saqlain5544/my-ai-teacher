@@ -6,8 +6,8 @@ import Foundation
 enum Features {
     struct Module: Sendable {
         let id: String
-        /// Added to `ToolRegistry.all` after the core tools, in module order (the order only ever grows, so cached prompt
-        /// prefixes hold).
+        /// Added to `ToolRegistry.all` after the core tools, in module order. (Lesson requests list tools in `AgentTree`
+        /// order; this order shapes sub-agents' tool lists and Settings → Tools.)
         var tools: [Tool] = []
         /// Registered after the permission gate, in module order (gates chain in registration order).
         var extensions: @MainActor @Sendable (AppModel) -> [AgentExtension] = { _ in [] }

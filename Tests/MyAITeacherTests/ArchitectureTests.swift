@@ -205,7 +205,8 @@ final class ToolRegistryTests: XCTestCase {
     }
 
     func testFeatureModulesAddTheirToolsWithoutReordering() {
-        // The order before modules existed: a change here reorders tool lists and so cached prompt prefixes.
+        // The order before modules existed: it shapes sub-agents' tool lists and Settings → Tools (lesson requests follow
+        // AgentTree), so moving a tool into a module shouldn't reshuffle them unnoticed.
         XCTAssertEqual(ToolRegistry.all.map(\.name), [
             "read", "write", "edit", "ls", "glob", "grep", "bash", "run_code", "run_tests", "web_search", "web_fetch", "task",
             "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "lesson_plan", "mastery",
