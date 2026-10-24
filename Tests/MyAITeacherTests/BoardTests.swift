@@ -44,7 +44,8 @@ final class BoardTests: XCTestCase {
         XCTAssertThrowsError(try b.complete("c1", evidence: "  ")) { XCTAssertTrue("\($0)".contains("evidence"), "\($0)") }
         XCTAssertThrowsError(try b.park("c1", reason: "")) { XCTAssertTrue("\($0)".contains("reason"), "\($0)") }
         XCTAssertThrowsError(try b.add(title: "tangent", lane: .parked)) { XCTAssertTrue("\($0)".contains("reason"), "\($0)") }
-        try b.start("c2", replace: true)
+        XCTAssertThrowsError(try b.start("c2", replace: true)) { XCTAssertTrue("\($0)".contains("after C1"), "its prerequisite comes first: \($0)") }
+        try b.start("c2", replace: true, force: true)
         XCTAssertEqual(b.focusID, "c2"); XCTAssertEqual(b.card("c1")?.lane, .backlog)
         try b.start("c1", replace: true)
         try b.complete("c1", evidence: "3/3 one-sided limits unaided")
@@ -350,7 +351,7 @@ final class BoardTests: XCTestCase {
     func testObservedSignals() throws {
         let posed = ChatMessage(role: .assistant, blocks: [.text("Try this.\n```problem\n{\"q\":\"Find lim x→2⁻ |x-2|/(x-2)\",\"hints\":[\"sign\"],\"solution\":\"-1\",\"answer\":\"-1\",\"concept\":\"one-sided limits\"}\n```\n")])
         let msgs = [ChatMessage(role: .user, blocks: [.text("ok")]), posed, ChatMessage(role: .user, blocks: [.text("-1?")])]
-        XCTAssertEqual(CourseBoardExtension.openLoop(msgs), "awaiting the learner's attempt at: Find lim x→2⁻ |x-2|/(x-2)")
+        XCTAssertEqual(CourseBoardExtension.openLoop(msgs), "open problem: Find lim x→2⁻ |x-2|/(x-2) — their latest message may be their attempt: review it before moving on")
         XCTAssertNil(CourseBoardExtension.openLoop([ChatMessage(role: .user, blocks: [.text("ok")]), ChatMessage(role: .assistant, blocks: [.text("plain")]), ChatMessage(role: .user, blocks: [.text("x")])]))
         var b = try sample()
         _ = study.recordAttempt(subject: "calculus", concept: "One-sided limits", correct: true, note: nil)

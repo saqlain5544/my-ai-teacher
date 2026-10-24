@@ -153,6 +153,11 @@ struct ProjectReviewTool: Tool {
                     open.map { "  [\($0.id)] \($0.file)\($0.line.map { ":\($0)" } ?? "") \($0.severity): \($0.text)" }.joined(separator: "\n") + "\n\n"
             }
             s += "Changed since the \(p.snapshotWhy ?? "baseline")\(p.snapshotAt.map { " (\(ProjectTestsTool.ago($0)))" } ?? ""):\n" + ProjectStore.render(changes)
+            // The round this start opens: findings are recorded against it (what changed, the run it made).
+            var q = ProjectStore.load(ws) ?? p
+            q.openReview = changes.isEmpty ? nil : MentorProject.OpenReview(at: Date(), changed: changes.map(\.path),
+                                                                          run: input["run_tests"]?.bool == false ? nil : q.lastRun)
+            ProjectStore.save(q, ws)
             if changes.isEmpty {
                 s += "\n\nNo project file differs from the baseline: the learner hasn't saved any change yet (or saved in an editor buffer, not to disk). Don't look for their files anywhere else. Tell them that nothing has changed on disk in \(ws.url.lastPathComponent), ask them to save and say which file they worked on, and offer to go through the first failing test together. Don't record a round."
             } else {
@@ -163,6 +168,16 @@ struct ProjectReviewTool: Tool {
         case "findings":
             var p = ProjectStore.load(ws) ?? MentorProject()
             let verdict = (input["verdict"]?.string ?? "changes").lowercased() == "pass" ? "pass" : "changes"
+            // A round reviews work: a `start` that found the learner's changes comes first, and a pass needs that start's
+            // tests green. (Rounds were recordable with no start, no changes, and a pass beside a red run.)
+            guard let open = p.openReview else {
+                return .error("No review is open: call `project_review` start first. A round needs the learner's changes since the last review; with none, there is nothing to record.")
+            }
+            if verdict == "pass" {
+                guard let run = open.run, run.green else {
+                    return .error("A pass needs the tests green in this review's run (" + (open.run.map(\.line) ?? "no run") + "). Record `changes`, or have them fix what fails first.")
+                }
+            }
             var next = p.nextFindingID
             var findings: [MentorProject.Finding] = []
             for f in input["findings"]?.array ?? [] {
@@ -171,7 +186,15 @@ struct ProjectReviewTool: Tool {
                 findings.append(MentorProject.Finding(id: next, file: file, line: f["line"]?.int, severity: sev, text: text, concept: f["concept"]?.string))
                 next += 1
             }
-            let resolvedIDs = Set(input["resolved"]?.array?.compactMap(\.int) ?? [])
+            var resolvedIDs = Set(input["resolved"]?.array?.compactMap(\.int) ?? [])
+            // A `must` is resolved by the learner's change to its file, not by saying so.
+            let changed = Set(open.changed)
+            var kept: [Int] = []
+            if let last = p.rounds.last {
+                for f in last.findings where resolvedIDs.contains(f.id) && f.severity == "must" && !changed.contains(f.file) {
+                    resolvedIDs.remove(f.id); kept.append(f.id)
+                }
+            }
             var carried: [MentorProject.Finding] = []
             if let last = p.rounds.indices.last {
                 for i in p.rounds[last].findings.indices where !p.rounds[last].findings[i].resolved {
@@ -182,14 +205,16 @@ struct ProjectReviewTool: Tool {
             if verdict == "pass", findings.contains(where: { $0.severity == "must" }) || !carried.filter({ $0.severity == "must" }).isEmpty {
                 return .error("A pass can't carry a `must` finding: fix the verdict (changes) or the severities.")
             }
-            let round = MentorProject.Round(number: p.rounds.count + 1, at: Date(), verdict: verdict, summary: input["summary"]?.string, findings: carried + findings, tests: p.lastRun)
+            let round = MentorProject.Round(number: p.rounds.count + 1, at: Date(), verdict: verdict, summary: input["summary"]?.string, findings: carried + findings, tests: open.run ?? p.lastRun)
             p.rounds.append(round)
+            p.openReview = nil
             ProjectStore.save(p, ws)
             ProjectStore.snapshot(ws, why: "review \(round.number)")
             var text = "Round \(round.number) recorded: \(verdict), \(findings.count) new finding\(findings.count == 1 ? "" : "s"), \(carried.count) carried over, \(resolvedIDs.count) resolved."
+            if !kept.isEmpty { text += " Still open: \(kept.map { "[\($0)]" }.joined(separator: ", ")) — a `must` is resolved when its file has changed, and it hasn't." }
             if verdict == "pass" {
                 // Credit only a green run that is newer than the baseline the learner worked from (never a stale one).
-                if let r = p.lastRun, r.green, r.at >= (p.rounds.dropLast().last?.at ?? p.snapshotAt ?? .distantPast), let concept = p.concept {
+                if let r = open.run, r.green, let concept = p.concept {
                     let m = ctx.services.study.recordAttempt(subject: p.subject ?? "programming", concept: concept, correct: true, note: "project review passed with green tests")
                     text += " Mastery of \(concept): \(Int(m.pKnown * 100))%."
                     EventBus.publish(.studyDataChanged)

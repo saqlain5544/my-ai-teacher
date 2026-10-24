@@ -118,6 +118,7 @@ final class AppModel: ObservableObject {
         extensions.register(TestingExtension())
         extensions.register(LanguageExtension())
         extensions.register(CodeMentorExtension())
+        extensions.register(MentorGuard())
         extensions.register(ActivityExtension())
         Telemetry.shared.start(db: global.db)
         extensions.register(TelemetryExtension())

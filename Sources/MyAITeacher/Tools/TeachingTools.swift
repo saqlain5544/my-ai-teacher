@@ -66,11 +66,21 @@ struct MasteryTool: Tool {
             "concept": Schema.string("Concept, e.g. \"solving linear equations\"."),
             "correct": Schema.boolean("For record: was the answer correct?"),
             "assisted": Schema.boolean("For record: the learner needed hints, a worked step or the solution."),
+            "help": Schema.string("For record: the most help they had — none, hint (a hint or a worked step) or solution (they saw it).", enum: ["none", "hint", "solution"]),
             "level": Schema.number("For set: 0..1."),
             "note": Schema.string("Optional evidence/note."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String { "\(input["action"]?.string ?? "") \(input["concept"]?.string ?? input["subject"]?.string ?? "")" }
+    /// How much help an answer had: `help` when given, else `assisted` as a hint. A seen solution is a solution, not a hint.
+    static func help(_ input: JSON) -> Help {
+        switch input["help"]?.string?.lowercased() {
+        case "solution": return .solution
+        case "hint": return .hint
+        case "none": return input["assisted"]?.bool == true ? .hint : .none
+        default: return input["assisted"]?.bool == true ? .hint : .none
+        }
+    }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let study = ctx.services.study
         let subject = input["subject"]?.string ?? "general"
@@ -78,9 +88,10 @@ struct MasteryTool: Tool {
         switch input["action"]?.string ?? "get" {
         case "record":
             let concept = try input.req("concept")
-            let assisted = input["assisted"]?.bool == true
+            let help = Self.help(input)
+            let assisted = help != .none
             let m = study.recordAttempt(subject: subject, concept: concept, correct: input["correct"]?.bool ?? false, note: input["note"]?.string,
-                                        help: assisted ? .hint : .none)
+                                        help: help)
             post()
             return ToolOutput(text: "\(concept): mastery \(Int(m.pKnown * 100))% (\(m.correct)/\(m.attempts) correct, streak \(m.streak))\(m.mastered ? " — mastered ✓" : "")\(assisted && input["correct"]?.bool == true ? " · with help, so mastery didn't rise" : "")")
         case "set":
@@ -139,7 +150,8 @@ struct LessonPlanTool: Tool {
             "text": Schema.string("Note text (note), or the new card's note (add)."),
             "reason": Schema.string("Why it is parked (park, or add with lane=parked)."),
             "evidence": Schema.string("What shows the card is done: a quiz score, an exercise pass, a correct explanation (complete)."),
-            "replace": Schema.boolean("start: send the current focus back to the backlog instead of failing."),
+            "replace": Schema.boolean("start: send the current focus back to the backlog instead of failing. create: start another board in a lesson that has one."),
+            "force": Schema.boolean("start/add/move to doing: start a card whose prerequisites (after) aren't done, because the learner already knows them."),
             "position": Schema.integer("Index in the board after add/move (0 = first)."),
             "outline": Self.outlineSchema,
             "section": Schema.string("Section id (\"2.3\") or title, for action=section."),
@@ -159,16 +171,21 @@ struct LessonPlanTool: Tool {
 
     /// Board changes are read–modify–write on one row: calls in parallel (a model often sends several `add`s at once)
     /// each read the same board and the last save won — two cards got the same id and one was lost. One at a time.
-    static let writes = NSLock()
+    static var writes: NSRecursiveLock { CourseBoard.writes }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         try Self.writes.withLock { try apply(input, ctx) }
     }
 
+    /// The teaching mode of the agent calling (its node in the agent tree), stored on the board for resumed lessons.
+    static func mode(forNode node: String) -> String { node == "code-mentor" ? TeachingMode.code.rawValue : node }
+
     private func apply(_ input: JSON, _ ctx: ToolContext) throws -> ToolOutput {
         let study = ctx.services.study
         let action = input["action"]?.string ?? "list"
         func finish(_ b: CourseBoard, _ line: String, full: Bool = false) -> ToolOutput {
+            var b = b
+            if b.mode == nil { b.mode = Self.mode(forNode: ctx.agentNode) }
             study.save(b, conversationID: ctx.conversationID)
             EventBus.publish(.studyDataChanged)
             let text = line + "\n" + (full ? b.markdown() : b.header())
@@ -176,6 +193,10 @@ struct LessonPlanTool: Tool {
         }
         switch action {
         case "create":
+            // One board per lesson: a second create used to fragment the course into boards the mentor lost track of.
+            if let existing = study.board(forLesson: ctx.conversationID), input["replace"]?.bool != true {
+                return .error("This lesson already has a board, \(existing.id) “\(existing.title)” (\(existing.doneCount)/\(existing.courseCount) done). Change it with add, update or outline; pass replace=true only to start a different course in this lesson.\n" + existing.header())
+            }
             let id = "plan-" + UUID().uuidString.prefix(8).lowercased()
             var b = CourseBoard(plan: LessonPlan(id: id, title: input["title"]?.string ?? "Learning plan", subject: input["subject"]?.string,
                                                  goal: input["goal"]?.string, data: ["modules": input["modules"] ?? []], updatedAt: Date()))
@@ -208,6 +229,10 @@ struct LessonPlanTool: Tool {
                           ?? "This lesson has no board yet: action=create one, or name an existing one with plan=<id> (action=list).")
         }
         let cardKey = input["card"]?.string ?? input["id"]?.string ?? ""
+        // The shallow arm of the board evaluation keeps cards only: outlines would make it the nested arm again.
+        if Experiments.evaluationArm(Experiments.courseBoard) == "shallow", ["outline", "section"].contains(action) {
+            return .error("This board keeps cards only, without outlines: put the plan in the cards' `next` and notes.")
+        }
         do {
             switch action {
             case "get": return finish(b, "Board \(b.id).", full: true)
@@ -225,7 +250,8 @@ struct LessonPlanTool: Tool {
                 let after: [String] = input["after"]?.array?.compactMap(\.string) ?? []
                 let note: String? = input["text"]?.string ?? input["notes"]?.string
                 var c = try b.add(title: input["title"]?.string ?? "", lane: lane, next: input["next"]?.string, objectives: objectives, after: after,
-                                  concept: input["concept"]?.string, note: note, reason: input["reason"]?.string, position: input["position"]?.int)
+                                  concept: input["concept"]?.string, note: note, reason: input["reason"]?.string, position: input["position"]?.int,
+                                  force: input["force"]?.bool == true)
                 if let o = input["outline"]?.array, !o.isEmpty { c = try b.setOutline(c.id, o) }
                 return finish(b, "Added \(c.id.uppercased()) \(c.title) → \(c.lane.rawValue).")
             case "outline":
@@ -235,7 +261,7 @@ struct LessonPlanTool: Tool {
                 let c = try b.section(cardKey, input["section"]?.string ?? input["text"]?.string ?? "", done: input["done"]?.bool ?? true)
                 return finish(b, "\(c.id.uppercased()) \(c.title): " + (b.position(c) ?? "") + ".")
             case "start", "focus":
-                let c = try b.start(cardKey, next: input["next"]?.string, replace: input["replace"]?.bool ?? false)
+                let c = try b.start(cardKey, next: input["next"]?.string, replace: input["replace"]?.bool ?? false, force: input["force"]?.bool == true)
                 return finish(b, "Focus: \(c.id.uppercased()) \(c.title).")
             case "park":
                 let c = try b.park(cardKey, reason: input["reason"]?.string ?? input["text"]?.string ?? "")
@@ -259,7 +285,8 @@ struct LessonPlanTool: Tool {
                 return finish(b, "Noted on \(c.id.uppercased()) \(c.title).")
             case "move":
                 guard let lane = input["lane"]?.string.flatMap(CourseBoard.Lane.init(rawValue:)) else { return .error("move needs a lane: backlog, doing, review, done or parked.") }
-                let c = try b.move(cardKey, to: lane, position: input["position"]?.int, evidence: input["evidence"]?.string, reason: input["reason"]?.string)
+                let c = try b.move(cardKey, to: lane, position: input["position"]?.int, evidence: input["evidence"]?.string, reason: input["reason"]?.string,
+                                   force: input["force"]?.bool == true)
                 return finish(b, "Moved \(c.id.uppercased()) \(c.title) → \(lane.rawValue).")
             default:
                 return .error("Unknown action \"\(action)\". Use create, add, start, park, resume, complete, note, move, get, list or update.")

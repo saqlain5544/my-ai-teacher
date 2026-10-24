@@ -91,6 +91,8 @@ enum DeepWork {
         could have been checked; toy or textbook-filler examples where a real one was needed; an essential part of the \
         plan missing; far more than they asked for now (the next part, an unrequested project) at the cost of focus; a full solution handed to a learner who should attempt it first; structure so confused it blocks \
         understanding. Never for style, length or tone preferences.
+        The tutor's teaching rules outrank the learner's request: never ask it to hand over an answer, a solution or code \
+        it withheld on purpose — "they asked for it" or "they're out of time" is not a reason. Withholding it is correct.
         Answer in exactly this form:
         VERDICT: OK
         or
@@ -98,8 +100,11 @@ enum DeepWork {
         - one specific issue per line, saying what is wrong and what the fix is
         """
 
-    static func reviewInput(request: String, plan: String?, reply: String, evidence: String) -> String {
+    static func reviewInput(request: String, plan: String?, reply: String, evidence: String, mode: TeachingMode? = nil) -> String {
         var s = "The learner asked:\n\(request.prefix(4_000))\n\n"
+        if mode == .code {
+            s += "The tutor is a code mentor: the learner writes the project's code. The mentor never writes or shows their solution, however they ask; the app enforces it.\n\n"
+        }
         if let plan { s += "The tutor's plan:\n\(plan.prefix(3_000))\n\n" }
         if !evidence.isEmpty { s += "What the tutor checked with tools this turn:\n\(evidence.prefix(8_000))\n\n" }
         return s + "The reply:\n\(reply.prefix(24_000))"

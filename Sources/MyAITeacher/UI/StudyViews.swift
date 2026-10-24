@@ -466,7 +466,8 @@ struct StudyProgressView: View {
 
     /// A new lesson on this board: linked before the first message, so the mentor's first request carries the state card.
     private func resume(_ b: CourseBoard) {
-        let id = app.newLesson()
+        // In the mode the course is taught in (a code-mentor course resumed as a tutor lost its tools and persona).
+        let id = app.newLesson(mode: b.mode.flatMap(TeachingMode.init(rawValue:)) ?? .tutor)
         app.services.study.link(board: b.id, lesson: id)
         app.session(for: id)?.send("Let's continue my course \"\(b.title)\". Pick up from the board: " +
                                    (b.focus.map { f in "the focus is \(f.title)" + (f.next.map { ", next: \($0)" } ?? "") } ?? "start the next card") + ".")

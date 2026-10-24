@@ -69,6 +69,8 @@ struct CourseBoard: Sendable, Equatable {
     var goal: String?
     /// A day ("2026-11-03"): the exam, the deadline, the end of the course.
     var deadline: Date?
+    /// The teaching mode the course is taught in (code, language, tutor…): a resumed lesson starts in it.
+    var mode: String?
     var focusID: String?
     var revision = 0
     var cards: [Card] = []
@@ -145,7 +147,7 @@ struct CourseBoard: Sendable, Equatable {
 
     @discardableResult
     mutating func add(title: String, lane: Lane = .backlog, next: String? = nil, objectives: [String] = [], after: [String] = [],
-                      concept: String? = nil, note: String? = nil, reason: String? = nil, position: Int? = nil, actor: String = "mentor") throws -> Card {
+                      concept: String? = nil, note: String? = nil, reason: String? = nil, position: Int? = nil, force: Bool = false, actor: String = "mentor") throws -> Card {
         let t = title.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !t.isEmpty else { throw Failure(message: "A card needs a title.") }
         if lane == .parked, (reason ?? note ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
@@ -153,6 +155,10 @@ struct CourseBoard: Sendable, Equatable {
         }
         if lane == .doing, let f = focusID, cards.contains(where: { $0.id == f && $0.lane == .doing }) {
             throw Failure(message: "\(f.uppercased()) is doing. Park it, complete it, or add this card to the backlog and `start` it with replace=true.")
+        }
+        if lane == .doing, !force {
+            let open = after.map { $0.lowercased() }.filter { id in cards.contains { $0.id == id } && !isDone(id) }
+            if !open.isEmpty { throw Failure(message: Self.blocked(open)) }
         }
         var c = Card(id: freshID(), title: t, lane: lane, next: next, objectives: objectives, after: after.map { $0.lowercased() },
                      concept: concept, note: note, parkedReason: lane == .parked ? (reason ?? note) : nil, source: actor)
@@ -165,15 +171,19 @@ struct CourseBoard: Sendable, Equatable {
 
     /// Makes a card the focus (WIP = 1). `replace` parks nothing: it moves the old focus back to the backlog.
     @discardableResult
-    mutating func start(_ key: String, next: String? = nil, replace: Bool = false, actor: String = "mentor") throws -> Card {
+    mutating func start(_ key: String, next: String? = nil, replace: Bool = false, force: Bool = false, actor: String = "mentor") throws -> Card {
         let i = try index(key)
+        var oldFocus: Int?
         if let f = focusID, f != cards[i].id, let fi = cards.firstIndex(where: { $0.id == f }), cards[fi].lane == .doing {
             guard replace else {
                 throw Failure(message: "\(f.uppercased()) \(cards[fi].title) is doing. Park it (park, with a reason), complete it (complete, with evidence), or pass replace=true to send it back to the backlog.")
             }
-            cards[fi].lane = .backlog
-            cards[fi].updatedAt = Date()
+            oldFocus = fi
         }
+        // Prerequisites first: the board's order was advice only, and a focus could sit on unfinished foundations.
+        let open = unmet(cards[i])
+        if !open.isEmpty, !force { throw Failure(message: Self.blocked(open)) }
+        if let fi = oldFocus { cards[fi].lane = .backlog; cards[fi].updatedAt = Date() }
         cards[i].lane = .doing
         cards[i].parkedReason = nil
         if let n = next, !n.isEmpty { cards[i].next = n }
@@ -207,7 +217,9 @@ struct CourseBoard: Sendable, Equatable {
     @discardableResult
     mutating func complete(_ key: String, evidence: String, actor: String = "mentor") throws -> Card {
         let e = evidence.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !e.isEmpty else { throw Failure(message: "Say what evidence shows this is done — a quiz score, an exercise pass, a correct explanation.") }
+        guard Self.isEvidence(e) else {
+            throw Failure(message: "Say what evidence shows this is done, concretely: the quiz score, the review that passed with green tests, the explanation they gave unaided. \"\(MemoryText.clip(e, 30))\" isn't evidence.")
+        }
         let i = try index(key)
         cards[i].lane = .done
         cards[i].parkedReason = nil
@@ -237,11 +249,11 @@ struct CourseBoard: Sendable, Equatable {
 
     /// The generic move; the same rules apply (one focus, evidence to finish, a reason to park).
     @discardableResult
-    mutating func move(_ key: String, to lane: Lane, position: Int? = nil, evidence: String? = nil, reason: String? = nil, actor: String = "mentor") throws -> Card {
+    mutating func move(_ key: String, to lane: Lane, position: Int? = nil, evidence: String? = nil, reason: String? = nil, force: Bool = false, actor: String = "mentor") throws -> Card {
         let i = try index(key)
         let cid = cards[i].id
         switch lane {
-        case .doing: try start(cid, actor: actor)
+        case .doing: try start(cid, force: force, actor: actor)
         case .parked: try park(cid, reason: reason ?? "", actor: actor)
         case .done: try complete(cid, evidence: evidence ?? "", actor: actor)
         case .backlog, .review:
@@ -256,6 +268,17 @@ struct CourseBoard: Sendable, Equatable {
             cards.insert(c, at: max(0, min(p, cards.count)))
         }
         return cards.first { $0.id == cid }!
+    }
+
+    static func blocked(_ open: [String]) -> String {
+        "It comes after \(open.map { $0.uppercased() }.joined(separator: ", ")), not done yet: finish \(open.count == 1 ? "that" : "those") first, or pass force=true when the learner already knows it (say why in a note)."
+    }
+    /// What can count as evidence: something that happened, in words — not "done", "ok" or "finished".
+    static func isEvidence(_ e: String) -> Bool {
+        let generic: Set<String> = ["done", "ok", "okay", "finished", "complete", "completed", "yes", "passed", "good", "learned", "understood", "covered", "n/a"]
+        let words = e.lowercased().split { !$0.isLetter && !$0.isNumber }
+        let bare = e.lowercased().trimmingCharacters(in: .punctuationCharacters.union(.whitespaces))
+        return !generic.contains(bare) && e.count >= 5 && (e.contains { $0.isNumber } || words.count >= 3)
     }
 
     /// Evidence from the app (a graded answer, a `mastery` record) attaches to the card that teaches the concept and does
@@ -479,6 +502,7 @@ struct CourseBoard: Sendable, Equatable {
         let d = p.data
         if d["version"]?.int == Self.version {
             deadline = d["deadline"]?.string.flatMap { Self.day.date(from: $0) }
+            mode = d["mode"]?.string
             focusID = d["focus"]?.string
             revision = d["revision"]?.int ?? 0
             cards = (d["cards"]?.array ?? []).compactMap(Self.card(from:))
@@ -536,6 +560,7 @@ struct CourseBoard: Sendable, Equatable {
                                  })]
         if let f = focusID { o["focus"] = .string(f) }
         if let d = deadline { o["deadline"] = .string(Self.day.string(from: d)) }
+        if let m = mode { o["mode"] = .string(m) }
         return .object(o)
     }
 
@@ -671,7 +696,22 @@ struct CourseBoard: Sendable, Equatable {
     }
 }
 
+extension CourseBoard {
+    /// Every change to a board is read–modify–write on one row. The tool, the app's evidence and the learner's panel all
+    /// write through this one lock: separately, a stale read in one could save over another's change.
+    static let writes = NSRecursiveLock()
+}
+
 extension StudyStore {
+    /// Changes a board under the boards' write lock: read it fresh, apply, save (nothing saved when `body` returns false).
+    @discardableResult
+    func mutateBoard(lesson: String, _ body: (inout CourseBoard) -> Bool) -> CourseBoard? {
+        CourseBoard.writes.lock(); defer { CourseBoard.writes.unlock() }
+        guard var b = board(forLesson: lesson), body(&b) else { return nil }
+        save(b, conversationID: lesson)
+        return b
+    }
+
     /// The board behind a plan row.
     func board(_ id: String) -> CourseBoard? { plan(id).map(CourseBoard.init(plan:)) }
 

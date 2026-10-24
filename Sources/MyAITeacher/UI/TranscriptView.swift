@@ -548,7 +548,10 @@ struct TranscriptView: NSViewRepresentable {
                 if let id = j["id"]?.string, let t = j["text"]?.string { session?.edit(messageID: id, newText: t) }
             case "suggest":
                 // "Continue: <course>" on the welcome screen links the board before the first message, like Progress does.
-                if let b = j["board"]?.string, let s = session, s.services.study.board(b) != nil { s.services.study.link(board: b, lesson: s.id) }
+                if let b = j["board"]?.string, let s = session, let board = s.services.study.board(b) {
+                    s.services.study.link(board: b, lesson: s.id)
+                    if s.messages.isEmpty, let m = board.mode.flatMap(TeachingMode.init(rawValue:)), !m.isAgent { s.setMode(m) }
+                }
                 if let t = j["text"]?.string { session?.send(t) }
             case "study":
                 // A hint or solution opened on a ```problem: logged as help; a solution seen without an attempt also goes to

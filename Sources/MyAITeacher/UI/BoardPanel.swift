@@ -18,12 +18,14 @@ final class BoardModel: ObservableObject {
     }
     /// The learner shelves a question for later: a parked card the mentor sees in the state header.
     func park(_ text: String) {
-        guard let lesson, let study, var b = board else { return }
+        guard let lesson, let study else { return }
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !t.isEmpty, (try? b.add(title: MemoryText.clip(t, 80), lane: .parked, note: t.count > 80 ? t : nil,
-                                       reason: "saved by the learner for later", actor: "learner")) != nil else { return }
-        study.save(b, conversationID: lesson)
-        EventBus.publish(.studyDataChanged)
+        guard !t.isEmpty else { return }
+        // Read fresh under the boards' lock: the panel's copy may be older than a change the mentor just made.
+        let saved = study.mutateBoard(lesson: lesson) { b in
+            (try? b.add(title: MemoryText.clip(t, 80), lane: .parked, note: t.count > 80 ? t : nil, reason: "saved by the learner for later", actor: "learner")) != nil
+        }
+        if saved != nil { EventBus.publish(.studyDataChanged) }
     }
 }
 

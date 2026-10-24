@@ -112,7 +112,9 @@ In **Code mentor** mode you learn by building real software, not toy snippets.
   Python's `asyncio`, or a package in your project, and the mentor teaches from the source installed on your Mac: it
   finds it by name (`source`), outlines it, reads the real implementation and cites file and line. The projects then
   reimplement a real piece of it against the original's behaviour.
-* **No solution.** The mentor writes the starter and the tests, never the exercise's solution, and won't show one: it
+* **No solution, enforced.** The mentor writes the starter and the tests; once the tests are registered, your project's
+  files are yours. The app refuses the mentor's writes and edits to them, undoes anything one of its commands changes
+  there, lets it start only read-only helpers, and withholds a reply that writes out one of your TODO functions. It
   teaches with questions, targeted hints and concepts so you find the fix.
 
 ### A language mentor

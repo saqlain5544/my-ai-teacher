@@ -136,8 +136,10 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func setMode(_ mode: TeachingMode) {
         guard mode != conversation.mode else { return }
-        // Into or out of the code agent: a different persona and toolset, so the system prompt is rebuilt.
-        if mode.isAgent != conversation.mode.isAgent { conversation.systemPrompt = nil }
+        // Every mode is its own branch of the agent tree (its guides, tools, project or language section): the prompt is
+        // rebuilt. Kept, a lesson switched into Code mentor had the mentor's tools under a tutor's prompt. The tool list
+        // changes anyway, so the cached prefix was already lost.
+        conversation.systemPrompt = nil
         conversation.mode = mode
         if messages.isEmpty { sink?.reset(messages, conversation: conversation) }   // the welcome fits the mode
         if !messages.isEmpty { pendingModeNote = "[The learner switched the teaching mode to \(mode.title).]\n" + Instructions.text(.mode(mode), settings) }
@@ -148,6 +150,8 @@ final class ChatSession: ObservableObject, Identifiable {
     func refreshWelcome() { if messages.isEmpty { sink?.reset(messages, conversation: conversation) } }
 
     func setModel(providerID: String, model: String) {
+        // The prompt names the model and what it can do (vision, reasoning): another model gets its own.
+        if providerID != conversation.providerID || model != conversation.model { conversation.systemPrompt = nil }
         conversation.providerID = providerID
         conversation.model = model
         save()
@@ -470,7 +474,7 @@ final class ChatSession: ObservableObject, Identifiable {
                 if reply.count > 200 {
                     setStatus("Checking the answer…")
                     let from = asked ?? 0
-                    let input = DeepWork.reviewInput(request: askedText, plan: plan, reply: reply, evidence: DeepWork.evidence(Array(messages[min(from, messages.count)...])))
+                    let input = DeepWork.reviewInput(request: askedText, plan: plan, reply: reply, evidence: DeepWork.evidence(Array(messages[min(from, messages.count)...])), mode: conversation.mode)
                     let rq = LLMRequest(model: conversation.model, system: DeepWork.reviewerSystem, messages: [ChatMessage(role: .user, blocks: [.text(input)])],
                                         maxTokens: 2_000, thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id + "-review", cache: false)
                     let checked = await DeepWork.collect(client, rq)

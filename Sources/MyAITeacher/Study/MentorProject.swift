@@ -45,6 +45,10 @@ struct MentorProject: Codable, Sendable, Equatable {
     /// The learner's files at the last baseline (the proven starter, or the last review).
     var snapshotAt: Date?
     var snapshotWhy: String?
+    /// The review `start` a round's `findings` belong to: when it ran and which files had changed. A round needs one,
+    /// with changes; a pass needs its run green.
+    var openReview: OpenReview?
+    struct OpenReview: Codable, Sendable, Equatable { var at: Date; var changed: [String]; var run: TestRun? }
 
     var lastRun: TestRun? { runs.last }
     var openFindings: [Finding] { rounds.last?.findings.filter { !$0.resolved } ?? [] }

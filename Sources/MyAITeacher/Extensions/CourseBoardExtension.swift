@@ -22,14 +22,13 @@ final class CourseBoardExtension: AgentExtension {
         let study = session.services.study
         switch call.name {
         case "mastery":
-            guard call.input?["action"]?.string == "record", let concept = call.input?["concept"]?.string, var b = study.board(forLesson: session.id) else { return }
+            guard call.input?["action"]?.string == "record", let concept = call.input?["concept"]?.string else { return }
             let right = call.input?["correct"]?.bool ?? false
-            let helped = call.input?["assisted"]?.bool == true
-            guard b.attachEvidence(concept: concept, "\(concept): \(right ? "correct" : "incorrect")\(helped ? " with help" : " unaided")") != nil else { return }
-            study.save(b, conversationID: session.id)
+            let help = MasteryTool.help(call.input ?? .null)
+            let how = help == .none ? " unaided" : help == .solution ? " after seeing the solution" : " with help"
+            study.mutateBoard(lesson: session.id) { b in b.attachEvidence(concept: concept, "\(concept): \(right ? "correct" : "incorrect")\(how)") != nil }
         case "ask_learner", "quiz":
-            guard let graded = result.meta?["graded"]?.array, !graded.isEmpty, let questions = call.input?["questions"]?.array,
-                  var b = study.board(forLesson: session.id) else { return }
+            guard let graded = result.meta?["graded"]?.array, !graded.isEmpty, let questions = call.input?["questions"]?.array else { return }
             var tally: [String: (right: Int, total: Int, hinted: Int)] = [:]
             var order: [String] = []
             for (i, g) in graded.enumerated() {
@@ -39,13 +38,16 @@ final class CourseBoardExtension: AgentExtension {
                 if c { tally[concept]!.right += 1 }
                 if (g["hints"]?.int ?? 0) > 0 { tally[concept]!.hinted += 1 }
             }
-            var touched = false
-            for concept in order {
-                let t = tally[concept]!
-                let text = "quiz: \(concept) \(t.right)/\(t.total)" + (t.hinted > 0 ? " (\(t.hinted) with hints)" : "")
-                if b.attachEvidence(concept: concept, text) != nil { touched = true }
+            let touched = study.mutateBoard(lesson: session.id) { b in
+                var touched = false
+                for concept in order {
+                    let t = tally[concept]!
+                    let text = "quiz: \(concept) \(t.right)/\(t.total)" + (t.hinted > 0 ? " (\(t.hinted) with hints)" : "")
+                    if b.attachEvidence(concept: concept, text) != nil { touched = true }
+                }
+                return touched
             }
-            if touched { study.save(b, conversationID: session.id); EventBus.publish(.studyDataChanged) }
+            if touched != nil { EventBus.publish(.studyDataChanged) }
         default: break
         }
     }
@@ -69,6 +71,8 @@ final class CourseBoardExtension: AgentExtension {
     /// The board's header enriched with what the app observed: the problem awaiting an attempt, the focus concept's mastery.
     static func stateBlock(_ session: ChatSession) -> String? {
         guard let b = session.services.study.board(forLesson: session.id) else { return nil }
+        // A lesson's first request on a board with history is a resumption: what happened last time, mode="resume".
+        if !session.messages.contains(where: { $0.role == .assistant }), b.revision > 1 { return b.resumeBrief() }
         return b.header(openLoop: openLoop(session.messages), watch: watch(b, study: session.services.study))
     }
 
@@ -88,7 +92,8 @@ final class CourseBoardExtension: AgentExtension {
         let after = text[fence.upperBound...]
         let body = after.range(of: "```").map { String(after[..<$0.lowerBound]) } ?? String(after)
         guard let j = JSON.parse(body.trimmingCharacters(in: .whitespacesAndNewlines)), let q = j["q"]?.string else { return nil }
-        return "awaiting the learner's attempt at: " + MemoryText.clip(q.replacingOccurrences(of: "\n", with: " "), 100)
+        // The learner's latest message came after the problem: it may well be their attempt, so it isn't "awaiting" one.
+        return "open problem: " + MemoryText.clip(q.replacingOccurrences(of: "\n", with: " "), 100) + " — their latest message may be their attempt: review it before moving on"
     }
 
     /// The focus card's concept, as `mastery` currently sees it.

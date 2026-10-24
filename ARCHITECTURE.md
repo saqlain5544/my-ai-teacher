@@ -360,7 +360,15 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   pytest, jest/vitest, mocha, go test, swift test, cargo, zig, rspec, mix, ctest) and the open findings; `findings`
   records the round (file, line, severity, text, concept), carries unresolved findings forward, marks resolved ids, takes
   a new snapshot, refuses a pass that still carries a `must`, and on a pass with the last run green records the project's
-  concept with `StudyStore.recordAttempt`. `CodeMentorExtension` appends a `<project_state>` line to every request
+  concept with `StudyStore.recordAttempt`. A round belongs to a `start` that found changes (`openReview`: when, which
+  files, its run): without one `findings` is refused, a pass needs that run green, and a `must` counts as resolved only
+  when its file is among the changed ones.
+  `MentorGuard` holds the solution boundary after the baseline: `write`/`edit` into the project (outside `.teacher/`)
+  are refused; around every command tool (bash, run_code, run_tests, diagnostics, project_tests, project_review) the
+  project's text files are cloned and anything the call changed, created or deleted is put back, with a note to the
+  mentor; `task` starts only read-only types; and `willStoreReply` replaces a code block that defines one of the
+  project's TODO functions (four lines or more) with a notice. A learner saving a file in the seconds a mentor's
+  command runs could see that save undone: the guard can't tell their write from the command's. `CodeMentorExtension` appends a `<project_state>` line to every request
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
@@ -535,12 +543,17 @@ help the learner had to ask for went unused. So these are app behaviour, not jus
 The mentor's intent for a goal that spans replies and lessons lives on a **course board** (`CourseBoard`, persisted as
 version 2 of `plans.data`; legacy `modules` plans convert on read), not in the transcript. A board has cards with
 stable ids (C1…), one of five lanes — backlog, doing (the one focus card, WIP = 1), review, done, parked — a `next`
-action, prerequisites (`after`), a `concept` for evidence, a revision and a capped log. `lesson_plan` is the only
-writer: add / start / park / resume / complete / note / move / get / list, plus the legacy create / update. Validation
-is the feature: a second `start` names the current focus, `complete` needs evidence, `park` needs a reason, an empty
-modules update is refused, and a card completed while its concept's mastery is low gets a Review card (the board is
-intent; mastery is belief). A lesson works from one board (`board_links`, set when a board is created, named or
-resumed from Progress); several lessons can share it.
+action, prerequisites (`after`), a `concept` for evidence, the teaching mode it is taught in, a revision and a capped log.
+`lesson_plan` writes it (add / start / park / resume / complete / note / move / get / list, plus create / update); the
+app's evidence and the learner's Park in the panel write too, and all three go through one lock
+(`CourseBoard.writes`, `StudyStore.mutateBoard`), reading the board fresh. Validation is the feature: a second `start`
+names the current focus, a card whose `after` cards aren't done can't become the focus (`force` when the learner
+already knows them), `complete` needs evidence that says something ("quiz 5/5", not "done"), `park` needs a reason, a
+second `create` in a lesson that has a board is refused (`replace` to start another), an empty modules update is
+refused, and a card completed while its concept's mastery is low gets a Review card (the board is intent; mastery is
+belief). A lesson works from one board (`board_links`, set when a board is created, named or resumed from Progress);
+several lessons can share it. A resumed lesson opens in the board's mode, and its first request carries the resume
+brief (`mode="resume"`, what happened last time).
 
 What keeps the mentor oriented is not the board but the **state card**: `CourseBoardExtension.willRequest` appends an
 app-generated `<lesson_state>` block (course, focus, next, then, parked, open loop, watch, evidence; ≤ 200 tokens
@@ -575,7 +588,8 @@ the root and never what its children add:
 root ── files (read, write, batch edit, ls), web, sub-agents (task), load_tools; core visualisations
 ├── teacher ── ask_learner, math, run_code, bash, memory, lesson_plan; quiz, mastery, flashcards (runtime); vocab, practice, problem
 │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
-│   └── code-mentor ── run_tests; glob, grep (runtime); layout, tree
+│   ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
+│   └── code-mentor ── run_tests, project_tests, project_review, symbols, diagnostics, source; glob, grep (runtime); layout, tree
 └── engineer ── the code agent: shell, search, run_tests, todo, project memory, browser and Mac control; layout, tree
 ```
 
@@ -594,7 +608,8 @@ root ── files (read, write, batch edit, ls), web, sub-agents (task), load_to
 ## Instructions and limits
 * Every agent's standing instructions live in `Instructions` (teacher, each mode, board, app guide, code agent,
   built-in sub-agents), short by default and editable in Settings → Instructions (stored in `AppSettings.instructions`;
-  a lesson keeps the prompt it started with, so its cached prefix stays valid). The defaults say what the app needs —
+  a lesson keeps the prompt it started with, so its cached prefix stays valid — until its teaching mode or model
+  changes: then the prompt is rebuilt for the new branch of the agent tree). The defaults say what the app needs —
   the standard of work, learner-first rules, how tools and rendering work — and leave teaching craft to the model.
 * No tool-step cap by default (`maxToolTurns = 0`; the old saved default 40 reads as none): a reply works until it is
   done, carrying on past output limits and summarising as it goes. With a cap set, the last step offers no tools, so
