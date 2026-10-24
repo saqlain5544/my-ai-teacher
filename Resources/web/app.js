@@ -510,6 +510,8 @@
     const KINDS = /^\s*(flowchart|graph|sequenceDiagram|classDiagram|stateDiagram|erDiagram|gantt|pie|mindmap|journey|gitGraph|timeline|quadrantChart|xychart|sankey|block|packet|architecture|kanban|requirementDiagram|C4\w+|zenuml|radar|treemap)\b/;
     // No header (just "A --> B"): it's a flowchart.
     if (!KINDS.test(src) && /-->|---/.test(src)) src = 'flowchart TD\n' + src;
+    // The first statement on the header's line ("flowchart TD A[x] --> B"): Mermaid needs it on a line of its own.
+    src = src.replace(/^(\s*(?:flowchart|graph)\s+(?:TD|TB|BT|RL|LR))[ \t]+(?=[^\s;])/i, '$1\n');
     if (!/^\s*(flowchart|graph)\b/i.test(src)) return src;
     const unsafe = /[()"':;#&|<>]/;
     const q = (inner) => /^\s*".*"\s*$/.test(inner) || !unsafe.test(inner) ? inner : '"' + inner.replace(/"/g, '#quot;') + '"';

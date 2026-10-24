@@ -211,6 +211,8 @@
   // ───────────── Mermaid ─────────────
   const MERMAID = {
     flowchart: 'flowchart TD\n  A[Start] --> B{Is x > 0?}\n  B -->|yes| C[Positive]\n  B -->|no| D[Not positive]',
+    // As a model wrote it in a live lesson: the first statement on the header's line.
+    flowchartInline: 'flowchart TD A["Right triangle with legs a, b"] --> B["Two squares of side a + b"]\n  B --> C[Same area]',
     sequence: 'sequenceDiagram\n  Alice->>Bob: Hello\n  Bob-->>Alice: Hi',
     classDiagram: 'classDiagram\n  Animal <|-- Duck\n  Animal : +int age',
     state: 'stateDiagram-v2\n  [*] --> Solid\n  Solid --> Liquid: melt\n  Liquid --> Gas: boil',
@@ -1024,6 +1026,15 @@
     T.upsert(R('tp1', 'bash', 'line 1\nfinished')); await sleep(160);
     ok(!$('.spinner', card) && card.textContent.includes('finished'), 'result shown');
     T.status('', false);
+  });
+
+  test('practice cards written one object per line render as a list', () => {
+    const code = '{"q":"6 and 8: hypotenuse?","a":"10"}\n{"q":"Is 7, 8, 9 a triple?","a":"No: 49 + 64 = 113, not 81."}';
+    T.reset([U('q'), A([{ kind: 'text', text: '```practice\n' + code + '\n```' }])], {});
+    const card = $('.practice');
+    ok(card && card.getAttribute('data-n') === '2', 'two cards, not a validation error');
+    ok(!$('.comp-error') && !document.body.textContent.includes('needs at least 1 item'), 'no error box');
+    eq(window.TeacherUI.parseLoose('[1] [2]', { all: true }), [[1], [2]], 'every top-level value');
   });
 
   test('quiz choices are a group named by their question', () => {

@@ -125,8 +125,9 @@
 
   // Lenient JSON for model-written component data: strict JSON first (fast path), then a small JSON5-style parser —
   // comments, unquoted keys, 'single' and “curly” quotes, trailing commas, NaN/Infinity, True/False/None, hex — and
-  // text after the first complete value is ignored. One pass, O(n).
-  R.parseLoose = function (src) {
+  // text after the first complete value is ignored — or, with `{ all: true }`, every top-level value is returned as an
+  // array (one object per line is how models often write a list). One pass, O(n).
+  R.parseLoose = function (src, opts) {
     src = String(src);
     try { return JSON.parse(src); } catch (_) {}
     let i = 0;
@@ -205,6 +206,13 @@
     if (i >= n) fail('empty');
     // Prose before the data ("Here is the chart: {…}"): start at the first bracket.
     if (!/[[{"'“‘\d-]/.test(src[i])) { const j = src.search(/[[{]/); if (j < 0) fail('no data'); i = j; }
-    return value();
+    const first = value();
+    if (!opts || !opts.all) return first;
+    const out = [first];
+    for (;;) {
+      ws(); if (src[i] === ',') { i++; ws(); }
+      if (i >= n || !/[[{]/.test(src[i])) return out;
+      out.push(value());
+    }
   };
 })();

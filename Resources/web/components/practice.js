@@ -12,7 +12,12 @@
 
   function parse(code) {
     const j = R.parseLoose(code);
-    return Array.isArray(j) ? { items: j } : { title: j.title, items: j.items || j.questions || j.cards || [] };
+    if (Array.isArray(j)) return { items: j };
+    const list = j && (j.items || j.questions || j.cards);
+    if (list) return { title: j.title, items: list };
+    // One card per value ({"q":…} on each line, as models often write a list): every value is a card.
+    const all = R.parseLoose(code, { all: true });
+    return { items: (Array.isArray(all) ? all : [all]).filter(x => x && typeof x === 'object') };
   }
 
   R.defineComponent({ names: ['practice', 'selfcheck', 'self-check'], version: 2,
