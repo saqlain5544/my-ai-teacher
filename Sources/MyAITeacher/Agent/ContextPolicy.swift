@@ -168,20 +168,33 @@ enum ContextPolicy {
         var total = estimateTokens(msgs)
         guard total > budget, budget > 0 else { return msgs }
         let lastUser = msgs.lastIndex { $0.role == .user && !$0.isToolResultOnly } ?? -1
-        var big: [(Int, Int, Int)] = []
+        // Tool inputs too (a `write` carrying a whole file is often the biggest thing in a coding lesson) — except with
+        // signed thinking in the history, where an edited earlier tool call invalidates the replayed reasoning.
+        let signed = msgs.contains { $0.blocks.contains { $0.kind == .thinking && $0.signature != nil } }
+        var big: [(i: Int, j: Int, key: String?, n: Int)] = []
         for (i, m) in msgs.enumerated() where i != lastUser {
-            for (j, b) in m.blocks.enumerated() where (b.kind == .toolResult || b.kind == .text) && (b.text?.count ?? 0) > 6000 { big.append((i, j, b.text!.count)) }
+            for (j, b) in m.blocks.enumerated() {
+                if (b.kind == .toolResult || b.kind == .text), let n = b.text?.count, n > squeezeOver { big.append((i, j, nil, n)) }
+                if b.kind == .toolUse, !signed, case .object(let o) = b.input ?? .null {
+                    for (k, v) in o { if let n = v.string?.count, n > squeezeOver { big.append((i, j, k, n)) } }
+                }
+            }
         }
         var out = msgs
-        for (i, j, n) in big.sorted(by: { $0.2 > $1.2 }) where total > budget {
-            let t = out[i].blocks[j].text!
-            let head = String(t.prefix(3000)), tail = String(t.suffix(1500))
-            let cut = head + "\n[… \(n - 4500) characters trimmed to fit the context …]\n" + tail
-            out[i].blocks[j].text = cut
+        for (i, j, key, n) in big.sorted(by: { $0.n > $1.n }) where total > budget {
+            let t = key.map { out[i].blocks[j].input?[$0]?.string ?? "" } ?? out[i].blocks[j].text ?? ""
+            let cut = String(t.prefix(3000)) + "\n[… \(n - 4500) characters trimmed to fit the context …]\n" + String(t.suffix(1500))
+            if let key, case .object(var o) = out[i].blocks[j].input ?? .null {
+                o[key] = .string(cut); out[i].blocks[j].input = .object(o)
+            } else {
+                out[i].blocks[j].text = cut
+            }
             total -= max(0, estimate(t) - estimate(cut))
         }
         return out
     }
+    /// Characters past which a block (or tool-input field) is a squeeze candidate.
+    static let squeezeOver = 6000
 
     /// For a model that cannot see images: every picture becomes a short note saying one was attached, so the lesson
     /// goes on (the provider would otherwise refuse the whole request) and the tutor knows to ask about it.

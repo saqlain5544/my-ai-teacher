@@ -324,3 +324,29 @@ final class TelemetryRetryTests: XCTestCase {
         XCTAssertEqual(try db.query("SELECT COUNT(*) AS n FROM tm_events").first?.int("n"), 1, "written once, on retry")
     }
 }
+
+final class SqueezeInputTests: XCTestCase {
+    private func lesson(signed: Bool) -> [ChatMessage] {
+        let file = String(repeating: "let x = 1\n", count: 30_000)   // ~300k chars
+        var a = ChatMessage(role: .assistant, blocks: [.toolUse(id: "w", name: "write", input: ["path": "main.swift", "content": .string(file)])])
+        if signed { a.blocks.insert(.thinking("plan", signature: "sig"), at: 0) }
+        return [ChatMessage(role: .user, blocks: [.text("build it")]), a,
+                ChatMessage(role: .user, blocks: [.toolResult(id: "w", name: "write", content: "ok")]),
+                ChatMessage(role: .user, blocks: [.text("now test it")])]
+    }
+
+    func testAHugeToolInputIsTrimmedToFit() {
+        let out = ContextPolicy.squeeze(lesson(signed: false), budget: 8_000)
+        XCTAssertLessThanOrEqual(ContextPolicy.estimateTokens(out), 8_000)
+        let content = out[1].blocks[0].input?["content"]?.string ?? ""
+        XCTAssertTrue(content.contains("trimmed to fit"))
+        XCTAssertEqual(out[1].blocks[0].input?["path"]?.string, "main.swift", "short fields untouched")
+        XCTAssertEqual(out[1].blocks[0].id, "w", "the call still pairs with its result")
+    }
+
+    func testSignedThinkingLeavesToolInputsAlone() {
+        let msgs = lesson(signed: true)
+        let out = ContextPolicy.squeeze(msgs, budget: 8_000)
+        XCTAssertEqual(out[1].blocks[1].input, msgs[1].blocks[1].input, "editing a call would invalidate the replayed reasoning")
+    }
+}
