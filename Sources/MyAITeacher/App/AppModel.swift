@@ -7,7 +7,6 @@ enum SidebarItem: Hashable {
     case sessions
     case flashcards
     case progress
-    case school
     case memory
     case insights
 }
@@ -118,7 +117,6 @@ final class AppModel: ObservableObject {
         extensions.register(CourseBoardExtension())
         extensions.register(TestingExtension())
         extensions.register(LanguageExtension())
-        extensions.register(SchoolExtension())
         extensions.register(CodeMentorExtension())
         extensions.register(MentorGuard())
         extensions.register(ActivityExtension())

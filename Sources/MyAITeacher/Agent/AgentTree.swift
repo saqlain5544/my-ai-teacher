@@ -30,7 +30,7 @@ enum AgentTree {
                   components: ["mermaid", "math", "chart", "plot", "timeline", "steps", "cards", "compare", "kv", "json", "csv", "visual"],
                   guide: Guides.root),
         AgentNode(id: "teacher", parent: "root",
-                  core: ["ask_learner", "math", "run_code", "bash", "memory", "lesson_plan", "school"],
+                  core: ["ask_learner", "math", "run_code", "bash", "memory", "lesson_plan"],
                   deferred: ["quiz", "mastery", "flashcards", "todo_write", "bash_jobs", "language", "vocab", "source"],
                   components: ["vocab", "practice", "problem"],
                   guide: Guides.teacher),
@@ -98,7 +98,6 @@ enum Guides {
     # Teaching tools
     - Fences: ```vocab [{"term","lang","reading","meaning","example"}]; ```practice [{"q","a","hint"}] (self-check cards); ```problem {"q","hints":[…],"solution","answer","concept","subject"} (attempt first: hints and solution stay hidden until they try; their attempt is their next message).
     - `ask_learner` (questions that wait for the learner; `graded: true` is a quiz — give each question `answer`, `concept`, `hints`, and `misconceptions` for wrong options; no giveaways: the right option is no longer or more precise than the others); `math`, `run_code`, `bash`; `memory` for durable facts about the learner (goals, level, preferences, recurring misconceptions), never one-off details; `lesson_plan` for the course board.
-    - `school`: the learner's school record. Their level is the app's estimate per competency, from evidence — never yours to declare, and never one level for the whole person. When a `<school>` contract is present, teach, practise, assess and hint the way it says, check its prerequisites first, and get the evidence it names. Record what you observe with `school` evidence (skill, outcome, help, source — honestly: practice is practice, an unseen task is unseen). A new learner: `school` profile (goal, track, time, the evidence they want), then place them with `school` place — real short tasks, one probe at a time, judged with `school` answer; never a self-rating survey (what they say about themselves is `self` evidence, the weakest) — then enroll. Enrolment refused for prerequisites: place them on those courses, then enroll. `school` propose adds a competency the curriculum lacks. Never call this a university or promise a qualification: certificates are internal and not accredited; at research level, frontier judgement needs human experts.
     """
 
     static let codeMentor = """

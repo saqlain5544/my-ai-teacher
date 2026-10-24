@@ -209,7 +209,7 @@ final class ToolRegistryTests: XCTestCase {
         // AgentTree), so moving a tool into a module shouldn't reshuffle them unnoticed.
         XCTAssertEqual(ToolRegistry.all.map(\.name), [
             "read", "write", "edit", "ls", "glob", "grep", "bash", "bash_jobs", "run_code", "run_tests", "web_search", "web_fetch", "task",
-            "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "mastery", "school",
+            "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "mastery",
             "flashcards", "project_memory", "language", "vocab", "source", "symbols", "diagnostics", "project_tests", "project_review", "browser", "mac", "computer", "lesson_plan"])   // lesson_plan: course board module
         XCTAssertEqual(Set(Features.all.map(\.id)).count, Features.all.count, "module ids are unique")
         for t in Features.tools { XCTAssertNotNil(ToolRegistry.byName[t.name], "\(t.name) reaches the registry") }

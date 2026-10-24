@@ -343,41 +343,6 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   made every pair *full* semantic evidence). Those memories fall back to lexical/FTS matching until a multilingual
   embedder ships. Latin-script text keeps the current model.
 
-## School (competencies, evidence, policy, progression)
-* **Graph** (`School/Competency.swift`, `School/Curriculum.swift`): `Competency` (id, title, kind concept|language|
-  library|toolchain|research, prereqs, transfers, aliases, misconceptions, outcomes per `Level`, sources) and `Course`
-  (level, competencies as outcomes, prerequisite courses, hours, assessments). Built in: ~55 programming concepts, an
-  overlay set per language (syntax, errors, toolchain, idioms, concurrency, memory for systems languages) whose
-  `transfers` name the concepts they build on, and a catalog from PF101 to RES600 plus LANG-* courses.
-  `CompetencyGraph.resolve` maps a concept name to a node (id, title, alias, or the longest title inside it);
-  `validates` keeps proposals acyclic and their references known. Proposed nodes live in `school_competencies`.
-* **Evidence** (`School/SchoolStore.swift`, tables `school_*` in the learner database): one row per observation —
-  competency, `Skill`, task level, outcome, help, `Source` (unseen 1.0, tests 0.95, review/defence 0.9, placement
-  0.8, quiz 0.75, practice/mastery 0.6, self 0.3), misconception, lesson. `StudyStore.recordAttempt` (quizzes,
-  flashcards, `mastery`, project reviews and explain-backs) bridges into it when the concept resolves; language
-  grammar doesn't. `estimate`: a level is held with ≥ 1.5 unaged weight at it (passes above count at it), an
-  age-weighted score ≥ 0.7 (half-life 120 days), and unaided passes in two skills including a use skill; above it,
-  mixed evidence is `developing`; per-skill bests, independence, misconceptions, and `recheckDue` after 60 days
-  without an unaided pass. Levels, completion and grades are computed; the agent writes only evidence.
-* **Policy** (`School/TeachingPolicy.swift`): `TeachingPolicy.contract` composes, per competency, the target level
-  (`SchoolStore.target`: one above what's held, capped by the course's level or the profile's track), the level's
-  style (teach, practise, assess, hints, sources), prerequisite gaps (no evidence, or held below the level this one
-  builds on), misconceptions, a diagnose step after two recent failures, and the evidence still needed.
-  `SchoolExtension` appends it as `<school …>` to each request for the lesson's linked competency
-  (`school_links`, set by `school` focus/enroll or the School screen) or the course board's focus card, and completes
-  courses after a turn. Not in the code agent or the language mentor.
-* **Placement** (`PlacementEngine`): per target competency, prerequisites first, a probe starts at the track (at most
-  university), goes up on a pass and down on a failure until bracketed; a failure at school level queues the
-  prerequisites; skills rotate by level; help turns a pass into partial; at most 14 probes; every answer is evidence.
-* **Progression**: `enroll` needs prerequisite courses completed or their outcomes held at their level (the
-  learner may override in the catalog). `progressCourses` completes an enrolled course when every competency is held
-  at its level and some unaided summative evidence (unseen, tests, review, defence) exists; grade from the
-  age-weighted score and independence. `SchoolReport.markdown` is the transcript, stating it is not accredited.
-* **Tool** `school` (teacher core): status, profile, catalog, enroll, focus/contract, evidence (level capped at one
-  above the target), place/answer, propose, level, transcript. **UI** `SchoolView` (sidebar → School): dashboard
-  (courses with next competency and Continue, re-checks due, levels with per-skill dots, learning measures),
-  catalog by level with prerequisites, transcript with export, and the profile sheet that starts a placement.
-
 ## Code mentor projects
 * No `exercise` tool and no built-in editor. The mentor creates the starter files directly in the lesson folder (`write`/
   `edit`, gated by the folder grant) and writes the project's tests to `<folder>/.teacher/tests/`, run with `bash`. The

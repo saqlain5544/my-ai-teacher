@@ -668,8 +668,7 @@ struct QuizTool: Tool {
             if g.correct != nil { autoTotal += 1; score += g.score ?? (g.correct == true ? 1 : 0) }
             if let c = g.correct {
                 study.recordResponse(subject: subject, concept: concept, correct: c, certainty: certainty, help: help, source: "quiz", conversationID: ctx.conversationID)
-                if let concept { study.recordAttempt(subject: subject, concept: concept, correct: c, note: nil, help: help, certainty: certainty,
-                                                     evidence: (.quiz, q["skill"]?.string.flatMap(Skill.init(rawValue:)) ?? .recall), conversationID: ctx.conversationID) }
+                if let concept { study.recordAttempt(subject: subject, concept: concept, correct: c, note: nil, help: help, certainty: certainty) }
                 if !c, let concept, missedBefore.contains(MemoryText.conceptKey(concept)) { missedAgain.append("Q\(i + 1) (\(concept))") }
                 else if !c { wrong += 1 }
                 if !c, certainty == .sure { sureButWrong.append("Q\(i + 1)") }
