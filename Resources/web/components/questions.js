@@ -220,9 +220,13 @@
       let g = gradedList ? gradedList[qi] : null;
       if (!g && answeredList) g = { given: answeredList[qi], correct: null };
       if (g && graded && qs[qi] && g.answer === undefined) g.answer = qs[qi].answer;
+      // Choices form a named group, so VoiceOver reads the question with them and says "2 of 4" (loose radios had neither).
+      const pid = 'qp-' + String(id).replace(/[^\w-]/g, '_') + '-' + qi;
+      const group = { single_choice: 'radiogroup', multiple_choice: 'group' }[q.type];
+      const body = impl.render(q, qi, F, ctx, active, g, id);
       h += '<div class="quiz-q" data-qi="' + qi + '"><div class="qn">' + (qs.length > 1 ? 'Question ' + (qi + 1) : '') + (q.concept ? (qs.length > 1 ? ' · ' : '') + ctx.esc(q.concept) : '') + '</div>' +
-        (q.type !== 'fill_blanks' || q.text ? '<div class="prompt md">' + ctx.md(q.prompt || '') + '</div>' : '') +
-        impl.render(q, qi, F, ctx, active, g, id);
+        (q.type !== 'fill_blanks' || q.text ? '<div class="prompt md" id="' + pid + '">' + ctx.md(q.prompt || '') + '</div>' : '') +
+        (group ? '<div role="' + group + '" aria-labelledby="' + pid + '">' + body + '</div>' : body);
       // Hints open one at a time, gentlest first; an answer after a hint is logged as helped (no mastery gain).
       const hs = ladder(q), opened = Math.min(+F.hints[qi] || 0, hs.length);
       if (hs.length && active) {
