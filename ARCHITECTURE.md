@@ -340,6 +340,13 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
+* **Learning a language or library from its source** (`Tools/SourceTool.swift`): `source` resolves a library by name
+  to where it lives on this Mac — Zig's std (`zig env`, via `Toolchains`), Rust's std/core/alloc (`rustc --print
+  sysroot` + rust-src), Go's GOROOT/src and module cache, Python's stdlib and any importable module (`importlib`;
+  built-ins without Python source are named as such), npm packages under the folder's `node_modules`, Cargo registry
+  crates, SwiftPM checkouts, or a folder path — then locates, finds files by name, outlines (`SymbolsTool.outline`),
+  reads numbered line ranges and greps within it. Roots are cached per launch. Core in Code mentor mode, deferred in
+  other lessons; the instructions make the installed source the textbook and the projects reimplementations of it.
 
 ## Language mentor
 * **Mode `language`** (`Instructions.mode(.language)`), with `language` and `vocab` as core tools (deferred in every

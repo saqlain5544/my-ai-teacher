@@ -170,6 +170,10 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
   several minutes on a fast model, and longer on free ones.
 * **Your editor.** There is no built-in editor. Open the folder in Helix, VS Code, Zed, Xcode — whatever you use — edit,
   save, then tell the mentor to check (or just "check my work"). The agent runs the tests with `bash` and reads the files.
+* **A language from its source.** "Teach me Zig's std", "how does Go's net/http serve a request", "walk me through
+  Python's asyncio event loop": the mentor finds the installed source on your Mac, outlines it, reads the real
+  implementation and teaches from it with file and line references. It works for standard libraries (Zig, Rust, Go,
+  Python) and for packages in your project (npm, Cargo, pip, SwiftPM).
 * **Proven tests.** When the mentor registers the test command, the app runs the suite on the starter: it must fail.
   A suite that already passes is refused, one that cannot run goes back to the mentor. The mentor tells you the command
   so you can run it yourself.
