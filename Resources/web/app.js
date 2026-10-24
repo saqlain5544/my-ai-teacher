@@ -857,10 +857,18 @@
     return el;
   }
 
+  /** A tool's result. A final one (not the "running" placeholder) replaces the streamed progress on its card for good,
+   *  so that text goes: it stayed in memory for the rest of the lesson (up to 20k characters per tool call). */
+  const isFinal = b => !(b.meta && b.meta.running);
+  function setResult(b) {
+    S.results.set(b.id, b);
+    if (isFinal(b)) S.progress.delete(b.id);
+  }
+
   function renderMessage(m) {
     if (isToolResultOnly(m)) {
       for (const b of m.blocks) {
-        S.results.set(b.id, b);
+        setResult(b);
         const card = S.cards.get(b.id);
         if (card && card.isConnected) renderToolCard(card, card._block);
       }
@@ -1274,7 +1282,7 @@
       // Empty with older messages on disk (the first loaded message was edited away): the way back, not the welcome.
       if (!messages.length && opts && opts.earlier > 0) { T.earlier(opts.earlier); return; }
       if (!messages.length) { stick = false; renderWelcome(); window.scrollTo(0, 0); return; }
-      for (const m of messages) { S.messages.push(m); S.byId.set(m.id, { msg: m, el: null }); if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.set(b.id, b)); }
+      for (const m of messages) { S.messages.push(m); S.byId.set(m.id, { msg: m, el: null }); if (isToolResultOnly(m)) m.blocks.forEach(setResult); }
       // A long lesson arrives as a window: older messages load on request.
       if (opts && opts.earlier > 0) {
         const more = document.createElement('div');
@@ -1306,7 +1314,7 @@
         if (m.role === 'assistant') streamTo(m.id);
         if (m.role === 'user' && !isToolResultOnly(m)) stick = true;
       }
-      if (isToolResultOnly(m)) m.blocks.forEach(b => S.results.set(b.id, b));
+      if (isToolResultOnly(m)) m.blocks.forEach(setResult);
       schedule(m.id);
     },
     delta(id, index, kind, text) {
@@ -1319,6 +1327,8 @@
       schedule(id);
     },
     toolProgress(toolId, text) {
+      const r = S.results.get(toolId);
+      if (r && isFinal(r)) return;   // throttled output arriving after the result: the card shows the result now
       S.progress.set(toolId, ((S.progress.get(toolId) || '') + text).slice(-20000));
       const el = document.querySelector('[data-tool-id="' + CSS.escape(toolId) + '"]');
       if (el && S.openTools.has(toolId)) renderToolCard(el, el._block);
