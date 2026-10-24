@@ -104,7 +104,6 @@ final class AppModel: ObservableObject {
         for module in Features.all { module.extensions(self).forEach(extensions.register) }
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
-        extensions.register(CourseBoardExtension())
         extensions.register(TestingExtension())
         extensions.register(LanguageExtension())
         extensions.register(ActivityExtension())

@@ -209,11 +209,12 @@ final class ToolRegistryTests: XCTestCase {
         // AgentTree), so moving a tool into a module shouldn't reshuffle them unnoticed.
         XCTAssertEqual(ToolRegistry.all.map(\.name), [
             "read", "write", "edit", "ls", "glob", "grep", "bash", "run_code", "run_tests", "web_search", "web_fetch", "task",
-            "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "lesson_plan", "mastery",
-            "flashcards", "project_memory", "browser", "mac", "computer"])
+            "agents", "load_tools", "visual", "todo_write", "ask_learner", "quiz", "math", "memory", "mastery",
+            "flashcards", "project_memory", "browser", "mac", "computer", "lesson_plan"])   // lesson_plan: course board module
         XCTAssertEqual(Set(Features.all.map(\.id)).count, Features.all.count, "module ids are unique")
         for t in Features.tools { XCTAssertNotNil(ToolRegistry.byName[t.name], "\(t.name) reaches the registry") }
         XCTAssertEqual(Features.computerUse.tools.map(\.name), ["browser", "mac", "computer"])
+        XCTAssertEqual(Features.courseBoard.tools.map(\.name), ["lesson_plan"])
     }
 
     func testEveryToolAnAgentCanGetExists() {

@@ -13,7 +13,7 @@ enum Features {
         var extensions: @MainActor @Sendable (AppModel) -> [AgentExtension] = { _ in [] }
     }
 
-    static let all: [Module] = [computerUse]
+    static let all: [Module] = [computerUse, courseBoard]
 
     static var tools: [Tool] { all.flatMap(\.tools) }
 }

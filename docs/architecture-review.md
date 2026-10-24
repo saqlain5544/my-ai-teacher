@@ -7,7 +7,7 @@ extension points.
 ## Adding features
 | Change | Commit | Checked by |
 |---|---|---|
-| A feature's tools and hooks are one `Features.Module` (computer use is the first) | `5405835` | `ToolRegistryTests`, live browser lessons |
+| A feature's tools and hooks are one `Features.Module`: computer use, then the course board | `5405835`, + `Study/CourseBoardFeature.swift` | `ToolRegistryTests`, live browser and follow-up lessons |
 | A tool declares its own sub-agent access (`subAgentVariant`); the pool is derived | `811ac98` | `ToolRegistryTests` |
 | Every extension's tool gate is consulted: an approval moves on to the next gate | `97a7954` | `ArchitectureTests` (gate chain) |
 | Compaction is its own unit (`Compaction.summaryRange` / `summarise`), usable by any agent | `a79c6ec` | `CompactionTests`, a live MiniMax summary |
@@ -67,6 +67,7 @@ extension points.
 ## Left open
 * `ChatSession.swift` (~950 lines) could be split further (tool execution, the step loop). Not done during the review:
   another session had uncommitted edits in it.
-* Only computer use is a `Features.Module`; the course board, testing and language features could follow. Moving them
-  changes extension order, which shapes system-prompt sections, so each needs its own check.
+* Computer use and the course board are `Features.Module`s; testing and language could follow. A module's hooks
+  register right after the permission gate, so each move needs the check done for the board: the hooks it implements
+  must keep their order relative to the other extensions that implement the same hooks.
 * Renderer checks added during the review ran from a copy of `renderer.test.js` (the same reason); they belong in it.
