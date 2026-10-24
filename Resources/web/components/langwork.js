@@ -589,6 +589,13 @@
   // plays sentence by sentence (with pauses to shadow), the text is hidden or shown, and each sentence can be written
   // from hearing and checked against the transcript.
   const players = new Map();   // key -> { file, segs, lang, hidden, rate, loop, i, all, shadow, tries }
+  // Another lesson: passages, lookups and players start fresh (a reading in progress stops).
+  R.onLessonChange(() => {
+    for (const st of readers.values()) if (st.playing) stopPlaying(st);
+    for (const st of players.values()) clearTimeout(st.timer);
+    readers.clear(); lookups.clear(); players.clear(); currentLookup = null;
+    const pop = document.getElementById('rd-pop'); if (pop) pop.hidden = true;
+  });
   const fmtTime = s => Math.floor(s / 60) + ':' + String(Math.floor(s % 60)).padStart(2, '0');
   R.fileView = function (b) {
     const m = b && b.meta;

@@ -8,6 +8,7 @@
   'use strict';
   const R = window.TeacherUI;
   const state = new Map(); // key -> { open:Set, hint:Set, mark:{i:'got'|'miss'}, shown:n, sent:bool }
+  R.onLessonChange(() => state.clear());
   const S = k => { let s = state.get(k); if (!s) { s = { open: new Set(), hint: new Set(), mark: {}, shown: 1, sent: false, hints: 0, text: '', at: Date.now() }; state.set(k, s); } return s; };
 
   function parse(code) {

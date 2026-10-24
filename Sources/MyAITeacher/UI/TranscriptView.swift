@@ -158,7 +158,7 @@ struct TranscriptView: NSViewRepresentable {
         private func render(_ page: ArraySlice<ChatMessage>, earlier: Int, newer: Int, windowCount: Int, conversation: Conversation) {
             pendingDeltas.removeAll()
             // Thinking is shown in every mode (the learner can hide it in Settings, and each finished block can be collapsed).
-            var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking)]
+            var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking), "lesson": .string(conversation.id)]
             if page.isEmpty && earlier == 0 && newer == 0 { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
             if conversation.mode.isAgent { opts["agent"] = true }

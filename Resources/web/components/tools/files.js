@@ -34,6 +34,7 @@
   // ── run_tests: a pass/fail card the learner can re-run without asking (the app runs the same tests and tells the
   // teacher with their next message) ──
   const reruns = new Map();   // tool id → the latest re-run's result meta
+  R.onLessonChange(() => reruns.clear());
   const testsMeta = n => reruns.get(n.props.callId) || (n.props.result && n.props.result.meta) || null;
   let lastCtx = null;
   window.TeacherTests = {

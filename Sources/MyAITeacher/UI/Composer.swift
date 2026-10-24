@@ -387,6 +387,11 @@ struct GrowingTextView: NSViewRepresentable {
         tv.placeholder = placeholder
         scroll.documentView = tv
         context.coordinator.textView = tv
+        // A narrower or wider window rewraps the draft: its height follows (it changed only with the text or focus).
+        tv.postsFrameChangedNotifications = true
+        context.coordinator.frameObserver = NotificationCenter.default.addObserver(forName: NSView.frameDidChangeNotification, object: tv, queue: .main) { [weak coord = context.coordinator] _ in
+            MainActor.assumeIsolated { coord?.widthChanged() }
+        }
         // Keys from the on-screen keyboard land at this view's caret (composition needs the text before it).
         context.coordinator.keyObserver = NotificationCenter.default.addObserver(forName: .composerKey, object: nil, queue: .main) { [weak tv] n in
             // Only the composer of the lesson whose keyboard was pressed (every open lesson has one).
@@ -421,8 +426,15 @@ struct GrowingTextView: NSViewRepresentable {
         weak var textView: ComposerTextView?
         var lastFocus = -1
         var keyObserver: NSObjectProtocol?
+        var frameObserver: NSObjectProtocol?
+        private var lastWidth: CGFloat = 0
         init(_ p: GrowingTextView) { parent = p }
-        deinit { if let o = keyObserver { NotificationCenter.default.removeObserver(o) } }
+        deinit { [keyObserver, frameObserver].compactMap { $0 }.forEach(NotificationCenter.default.removeObserver) }
+        func widthChanged() {
+            guard let w = textView?.frame.width, abs(w - lastWidth) > 0.5 else { return }
+            lastWidth = w
+            recalc()
+        }
         func textDidChange(_ n: Notification) {
             guard let tv = textView else { return }
             parent.text = tv.string

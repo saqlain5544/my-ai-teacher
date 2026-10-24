@@ -336,6 +336,10 @@
       Array.from(table.tHead.rows[0] ? table.tHead.rows[0].cells : []).forEach((th, col) => {
         th.classList.add('sort-th');
         th.title = 'Sort';
+        // Reachable and announced: Tab to a header, Enter or Space sorts, VoiceOver reads the column's order.
+        th.tabIndex = 0;
+        th.setAttribute('aria-sort', 'none');
+        th.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); th.click(); } });
         th.addEventListener('click', () => {
           const body = table.tBodies[0]; if (!body) return;
           const dir = th._dir = -(th._dir || -1);
@@ -345,8 +349,9 @@
           const cmp = (x, y) => typeof x === 'number' && typeof y === 'number' ? x - y : typeof x === 'number' ? -1 : typeof y === 'number' ? 1 : x.localeCompare(y);
           rows.sort((a, b) => cmp(val(a), val(b)) * dir);
           rows.forEach(r => body.appendChild(r));
-          table.querySelectorAll('.sort-th').forEach(h => h.removeAttribute('data-dir'));
+          table.querySelectorAll('.sort-th').forEach(h => { h.removeAttribute('data-dir'); h.setAttribute('aria-sort', 'none'); });
           th.setAttribute('data-dir', dir > 0 ? 'asc' : 'desc');
+          th.setAttribute('aria-sort', dir > 0 ? 'ascending' : 'descending');
         });
       });
     });

@@ -5,6 +5,7 @@
   'use strict';
   const R = window.TeacherUI;
   const forms = new Map();   // toolId -> form state
+  R.onLessonChange(() => forms.clear());
 
   const ALIASES = { mcq: 'single_choice', choice: 'single_choice', multi: 'multiple_choice', short: 'short_text', text: 'short_text',
     essay: 'long_text', tf: 'true_false', boolean: 'true_false', number: 'numeric', cloze: 'fill_blanks', order: 'ordering',

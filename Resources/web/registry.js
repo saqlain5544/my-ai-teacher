@@ -17,6 +17,7 @@
     actions: {},       // data-act value -> (element, event, ctx) => void
     inputs: [],        // (event, ctx) => void for input/change events
     footers: [],       // (message, turnMessages, ctx) => html   rendered under a finished reply
+    lessonHooks: [],   // () => void, when the page shows another lesson: components drop their per-page state
     nodes: {},         // node type -> { type, render(el, node, ctx, env), unmount(el, node) }
     tools: {},         // tool name -> descriptor (see defineTool)
     components: {},    // component name -> descriptor (see defineComponent)
@@ -27,6 +28,9 @@
     registerAction(names, fn) { [].concat(names).forEach(n => { this.actions[n] = fn; }); },
     registerInput(fn) { this.inputs.push(fn); },
     registerFooter(fn) { this.footers.push(fn); },
+    /** State a component keeps between renders (revealed answers, marks, outputs) belongs to one lesson: keyed by
+     *  content, it would reappear in another lesson that shows the same fence. `fn` clears it on a lesson change. */
+    onLessonChange(fn) { this.lessonHooks.push(fn); },
 
     /** A semantic node renderer: `render(el, node, ctx, env)` fills `el` for a node of `type`; `unmount(el, node)` runs
      *  when the node's element leaves the page (a trimmed lesson, a reset, a block that changed type). */

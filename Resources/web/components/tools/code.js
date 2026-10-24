@@ -36,6 +36,7 @@
 
   // Undo under a code agent's reply: the files the turn changed, and one click to put them back.
   const undone = new Set();
+  R.onLessonChange(() => undone.clear());
   R.registerFooter((m, turnMsgs, userMsg, ctx) => {
     const t = m.turn; if (!t || !t.checkpoint || !t.changedFiles || !t.changedFiles.length) return '';
     const files = t.changedFiles;

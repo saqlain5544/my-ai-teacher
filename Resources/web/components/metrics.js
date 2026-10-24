@@ -3,6 +3,7 @@
   'use strict';
   const R = window.TeacherUI;
   const open = new Set();
+  R.onLessonChange(() => open.clear());
   // 950 · 12.4k · 3.61M: large counts in millions, never "3609.8k".
   const k = n => n == null ? '—' : n >= 1e7 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e6 ? (n / 1e6).toFixed(2) + 'M'
     : n >= 10000 ? (n / 1000).toFixed(1).replace(/\.0$/, '') + 'k' : n >= 1000 ? (n / 1000).toFixed(1) + 'k' : String(Math.round(n));

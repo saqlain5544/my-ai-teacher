@@ -322,7 +322,9 @@
     const rest = info.slice(raw.length).trim();
     const known = !!(R.components[lang] || R.lazy[lang]);
     if (rest && /^[\[{]/.test(rest) && known) code = rest + '\n' + code;
-    else if (rest && !code.trim() && !known) code = rest;   // ```python print(1)```: the code is on the fence line
+    // ```python print(1)``` or ```plot sin(x)```: with nothing below, the fence line is the content (a known component's
+    // prose or raw form too: it used to come out as nothing at all).
+    else if (rest && !code.trim()) code = rest;
     const isLastOpen = env.streaming && env.openFence && idx === env.lastFenceIdx;
     // A stray or mid-line fence leaves an empty block: show nothing rather than an empty code box.
     if (!code.trim() && !isLastOpen) return '';
@@ -423,8 +425,10 @@
     if (open) return compPending('component');
     let spec;
     try { spec = R.parseLoose(code); } catch (e) { return unclosed ? unfinished('ui', code) : compError('ui', e, code); }
-    const name = spec && typeof spec === 'object' ? String(spec.component || spec.type || spec.name || '') : '';
+    const name = spec && typeof spec === 'object' ? String(spec.component || spec.type || spec.name || '').toLowerCase() : '';
     const props = spec && spec.props !== undefined ? spec.props : spec;
+    // The same allowlist as a fence of that name: ```ui is a way to write a component, not a way around the agent tree.
+    if (name && !componentAllowed(name)) return renderCode(code, 'json', {});
     const d = R.components[name];
     if (!d) {
       if (R.lazy[name]) { loadComponent(name); return '<div class="comp comp-loading" data-lazy="' + esc(name) + '"><div class="diagram-pending">Loading ' + esc(name) + '…</div></div>'; }
@@ -729,12 +733,13 @@
         const c = cur[i++], src = n.nodeType === 1 ? n.outerHTML : n.nodeValue;
         if (c && c._src === src) { nodes.push(c); continue; }
         n._src = src;
+        if (c && c.nodeType === 1) unmountComponents(c);   // a visual replaced here must stop, not run on detached
         if (c) el.replaceChild(n, c); else el.appendChild(n);
         processNode(n); nodes.push(n);
       }
       segs.push({ html: parts[s], nodes });
     }
-    for (let j = cur.length - 1; j >= i; j--) if (cur[j].parentNode === el) el.removeChild(cur[j]);
+    for (let j = cur.length - 1; j >= i; j--) if (cur[j].parentNode === el) { if (cur[j].nodeType === 1) unmountComponents(cur[j]); el.removeChild(cur[j]); }
     el._segs = Array.isArray(html) ? segs : null;
   }
   // Re-rendering a card must never steal the learner's caret: remember the focused field (by its data-* key), restore
@@ -767,6 +772,7 @@
     if (node._html === html) return;
     const f = captureFocus(node);
     if (f && composing) { node._pending = html; deferred.add(node); return; }
+    unmountComponents(node);   // what the new HTML replaces leaves the page: its components unmount (a visual's frame stops)
     node.innerHTML = html; node._html = html;
     processNode(node);
     restoreFocus(node, f);
@@ -1062,10 +1068,13 @@
 
   /** Everything a card's HTML depends on, cheaply: an unchanged card must not be rebuilt while a reply streams (the plan
    *  markdown, a 20k-character output and its escaping would otherwise run on every frame). */
+  // All of a result's meta counts (a board card's plan, search results, a job's URL), not a hand-kept list of fields:
+  // hashed once per result object, so a result whose text stays the same but whose meta changes still redraws.
+  const metaSigs = new WeakMap();
+  const metaSig = r => { let v = metaSigs.get(r); if (v == null) { v = hash(JSON.stringify(r.meta)); metaSigs.set(r, v); } return v; };
   function toolSignature(b) {
     const r = S.results.get(b.id), pend = S.pending.get(b.id);
-    const meta = r && r.meta ? [r.meta.ms, r.meta.running ? 1 : 0, r.meta.handle, r.meta.agentID, r.meta.background ? 1 : 0,
-      r.meta.state, r.meta.latex, r.meta.title, r.meta.agentReport].join(',') : '';
+    const meta = r && r.meta ? metaSig(r) : '';
     return [b.id, b.name, S.openTools.has(b.id) ? 1 : 0, b.meta && b.meta.pending ? 1 : 0,
       r ? (r.text || '').length + ':' + (r.isError ? 1 : 0) + ':' + meta : 'running',
       pend ? pend.kind + ':' + ((pend.payload && (pend.payload.title || '')) || '') : '',
@@ -1282,6 +1291,14 @@
       S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear(); S.cards.clear();
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;
+      // Another lesson: nothing of the last one's page state carries over (code outputs, open cards, revealed answers).
+      const lesson = (opts && opts.lesson) || null;
+      if (lesson !== S.lesson) {
+        S.lesson = lesson;
+        S.codeOutputs.clear(); S.openTools.clear(); S.armedAt.clear(); S.pending.clear();
+        mdCache.clear(); segCache.clear(); S.codeEpoch++;   // cached HTML has the last lesson's outputs drawn in
+        for (const f of R.lessonHooks) { try { f(); } catch (e) { console.log(e); } }
+      }
       const allowed = opts && Array.isArray(opts.components) ? new Set(opts.components) : null;
       const key = allowed ? Array.from(allowed).sort().join(',') : '*';
       if (key !== S.allowedKey) { mdCache.clear(); segCache.clear(); S.allowedKey = key; }   // cached HTML was drawn under the old set

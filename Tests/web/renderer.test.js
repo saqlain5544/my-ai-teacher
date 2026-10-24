@@ -1043,6 +1043,57 @@
     T.status('', false);
   });
 
+  // ───────────── Audit fixes ─────────────
+  test('another lesson starts clean: a revealed answer and a code output stay with their lesson', async () => {
+    const src = '```practice\n[{"q":"2+2?","a":"4"}]\n```\n\n```python\nprint(42)\n```';
+    let el = show(src, { lesson: 'L1' });
+    click($('[data-act="pr-show"]', el));
+    ok($('[data-act="pr-show"]', el).hidden, 'revealed in lesson 1');
+    const key = $('.code-block', el).getAttribute('data-key');
+    T.codeOutput(key, '42', false);
+    ok($('.code-output', el), 'output in lesson 1');
+    el = show(src, { lesson: 'L1' });
+    ok($('[data-act="pr-show"]', el).hidden && $('.code-output', el), 'the same lesson redrawn keeps both');
+    el = show(src, { lesson: 'L2' });
+    ok(!$('[data-act="pr-show"]', el).hidden, 'another lesson with the same fence: the answer is hidden again');
+    ok(!$('.code-output', el), 'and no output from the other lesson');
+  });
+
+  test('a ui fence obeys the agent\'s components; a fence-line payload is the content', async () => {
+    let el = show('```ui {"component":"visual","props":{"html":"<b>hi</b>"}}\n```', { components: ['mermaid', 'chart'] });
+    ok(!$('.visual, iframe', el) && $('pre', el), 'visual is not this agent\'s: shown as source');
+    el = show('```plot sin(x)\n```\n\n```plot cos(x)\n```', {});
+    const plots = await until(() => $$('svg.plot', el).length === 2 && $$('svg.plot', el), 'both fence-line plots draw', 6000);
+    const ids = plots.map(p => $('clipPath', p).id);
+    ok(ids[0] !== ids[1], 'each plot clips by its own id: ' + ids.join(','));
+  });
+
+  test('two identical visuals get their own frames; a replaced visual unmounts', async () => {
+    const v = '```visual\n<!-- title: Dot -->\n<div id="d">dot</div>\n```';
+    const el = show(v + '\n\n' + v, {});
+    await sleep(60);
+    const fids = $$('.visual', el).map(x => x.getAttribute('data-fid'));
+    eq(fids.length, 2); ok(fids[0] !== fids[1], 'distinct frame ids: ' + fids.join(','));
+    show('plain text now', {});
+    ok(!$('.visual iframe'), 'no frame left running after the lesson changed');
+  });
+
+  test('sortable headers work from the keyboard and say their order', () => {
+    const el = show('| n | name |\n|---|---|\n| 10 | b |\n| 2 | a |', {});
+    const th = $('th', el);
+    eq(th.tabIndex, 0, 'focusable'); eq(th.getAttribute('aria-sort'), 'none');
+    th.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    eq(th.getAttribute('aria-sort'), 'ascending'); eq($('tbody td', el).textContent, '2', 'sorted numerically');
+  });
+
+  test('a tool card redraws when only its result meta changes', async () => {
+    const a = A([{ kind: 'toolUse', id: 'ms1', name: 'bash', input: { command: 'npm run dev' } }]);
+    T.reset([U('q'), a, R('ms1', 'bash', 'ready', { meta: { background: 'B1' } })], {});
+    ok($('[data-tool-id="ms1"]').textContent.includes('B1'), 'B1');
+    T.upsert(R('ms1', 'bash', 'ready', { meta: { background: 'B1', url: 'http://localhost:5173/' } })); await sleep(160);
+    ok($('[data-tool-id="ms1"]').textContent.includes('localhost:5173'), 'same text, new meta: redrawn');
+  });
+
   test('practice cards written one object per line render as a list', () => {
     const code = '{"q":"6 and 8: hypotenuse?","a":"10"}\n{"q":"Is 7, 8, 9 a triple?","a":"No: 49 + 64 = 113, not 81."}';
     T.reset([U('q'), A([{ kind: 'text', text: '```practice\n' + code + '\n```' }])], {});

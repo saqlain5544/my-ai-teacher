@@ -33,6 +33,11 @@
   // learner (and the teacher, via "Fix").
   const RUNTIME = function (fid) {
     var sent = {};
+    // The page's light/dark switch reaches a running visual as new colours (it kept the ones it was mounted with).
+    window.addEventListener('message', function (e) {
+      var t = e.data && e.data.visualTheme; if (!t || e.source !== parent) return;
+      for (var k in t) if (t[k]) document.documentElement.style.setProperty('--' + k, t[k]);
+    });
     function rep(e) {
       var m = e && e.name ? e.name + ': ' + e.message : String(e);
       if (sent[m]) return; sent[m] = 1;
@@ -102,7 +107,11 @@
       return;
     }
     body.innerHTML = '';
-    const fid = container.getAttribute('data-fid');
+    for (const [id, fr] of frames) if (!fr.isConnected) frames.delete(id);   // frames re-rendered away without an unmount
+    // Two identical visuals share a content key: the second gets its own frame id, so heights, errors, restarts and
+    // unmounts reach the right frame.
+    let fid = container.getAttribute('data-fid');
+    if (frames.has(fid)) { fid = container.getAttribute('data-key') + '-' + (++seq); container.setAttribute('data-fid', fid); }
     const { html, libs } = JSON.parse(decodeURIComponent(body.getAttribute('data-src')));
     if (!body.style.height) body.style.height = Math.min(900, Math.max(80, +body.getAttribute('data-h') || 360)) + 'px';
     const f = document.createElement('iframe');
@@ -112,6 +121,11 @@
     body.appendChild(f);
     frames.set(fid, f);
   }
+
+  const darkMQ = window.matchMedia('(prefers-color-scheme: dark)');
+  const retheme = () => setTimeout(() => { const t = theme(); for (const f of frames.values()) { try { f.contentWindow.postMessage({ visualTheme: t }, '*'); } catch (e) {} } }, 30);
+  if (darkMQ.addEventListener) darkMQ.addEventListener('change', retheme);
+  R.retheme = retheme;
 
   // Inline fence: ```visual  (temporary; renders once the fence closes). The frame mounts when the DOM is inserted and
   // is let go when the lesson resets, trims or re-renders it away.

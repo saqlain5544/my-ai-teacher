@@ -170,6 +170,7 @@ struct BoardPanel: View {
             if compact { Image(systemName: "checkmark.message") } else { Label("Ask for a check", systemImage: "checkmark.message") }
         }
         .buttonStyle(.borderless).font(.caption).disabled(session == nil || session?.isRunning == true)
+        .accessibilityLabel("Ask for a check on \(c.title)")
         .help("Ask your teacher to check this with a question")
     }
 
@@ -188,7 +189,8 @@ struct BoardPanel: View {
                     Button {
                         session?.send("Let's come back to \(c.title) (\(c.id.uppercased())) now.")
                     } label: { Image(systemName: "arrow.uturn.backward") }
-                    .buttonStyle(.borderless).disabled(session == nil || session?.isRunning == true).help("Ask to come back to this now")
+                    .buttonStyle(.borderless).disabled(session == nil || session?.isRunning == true)
+                    .accessibilityLabel("Come back to \(c.title) now").help("Ask to come back to this now")
                 }
                 .padding(.vertical, 3)
             }

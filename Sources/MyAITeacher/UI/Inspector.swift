@@ -11,6 +11,9 @@ enum InspectorTab: String, CaseIterable, Identifiable {
     var title: String {
         switch self { case .files: "Files"; case .plan: "Plan"; case .changes: "Changes"; case .browser: "Browser"; case .agents: "Agents" }
     }
+    var symbol: String {
+        switch self { case .files: "folder"; case .plan: "rectangle.3.group"; case .changes: "plusminus"; case .browser: "globe"; case .agents: "person.2" }
+    }
 }
 
 struct InspectorPanel: View {
@@ -19,10 +22,19 @@ struct InspectorPanel: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            Picker("", selection: $app.inspectorTab) {
-                ForEach(InspectorTab.allCases) { Text($0.title).tag($0) }
+            // Words when the panel has room; icons (named for VoiceOver and on hover) when it's narrow, where five
+            // labels were squeezed into about 40 points each.
+            ViewThatFits(in: .horizontal) {
+                Picker("", selection: $app.inspectorTab) {
+                    ForEach(InspectorTab.allCases) { Text($0.title).tag($0) }
+                }
+                .pickerStyle(.segmented).labelsHidden().fixedSize()
+                Picker("", selection: $app.inspectorTab) {
+                    ForEach(InspectorTab.allCases) { t in Image(systemName: t.symbol).accessibilityLabel(t.title).help(t.title).tag(t) }
+                }
+                .pickerStyle(.segmented).labelsHidden()
             }
-            .pickerStyle(.segmented).labelsHidden().padding(8)
+            .padding(8)
             Divider()
             // The tab always fills the rest of the panel: an empty state (no agents, no changes) is shorter than the
             // panel, and without this the whole column, picker included, was centred and jumped down.

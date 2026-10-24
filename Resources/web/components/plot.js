@@ -201,6 +201,7 @@
   const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const COLORS = ['#2f6fec', '#e5484d', '#30a46c', '#f76b15', '#8e4ec6', '#0d9488', '#d6409f', '#946800'];
 
+  let clipSeq = 0;
   function render(src) {
     const spec = parseSpec(src);
     const W = 640, H = 400, M = { l: 48, r: 16, t: spec.title ? 34 : 14, b: 36 };
@@ -238,7 +239,8 @@
     const sx = x => M.l + (x - x0) / (x1 - x0) * (W - M.l - M.r);
     const sy = y => H - M.b - (y - y0) / (y1 - y0) * (H - M.t - M.b);
     let svg = `<svg class="plot" viewBox="0 0 ${W} ${H}" xmlns="http://www.w3.org/2000/svg" role="img">`;
-    svg += `<defs><clipPath id="pc"><rect x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"/></clipPath></defs>`;
+    const clip = 'pc' + (++clipSeq);   // one id per drawing: every plot had "pc", and one could clip by another's rectangle
+    svg += `<defs><clipPath id="${clip}"><rect x="${M.l}" y="${M.t}" width="${W - M.l - M.r}" height="${H - M.t - M.b}"/></clipPath></defs>`;
     if (spec.title) svg += `<text class="plot-title" x="${W / 2}" y="20" text-anchor="middle">${esc(spec.title)}</text>`;
     const xs = niceStep(x1 - x0, 10), ys = niceStep(y1 - y0, 8);
     svg += '<g class="plot-grid">';
@@ -250,7 +252,7 @@
     svg += '</g><g class="plot-ticks">';
     for (let x = Math.ceil(x0 / xs) * xs; x <= x1 + 1e-9; x += xs) svg += `<text x="${sx(x)}" y="${H - M.b + 16}" text-anchor="middle">${fmt(x)}</text>`;
     for (let y = Math.ceil(y0 / ys) * ys; y <= y1 + 1e-9; y += ys) svg += `<text x="${M.l - 6}" y="${sy(y) + 4}" text-anchor="end">${fmt(y)}</text>`;
-    svg += '</g><g clip-path="url(#pc)">';
+    svg += '</g><g clip-path="url(#' + clip + ')">';
     const span = y1 - y0;
     samples.forEach((arr, i) => {
       let d = '', pen = false, prev = null;
