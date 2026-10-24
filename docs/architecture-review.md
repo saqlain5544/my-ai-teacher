@@ -65,7 +65,8 @@ extension points.
   force-unwrap, the follow-up scheduler, Gemini thought-signature round trips, sub-agent handles.
 
 ## Left open
-* `ChatSession.swift`: stream handling moved out into `ReplyBuilder` (pure, unit tested). Tool execution and the step
+* `ChatSession.swift`: stream handling moved out into `ReplyBuilder` (pure, unit tested), which the sub-agent loop
+  now shares (one set of stream rules; it had drifted before, dropping thinking signatures). Tool execution and the step
   loop could follow; they were left in place because another session's uncommitted edits sit in `execute`.
 * Computer use and the course board are `Features.Module`s; testing and language could follow. A module's hooks
   register right after the permission gate, so each move needs the check done for the board: the hooks it implements

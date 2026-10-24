@@ -489,6 +489,27 @@ final class SubAgentTests: XCTestCase {
         XCTAssertEqual(silent.requests.count, n, "no incarnation outlives Stop")
     }
 
+    /// A stream that announced a tool call and ended without finishing it: the placeholder (empty input) must not be run
+    /// as a call, nor stay in the transcript without a result.
+    func testAnUnfinishedToolCallIsNotRun() async throws {
+        final class Announces: LLMClient, @unchecked Sendable {
+            let requests = Locked<[LLMRequest]>([])
+            func stream(_ r: LLMRequest) -> AsyncThrowingStream<StreamEvent, Error> {
+                requests.mutate { $0.append(r) }
+                return AsyncThrowingStream { c in
+                    c.yield(.toolCallStarted(id: "p1", name: "ls")); c.yield(.text("Report: nothing to list.")); c.yield(.stop("end_turn")); c.finish()
+                }
+            }
+        }
+        let llm = Announces()
+        let c = ctx(llm)
+        let o = try await task(["description": "B", "prompt": "x"], c)
+        XCTAssertFalse(o.isError, o.text)
+        XCTAssertEqual(llm.requests.get().count, 1, "no tool step for a call that never completed")
+        let blocks = await MainActor.run { SubAgentCenter.shared.run(c.toolCallID)?.messages.flatMap(\.blocks) ?? [] }
+        XCTAssertFalse(blocks.contains { $0.kind == .toolUse && $0.id == "p1" }, "the placeholder is not kept")
+    }
+
     func testANoteSurvivesARestart() async throws {
         // The note arrives after the run read its mailbox and before the provider fails: the restart must get it.
         let llm = ScriptedLLM([step(.fail(HTTPError(status: 503, body: "busy")), delay: 0.5), step(.text("done"))])

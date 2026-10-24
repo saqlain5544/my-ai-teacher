@@ -825,39 +825,34 @@ enum SubAgent {
                              maxTokens: Int) async throws {
         let first = assistant
         await w { $0.upsert(first) }
-        defer { metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count }
+        defer {
+            // A call the stream announced but never finished (it broke off) has no result: a request carrying it is refused,
+            // and a restart resumes from this transcript.
+            assistant.blocks.removeAll { $0.kind == .toolUse && $0.meta?["pending"]?.bool == true }
+            metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count
+        }
         let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort,
                                  sessionID: ctx.toolCallID)
         for try await ev in client.stream(request) {
             proc.heartbeat()
             if metrics.timeToFirstToken == nil { metrics.timeToFirstToken = Date().timeIntervalSince(metrics.startedAt) }
-            switch ev {
-            case .text(let t), .thinking(let t):
-                let kind: Block.Kind = { if case .text = ev { return .text }; return .thinking }()
-                // A signed thinking block is finished: new reasoning starts a new block (as in the lesson loop).
-                if assistant.blocks.last?.kind != kind || assistant.blocks.last?.signature != nil { assistant.blocks.append(Block(kind: kind, text: "")) }
-                let i = assistant.blocks.count - 1, id = assistant.id
-                assistant.blocks[i].text = (assistant.blocks[i].text ?? "") + t
-                await w { $0.delta(id, i, kind, t) }
-            case .toolCall(let b):
-                assistant.blocks.append(b)
-                let m = assistant
-                await w { $0.upsert(m) }
+            if case .toolCall(let b) = ev {
                 ctx.progress("→ \(b.name ?? "") \(tools.first { $0.name == b.name }?.summary(b.input ?? .null) ?? "")\n")
-            case .textWasThinking:
-                let t = assistant.blocks.filter { $0.kind == .text }.compactMap(\.text).joined()
-                assistant.blocks.removeAll { $0.kind == .text }
-                if !t.isEmpty { assistant.blocks.insert(.thinking(t), at: 0) }
-                let m = assistant
-                await w { $0.upsert(m) }
-            case .thinkingSignature(let sig):
-                // Kept so the step's reasoning is replayed with its tool calls: Anthropic requires signed thinking back in
-                // a tool loop, and the client leaves unsigned thinking out of requests.
-                if let i = assistant.blocks.indices.last, assistant.blocks[i].kind == .thinking, assistant.blocks[i].signature == nil {
-                    assistant.blocks[i].signature = sig
-                } else {
-                    assistant.blocks.append(.thinking("", signature: sig))
+            }
+            // The same stream → reply rules as the lesson loop (ReplyBuilder); the run's panel gets the deltas and redraws.
+            for effect in ReplyBuilder.apply(ev, to: &assistant) {
+                switch effect {
+                case .delta(let i, let kind, let t):
+                    let id = assistant.id
+                    await w { $0.delta(id, i, kind, t) }
+                case .upsert:
+                    let m = assistant
+                    await w { $0.upsert(m) }
+                case .clearStatus, .thinking, .toolStarted, .todos:
+                    break   // the run's status line is set by the loop; sub-agents have no todo list
                 }
+            }
+            switch ev {
             case .usage(let u): metrics.usage = u
             case .stop(let r): metrics.finishReason = r
             default: break
