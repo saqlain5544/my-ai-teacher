@@ -780,7 +780,7 @@ final class ChatSession: ObservableObject, Identifiable {
     func save() {
         guard !discarded else { return }
         services.conversations.save(conversation)
-        if !detached { app.conversationDidChange(conversation) }
+        if !detached { app.conversationDidChange(conversation, folder: services.workspace.url) }
     }
 
     /// A running turn is user-initiated work, but the learner now leaves for their own editor mid-turn: App Nap would

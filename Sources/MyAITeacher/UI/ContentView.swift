@@ -24,6 +24,7 @@ struct ContentView: View {
         case .lesson(let id):
             if let s = app.session(for: id) { ChatView(session: s) }
             else { Text("Select a lesson").foregroundStyle(.secondary) }
+        case .sessions: SessionsView()
         case .flashcards: FlashcardsView()
         case .progress: StudyProgressView()
         case .memory: MemoryView()
@@ -45,6 +46,10 @@ struct Sidebar: View {
             // bar, where the window controls and the sidebar toggle were drawn over its text.
             Section { FolderSwitcher().listRowInsets(EdgeInsets(top: 2, leading: 6, bottom: 6, trailing: 6)).listRowBackground(Color.clear) }
             Section {
+                Label("All Sessions", systemImage: "rectangle.stack")
+                    .badge(app.activeCount)
+                    .tag(SidebarItem.sessions)
+                    .help("Every lesson in every folder (⇧⌘L)")
                 Label("Flashcards", systemImage: "rectangle.on.rectangle.angled")
                     .badge(app.dueCount)
                     .tag(SidebarItem.flashcards)
@@ -87,6 +92,7 @@ struct Sidebar: View {
                 Text(c.updatedAt, format: .relative(presentation: .named)).font(.caption2).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)
+            SessionActivityBadge(activity: app.activity(c.id), compact: true)
             if c.pinned { Image(systemName: "pin.fill").font(.caption2).foregroundStyle(.secondary) }
         }
         .contextMenu {

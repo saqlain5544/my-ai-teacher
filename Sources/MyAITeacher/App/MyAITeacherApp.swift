@@ -40,6 +40,7 @@ struct MyAITeacherApp: App {
                 Button("Quick Question") { app.quickQuestion() }.keyboardShortcut("n", modifiers: [.command, .shift])
                 Button("New Code Session") { app.newLesson(mode: .agent) }.keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Open Folder…") { app.openFolderPanel() }.keyboardShortcut("o")
+                Button("All Sessions") { app.selection = .sessions }.keyboardShortcut("l", modifiers: [.command, .shift])
                 Menu("New Lesson in Mode") {
                     ForEach(TeachingMode.allCases) { m in Button(m.title) { app.newLesson(mode: m) } }
                 }

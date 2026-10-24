@@ -4,6 +4,7 @@ import Combine
 
 enum SidebarItem: Hashable {
     case lesson(String)
+    case sessions
     case flashcards
     case progress
     case memory
@@ -23,7 +24,13 @@ final class AppModel: ObservableObject {
     @Published private(set) var workspace: Workspace
     @Published private(set) var services: Services
     @Published var conversations: [Conversation] = []
-    @Published var selection: SidebarItem?
+    @Published var selection: SidebarItem? {
+        didSet { if case .lesson(let id) = selection { finishedUnseen.remove(id) } }
+    }
+    /// Every lesson in every folder the learner works in (`SessionIndex`), for the All Sessions list.
+    @Published private(set) var allSessions: [SessionIndex.Entry] = []
+    /// Lessons that finished a turn while the learner was looking elsewhere: marked in the lists until opened.
+    @Published private(set) var finishedUnseen: Set<String> = []
     @Published var keyRequest: ProviderConfig?
     @Published var accessPrompt: Workspace?
     @Published var models: [String: [String]] = [:]
@@ -46,6 +53,8 @@ final class AppModel: ObservableObject {
     @Published var searchResults: [String]? = nil
 
     private var sessions: [String: ChatSession] = [:]
+    /// Each resident session's running state, forwarded so the lists show a lesson working in the background.
+    private var sessionWatch: [String: AnyCancellable] = [:]
     private var bag: Set<AnyCancellable> = []
 
     private init() {
@@ -67,6 +76,7 @@ final class AppModel: ObservableObject {
             .sink { [weak self] e in self?.handle(e) }
             .store(in: &bag)
         settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
+        interactions.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         Experiments.enabled = s.value.experiments
         Experiments.loadForced()
         settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
@@ -157,29 +167,44 @@ final class AppModel: ObservableObject {
         if panel.runModal() == .OK, let url = panel.url { openFolder(url) }
     }
 
-    func openFolder(_ url: URL) {
-        guard url.standardizedFileURL.path != workspace.url.path else { return }
-        let ws: Workspace
-        do { ws = try Workspace(url: url) }
-        catch {
-            let alert = NSAlert()
-            alert.messageText = "Can't use this folder"
-            alert.informativeText = "Teacher needs to create a hidden “.teacher” folder inside it to keep lessons. \(error.localizedDescription)"
-            alert.runModal()
+    /// Switches to another folder. Lessons still working (a turn running, or waiting for the learner's answer) keep
+    /// going in the background with their own folder's services; the rest are saved and let go. `select` opens one of
+    /// the folder's lessons instead of the newest; `askAccess` is false when the folder is one the learner already uses.
+    func openFolder(_ url: URL, select: String? = nil, askAccess: Bool = true) {
+        let path = url.standardizedFileURL.path
+        guard path != workspace.url.path else {
+            if let select, conversations.contains(where: { $0.id == select }) { selection = .lesson(select) }
             return
         }
-        for s in sessions.values { s.stop(); s.close(); s.detach(deleted: false) }
-        sessions.removeAll()
+        let keep = sessions.filter { isActive($0.key) }
+        let ws: Workspace, next: Services
+        // A lesson of that folder still working there: its services (and database connection) are the folder's.
+        if let live = keep.values.first(where: { $0.services.workspace.url.path == path })?.services {
+            ws = live.workspace; next = live
+        } else {
+            do { ws = try Workspace(url: url) }
+            catch {
+                let alert = NSAlert()
+                alert.messageText = "Can't use this folder"
+                alert.informativeText = "Teacher needs to create a hidden “.teacher” folder inside it to keep lessons. \(error.localizedDescription)"
+                alert.runModal()
+                return
+            }
+            next = Services(global: global, workspace: ws)
+        }
+        for (id, s) in sessions where keep[id] == nil { s.close(); s.detach(deleted: false); sessionWatch[id] = nil }
+        sessions = keep
         workspace = ws
-        services = Services(global: global, workspace: ws)
+        services = next
         settings.value.lastFolder = ws.url.path
         touchRecent(ws)
         conversations = services.conversations.all()
         searchResults = nil
         refreshCounts()
-        if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
+        if let select, conversations.contains(where: { $0.id == select }) { selection = .lesson(select) }
+        else if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         EventBus.publish(.workspaceChanged(path: ws.url.path))
-        if settings.value.folderAccess[ws.url.path] == nil && ws.url != settings.defaultFolder && !isQuick(ws) { accessPrompt = ws }
+        if askAccess, settings.value.folderAccess[ws.url.path] == nil && ws.url != settings.defaultFolder && !isQuick(ws) { accessPrompt = ws }
     }
 
     private func touchRecent(_ ws: Workspace) {
@@ -195,6 +220,7 @@ final class AppModel: ObservableObject {
         guard let c = conversations.first(where: { $0.id == id }) else { return nil }
         let s = ChatSession(conversation: c, app: self, services: services)
         sessions[id] = s
+        sessionWatch[id] = s.$isRunning.removeDuplicates().dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
         evictSessions(keeping: id)
         return s
     }
@@ -202,9 +228,11 @@ final class AppModel: ObservableObject {
     /// Keep memory low: only the selected and running sessions stay resident.
     private func evictSessions(keeping id: String) {
         guard sessions.count > 3 else { return }
-        for (sid, s) in sessions where sid != id && !s.isRunning {
+        for (sid, s) in sessions where sid != id && !isActive(sid) {
             s.close()
+            if s.services.workspace !== services.workspace { s.detach(deleted: false) }
             sessions.removeValue(forKey: sid)
+            sessionWatch[sid] = nil
             if sessions.count <= 3 { break }
         }
     }
@@ -232,6 +260,8 @@ final class AppModel: ObservableObject {
         sessions[id]?.stop()
         sessions[id]?.detach(deleted: true)
         sessions.removeValue(forKey: id)
+        sessionWatch[id] = nil
+        finishedUnseen.remove(id)
         services.conversations.delete(id)
         conversations.removeAll { $0.id == id }
         if case .lesson(let sel) = selection, sel == id {
@@ -253,7 +283,11 @@ final class AppModel: ObservableObject {
         services.conversations.save(conversations[i])
     }
 
-    func conversationDidChange(_ c: Conversation) {
+    /// A lesson saved itself. One of another folder's, working in the background, only updates the All Sessions list:
+    /// the sidebar shows the open folder's lessons.
+    func conversationDidChange(_ c: Conversation, folder: URL) {
+        if let i = allSessions.firstIndex(where: { $0.id == c.id }) { allSessions[i] = .init(conversation: c, folder: folder.path) }
+        guard folder.path == workspace.url.path else { return }
         if let i = conversations.firstIndex(where: { $0.id == c.id }) {
             if conversations[i] != c { conversations[i] = c }
         } else {
@@ -262,6 +296,8 @@ final class AppModel: ObservableObject {
     }
 
     func sessionDidFinishTurn(_ s: ChatSession) {
+        if selection != .lesson(s.id) { finishedUnseen.insert(s.id) }
+        guard s.services.workspace === services.workspace else { return }
         if let i = conversations.firstIndex(where: { $0.id == s.id }), i != 0, !conversations[i].pinned {
             let c = conversations.remove(at: i)
             conversations.insert(c, at: 0)
@@ -277,6 +313,41 @@ final class AppModel: ObservableObject {
         var seen = Set<String>()
         searchResults = (titleHits + ftsHits).filter { seen.insert($0).inserted }
     }
+
+    // MARK: All sessions
+
+    /// Re-reads every folder's lessons, off the main thread (each folder is its own database). The open folder's come
+    /// from memory, and a lesson working in the background shows its live title.
+    func refreshSessions() {
+        var folders = settings.value.recentFolders.map(\.path) + [settings.defaultFolder.path, AppPaths.quickFolder.path]
+        folders += sessions.values.map(\.services.workspace.url.path)
+        let current = workspace.url.path, here = workspace.url.canonicalPath
+        folders = folders.filter { URL(fileURLWithPath: $0).canonicalPath != here }
+        Task {
+            let others = await Task.detached(priority: .userInitiated) { SessionIndex.scan(folders) }.value
+            var list = conversations.map { SessionIndex.Entry(conversation: $0, folder: current) } + others
+            for i in list.indices { if let live = sessions[list[i].id]?.conversation { list[i] = .init(conversation: live, folder: list[i].folder) } }
+            allSessions = SessionIndex.unique(list)
+        }
+    }
+
+    /// Goes into a lesson of any folder: the folder (its files, memory and access), the lesson, and with it its mode
+    /// and model. Lessons working elsewhere keep working.
+    func openSession(_ id: String, folder: String) {
+        openFolder(URL(fileURLWithPath: folder), select: id, askAccess: false)
+    }
+
+    enum Activity { case running, waiting, finished, idle }
+    /// What a lesson is doing: a turn running, a question or approval waiting for the learner, a turn finished unseen.
+    func activity(_ id: String) -> Activity {
+        if interactions.pending.values.contains(where: { $0.conversationID == id }) { return .waiting }
+        if sessions[id]?.isRunning == true { return .running }
+        return finishedUnseen.contains(id) ? .finished : .idle
+    }
+    /// Running or waiting: such a lesson stays resident (and keeps going) when the learner switches folders.
+    private func isActive(_ id: String) -> Bool { [.running, .waiting].contains(activity(id)) }
+    /// Lessons working right now, in any folder.
+    var activeCount: Int { sessions.keys.filter(isActive).count }
 
     func flushAll() { for s in sessions.values { s.close() } }
     func isRunning(_ id: String) -> Bool { sessions[id]?.isRunning ?? false }
