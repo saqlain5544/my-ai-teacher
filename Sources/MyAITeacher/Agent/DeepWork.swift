@@ -118,8 +118,9 @@ enum DeepWork {
         <context>
         A reviewer read your reply before the learner did and found:
         \(issues.map { "- " + $0 }.joined(separator: "\n"))
-        Write the complete, corrected reply now. It replaces your previous one (the learner sees that one collapsed as a \
-        draft), so it must stand on its own. Fix every issue, checking with tools where needed; don't mention the review.
+        Write the corrected reply now. It replaces your previous reply only (the learner sees that one collapsed as a \
+        draft), so it must stand on its own as that reply — don't repeat what you said before it in this lesson. Fix every \
+        issue, checking with tools where needed; don't mention the review.
         </context>
         """
     }

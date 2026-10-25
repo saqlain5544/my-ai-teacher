@@ -539,7 +539,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Why a reply without tool calls leaves its work unfinished, or nil when ending the turn is right: an empty reply; one
     /// whose last words announce a step it didn't take ("Let me run the tests:"), after tools this turn; an open todo list.
-    /// A question to the learner always ends the turn: waiting for them is a solid reason.
+    /// A question to the learner, or a step that waits on them, ends the turn: waiting for them is a solid reason.
     nonisolated static func unfinished(reply: String, usedTools: Bool, todos: [JSON]) -> String? {
         let text = reply.trimmingCharacters(in: .whitespacesAndNewlines)
         if text.isEmpty { return "the reply was empty" }
@@ -548,7 +548,10 @@ final class ChatSession: ObservableObject, Identifiable {
         let last = tail.split(whereSeparator: \.isNewline).last.map(String.init) ?? tail
         let announces = last.range(of: #"(?i)\b(let me(?! know)|let's|i'?ll now|i will now|now i'?ll|now i will|next,? i'?ll|next,? i will|i'?m going to|i am going to|i'?ll (start|begin|run|check|open|fix|try|write|add|create|update|test|verify|look))\b"#,
                                    options: .regularExpression) != nil
-        if usedTools, announces, last.hasSuffix(":") || last.hasSuffix("…") || last.hasSuffix("...") || last.count < 160 {
+        // A step that waits on the learner ("When you're done, ask me and I'll review") is a hand-off, not an unkept
+        // promise: in measured mentor lessons all six announcements the rule flagged were of this kind.
+        let waitsOnThem = last.range(of: #"(?i)\b(when|once|if|after|as soon as) (you|you've|you're|you have|you are)\b|\b(ask|tell|ping|show|send) me\b|\b(say|paste|hit|press|click)\b.*\bi'?ll\b"#, options: .regularExpression) != nil
+        if usedTools, announces, !waitsOnThem, last.hasSuffix(":") || last.hasSuffix("…") || last.hasSuffix("...") || last.count < 160 {
             return "it ends by announcing a next step (“\(last.prefix(120))”) without taking it"
         }
         // Stopped mid-sentence: a prose line (not code, a table, a list or a heading) whose last character is a letter or a comma.

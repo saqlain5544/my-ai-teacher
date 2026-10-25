@@ -20,5 +20,13 @@ final class TurnContinuationTests: XCTestCase {
         XCTAssertNil(ChatSession.unfinished(reply: "Run it:\n\n```\nzig build test\n```", usedTools: true, todos: []), "ends with code")
         XCTAssertNil(ChatSession.unfinished(reply: "Two cases:\n- the empty input\n- a lone operator with no operand", usedTools: true, todos: []), "ends with a list")
         XCTAssertNil(ChatSession.unfinished(reply: "Done.", usedTools: true, todos: [["content": "x", "status": "completed"]]))
+        // Hand-offs a mentor ends on, from measured lessons where the old rule sent each one back.
+        for line in ["When C1 is done, ask me to review: I'll run the tests, read your diff, and record findings.",
+                     "Paste `myprog.py` here and I'll check it.",
+                     "When you've made a change, hit **Request review** and I'll look at your diff. Good luck.",
+                     "When you're ready, say **\"review\"** and I'll run the suite, read your diff, and go through it line by line.",
+                     "When you've written `Clamp.java`, say the word and I'll run a review."] {
+            XCTAssertNil(ChatSession.unfinished(reply: "The project is set up.\n\n" + line, usedTools: true, todos: []), line)
+        }
     }
 }

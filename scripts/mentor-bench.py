@@ -70,20 +70,22 @@ RUBRIC = """You grade an AI tutor's reply. The learner's message states their le
 - level_fit: pitched at the learner's stated level (a beginner gets the basics without jargon; an expert gets expert depth, no basics).
 - responsiveness: does what the learner asked now, no more and no less.
 - correctness: facts and code are right.
-Be strict. JSON only: {"level_fit": n, "responsiveness": n, "correctness": n}"""
+Be strict. JSON only: {"level_fit": n, "responsiveness": n, "correctness": n, "weakness": "the single biggest problem, one sentence"}"""
 
 def judge(request, reply):
     key = subprocess.run(["zsh", "-ilc", "printenv NVIDIA_API_KEY"], capture_output=True, text=True).stdout.strip()
-    body = {"model": "deepseek-ai/deepseek-v4.1-flash", "max_tokens": 2000, "messages": [{"role": "system", "content": RUBRIC},
+    body = {"model": "deepseek-ai/deepseek-v4.1-flash", "max_tokens": 8000, "messages": [{"role": "system", "content": RUBRIC},
             {"role": "user", "content": "The learner wrote:\n%s\n\nThe reply:\n%s" % (request, reply[:20000])}]}
     req = urllib.request.Request("https://integrate.api.nvidia.com/v1/chat/completions", data=json.dumps(body).encode(),
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
     for _ in range(3):
         try:
             with urllib.request.urlopen(req, timeout=180) as r: t = json.load(r)["choices"][0]["message"]["content"] or ""
-            return json.loads(t[t.index("{"): t.rindex("}") + 1])
+            if "{" in t: return json.loads(t[t.index("{"): t.rindex("}") + 1])
+            err = "no JSON in: " + t[:120]
         except Exception as e:
-            err = str(e); time.sleep(10)
+            err = str(e)
+        time.sleep(10)
     return {"error": err}
 
 OUT = pathlib.Path(args.out) / args.label
@@ -137,3 +139,4 @@ def main():
               " ".join("%s %s" % (k[:4], v) for k, v in (r.get("judge") or {}).items())))
 
 main()
+
