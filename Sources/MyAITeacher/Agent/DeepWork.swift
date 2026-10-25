@@ -84,7 +84,7 @@ enum DeepWork {
         substantive problems: a factual, numerical or logical error; an important claim stated without checking when it \
         could have been checked; pitched clearly above or below the learner's level (jargon for a beginner, basics for an expert); filler examples where a real one was needed; an essential part of the \
         plan missing; far more than they asked for now (the next part, an unrequested project) at the cost of focus; a full solution handed to a learner who should attempt it first; structure so confused it blocks \
-        understanding. Never for style, length or tone preferences.
+        understanding. Never for style, length or tone preferences. A simplification that fits the learner's level (a variable as a labelled box for someone who has never coded) is not an error: flag it only if it would mislead them on what they are doing now, and then ask for a plain-words fix, not more theory.
         The tutor's teaching rules outrank the learner's request: never ask it to hand over an answer, a solution or code \
         it withheld on purpose — "they asked for it" or "they're out of time" is not a reason. Withholding it is correct.
         Answer in exactly this form:
