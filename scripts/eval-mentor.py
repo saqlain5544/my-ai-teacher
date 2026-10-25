@@ -68,12 +68,12 @@ def judge(request, reply, tools):
     body = {"model": args.judge_model, "max_tokens": 3000, "messages": [{"role": "system", "content": RUBRIC},
             {"role": "user", "content": "The learner wrote:\n%s\n\nTools the tutor used:\n%s\n\nWhat the learner read:\n%s" % (request, tools[:3000] or "(none)", reply[:24000])}]}
     req = urllib.request.Request(base + "/chat/completions", data=json.dumps(body).encode(), headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
-    for _ in range(3):
+    for _ in range(4):
         try:
             with urllib.request.urlopen(req, timeout=300) as r: text = json.load(r)["choices"][0]["message"]["content"]
             return json.loads(text[text.index("{"): text.rindex("}") + 1])
         except Exception as e:
-            err = e; time.sleep(5)
+            err = e; time.sleep(20)
     return {"error": str(err)}
 
 def turn_stats(r, prompt):
@@ -124,7 +124,8 @@ def main():
                 reply += "\n\n[next turn, after the learner implemented it]\n" + reply2
             res["project"] = project(folder)
             g = judge(sc["prompt"], reply, stats["inputs"]) if reply.strip() else {"error": "no reply"}
-            res["scores"], res["weaknesses"] = g.get("scores"), g.get("weaknesses")
+            res["scores"], res["weaknesses"], res["judge_error"] = g.get("scores"), g.get("weaknesses"), g.get("error")
+            res["reply"] = reply[:24000]
             res.pop("inputs")
             results.append(res)
             print(json.dumps(res, ensure_ascii=False), flush=True)
