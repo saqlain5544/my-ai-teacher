@@ -225,7 +225,7 @@ def fresh_profile():
     (HOME / "support").mkdir(parents=True)
     (HOME / "support/settings.json").write_text(json.dumps({
         "providerID": args.provider, "model": args.model, "thinking": "off", "autoMemory": True,
-        "python": "allow", "compactAtTokens": args.compact, "showThinking": True, "experiments": True}))
+        "python": "allow", "compactAtTokens": args.compact, "showThinking": True}))
     LAB.mkdir()
     (LAB / "notes.md").write_text("# Photosynthesis\n\nPlants turn light, water and CO2 into glucose and oxygen.\n\nChlorophyll absorbs red and blue light.\n")
     (LAB / "buggy.py").write_text("total = 0\nfor i in range(1, 10):\n    total += i\nprint(total)\n")

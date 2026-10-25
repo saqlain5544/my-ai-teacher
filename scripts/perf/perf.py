@@ -380,7 +380,7 @@ class Run:
 
     # ───────────── Orchestration ─────────────
     def settings(self):
-        s = {"thinking": "off", "autoMemory": True, "python": "allow", "compactAtTokens": 48000, "showThinking": True, "experiments": False}
+        s = {"thinking": "off", "autoMemory": True, "python": "allow", "compactAtTokens": 48000, "showThinking": True}
         if self.a.provider == "mock":
             s.update(providerID="perf-mock", model="perf-mock", customProviders=[{
                 "id": "perf-mock", "name": "Perf mock", "api": "openai", "baseURL": f"http://127.0.0.1:{self.mock_port}/v1", "envKeys": [],

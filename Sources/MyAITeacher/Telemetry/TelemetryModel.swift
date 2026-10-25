@@ -14,7 +14,6 @@ struct TelemetryEvent: Codable, Sendable, Equatable {
         case resource    // attrs: footprintMB, cpuPct, webMB, webCpuPct, webProcs
         case web         // name = frame | reset | load; histogram buckets in attrs ("b<k>")
         case launch      // value = process start → first transcript ready (s); attrs: init
-        case experiment  // name = experiment, label = variant, model = outcome metric; attrs: outcome (0/1); value
     }
 
     var ts: Double
@@ -186,10 +185,6 @@ struct RollupBatch: Sendable {
         case .launch:
             observe(day, TelemetryMetric.launch, e.value * 1000)
             count(day, "launch", "", sum: e.value)
-        case .experiment:
-            let key = e.name + "|" + (e.label ?? "")
-            if (e.attr("outcome") ?? 0) > 0 { count(day, "exp.outcome", key + "|" + e.model, sum: e.value) }
-            else { count(day, "exp.exposure", key) }
         }
     }
 }

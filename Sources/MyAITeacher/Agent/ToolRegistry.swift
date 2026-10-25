@@ -19,7 +19,7 @@ enum ToolRegistry {
     static func off(_ settings: AppSettings) -> Set<String> {
         var off = Set(settings.disabledTools)
         if settings.python == .off { off.insert("math") }   // SymPy needs Python
-        if Experiments.boardOff { off.insert("lesson_plan") }
+        if BoardSystem.off { off.insert("lesson_plan") }
         return off
     }
 

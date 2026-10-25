@@ -76,8 +76,6 @@ final class TelemetryExtension: AgentExtension {
             timed { [TelemetryEvent(ts: Date().timeIntervalSince1970, kind: .approval, conv: conv, name: tool, value: waited, ok: allowed, label: choice)] }
         case .memoryChanged(let c):
             timed { [TelemetryEvent(ts: Date().timeIntervalSince1970, kind: .memory, conv: c.conversationID, name: c.kind.rawValue, value: Double(max(1, c.ids.count)))] }
-        case .experiment(let x):
-            timed { [TelemetryMapper.event(x)] }
         default: break
         }
     }
@@ -124,11 +122,6 @@ enum TelemetryMapper {
         out.append(TelemetryEvent(ts: turn.startedAt.timeIntervalSince1970 + turn.duration, kind: .turn, provider: last?.provider ?? "",
                                   model: last?.model ?? "", conv: conversationID, value: turn.duration, ok: turn.error == nil, attrs: a))
         return out
-    }
-
-    static func event(_ x: ExperimentEvent, now: Double = Date().timeIntervalSince1970) -> TelemetryEvent {
-        TelemetryEvent(ts: now, kind: .experiment, model: x.metric ?? "", conv: x.conversationID, name: x.name, value: x.value ?? 0,
-                       label: x.variant, attrs: x.kind == .outcome ? ["outcome": 1] : [:])
     }
 
     /// Buckets provider error messages into a few actionable categories.

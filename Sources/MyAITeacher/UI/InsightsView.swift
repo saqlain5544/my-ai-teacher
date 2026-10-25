@@ -35,8 +35,6 @@ struct InsightsData: Sendable {
     var reset: TelemetryStore.Quantiles?
     var launch: TelemetryStore.Quantiles?
     var lastLaunch: TelemetryEvent?
-    var exposures: [TelemetryStore.CountRow] = []
-    var outcomes: [TelemetryStore.CountRow] = []
     var rawEvents = 0
 
     static func load(_ s: TelemetryStore, _ f: TelemetryStore.Filter) -> InsightsData {
@@ -80,8 +78,6 @@ struct InsightsData: Sendable {
         d.reset = s.quantiles(TelemetryMetric.reset, all, perModel: false).first
         d.launch = s.quantiles(TelemetryMetric.launch, all, perModel: false).first
         d.lastLaunch = s.recentEvents(.launch, since: 0, limit: 1).first
-        d.exposures = s.counts("exp.exposure", since: since)
-        d.outcomes = s.counts("exp.outcome", since: since)
         d.rawEvents = s.rawCount()
         return d
     }
@@ -133,9 +129,6 @@ struct InsightsView: View {
                     card("Memory activity", "Long-term memory reads (recalled) and writes, per day.") { memoryView }
                 }
                 card("App performance", "Resource samples every minute; transcript render timings from the web view.") { performanceView }
-                if !data.exposures.isEmpty || !data.outcomes.isEmpty {
-                    card("Experiments", "A/B exposures and outcome means per variant.") { experimentsView }
-                }
                 privacy
             }
             .padding(28)
@@ -468,21 +461,6 @@ struct InsightsView: View {
         return String(format: "Telemetry cost this session: %d events · %.2f µs/event on the main thread (enqueue %.2f + mapping %.2f) · %.1f µs/event background write · %d flushes (last %.1f ms) · %d raw rows stored",
                       o.events, o.recordMicrosPerEvent + o.mapMicrosPerEvent, o.recordMicrosPerEvent, o.mapMicrosPerEvent,
                       o.flushMicrosPerEvent, o.flushes, o.lastFlushMillis, data.rawEvents)
-    }
-
-    @ViewBuilder private var experimentsView: some View {
-        Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 4) {
-            GridRow { ForEach(["Experiment", "Variant", "Exposures", "Outcome", "Mean"], id: \.self) { Text($0).bold() } }.font(.caption).foregroundStyle(.secondary)
-            ForEach(data.exposures, id: \.key) { r in
-                let p = r.key.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-                let outs = data.outcomes.filter { $0.key.hasPrefix(r.key + "|") }
-                GridRow {
-                    Text(p.first ?? ""); Text(p.count > 1 ? p[1] : ""); Text("\(r.n)").monospacedDigit()
-                    Text(outs.map { String($0.key.split(separator: "|", omittingEmptySubsequences: false).last ?? "") }.joined(separator: ", "))
-                    Text(outs.map { String(format: "%.3g (n=%d)", $0.n > 0 ? $0.sum / Double($0.n) : 0, $0.n) }.joined(separator: ", ")).monospacedDigit()
-                }
-            }
-        }
     }
 
     private var privacy: some View {

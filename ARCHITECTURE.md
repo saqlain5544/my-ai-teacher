@@ -87,12 +87,12 @@ and let requests run past the budget before compaction fired. The lesson window 
 | Cache hit, later steps of a lesson (real lessons) | — | **71–82%** |
 | Cache hit, first request of a new lesson (shared prefix) | ~1% | **~5k of ~5.05k tokens** |
 
-## Experiments (A/B)
-`Experiments` assigns each lesson a deterministic arm per experiment (FNV hash of experiment + lesson id), so a
-lesson's prefix never changes and nothing is stored. `ExperimentExtension` publishes exposures and per-turn outcomes
-(steps, tokens, seconds); telemetry stores them and Insights compares arms. Settings has an off switch; the CLI can
-force arms with `--exp name=arm`. First experiment `visual_tool` (core vs deferred): offline, 3 prompts × 2 arms,
-rewording the tool mattered more than placement (fence 2/3 in both arms), so **deferred** is the default (−250 tok/req).
+## Evaluations
+Comparisons run offline, never randomised for learners: the course board system's three arms are forced with
+`MYAITEACHER_EXP=course_board=nested|shallow|off` or the CLI's `--exp` (`BoardSystem`, `scripts/ab-board.py`), and a
+mentor's lessons are measured headless (`--lesson`, `scripts/mentor-bench.py`). An in-app A/B framework (per-lesson
+arms, exposure telemetry, an Insights card) once tested the `visual` tool's placement — rewording mattered more than
+placement, so it is runtime-loaded — and was removed once nothing used it.
 
 ## Live visuals and practice
 * ```` ```visual ```` fence (no extra round trip) or the `visual` tool (persists to `.teacher/visuals/`). Runtime:
@@ -153,7 +153,6 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 | Add a wire protocol | Implement `LLMClient` (emit `StreamEvent`s) and a case in `APIKind` | 1 switch |
 | Summarise a long history (another agent, an import) | `Compaction.summaryRange(…)` picks the messages, `Compaction.summarise(…)` writes the rolling summary (digest fallback, usage per call, cancellation-safe) | none |
 | Gate tool calls (budgets, policies) | Implement `shouldRun` in an `AgentExtension`; gates chain in registration order (`ExtensionHost.chain`) | none |
-| Run an A/B test | Add an `Experiment` to `Experiments.all` and branch on `Experiments.arm(e, unit: lessonID)` | none |
 | Run background work | `Runtime.job(name) { … }` (one per name, watchdog, restart on a crash), `Runtime.call` (returns a value), `Runtime.every` (periodic service) — not `Task.detached` | none |
 | Add a sub-agent type | Settings → Agents, or a `.teacher/agents/<name>.md` in the folder (or `AgentCatalog.builtIns`) | none |
 | Render a new fenced block (```xyz) or ```ui component | `TeacherUI.defineComponent({ names: ['xyz'], schema, render(props, ctx, env) })` in a file under `Resources/web/components/` (`raw: true` for text forms, `// @lazy` at the top to load on first use), then `scripts/gen-web-manifest.py` | none |

@@ -143,14 +143,6 @@ final class PolicyTests: XCTestCase {
         XCTAssertFalse(PermissionExtension.isPython(RunCodeTool(), ["language": "javascript", "code": "1"]))
     }
 
-    func testExperimentArmsAreStableAndSplit() {
-        let e = Experiments.Experiment(name: "sample", arms: ["a", "core"])
-        XCTAssertEqual(Experiments.arm(e, unit: "lesson-1"), Experiments.arm(e, unit: "lesson-1"))
-        let arms = (0..<200).map { Experiments.arm(e, unit: "l\($0)") }
-        let share = Double(arms.filter { $0 == "core" }.count) / 200
-        XCTAssertGreaterThan(share, 0.35); XCTAssertLessThan(share, 0.65)
-    }
-
     func testConsecutiveLearnerMessagesMergeForProviders() {
         let msgs = [ChatMessage(role: .user, blocks: [.text("q")]),
                     ChatMessage(role: .assistant, blocks: [.toolUse(id: "t", name: "task", input: [:])]),

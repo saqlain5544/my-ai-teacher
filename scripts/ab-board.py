@@ -112,7 +112,7 @@ class Run:
         (self.home / "support").mkdir(parents=True)
         (self.home / "support/settings.json").write_text(json.dumps({
             "providerID": args.provider, "model": args.model, "thinking": "off", "autoMemory": True, "python": "allow",
-            "compactAtTokens": args.compact, "showThinking": True, "experiments": False, "learnerName": "Sam"}))
+            "compactAtTokens": args.compact, "showThinking": True, "learnerName": "Sam"}))
         subprocess.run(["open", "-n", "-g", "-a", str(APP), "--env", f"MYAITEACHER_HOME={self.home}", "--env", "MYAITEACHER_DEBUG=1",
                         "--env", f"MYAITEACHER_EXP=course_board={self.arm}"], check=True)
         t0 = time.time()

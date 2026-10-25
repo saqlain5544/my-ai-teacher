@@ -76,10 +76,8 @@ final class AppModel: ObservableObject {
             .store(in: &bag)
         settings.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         interactions.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
-        Experiments.enabled = s.value.experiments
-        Experiments.loadForced()
-        settings.$value.map(\.experiments).removeDuplicates().sink { Experiments.enabled = $0 }.store(in: &bag)
-        settings.$value.map(\.courseBoard).removeDuplicates().sink { Experiments.choose($0, for: Experiments.courseBoard.name) }.store(in: &bag)
+        BoardSystem.loadForced()
+        settings.$value.map(\.courseBoard).removeDuplicates().sink { BoardSystem.chosen = $0 }.store(in: &bag)
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         // A sub-agent starting in the open lesson shows up in the right-hand panel, as it works.
         SubAgentCenter.shared.onReport = { [weak self] run, out in
@@ -114,7 +112,6 @@ final class AppModel: ObservableObject {
         for module in Features.all { module.extensions(self).forEach(extensions.register) }
         extensions.register(MemoryExtension(app: self))
         extensions.register(TeachingContextExtension(app: self))
-        extensions.register(CourseBoardExtension())
         extensions.register(TestingExtension())
         extensions.register(LanguageExtension())
         extensions.register(CodeMentorExtension())
@@ -123,7 +120,6 @@ final class AppModel: ObservableObject {
         extensions.register(ActivityExtension())
         Telemetry.shared.start(db: global.db)
         extensions.register(TelemetryExtension())
-        extensions.register(ExperimentExtension())
     }
 
     private func handle(_ e: AppEvent) {
@@ -488,7 +484,7 @@ final class AppModel: ObservableObject {
         ]
         if isQuick(workspace) { suggestions.removeAll { $0["title"]?.string == "Study this folder" } }
         // The course in progress comes first: one click picks it up where the board says (linked before the first message).
-        if !Experiments.boardOff, let b = services.study.plans().lazy.map(CourseBoard.init(plan:)).first(where: { $0.doneCount < $0.courseCount }) {
+        if !BoardSystem.off, let b = services.study.plans().lazy.map(CourseBoard.init(plan:)).first(where: { $0.doneCount < $0.courseCount }) {
             let where_ = b.focus.map { "\($0.id.uppercased()) \($0.title)" } ?? "the next card"
             suggestions.insert(["title": .string("Continue: \(b.title)"), "subtitle": .string("\(b.doneCount) of \(b.courseCount) done · next: \(where_)"),
                                 "prompt": .string("Let's continue my course \"\(b.title)\". Pick up from the board: " + (b.focus.map { f in "the focus is \(f.title)" + (f.next.map { ", next: \($0)" } ?? "") } ?? "start the next card") + "."),

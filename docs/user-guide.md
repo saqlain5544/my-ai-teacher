@@ -361,7 +361,7 @@ Stop the agent any time with ⌘. or Esc twice.
 
 | Tab | What's there |
 |---|---|
-| General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), the course board system (book outlines, cards only, or off; each is explained under the picker), text size, an optional limit on tool steps per reply (none by default: the teacher works until the reply is done; ⌘. stops it), context budget, local A/B experiments, Insights telemetry |
+| General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), the course board system (book outlines, cards only, or off; each is explained under the picker), text size, an optional limit on tool steps per reply (none by default: the teacher works until the reply is done; ⌘. stops it), context budget, Insights telemetry |
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
 | Agents | Sub-agent defaults, limits and custom agent types |

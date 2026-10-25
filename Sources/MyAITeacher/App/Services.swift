@@ -24,7 +24,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Quizzes and tests. Off: the teacher teaches without testing until the learner turns them back on (toolbar).
     /// Quiz and Exam prep modes always test.
     var quizzes = true
-    /// How the teacher keeps long-term state for goals that span many replies: `Experiments.courseBoard` arms
+    /// How the teacher keeps long-term state for goals that span many replies: `BoardSystem` arms
     /// ("nested": cards with book-style outlines, "shallow": cards only, "off": no board).
     var courseBoard = "nested"
     /// The learner's edits to the agents' instructions (`Instructions.Key.raw` → text); absent = the default.
@@ -42,7 +42,6 @@ struct AppSettings: Codable, Sendable, Equatable {
     var compactAtTokens = 0
     var showThinking = true
     var python: PythonPolicy = .allow   // run_code (python) and math (SymPy)
-    var experiments = true              // local A/B experiments (see Experiments)
     var agents = SubAgentSettings()     // sub-agent limits, defaults and app-level agent types
     /// Sites the agent's browser may always use, and Mac apps (bundle ids) it may always control. Per-lesson grants live in
     /// InteractionCenter; localhost and file:// are never stored here (they're approved per lesson).
@@ -74,7 +73,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         let savedSteps = (try? c.decode(Int.self, forKey: .maxToolTurns)) ?? d.maxToolTurns
         maxToolTurns = savedSteps == 40 ? 0 : max(0, savedSteps)
         quizzes = (try? c.decode(Bool.self, forKey: .quizzes)) ?? d.quizzes
-        courseBoard = (try? c.decode(String.self, forKey: .courseBoard)).flatMap { Experiments.courseBoard.arms.contains($0) ? $0 : nil } ?? d.courseBoard
+        courseBoard = (try? c.decode(String.self, forKey: .courseBoard)).flatMap { BoardSystem.arms.contains($0) ? $0 : nil } ?? d.courseBoard
         learnerName = (try? c.decode(String.self, forKey: .learnerName)) ?? ""
         learnerLevel = (try? c.decode(String.self, forKey: .learnerLevel)) ?? ""
         voiceIdentifier = try? c.decode(String.self, forKey: .voiceIdentifier)
@@ -86,7 +85,6 @@ struct AppSettings: Codable, Sendable, Equatable {
         compactAtTokens = [0, 48_000, 120_000].contains(savedBudget) ? 0 : min(max(savedBudget, 20_000), 900_000)
         showThinking = (try? c.decode(Bool.self, forKey: .showThinking)) ?? true
         python = (try? c.decode(PythonPolicy.self, forKey: .python)) ?? d.python
-        experiments = (try? c.decode(Bool.self, forKey: .experiments)) ?? d.experiments
         agents = (try? c.decode(SubAgentSettings.self, forKey: .agents)) ?? d.agents
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []

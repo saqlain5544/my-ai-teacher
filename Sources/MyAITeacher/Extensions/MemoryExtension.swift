@@ -184,7 +184,7 @@ final class TeachingContextExtension: AgentExtension {
         if due > 0 { out.append("# Spaced repetition\n\(due) flashcard(s) are due. Mention it at a natural moment (the learner reviews in the Flashcards screen).") }
         let follow = s.study.dueFollowUps(limit: 5)
         if !follow.isEmpty { out.append(Self.followUpSection(follow)) }
-        let plans = Experiments.boardOff ? [] : s.study.plans().prefix(3)
+        let plans = BoardSystem.off ? [] : s.study.plans().prefix(3)
         if !plans.isEmpty {
             let linked = s.study.boardID(forLesson: session.id)
             var p = "# Course boards\n"

@@ -56,7 +56,6 @@ struct GeneralSettings: View {
                 }
                 Text(SettingsView.boardHelp(settings.value.courseBoard)).font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Toggle("Run local A/B experiments to tune the teacher (results stay on this Mac)", isOn: $settings.value.experiments)
                 Stepper("Text size: \(Int(settings.value.fontSize)) pt", value: $settings.value.fontSize, in: 11...24)
                 Toggle("Limit tool steps per reply", isOn: Binding(
                     get: { settings.value.maxToolTurns > 0 },

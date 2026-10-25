@@ -8,7 +8,7 @@ final class CourseBoardExtension: AgentExtension {
     let id = "course-board"
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        guard !session.conversation.mode.isAgent, !Experiments.boardOff else { return }
+        guard !session.conversation.mode.isAgent, !BoardSystem.off else { return }
         Self.inject(Self.stateBlock(session) ?? Self.noBoard(existing: session.services.study.plans().prefix(3).map { CourseBoard(plan: $0) }), into: &request)
     }
 

@@ -183,14 +183,14 @@ final class BoardTests: XCTestCase {
     }
 
     func testTheLearnerChoosesTheBoardSystem() throws {
-        defer { Experiments.chosen = [:]; Experiments.forced = [:] }
-        XCTAssertEqual(Experiments.evaluationArm(Experiments.courseBoard), "nested", "book outlines by default")
-        Experiments.choose("shallow", for: "course_board")
-        XCTAssertEqual(Experiments.evaluationArm(Experiments.courseBoard), "shallow")
-        Experiments.choose("off", for: "course_board")
-        XCTAssertTrue(Experiments.boardOff)
-        Experiments.forced["course_board"] = "nested"
-        XCTAssertFalse(Experiments.boardOff, "an evaluation run's forced arm wins")
+        defer { BoardSystem.chosen = nil; BoardSystem.forced = nil }
+        XCTAssertEqual(BoardSystem.current, "nested", "book outlines by default")
+        BoardSystem.chosen = "shallow"
+        XCTAssertEqual(BoardSystem.current, "shallow")
+        BoardSystem.chosen = "off"
+        XCTAssertTrue(BoardSystem.off)
+        BoardSystem.force("other=x,course_board=nested")
+        XCTAssertFalse(BoardSystem.off, "an evaluation run's forced arm wins")
         let saved = try JSONDecoder().decode(AppSettings.self, from: Data(#"{"courseBoard":"bogus"}"#.utf8))
         XCTAssertEqual(saved.courseBoard, "nested", "an unknown value falls back to the default")
     }

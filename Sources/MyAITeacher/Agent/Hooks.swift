@@ -17,18 +17,6 @@ enum AppEvent: Sendable {
     case notice(conversationID: String?, text: String)
     /// A tool-approval decision (emitted by `ExtensionHost.shouldRun`; `choice` is the learner's option id, or "policy").
     case approval(conversationID: String, tool: String, choice: String, allowed: Bool, waited: Double)
-    /// A/B experiment exposure or outcome. Publish once where a variant is applied / an outcome is known.
-    case experiment(ExperimentEvent)
-}
-
-struct ExperimentEvent: Sendable {
-    enum Kind: String, Sendable { case exposure, outcome }
-    var name: String
-    var variant: String
-    var kind: Kind = .exposure
-    var metric: String?
-    var value: Double?
-    var conversationID: String?
 }
 
 struct MemoryChange: Sendable {

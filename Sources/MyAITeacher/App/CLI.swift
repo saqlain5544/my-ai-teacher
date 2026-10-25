@@ -79,10 +79,7 @@ enum CLI {
         if provider.id == "openrouter", !model.hasSuffix(":free"), !args.contains("--allow-paid") {
             print("Refusing a paid OpenRouter model (\(model)); pass a :free model or --allow-paid."); return 2
         }
-        for (i, a) in args.enumerated() where a == "--exp" && i + 1 < args.count {
-            let kv = args[i + 1].split(separator: "=", maxSplits: 1).map(String.init)
-            if kv.count == 2 { Experiments.forced[kv[0]] = kv[1] }
-        }
+        for (i, a) in args.enumerated() where a == "--exp" && i + 1 < args.count { BoardSystem.force(args[i + 1]) }
         let valued: Set<String> = ["--lesson", "--spec", "--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
         let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()

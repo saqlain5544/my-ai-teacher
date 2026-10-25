@@ -230,7 +230,7 @@ struct LessonPlanTool: Tool {
         }
         let cardKey = input["card"]?.string ?? input["id"]?.string ?? ""
         // The shallow arm of the board evaluation keeps cards only: outlines would make it the nested arm again.
-        if Experiments.evaluationArm(Experiments.courseBoard) == "shallow", ["outline", "section"].contains(action) {
+        if BoardSystem.current == "shallow", ["outline", "section"].contains(action) {
             return .error("This board keeps cards only, without outlines: put the plan in the cards' `next` and notes.")
         }
         do {

@@ -51,7 +51,7 @@ enum SystemPrompt {
         var s = Instructions.text(.teacher, settings).replacingOccurrences(of: "{learner}", with: name)
         s += "\n\n# Current teaching mode\n" + Instructions.text(.mode(mode), settings)
             + "\n(If the learner switches modes later you'll see a note in their message.)"
-        switch Experiments.evaluationArm(Experiments.courseBoard) {
+        switch BoardSystem.current {
         case "off": break
         case "shallow": s += "\n\n" + Instructions.boardShallow
         default: s += "\n\n" + Instructions.text(.board, settings)
