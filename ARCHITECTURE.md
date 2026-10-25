@@ -391,6 +391,21 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   copy path:line), the diff since the baseline, the protection state and the guard's log; Run tests, Request review
   (after a self-review sheet, kept with the round), Unlock the tests, Restore (the learner's files back to the last
   review, current versions to the Trash) and a Markdown report.
+  **Measuring it.** `MyAITeacher --lesson spec.json` (`App/HeadlessLesson.swift`) runs a real lesson — the same
+  `ChatSession`, tools and extensions — with no window, on its own `MYAITEACHER_HOME`, a hard time budget per turn,
+  approvals given once and questions skipped, and prints one JSON line per turn (time to the first reply, tools, tool
+  errors, the reply, the project record). `scripts/mentor-bench.py --bin <binary>` runs ten scenarios with it in
+  parallel (beginner, expert, PhD, an unfamiliar language, data structures, seeded C/Elixir/Java/debugging projects
+  reviewed after the learner's solution, a non-programming lesson; about ten minutes), with an optional judge;
+  `scripts/bench-stats.py` counts what the app's own mechanisms did in those transcripts (nudges, revisions,
+  answer-first notes, guard refusals, repeated replies). Comparing two binaries on it drove the changes below:
+  against the build before them, answered within the budget went from 3 to 10 of 10, seeded projects passing review
+  from 1 to 4 of 4, guard refusals from 16 to 1.
+  **Answer first** (`Extensions/AnswerFirstExtension.swift`): "verify before you teach" has no natural end for a model
+  (34 tool calls reading rustc for an expert's question; a PhD question where it built the OCaml compiler from
+  source), so after 12 tool calls with no reply the learner can read, results carry a note to answer now, and at 24
+  the next request offers no tools. Teaching modes only. A reply that hands over to the learner ("When you're done,
+  ask me and I'll review") ends the turn: the "unfinished" rule had flagged all six such hand-offs it saw.
   `scripts/eval-mentor.py` runs mentor lessons through the built app (beginner, expert, an unfamiliar language,
   seeded C and Elixir projects reviewed after the learner's solution, a non-programming lesson), records friction
   (tool errors, seconds, registration, passes) and has a judge score level fit and responsiveness; `--repo` compares
