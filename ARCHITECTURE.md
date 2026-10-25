@@ -51,7 +51,8 @@ Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
 
 ## Context and cost
 Every request = fixed prefix (system prompt + tool schemas) + history prepared by `ContextPolicy` (all O(n)):
-1. **Deferred tools.** 12 core tools are always sent; 8 rarely used ones are listed by one line each and loaded with
+1. **Deferred tools.** An agent's core tools are always sent (a tutor's 14); the rarely used ones (a tutor's 9, per
+   `AgentTree`) are listed by one line each and loaded with
    `load_tools` (or automatically on first direct call). Tool order only ever grows, so the cached prefix holds.
 2. **Old reasoning** is not resent (except Claude adaptive thinking, which must replay).
 3. **Microcompaction epochs.** Past 70% of the budget, bulky tool results/inputs and images older than the last 3

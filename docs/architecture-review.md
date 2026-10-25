@@ -73,3 +73,32 @@ extension points.
   with the modules (after the permission gate) would reorder the prompt every new lesson gets.
 * The quiz-grouping check is in `renderer.test.js`. The late-progress change has no renderer test: the page API can't see
   the memory it frees, and a visible check would pass without it.
+
+# Bug hunt (25 October 2026)
+
+A second pass over the whole app for bugs and for features that cost more than they give. `d06a5ab`…`8f6bcb9`.
+
+## Bugs fixed
+| Bug | Commit | Checked by |
+|---|---|---|
+| Model HTML could make working app buttons: the attribute filter missed attributes after a `/` or a closing quote, and a `>` inside a quoted value | `d06a5ab` | `renderer.test.js` (fake UI) |
+| A single choice key given as text was read as an index ("2" keyed option "3"); a key naming no option marked everyone wrong, a negative one trapped | `2aafe6a` | `FeatureTests` |
+| Answer first's tool-call count carried over into a regenerated, retried or background-report turn, which then lost its tools on its first request | `2143ec9` | live lessons |
+| A DeepWork plan was added again on regenerate or retry, and an edited message kept the old question's plan | `2143ec9` | |
+| The step that must write the reply sent tool calls without tools; Anthropic's API refuses that (a 400 instead of the answer) | `1866581` | `TurnContinuationTests`, MiniMax live |
+| `web_fetch` reached localhost and the local network unasked, unlike the browser | `b8e7262` | `SubAgentTests`, live redirect and DNS checks |
+| The mentor's write fence let a command rename the folder holding the learner's files | `1b23dd9` | `MentorCockpitTests`, sandbox-exec |
+| A cut-off reply was continued without limit when no step cap was set | `ec86f82` | |
+| Language writes used `try? db.execute`; removing a word and its card wasn't one transaction | `2143ec9` | |
+| Headless lessons reported no first reply when it came with the last step | `8f6bcb9` | live |
+
+## Pruned
+| What | Commit |
+|---|---|
+| The A/B experiments framework (no experiments left): arms, exposure telemetry, the Insights card, the Settings switch. The course board choice is `BoardSystem` | `daf3698` |
+| The `quiz` tool, a second name for graded `ask_learner` (now `GradedQuiz`) | `5d71563` |
+| A duplicate registration of the course board extension, and 14 functions nothing called | `daf3698`, `5ba10f2` |
+
+## Verification
+* 451 unit tests, 155 renderer tests in light and dark, the watchdog check; a clean build with no warnings (17 before).
+* Live headless lessons on MiniMax-M3.1-Flash (tutor and explain, with plans, reviews and graded questions).
