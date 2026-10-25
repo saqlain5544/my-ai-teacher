@@ -262,7 +262,7 @@ extension StudyStore {
     /// A passage the learner finished reading (the ```reading component's Done): extensive reading, counted per language.
     func logReading(lang raw: String, title: String?, words: Int, unit: String?, conversationID: String?) {
         guard let lang = Languages.code(raw), words > 0 else { return }
-        try? db.execute("INSERT INTO reading_log(lang, title, words, unit, at, conversation_id) VALUES(?,?,?,?,?,?)", lang, title, words, unit, Date(), conversationID)
+        db.run("INSERT INTO reading_log(lang, title, words, unit, at, conversation_id) VALUES(?,?,?,?,?,?)", lang, title, words, unit, Date(), conversationID)
     }
     /// Words (or characters, for unspaced scripts) read in the last `days` days, and passages finished.
     func readingStats(lang raw: String, days: Double = 7, now: Date = Date()) -> (words: Int, passages: Int, unit: String) {

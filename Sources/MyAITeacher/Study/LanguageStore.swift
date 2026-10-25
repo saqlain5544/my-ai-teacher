@@ -57,11 +57,11 @@ extension StudyStore {
         let r = role ?? old?.role ?? "target"
         let l = level == nil ? old?.level : (level!.isEmpty ? nil : level)
         let n = notes == nil ? old?.notes : (notes!.isEmpty ? nil : notes)
-        try? db.execute("INSERT INTO languages(code, role, level, notes, updated_at) VALUES(?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET role=excluded.role, level=excluded.level, notes=excluded.notes, updated_at=excluded.updated_at",
+        db.run("INSERT INTO languages(code, role, level, notes, updated_at) VALUES(?,?,?,?,?) ON CONFLICT(code) DO UPDATE SET role=excluded.role, level=excluded.level, notes=excluded.notes, updated_at=excluded.updated_at",
                         code, r, l, n, Date())
         return languageProfile(code)
     }
-    func removeLanguageProfile(_ code: String) { try? db.execute("DELETE FROM languages WHERE code=?", Languages.code(code) ?? code) }
+    func removeLanguageProfile(_ code: String) { db.run("DELETE FROM languages WHERE code=?", Languages.code(code) ?? code) }
 
     // MARK: Vocabulary
 
@@ -93,9 +93,9 @@ extension StudyStore {
         if let e = ex { back += "\n\n> \(e)" + (exm.map { "\n> *\($0)*" } ?? "") }
         if let n = clean(notes) ?? existing?.string("notes") { back += "\n\n" + n }   // register, collocations, word family
         var cardID = existing?.int("card_id").map(Int64.init)
-        if let c = cardID { try? db.execute("UPDATE cards SET front=?, back=? WHERE id=?", front, back, c) }
+        if let c = cardID { db.run("UPDATE cards SET front=?, back=? WHERE id=?", front, back, c) }
         else { cardID = addCard(deck: Self.vocabDeck(lang), front: front, back: back, concept: nil, subject: lang, source: source) }
-        try? db.execute("""
+        db.run("""
             INSERT INTO vocab(lang, term, reading, meaning, pos, example, example_meaning, notes, tags, card_id, source, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(lang, term) DO UPDATE SET reading=COALESCE(excluded.reading, vocab.reading), meaning=excluded.meaning, pos=COALESCE(excluded.pos, vocab.pos),
             example=COALESCE(excluded.example, vocab.example), example_meaning=COALESCE(excluded.example_meaning, vocab.example_meaning),
@@ -127,9 +127,14 @@ extension StudyStore {
     }
     func removeVocab(lang: String, term: String) -> Bool {
         guard let l = Languages.code(lang), let row = (try? db.query("SELECT id, card_id FROM vocab WHERE lang=? AND term=?", l, term))?.first, let id = row.int("id") else { return false }
-        if let c = row.int("card_id") { try? db.execute("DELETE FROM cards WHERE id=?", Int64(c)) }
-        try? db.execute("DELETE FROM vocab WHERE id=?", Int64(id))
-        return true
+        // The word and its flashcard go together: a failure between the two left a word pointing at a deleted card.
+        var removed = false
+        db.write("remove a word") {
+            if let c = row.int("card_id") { try db.execute("DELETE FROM cards WHERE id=?", Int64(c)) }
+            try db.execute("DELETE FROM vocab WHERE id=?", Int64(id))
+            removed = true
+        }
+        return removed
     }
     func vocabStats(lang: String? = nil, now: Date = Date()) -> VocabStats {
         var s = VocabStats()

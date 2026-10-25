@@ -205,7 +205,8 @@ final class ChatSession: ObservableObject, Identifiable {
     func edit(messageID: String, newText: String) {
         guard !isRunning, let idx = messages.firstIndex(where: { $0.id == messageID }) else { return }
         var m = messages[idx]
-        m.blocks = m.blocks.filter { $0.kind != .text || $0.meta?["hidden"]?.bool == true } + [.text(newText)]
+        // Hidden context stays (recalled memory, a mode note), except the plan, which was for the old question.
+        m.blocks = m.blocks.filter { ($0.kind != .text || $0.meta?["hidden"]?.bool == true) && $0.meta?["deepPlan"]?.bool != true } + [.text(newText)]
         truncate(after: idx - 1)
         append(m)
         start()
@@ -365,6 +366,8 @@ final class ChatSession: ObservableObject, Identifiable {
             recordAuxiliary(planned.usage)
             if let p = planned.text {
                 plan = p
+                // A regenerated, retried or edited request is planned afresh: its earlier plan goes.
+                messages[i].blocks.removeAll { $0.meta?["deepPlan"]?.bool == true }
                 messages[i].blocks.insert(Block(kind: .text, text: DeepWork.planNote(p, mode: conversation.mode), meta: ["hidden": true, "deepPlan": true, "ephemeral": true]), at: 0)
                 persist(i)
                 sink?.upsert(messages[i])
@@ -954,11 +957,6 @@ final class ChatSession: ObservableObject, Identifiable {
 }
 
 /// Coalesces streamed tool output to ≤ 10 UI updates per second.
-private struct SummaryCall: Sendable {
-    var text = ""
-    var usage = Usage()
-}
-
 final class ProgressThrottle: @unchecked Sendable {
     private let lock = NSLock()
     private var buffer = ""

@@ -158,7 +158,7 @@ struct BashJobsTool: Tool {
 /// Runs a self-contained snippet in a scratch directory. Used by the tutor and by "Run" buttons on code blocks.
 struct RunCodeTool: Tool {
     var subAgentVariant: Tool? { self }
-    func timeout(_ input: JSON) -> Double? { Double(min(300, input["timeout"]?.int ?? 30)) + 60 }   // + compile time
+    func timeout(_ input: JSON) -> Double? { Double(min(300, max(1, input["timeout"]?.int ?? 30))) + 60 }   // + compile time
     let name = "run_code"
     let description = """
     Execute a code snippet and return stdout/stderr. Languages: python, javascript, typescript, swift, c, cpp, go, rust, zig, ruby, bash, java. \
@@ -179,7 +179,7 @@ struct RunCodeTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let (code, strayEOF) = HeredocSlip.strip(try input.req("code"))
         let r = try await Self.execute(language: try input.req("language"), code: code,
-                                       stdin: input["stdin"]?.string, timeout: TimeInterval(min(300, input["timeout"]?.int ?? 30)),
+                                       stdin: input["stdin"]?.string, timeout: TimeInterval(min(300, max(1, input["timeout"]?.int ?? 30))),
                                        workingDirectory: ctx.workspace, progress: ctx.progress)
         return ToolOutput(text: r.text + (strayEOF ? "\n" + HeredocSlip.note : ""), isError: r.failed)
     }

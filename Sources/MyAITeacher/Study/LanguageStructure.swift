@@ -36,10 +36,10 @@ extension StudyStore {
 
     func setSkill(lang raw: String, skill: String, level: String, evidence: String?) -> Bool {
         guard let code = Languages.code(raw), Self.skills.contains(skill.lowercased()), !level.trimmingCharacters(in: .whitespaces).isEmpty else { return false }
-        return (try? db.execute("""
+        return db.run("""
             INSERT INTO language_skills(code, skill, level, evidence, at) VALUES(?,?,?,?,?)
             ON CONFLICT(code, skill) DO UPDATE SET level=excluded.level, evidence=COALESCE(excluded.evidence, language_skills.evidence), at=excluded.at
-            """, code, skill.lowercased(), level.trimmingCharacters(in: .whitespaces), evidence, Date())) != nil
+            """, code, skill.lowercased(), level.trimmingCharacters(in: .whitespaces), evidence, Date()) != nil
     }
     func skills(lang raw: String) -> [SkillLevel] {
         guard let code = Languages.code(raw) else { return [] }
@@ -62,17 +62,17 @@ extension StudyStore {
         for p in points {
             let name = p.name.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !name.isEmpty, let level = Self.cefrLevel(p.level) else { continue }
-            let ok = (try? db.execute("""
+            let ok = db.run("""
                 INSERT INTO grammar_points(lang, name, level, description, position, created_at) VALUES(?,?,?,?,?,?)
                 ON CONFLICT(lang, name) DO UPDATE SET level=excluded.level, description=COALESCE(excluded.description, grammar_points.description)
-                """, code, name, level, p.description, next, Date())) != nil
+                """, code, name, level, p.description, next, Date()) != nil
             if ok { n += 1; next += 1 }
         }
         return n
     }
     func removeGrammarPoint(lang raw: String, name: String) -> Bool {
         guard let code = Languages.code(raw) else { return false }
-        return ((try? db.execute("DELETE FROM grammar_points WHERE lang=? AND name=?", code, name)) ?? 0) > 0
+        return (db.run("DELETE FROM grammar_points WHERE lang=? AND name=?", code, name) ?? 0) > 0
     }
 
     /// The syllabus in level order (A1 first, then the order points were added), each with its mastery.

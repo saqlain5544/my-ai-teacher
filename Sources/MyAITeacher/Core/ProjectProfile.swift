@@ -198,30 +198,28 @@ struct ProjectProfile: Sendable, Equatable {
     }
 
     static func invalidate(_ folder: URL) {
-        cacheLock.lock(); cache[folder.standardizedFileURL.path] = nil; cacheLock.unlock()
+        cacheLock.withLock { cache[folder.standardizedFileURL.path] = nil }
     }
     static func invalidateAll() {
-        cacheLock.lock(); cache = [:]; cacheLock.unlock()
+        cacheLock.withLock { cache = [:] }
     }
 
     static func detect(_ folder: URL) async -> ProjectProfile {
         let key = folder.standardizedFileURL.path
         let fp = fingerprint(folder)
         let now = Date()
-        cacheLock.lock()
-        let hit = cache[key]
-        cacheLock.unlock()
+        let hit = cacheLock.withLock { cache[key] }
         if var e = hit, e.fingerprint == fp, now.timeIntervalSince(e.taken) < 600 {
             if now.timeIntervalSince(e.gitTaken) > 60 {
                 e.profile.git = await gitState(folder)
                 e.gitTaken = Date()
-                cacheLock.lock(); cache[key] = e; cacheLock.unlock()
+                cacheLock.withLock { cache[key] = e }
             }
             return e.profile
         }
         let p = await compute(folder)
         let t = Date()
-        cacheLock.lock(); cache[key] = Entry(profile: p, taken: t, gitTaken: t, fingerprint: fp); cacheLock.unlock()
+        cacheLock.withLock { cache[key] = Entry(profile: p, taken: t, gitTaken: t, fingerprint: fp) }
         return p
     }
 

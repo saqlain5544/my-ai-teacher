@@ -14,15 +14,15 @@ final class AnswerFirstExtension: AgentExtension {
     private var turnStart: [String: Int] = [:]
     private var calls: [String: Int] = [:]
 
-    func willSend(_ message: inout ChatMessage, session: ChatSession) {
-        turnStart[session.id] = session.messages.count
-        calls[session.id] = 0
-    }
-
+    /// A turn starts at its first request, whatever started it (a message, regenerate, retry, a background report): set
+    /// only on sending, a regenerated turn inherited the last turn's count and lost its tools on its first request.
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
+        if turnStart[session.id] == nil { turnStart[session.id] = max(0, session.messages.count - 1); calls[session.id] = 0 }
         guard !session.conversation.mode.isAgent, (calls[session.id] ?? 0) >= Self.cutoff, !answered(session) else { return }
         request.tools = []
     }
+
+    func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) { turnStart[session.id] = nil; calls[session.id] = nil }
 
     private func answered(_ session: ChatSession) -> Bool {
         let start = min(turnStart[session.id] ?? 0, session.messages.count)
