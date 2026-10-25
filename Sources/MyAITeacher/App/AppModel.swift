@@ -370,12 +370,13 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// Shows a file or folder in the inspector's file explorer.
+    /// Shows a sub-agent's run in the inspector's Agents tab.
     func showSubAgent(_ id: String) {
         SubAgentCenter.shared.selectedID = id
         inspectorTab = .agents
         inspectorShown = true
     }
+    /// Shows a file or folder in the inspector's file explorer.
     func reveal(_ url: URL) { inspectorTab = .files; inspectorShown = true; revealRequest = url }
 
     // MARK: Providers & models
