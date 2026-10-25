@@ -17,7 +17,7 @@ enum Testing {
         or what they think as part of teaching is fine.</context>
         """
 
-    /// What the quiz tool says when the teacher tries to test anyway.
+    /// What a graded `ask_learner` says when the teacher tries to test anyway.
     static let refusal = "Quizzes are off: the learner turned testing off. Don't test them; teach, and carry on with the lesson. (Plain, ungraded `ask_learner` questions about what they want are fine.)"
 
     /// Why the learner skipped a quiz or a question, and what the teacher should do about it.
