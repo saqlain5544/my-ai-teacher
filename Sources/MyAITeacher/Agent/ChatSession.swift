@@ -443,8 +443,9 @@ final class ChatSession: ObservableObject, Identifiable {
             // Cut off at the output limit without asking for a tool (often a long plan, or one huge tool call that never
             // finished): carry on by itself, twice at most, before handing it to the learner.
             let cutOff = step.finishReason == "max_tokens" && assistant.toolUses.isEmpty && !Task.isCancelled && assistant.error == nil
-            // Without a step limit, a reply cut off at the output limit carries on as often as it needs to.
-            let carryOn = cutOff && (stepCap <= 0 || limitContinues < 2)
+            // Without a step limit a cut-off reply carries on longer, but not for ever: a model stuck repeating itself hits
+            // the limit every time, and each carry-on is another full-length paid request.
+            let carryOn = cutOff && limitContinues < (stepCap <= 0 ? 6 : 2)
             if step.finishReason == "max_tokens" && !carryOn { assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*")) }
             step.toolCalls = assistant.toolUses.count
             assistant.metrics = step

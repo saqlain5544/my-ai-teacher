@@ -653,7 +653,8 @@ root ── files (read, write, batch edit, ls), web, sub-agents (task), load_to
   changes: then the prompt is rebuilt for the new branch of the agent tree). The defaults say what the app needs —
   the standard of work, learner-first rules, how tools and rendering work — and leave teaching craft to the model.
 * No tool-step cap by default (`maxToolTurns = 0`; the old saved default 40 reads as none): a reply works until it is
-  done, carrying on past output limits and summarising as it goes. With a cap set, the last step offers no tools, so
+  done, carrying on past output limits (six times in a row at most: a model repeating itself hits the limit every time)
+  and summarising as it goes. With a cap set, the last step offers no tools, so
   the reply always ends with a write-up instead of a dangling tool call.
 * A turn ends for a reason: the work is done, the learner is needed (a question), Stop, a cap, or an error that isn't
   transient. A dropped or stalled stream is retried (three times, with backoff), also after part of the reply arrived;
