@@ -80,7 +80,7 @@ def judge(request, reply):
                                  headers={"Authorization": "Bearer " + key, "Content-Type": "application/json"})
     for _ in range(3):
         try:
-            with urllib.request.urlopen(req, timeout=180) as r: t = json.load(r)["choices"][0]["message"]["content"] or ""
+            with urllib.request.urlopen(req, timeout=400) as r: t = json.load(r)["choices"][0]["message"]["content"] or ""
             if "{" in t: return json.loads(t[t.index("{"): t.rindex("}") + 1])
             err = "no JSON in: " + t[:120]
         except Exception as e:

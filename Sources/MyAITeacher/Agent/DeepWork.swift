@@ -40,7 +40,7 @@ enum DeepWork {
         Learner needs: what they are really asking and their level, judged from what they've shown (a beginner, an expert, \
         in between). Scope: only what they asked for now.
         Grounding: the real code, library, system or paper the idea lives in, chosen to fit this learner — for a beginner \
-        an everyday program, for an expert the actual implementation or primary source.
+        an everyday program, for someone new to this topic (whatever else they know) a small program in a language they know, for an expert in it the actual implementation or primary source.
         Concepts: in order, each with how you'll make it concrete for them, and where an analogy breaks.
         Check before teaching: the few examples you will show (to run) and the claims you're unsure of (to verify), and how (run_code, the installed source, docs) — proportionate to the request: a question needs a few checks, not an investigation.
         Practice: only if it fits the request — a question to answer, an exercise, or a project (starter, tests that fail \
