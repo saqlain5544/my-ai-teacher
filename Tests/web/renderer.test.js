@@ -108,6 +108,12 @@
     ok(!$('[data-act="suggest"], [data-act="regenerate"]', el), 'no model-made app buttons');
     const svg = $('.svg-block', el); ok(getComputedStyle(svg).contain.includes('paint'), 'svg painted inside its box');
     posts.length = 0; const b = $('button', el); if (b) click(b); eq(posts.filter(p => p.type === 'suggest').length, 0, 'clicking sends nothing');
+    // HTML separates attributes with a '/' or after a closing quote too, and a '>' inside a quoted value doesn't end a tag.
+    const sly = show('<span/data-act="suggest" data-text="x">A</span> <b title="a"class="fake-ui">B</b> <i title=">" data-act="regenerate">C</i> ' +
+      '<u/id="fake-id">D</u> <s title=\'q\'style="position:fixed">E</s> <abbr title="kept">F</abbr>\n\n' +
+      '<div>\n<span/data-act="suggest" data-text="x">G</span> <b title="a"class="fake-ui">H</b> <em/id="fake-id">I</em>\n</div>');
+    ok(!$('[data-act], .fake-ui, [id="fake-id"], [style]', sly), 'no app attributes however they are separated: ' + sly.innerHTML);
+    ok($('abbr[title="kept"]', sly) && /A.*B.*C.*D.*E.*F.*G.*H.*I/s.test(sly.textContent), 'allowed attributes and the text stay');
     const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'image', mime: 'image/png', data: 'x" onerror="window.__pwned=1' }] };
     T.reset([u], {}); eq(window.__pwned, 0, 'attachment data is never markup');
   });

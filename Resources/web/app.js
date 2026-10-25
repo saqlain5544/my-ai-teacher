@@ -51,9 +51,32 @@
   md.renderer.rules.code_block = (tokens, idx, opts, env) => renderCode(tokens[idx].content, '', env);
   // HTML the model writes may use plain tags (<span lang>, <ruby>, <details>, <b>…) but never the attributes the app's
   // own UI relies on: no style/class/id (no faking KaTeX or overlaying fake UI), no data-* (no app buttons), no on*.
-  // Tokens the renderer creates itself are marked trusted.
-  const UNSAFE_ATTR = /\s(?:style|class|id|data-[\w-]*|on\w+|slot|is|popover\w*|form\w*)\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi;
-  const cleanHTML = s => s.replace(/<[a-zA-Z][^>]*>/g, tag => tag.replace(UNSAFE_ATTR, ''));
+  // Tokens the renderer creates itself are marked trusted. Tags are read the way the HTML parser reads them: a '/' or a
+  // closing quote separates attributes as well as a space, and a '>' inside a quoted value doesn't end the tag (a regex
+  // that assumed otherwise let `<i title=">" data-act=…>` and `<span/data-act=…>` make working app buttons).
+  const UNSAFE_ATTR = /^(?:style|class|id|data-[\w-]*|on\w+|slot|is|popover\w*|form\w*)$/i;
+  const TAG = /<[a-zA-Z][^\s/>]*/y, ATTR = /[\s/]*([^\s/>=][^\s/>=]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>][^\s>]*))?/y, END = /[\s/]*>/y;
+  function cleanHTML(s) {
+    let out = '', i = 0;
+    for (let lt; (lt = s.indexOf('<', i)) >= 0; ) {
+      TAG.lastIndex = lt;
+      const name = TAG.exec(s);
+      if (!name) { out += s.slice(i, lt + 1); i = lt + 1; continue; }
+      out += s.slice(i, lt) + name[0];
+      let at = TAG.lastIndex, m;
+      ATTR.lastIndex = at;
+      while ((m = ATTR.exec(s))) {
+        at = ATTR.lastIndex;
+        if (!UNSAFE_ATTR.test(m[1])) out += ' ' + m[1] + (m[2] === undefined ? '' : '=' + m[2]);
+      }
+      END.lastIndex = at;
+      const end = END.exec(s);
+      if (!end) return out + '>';   // an unclosed quote or tag: the parser would swallow the rest into it
+      out += end[0].includes('/') ? '/>' : '>';
+      i = END.lastIndex;
+    }
+    return out + s.slice(i);
+  }
   md.renderer.rules.html_inline = (tokens, idx) => tokens[idx].meta && tokens[idx].meta.trusted ? tokens[idx].content : cleanHTML(tokens[idx].content);
   md.renderer.rules.html_block = (tokens, idx) => cleanHTML(tokens[idx].content);
   md.linkify.set({ fuzzyEmail: false });
