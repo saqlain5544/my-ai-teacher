@@ -86,7 +86,7 @@ enum DebugHooks {
                 guard let s = try? await MediaTranscript.samples(URL(fileURLWithPath: p)) else { AppLog.write("speakFile: unreadable"); return }
                 let info = await Speech.pitchInfo(samples: s, rate: 16_000, target: target, lang: lang)
                 let x: JSON = ["engine": "audio file (debug)", "pitch": info ?? .null]
-                web?.evaluateJavaScript("T.dictation(\(JSON.string(key).compact),\(JSON.string(cmd["heard"]?.string ?? target).compact),true,\(x.compact))", completionHandler: nil)
+                _ = try? await web?.evaluateJavaScript("T.dictation(\(JSON.string(key).compact),\(JSON.string(cmd["heard"]?.string ?? target).compact),true,\(x.compact))")
                 AppLog.write("speakFile: \(info?["prosody"]?.compact.prefix(300) ?? "no prosody")")
             }
         case "importVocab":   // {"action":"importVocab","path":"/tmp/words.txt","lang":"es"}: what the Progress screen's Import does
