@@ -40,7 +40,7 @@ final class MentorCockpitTests: XCTestCase {
             echo hacked > src/lexer.zig; rm -f src/lexer.zig; echo new > src/solution.zig; echo t > .teacher/tests/spec.zig
             echo '{}' > .teacher/project.json
             mkdir -p .zig-cache zig-out src/__pycache__ && echo c > .zig-cache/o.zig && echo b > zig-out/bin && echo p > src/__pycache__/x.pyc
-            echo note > .teacher/mentor/plan.md; echo done
+            echo note > .teacher/mentor/plan.md; mv src moved; echo done
             """)
         XCTAssertTrue(r.stdout.contains("done"), r.stdout + r.stderr)
         XCTAssertTrue(r.stderr.lowercased().contains("operation not permitted"), r.stderr)
@@ -50,6 +50,7 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertNil(read(".teacher/project.json"), "the record can't be written by a command")
         XCTAssertEqual(read(".zig-cache/o.zig"), "c\n"); XCTAssertEqual(read("zig-out/bin"), "b\n"); XCTAssertEqual(read("src/__pycache__/x.pyc"), "p\n")
         XCTAssertEqual(read(".teacher/mentor/plan.md"), "note\n", "the mentor's own notes")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent("moved").path), "the folder holding the learner's files can't be renamed")
         // Unlocked by the learner: the tests open, the learner's files stay closed.
         ProjectStore.mutate(ws) { $0.testsUnlockedAt = Date() }
         _ = await sh("echo t2 > .teacher/tests/spec.zig; echo x > src/lexer.zig")

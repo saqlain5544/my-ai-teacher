@@ -78,8 +78,15 @@ final class MentorGuard: AgentExtension {
     nonisolated static func fence(_ ws: Workspace) -> String {
         let unlocked = ProjectStore.load(ws)?.testsUnlockedAt != nil
         try? FileManager.default.createDirectory(at: ws.mentorDir, withIntermediateDirectories: true)
-        return WriteFence.profile(files: ProjectStore.projectFiles(ws).map { ws.url.appendingPathComponent($0) },
-                                  locked: [ws.stateDir], open: [ws.mentorDir] + (unlocked ? [ws.testsDir] : []))
+        let files = ProjectStore.projectFiles(ws).map { ws.url.appendingPathComponent($0) }
+        // The folders holding them too, up to the project's own: renaming one (`mv src lib`) moved the learner's files
+        // without writing a fenced path. New files and folders inside stay writable (a folder's literal path is the folder).
+        var folders: [URL] = [], seen = Set<String>()
+        for f in files {
+            var d = f.deletingLastPathComponent()
+            while d.path.count >= ws.url.path.count, seen.insert(d.path).inserted { folders.append(d); d.deleteLastPathComponent() }
+        }
+        return WriteFence.profile(files: files + folders, locked: [ws.stateDir], open: [ws.mentorDir] + (unlocked ? [ws.testsDir] : []))
     }
 
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {
