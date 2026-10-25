@@ -1296,7 +1296,7 @@
   function renderWelcome() {
     const w = S.welcome || {};
     const sug = (w.suggestions || []).map(s => '<div class="suggestion' + (s.board ? ' continue' : '') + '" data-act="suggest" data-text="' + esc(s.prompt) + '"' + (s.board ? ' data-board="' + esc(s.board) + '"' : '') + '><div class="t">' + esc(s.title) + '</div><div class="d">' + esc(s.subtitle || '') + '</div>' + R.icon('arrow-right', 'go') + '</div>').join('');
-    const stats = (w.stats || []).map(s => '<span class="pill">' + esc(s) + '</span>').join('');
+    const stats = (w.stats || []).map(s => '<span class="pill">' + (typeof s === 'string' ? esc(s) : R.icon(s.icon) + esc(s.text || '')) + '</span>').join('');
     thread.innerHTML = '<div class="welcome"><div class="logo">' + R.icon('cap') + '</div><h1>' + esc(w.title || 'What would you like to learn?') + '</h1><p>' + esc(w.subtitle || '') + '</p><div class="suggestions">' + sug + '</div>' + (stats ? '<div class="stats">' + stats + '</div>' : '') + '</div>';
   }
 

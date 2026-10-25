@@ -437,6 +437,9 @@ final class AppModel: ObservableObject {
 
     // MARK: Welcome screen content
 
+    /// One fact under the welcome's suggestions: an icon from the page's set (icons.js) and its text.
+    private static func stat(_ icon: String, _ text: String) -> JSON { ["icon": .string(icon), "text": .string(text)] }
+
     func welcomePayload(mode: TeachingMode = .tutor) -> JSON {
         let name = settings.value.learnerName
         if mode.isAgent {
@@ -449,7 +452,7 @@ final class AppModel: ObservableObject {
                         ["title": "Review my changes", "subtitle": "git diff, bugs and risks", "prompt": "Review the uncommitted changes in this repository (git diff) for bugs, risks and missing tests. Don't change anything yet."],
                         ["title": "Add a feature", "subtitle": "Plan, implement, verify", "prompt": "I want to add a feature. Ask me what it is, then plan it with a todo list, implement it in small steps and verify with the tests."],
                     ],
-                    "stats": .array([.string("📁 \(workspace.name) · \(access(for: workspace).title)"), .string(hasMemory ? "🧠 project memory loaded" : "🧠 no project memory yet")])]
+                    "stats": .array([Self.stat("folder", "\(workspace.name) · \(access(for: workspace).title)"), Self.stat("bookmark", hasMemory ? "project memory loaded" : "no project memory yet")])]
         }
         if mode == .language {
             let profiles = services.study.languageProfiles().filter { $0.role == "target" }
@@ -463,16 +466,16 @@ final class AppModel: ObservableObject {
             if profiles.isEmpty { sug.insert(["title": "Start from zero", "subtitle": "Sounds, script and first phrases", "prompt": "I'm a complete beginner. Ask me which language and why, then start with the sounds, the script (with the on-screen keyboard) and the first useful phrases."], at: 0) }
             return ["title": .string(profiles.isEmpty ? "Which language are we learning?" : "Back to \(learning)?"),
                     "subtitle": "Say the language and how far along you are. The mentor places you, shows the keyboard for its script, and keeps the words you learn for review.",
-                    "suggestions": .array(sug), "stats": .array(profiles.map { p in let v = services.study.vocabStats(lang: p.code); return .string("🗣 \(Languages.englishName(p.code)): \(v.total) words, \(v.due) due") })]
+                    "suggestions": .array(sug), "stats": .array(profiles.map { p in let v = services.study.vocabStats(lang: p.code); return Self.stat("languages", "\(Languages.englishName(p.code)): \(v.total) words, \(v.due) due") })]
         }
         var stats: [JSON] = []
         let streak = services.study.streakDays()
-        if streak > 0 { stats.append(.string("🔥 \(streak)-day streak")) }
-        if dueCount > 0 { stats.append(.string("🗂 \(dueCount) cards due")) }
-        if memoryCount > 0 { stats.append(.string("🧠 \(memoryCount) \(memoryCount == 1 ? "memory" : "memories")")) }
+        if streak > 0 { stats.append(Self.stat("flame", "\(streak)-day streak")) }
+        if dueCount > 0 { stats.append(Self.stat("cards", "\(dueCount) cards due")) }
+        if memoryCount > 0 { stats.append(Self.stat("brain", "\(memoryCount) \(memoryCount == 1 ? "memory" : "memories")")) }
         let mastered = services.study.allMastery().filter(\.mastered).count
-        if mastered > 0 { stats.append(.string("✅ \(mastered) concepts mastered")) }
-        stats.append(.string("📁 \(workspace.name) · \(access(for: workspace).title)"))
+        if mastered > 0 { stats.append(Self.stat("check-circle", "\(mastered) concepts mastered")) }
+        stats.append(Self.stat("folder", "\(workspace.name) · \(access(for: workspace).title)"))
         var suggestions: [JSON] = [
             ["title": "Learn something new", "subtitle": "Start from what I know and build up", "prompt": "I'd like to learn something new. Ask me a couple of quick questions to find the right starting point, then teach me step by step."],
             ["title": "Explain with a diagram", "subtitle": "How does the internet route a packet?", "prompt": "Explain how a packet travels across the internet from my laptop to a web server. Use a mermaid diagram."],

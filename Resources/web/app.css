@@ -342,7 +342,9 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 /* Quiz */
 .quiz { border: 1px solid var(--border); border-radius: 16px; background: var(--surface); box-shadow: var(--shadow); overflow: hidden; }
 .quiz-head { display: flex; justify-content: space-between; align-items: center; padding: 12px 16px; background: linear-gradient(180deg, var(--accent-soft), color-mix(in srgb, var(--accent-soft) 40%, transparent)); border-bottom: 1px solid var(--border); }
-.quiz-head .title { font-family: var(--display); font-weight: 680; letter-spacing: -0.01em; }
+.quiz-head .title { display: inline-flex; align-items: center; gap: 8px; font-family: var(--display); font-weight: 680; letter-spacing: -0.01em; }
+.quiz-head .title .i { width: 17px; height: 17px; color: var(--accent); }
+.quiz-head .meta .i, .quiz-foot .meta .i { width: 14px; height: 14px; margin-right: 4px; color: var(--tone-orange); }
 .quiz-head .meta { color: var(--muted); font-size: 0.85em; }
 .quiz-q { padding: 13px 15px; border-top: 1px solid var(--border); }
 .quiz-q:first-of-type { border-top: 0; }
@@ -363,6 +365,10 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .hint-btn { border: 0; background: transparent; color: var(--accent); cursor: pointer; font-size: 0.85em; padding: 4px 0; }
 .hint { color: var(--muted); font-size: 0.9em; background: var(--card); border-radius: 8px; padding: 6px 10px; margin-top: 4px; }
 .feedback { margin-top: 8px; border-radius: 9px; padding: 8px 11px; font-size: 0.93em; }
+.feedback > b { display: inline-flex; align-items: center; gap: 6px; }
+.feedback > b .i { width: 15px; height: 15px; }
+.feedback.good > b { color: var(--good); } .feedback.bad > b { color: var(--bad); }
+.hint .i { width: 14px; height: 14px; margin-right: 5px; color: var(--tone-orange); vertical-align: -0.18em; }
 .feedback.good { background: var(--good-soft); }
 .feedback.bad { background: var(--bad-soft); }
 .feedback.neutral { background: var(--card); }
@@ -456,7 +462,9 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .suggestion .go { position: absolute; right: 14px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--faint); transition: color .12s, transform .12s; }
 .suggestion:hover .go, .suggestion.continue .go { color: var(--accent); }
 .suggestion:hover .go { transform: translate(2px, -50%); }
-.welcome .stats { display: flex; gap: 10px; justify-content: center; margin-top: 22px; flex-wrap: wrap; }
+.welcome .stats { display: flex; gap: 8px; justify-content: center; margin-top: 24px; flex-wrap: wrap; }
+.welcome .stats .pill { background: var(--surface); padding: 4px 12px 4px 10px; }
+.welcome .stats .pill .i { width: 13px; height: 13px; color: var(--accent); }
 
 /* Status & jump */
 #status { position: fixed; left: 50%; transform: translateX(-50%); bottom: 14px; background: color-mix(in srgb, var(--surface) 80%, transparent); -webkit-backdrop-filter: saturate(180%) blur(16px); backdrop-filter: saturate(180%) blur(16px);
@@ -521,7 +529,8 @@ svg.chart { width: 100%; max-width: 640px; height: auto; font-family: -apple-sys
 .vocab-meaning { font-weight: 550; margin-top: 4px; }
 .vocab-example { margin-top: 8px; padding-top: 8px; border-top: 1px dashed var(--border); font-size: 0.95em; }
 .vocab-ex-meaning, .vocab-notes { color: var(--muted); font-size: 0.88em; }
-.say { border: 0; background: transparent; cursor: pointer; font-size: 0.95em; opacity: .7; padding: 2px 4px; }
+.say { border: 0; background: transparent; cursor: pointer; font-size: 0.95em; color: var(--accent); opacity: .75; padding: 2px 4px; border-radius: 6px; }
+.say .i { width: 16px; height: 16px; }
 .say:hover { opacity: 1; }
 .vocab-card > .say { position: absolute; top: 10px; right: 8px; }
 .vocab-save { position: absolute; bottom: 8px; right: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--muted); border-radius: 6px; padding: 1px 8px; font-size: 0.78em; cursor: pointer; }
@@ -711,7 +720,9 @@ label.opt[tabindex]:focus-visible { outline: 2px solid var(--accent); outline-of
 /* Problem (attempt first) */
 .problem { border: 1px solid var(--accent); border-radius: 12px; overflow: hidden; }
 .pb-head { display: flex; justify-content: space-between; align-items: baseline; gap: 10px; padding: 8px 14px; background: var(--accent-soft); flex-wrap: wrap; }
-.pb-title { font-weight: 650; }
+.pb-title { display: inline-flex; align-items: center; gap: 7px; font-weight: 650; }
+.pb-title .i { width: 16px; height: 16px; color: var(--accent); }
+.pr-hint .i { width: 14px; height: 14px; margin-right: 5px; color: var(--tone-orange); vertical-align: -0.18em; }
 .pb-sub { color: var(--muted); font-size: 0.82em; }
 .pb-q { padding: 10px 14px 4px; overflow-wrap: anywhere; }
 .problem .pb-hint { margin: 4px 14px; }

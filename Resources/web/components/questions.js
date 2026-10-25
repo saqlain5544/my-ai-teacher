@@ -212,7 +212,7 @@
     F.ctx = ctx; F.active = active && !locked(F, pend);
     const gradedList = r && r.meta && r.meta.graded;
     const answeredList = r && r.meta && r.meta.answers;
-    let h = '<div class="quiz' + (graded ? '' : ' askform') + '" data-form="' + ctx.esc(id) + '"><div class="quiz-head"><span class="title">' + (graded ? '📝 ' : '💬 ') + ctx.esc(input.title || (graded ? 'Quiz' : 'A few questions')) + '</span>' +
+    let h = '<div class="quiz' + (graded ? '' : ' askform') + '" data-form="' + ctx.esc(id) + '"><div class="quiz-head"><span class="title">' + R.icon(graded ? 'list-checks' : 'help') + ctx.esc(input.title || (graded ? 'Quiz' : 'A few questions')) + '</span>' +
       '<span class="meta">' + qs.length + ' question' + (qs.length === 1 ? '' : 's') + (input.subject ? ' · ' + ctx.esc(input.subject) : '') + '</span></div>';
     const kase = input.case || (pend && pend.payload && pend.payload.case);
     if (kase) h += '<div class="quiz-case"><div class="qc-label">Case</div><div class="md">' + ctx.md(String(kase)) + '</div></div>';
@@ -232,7 +232,7 @@
       // Hints open one at a time, gentlest first; an answer after a hint is logged as helped (no mastery gain).
       const hs = ladder(q), opened = Math.min(+F.hints[qi] || 0, hs.length);
       if (hs.length && active) {
-        for (let k = 0; k < opened; k++) h += '<div class="hint">' + (F.nudged === qi && k === 0 ? '<span class="nudge">Stuck? Here\'s a nudge.</span> ' : '') + '💡 ' + (hs.length > 1 ? '<b>Hint ' + (k + 1) + ':</b> ' : '') + ctx.inline(hs[k]) + '</div>';
+        for (let k = 0; k < opened; k++) h += '<div class="hint">' + (F.nudged === qi && k === 0 ? '<span class="nudge">Stuck? Here\'s a nudge.</span> ' : '') + R.icon('bulb') + (hs.length > 1 ? '<b>Hint ' + (k + 1) + ':</b> ' : '') + ctx.inline(hs[k]) + '</div>';
         if (opened < hs.length) h += '<button class="hint-btn" data-act="q-hint" data-q="' + qi + '">' + (opened ? 'Another hint (' + (opened + 1) + ' of ' + hs.length + ')' : 'Show hint') + '</button>';
       }
       // How sure, before the result: a confident mistake is the one most worth correcting.
@@ -243,7 +243,8 @@
       if (g && graded) {
         const ok = g.correct;
         const cls = ok === true ? 'good' : ok === false ? 'bad' : 'neutral';
-        const label = g.unknown ? '🤷 Not known yet — your teacher will explain it' : ok === true ? '✅ Correct' : ok === false ? (g.score > 0 ? '🟡 Partly right (' + Math.round(g.score * 100) + '%)' : '❌ Not quite') : '📝 Your teacher will review this';
+        const label = g.unknown ? R.icon('help') + 'Not known yet — your teacher will explain it' : ok === true ? R.icon('check-circle') + 'Correct'
+          : ok === false ? (g.score > 0 ? R.icon('circle-dot') + 'Partly right (' + Math.round(g.score * 100) + '%)' : R.icon('x-circle') + 'Not quite') : R.icon('eye') + 'Your teacher will review this';
         let expl = g.explanation ? '<div class="md">' + ctx.md(g.explanation) + '</div>' : '';
         if (ok === false && g.expected && !['single_choice', 'multiple_choice', 'true_false', 'ordering', 'matching', 'fill_blanks'].includes(q.type)) expl = '<div>Expected: <b>' + (q.type === 'math' ? ctx.tex(g.expected, false) : ctx.esc(g.expected)) + '</b></div>' + expl;
         if (ok === false && g.misconception) expl = '<div class="mis">Common mix-up: ' + ctx.inline(g.misconception) + '</div>' + expl;
@@ -265,7 +266,7 @@
     } else if (gradedList) {
       const score = r.meta.score, total = r.meta.total;
       if (!total) h += '<div class="quiz-foot"><span class="answered">Sent — your teacher will review your answers.</span></div>';
-      else h += '<div class="quiz-foot"><span class="score' + (total && score / total >= 0.8 ? ' great' : '') + '">Score: ' + score + ' / ' + total + '</span><span class="meta">' + (total && score === total ? '🎉 Perfect!' : 'Mistakes are how we learn.') + '</span></div>';
+      else h += '<div class="quiz-foot"><span class="score' + (total && score / total >= 0.8 ? ' great' : '') + '">Score: ' + score + ' / ' + total + '</span><span class="meta">' + (total && score === total ? R.icon('sparkles') + 'Perfect!' : 'Mistakes are how we learn.') + '</span></div>';
     } else if (r && r.isError) {
       const why = /skipped the (?:quiz|question) — ([^.]+)\./.exec(r.text || '');
       h += '<div class="quiz-foot"><span class="answered">' + (/Interrupted/.test(r.text || '') ? 'Interrupted — the app closed before this was answered.' : why ? 'Skipped — ' + ctx.esc(why[1]) + '.' : 'Skipped.') + '</span></div>';

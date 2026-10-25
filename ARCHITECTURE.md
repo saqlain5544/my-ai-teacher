@@ -20,7 +20,7 @@ Sources/MyAITeacher/
   Native/      Apple on-device model jobs (lesson titles) — no network, weak-linked
   UI/          SwiftUI views + TranscriptView bridge + Inspector (files, plan, changes, browser, agents)
   App/         App entry, AppModel, settings, CLI (--cli), DebugHooks
-Resources/web/ Transcript renderer (core app.js + registry.js + components/*.js)
+Resources/web/ Transcript renderer (core app.js + registry.js + icons.js + components/*.js)
 ```
 
 ## Invariants
@@ -158,7 +158,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 | Add a sub-agent type | Settings → Agents, or a `.teacher/agents/<name>.md` in the folder (or `AgentCatalog.builtIns`) | none |
 | Render a new fenced block (```xyz) or ```ui component | `TeacherUI.defineComponent({ names: ['xyz'], schema, render(props, ctx, env) })` in a file under `Resources/web/components/` (`raw: true` for text forms, `// @lazy` at the top to load on first use), then `scripts/gen-web-manifest.py` | none |
 | Add a question type | `TeacherUI.registerQuestionType('type', {render})` + grading case in `Questions.grade` | none |
-| Present a tool | `TeacherUI.defineTool({ name, icon, title, summary(node), body(node, ctx), open, compact })` in `components/tools/` (a `card` replaces the whole frame); tools without one get the generic card | none |
+| Present a tool | `TeacherUI.defineTool({ name, icon, tone, title, summary(node), body(node, ctx), open, compact })` in `components/tools/` (`icon` names one of `icons.js`'s line icons, `tone` its family colour: blue files, slate shell, green tests, teal web, purple memory, orange teaching, indigo agents; a `card` replaces the whole frame); tools without one get the generic card, which summarises their arguments | none |
 | A new kind of block in a reply | `TeacherUI.defineNode({ type, render(el, node, ctx, env), unmount })` — the semantic vocabulary is small on purpose; most things are components | `nodes.js` |
 | Post‑process rendered DOM | `TeacherUI.registerProcessor((root, ctx) => …)` (runs on freshly inserted nodes only) | none |
 | Markdown syntax | `TeacherUI.registerMarkdown(md => md.use(…))` | none |

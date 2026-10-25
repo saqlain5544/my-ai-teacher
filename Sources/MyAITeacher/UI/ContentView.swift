@@ -23,13 +23,23 @@ struct ContentView: View {
         switch app.selection {
         case .lesson(let id):
             if let s = app.session(for: id) { ChatView(session: s) }
-            else { Text("Select a lesson").foregroundStyle(.secondary) }
+            else { noLesson }
         case .sessions: SessionsView()
         case .flashcards: FlashcardsView()
         case .progress: StudyProgressView()
         case .memory: MemoryView()
         case .insights: InsightsView()
-        case nil: Text("Select a lesson").foregroundStyle(.secondary)
+        case nil: noLesson
+        }
+    }
+
+    private var noLesson: some View {
+        ContentUnavailableView {
+            Label("No lesson open", systemImage: "graduationcap")
+        } description: {
+            Text("Pick a lesson in the sidebar, or start a new one.")
+        } actions: {
+            Button("New Lesson") { app.newLesson() }.buttonStyle(.borderedProminent).help("New lesson (⌘N)")
         }
     }
 }

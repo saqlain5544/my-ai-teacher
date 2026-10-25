@@ -272,7 +272,7 @@
     render: (items, ctx, env) => box('vocab', 'vc' + ctx.hash(env.code), items.map(w => {
       const lang = w.lang || w.language || '';
       const rtl = /^(ar|he|fa|ur|ps|yi)/.test(lang);
-      const say = (t, l) => t ? '<button class="say" data-act="say" data-lang="' + ctx.esc(l) + '" data-text="' + ctx.esc(t) + '" title="Listen">🔊</button>' : '';
+      const say = (t, l) => t ? '<button class="say" data-act="say" data-lang="' + ctx.esc(l) + '" data-text="' + ctx.esc(t) + '" title="Listen" aria-label="Listen">' + R.icon('volume') + '</button>' : '';
       return '<div class="vocab-card"><div class="vocab-term"' + (lang ? ' lang="' + ctx.esc(lang) + '"' : '') + (rtl ? ' dir="rtl"' : '') + '>' + ctx.esc(w.term || w.word || '') + '</div>' +
         say(w.term || w.word, lang) +
         (w.reading || w.transliteration ? '<div class="vocab-reading">' + ctx.esc(w.reading || w.transliteration) + '</div>' : '') +

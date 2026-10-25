@@ -31,7 +31,7 @@
       '<div class="pr-head"><span class="pr-title">✎ ' + ctx.esc(spec.title || 'Practice') + '</span><span class="pr-score"></span></div>';
     items.forEach((it, i) => {
       h += '<div class="pr-item" data-i="' + i + '" data-q="' + ctx.esc(String(it.q || it.question || '').slice(0, 160)) + '"><div class="pr-q md">' + ctx.inline(it.q || it.question || '') + '</div>' +
-        (it.hint ? '<div class="pr-hint md" hidden>💡 ' + ctx.inline(it.hint) + '</div>' : '') +
+        (it.hint ? '<div class="pr-hint md" hidden>' + R.icon('bulb') + ctx.inline(it.hint) + '</div>' : '') +
         '<div class="pr-a md" hidden>' + ctx.md(String(it.a || it.answer || '')) + '</div>' +
         '<div class="pr-actions">' + (it.hint ? '<button class="btn link" data-act="pr-hint">Hint</button>' : '') +
         '<button class="btn" data-act="pr-show">Show answer</button>' +
@@ -114,9 +114,9 @@
     const answer = p.answer != null ? String(p.answer) : '';
     const key = 'pb' + ctx.hash(code);
     return '<div class="comp problem" data-key="' + key + '" data-concept="' + ctx.esc(p.concept || '') + '" data-subject="' + ctx.esc(p.subject || '') + '" data-q="' + ctx.esc(q.slice(0, 160)) + '">' +
-      '<div class="pb-head"><span class="pb-title">🧩 ' + ctx.esc(p.title || 'Your turn') + '</span><span class="pb-sub">Try it first: hints and the solution are here when you need them</span></div>' +
+      '<div class="pb-head"><span class="pb-title">' + R.icon('target') + ctx.esc(p.title || 'Your turn') + '</span><span class="pb-sub">Try it first: hints and the solution are here when you need them</span></div>' +
       '<div class="pb-q md">' + ctx.md(q) + '</div>' +
-      hints.map((h, i) => '<div class="hint pb-hint" data-h="' + i + '" hidden><span class="nudge" hidden>Stuck? Here\'s a nudge.</span> 💡 ' + (hints.length > 1 ? '<b>Hint ' + (i + 1) + ':</b> ' : '') + ctx.inline(h) + '</div>').join('') +
+      hints.map((h, i) => '<div class="hint pb-hint" data-h="' + i + '" hidden><span class="nudge" hidden>Stuck? Here\'s a nudge.</span> ' + R.icon('bulb') + (hints.length > 1 ? '<b>Hint ' + (i + 1) + ':</b> ' : '') + ctx.inline(h) + '</div>').join('') +
       '<textarea class="q-text pb-attempt" rows="3" placeholder="Your attempt: steps, a first idea, or where you got stuck…"></textarea>' +
       '<div class="pb-actions">' + (hints.length ? '<button class="btn link" data-act="pb-hint" data-n="' + hints.length + '">Hint</button>' : '') +
       (solution || answer ? '<button class="btn link" data-act="pb-solution">Show solution</button>' : '') +

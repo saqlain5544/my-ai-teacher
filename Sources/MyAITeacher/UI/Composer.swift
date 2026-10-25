@@ -122,8 +122,9 @@ struct Composer: View {
                 }
             }
             .padding(.horizontal, 12).padding(.vertical, 9)
-            .background(RoundedRectangle(cornerRadius: 16).fill(Color(nsColor: .controlBackgroundColor)))
-            .overlay(RoundedRectangle(cornerRadius: 16).strokeBorder(Color.primary.opacity(0.1)))
+            .background(RoundedRectangle(cornerRadius: 18, style: .continuous).fill(Color(nsColor: .controlBackgroundColor))
+                .shadow(color: .black.opacity(0.07), radius: 10, y: 3))
+            .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
             HStack(spacing: 10) {
                 if let u = session.conversation.usage, u.input > 0 {
                     Text("Context \(Self.short(u.input)) tokens · \(Self.short(u.output)) generated")
