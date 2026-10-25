@@ -38,6 +38,7 @@ enum HeadlessLesson {
             put(turn["files"])
             let start = s.messages.count, t0 = Date()
             var firstReply: Double?
+            let replied = { s.messages[min(start, s.messages.count)...].contains { $0.role == .assistant && $0.blocks.contains { $0.kind == .text && ($0.text?.count ?? 0) > 300 } } }
             s.send(turn["text"]?.string ?? "")
             try? await Task.sleep(for: .milliseconds(300))
             while s.isRunning, Date().timeIntervalSince(t0) < budget {
@@ -49,11 +50,11 @@ enum HeadlessLesson {
                         app.interactions.resolve(p.id, ["cancelled": true, "reason": "not_now"])
                     }
                 }
-                if firstReply == nil, s.messages[start...].contains(where: { $0.role == .assistant && $0.blocks.contains { $0.kind == .text && ($0.text?.count ?? 0) > 300 } }) {
-                    firstReply = Date().timeIntervalSince(t0)
-                }
+                if firstReply == nil, replied() { firstReply = Date().timeIntervalSince(t0) }
                 try? await Task.sleep(for: .milliseconds(250))
             }
+            // A reply that came with the turn's last step ended the loop before it was seen: it was reported as none.
+            if firstReply == nil, replied() { firstReply = Date().timeIntervalSince(t0) }
             let timedOut = s.isRunning
             if timedOut { s.stop(); try? await Task.sleep(for: .seconds(1)) }
             let msgs = Array(s.messages[min(start, s.messages.count)...])
