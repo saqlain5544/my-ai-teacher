@@ -27,7 +27,7 @@ final class CourseBoardExtension: AgentExtension {
             let help = MasteryTool.help(call.input ?? .null)
             let how = help == .none ? " unaided" : help == .solution ? " after seeing the solution" : " with help"
             study.mutateBoard(lesson: session.id) { b in b.attachEvidence(concept: concept, "\(concept): \(right ? "correct" : "incorrect")\(how)") != nil }
-        case "ask_learner", "quiz":
+        case "ask_learner":
             guard let graded = result.meta?["graded"]?.array, !graded.isEmpty, let questions = call.input?["questions"]?.array else { return }
             var tally: [String: (right: Int, total: Int, hinted: Int)] = [:]
             var order: [String] = []

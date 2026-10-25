@@ -1,4 +1,4 @@
-// Interactive question components for the `ask_learner` and `quiz` tools.
+// Interactive question components for `ask_learner` (and the `quiz` tool of earlier lessons).
 // Types: single_choice, multiple_choice, true_false, short_text, long_text, numeric, fill_blanks,
 //        ordering, matching, scale, code, math, drawing; `speak` (pronunciation) comes from langlearn.js.
 (function () {

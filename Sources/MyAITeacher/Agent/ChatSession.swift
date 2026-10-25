@@ -949,7 +949,6 @@ final class ChatSession: ObservableObject, Identifiable {
         case "math": "Calculating…"
         case "read", "ls", "glob", "grep": "Looking at files…"
         case "write", "edit": "Writing files…"
-        case "quiz": "Waiting for your answers…"
         case "ask_learner": "Waiting for your answer…"
         case "task": "Researching with a sub-agent…"
         case let n where n == "memory" || n.hasPrefix("memory_"): "Updating memory…"

@@ -117,8 +117,8 @@ final class ContextTests: XCTestCase {
     func testDeferredToolsLoadOnDemand() async throws {
         let s = AppSettings()
         let base = ToolRegistry.active(s, loaded: []).map(\.name)
-        XCTAssertFalse(base.contains("quiz")); XCTAssertTrue(base.contains("load_tools"))
-        XCTAssertEqual(ToolRegistry.active(s, loaded: ["quiz", "nope", "browser"]).map(\.name), base + ["quiz"], "only this agent's loadable tools load")
+        XCTAssertFalse(base.contains("mastery")); XCTAssertTrue(base.contains("load_tools"))
+        XCTAssertEqual(ToolRegistry.active(s, loaded: ["mastery", "nope", "browser", "quiz"]).map(\.name), base + ["mastery"], "only this agent's loadable tools load (and the retired `quiz` none)")
         // The course board never waits on another tool being loaded (it used to come in with `mastery`, so a lesson
         // with quizzes off had no board).
         XCTAssertTrue(base.contains("lesson_plan")); XCTAssertFalse(ToolRegistry.deferredIndex("tutor").contains("lesson_plan"))

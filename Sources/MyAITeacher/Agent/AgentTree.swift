@@ -31,7 +31,7 @@ enum AgentTree {
                   guide: Guides.root),
         AgentNode(id: "teacher", parent: "root",
                   core: ["ask_learner", "math", "run_code", "bash", "memory", "lesson_plan"],
-                  deferred: ["quiz", "mastery", "flashcards", "todo_write", "bash_jobs", "language", "vocab", "source"],
+                  deferred: ["mastery", "flashcards", "todo_write", "bash_jobs", "language", "vocab", "source"],
                   components: ["vocab", "practice", "problem"],
                   guide: Guides.teacher),
         AgentNode(id: "tutor", parent: "teacher"),

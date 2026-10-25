@@ -559,11 +559,12 @@ help the learner had to ask for went unused. So these are app behaviour, not jus
   gets a worked example instead of another quiz.
 * **Quizzes can be switched off** (`AppSettings.quizzes`, the toolbar's Quizzes button; `Testing`). The switch is sticky and
   takes effect on the next request. While it is off, `TestingExtension` appends a note to the learner's message (request
-  copy only), and `quiz` and graded `ask_learner` return a refusal. Quiz and Exam prep modes always test.
+  copy only), and graded `ask_learner` returns a refusal. Quiz and Exam prep modes always test.
 * **Skips carry a reason** (`Testing.SkipReason`: need more explanation, too easy, not now, unclear). The tool result tells the
   teacher what to do about each. **Don't know yet** (certainty 0) is not graded or recorded; the result asks for teaching.
-* **Exam-style quizzes:** `quiz` and `ask_learner` take a `case` (Markdown shown above the questions) that the questions
-  refer to.
+* **Exam-style quizzes:** `ask_learner` takes a `case` (Markdown shown above the questions) that the questions refer to.
+  A graded quiz is `ask_learner` with `graded: true` (`GradedQuiz`); the separate `quiz` tool, a second name for it, is
+  gone (earlier lessons still draw its cards).
 * **Certainty per question** (Guessing / Unsure / Sure, in `responses`):
   * a confident mistake is re-checked tomorrow and its flashcards come forward;
   * a lucky guess is flagged for a later check;
@@ -839,7 +840,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
 | /command | `.teacher/commands/*.md` | project slash commands with `$ARGUMENTS` |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
-| — (extra) | `quiz`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
+| — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |
 
 ## Measured (Apple Silicon, macOS 27)

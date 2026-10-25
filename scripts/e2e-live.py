@@ -501,8 +501,8 @@ SCENARIOS = [
          expect=["run_code", "math"]),
     dict(name="ask", quick=True, prompt="Before explaining anything, call ask_learner to ask me which topic I want to learn, with exactly these options: Cells, Atoms, Planets.",
          expect=["ask_learner"], pick="atoms", followup_contains="atom"),
-    dict(name="quiz", quick=True, prompt="Use the quiz tool to give me a 3-question quiz on fractions: one single_choice, one true_false and one short_text question.",
-         expect=["quiz"], reply="1/2"),
+    dict(name="quiz", quick=True, prompt="Give me a graded 3-question quiz on fractions with ask_learner (graded: true): one single_choice, one true_false and one short_text question.",
+         expect=["ask_learner"], reply="1/2"),
     dict(name="files", folder=True, prompt="List the files in this folder, read notes.md and summarise it in one line. Then buggy.py should print 55 (the sum of 1..10) "
          "but doesn't: fix it with the edit tool and run it with bash to verify.", expect=["read", "edit", "bash"], any=["ls", "glob"],
          after=lambda: (LAB / "buggy.py").read_text()),

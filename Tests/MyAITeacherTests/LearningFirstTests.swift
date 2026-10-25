@@ -105,13 +105,13 @@ final class LearningFirstTests: XCTestCase {
             ["type": "single_choice", "prompt": "First suspect?", "options": ["GC", "Locks"], "answer": 1, "concept": "lock contention"],
             ["type": "true_false", "prompt": "p99 hides the tail", "answer": false, "concept": "percentiles"]]]
         // Off: the quiz is refused, graded or through ask_learner, before anything reaches the learner.
-        let off = try await QuizTool().run(input, ctx("q0", quizzes: false))
+        let off = try await GradedQuiz.run(input, ctx("q0", quizzes: false))
         XCTAssertTrue(off.isError == true && off.text.contains("Quizzes are off"), off.text)
         var viaAsk = input.object ?? [:]; viaAsk["graded"] = true
         let refused = try await AskLearnerTool().run(.object(viaAsk), ctx("q0b", quizzes: false)).text
         XCTAssertTrue(refused.contains("Quizzes are off"), refused)
         // "Don't know yet": a gap to teach, not graded, not a mistake.
-        let run = Task { try await QuizTool().run(input, ctx("q1")) }
+        let run = Task { try await GradedQuiz.run(input, ctx("q1")) }
         for _ in 0..<200 where await MainActor.run(body: { interactions.pending["q1"] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
         let payload = await MainActor.run { interactions.pending["q1"]?.payload }
         XCTAssertEqual(payload?["case"]?.string, "p99 jumps from 40 ms to 900 ms after a deploy.", "the case reaches the page")
@@ -122,7 +122,7 @@ final class LearningFirstTests: XCTestCase {
         XCTAssertEqual(out.meta?["graded"]?[0]?["unknown"]?.bool, true)
         XCTAssertNil(study.mastery(subject: "general", concept: "lock contention"), "nothing recorded for an unknown")
         // A skip says why, and the teacher is told what to do about it.
-        let skip = Task { try await QuizTool().run(input, ctx("q2")) }
+        let skip = Task { try await GradedQuiz.run(input, ctx("q2")) }
         for _ in 0..<200 where await MainActor.run(body: { interactions.pending["q2"] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
         await MainActor.run { interactions.resolve("q2", ["cancelled": true, "reason": "need_more"]) }
         let skipped = try await skip.value.text
@@ -147,7 +147,7 @@ final class LearningFirstTests: XCTestCase {
             ["type": "true_false", "prompt": "x^0 = 1 for x ≠ 0", "answer": true, "concept": "zero exponent"],
             ["type": "short_text", "prompt": "Name the base in 5^2", "answer": "5", "misconceptions": [["answer": "2", "misconception": "confuses base and exponent"]]],
         ]]
-        let run = Task { try await QuizTool().run(input, ctx) }
+        let run = Task { try await GradedQuiz.run(input, ctx) }
         for _ in 0..<200 where await MainActor.run(body: { interactions.pending["quiz-1"] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
         await MainActor.run {
             interactions.resolve("quiz-1", ["answers": [0, "8", true, "2"], "hints": [0, 1, 0, 0], "certainty": [3, 2, 1, .null]])
@@ -187,7 +187,7 @@ final class LearningFirstTests: XCTestCase {
             let ctx = ToolContext(conversationID: lesson, workspace: dir, services: services, interactions: interactions, toolCallID: id,
                                   client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
             let input: JSON = ["title": "Fractions", "questions": [["type": "single_choice", "prompt": "1/3 + 1/4?", "options": ["2/7", "7/12"], "answer": 1, "concept": "adding fractions"]]]
-            let run = Task { try await QuizTool().run(input, ctx) }
+            let run = Task { try await GradedQuiz.run(input, ctx) }
             for _ in 0..<200 where await MainActor.run(body: { interactions.pending[id] == nil }) { try await Task.sleep(nanoseconds: 5_000_000) }
             await MainActor.run { interactions.resolve(id, ["answers": [0]]) }
             return try await run.value.text
@@ -214,10 +214,10 @@ final class LearningFirstTests: XCTestCase {
         if right.correct == nil { throw XCTSkip("SymPy isn't installed") }
         XCTAssertEqual(right.correct, true, "any accepted form counts")
         XCTAssertEqual(wrong.correct, false)
-        XCTAssertTrue(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("record each with `mastery`"))
-        XCTAssertFalse(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("Praise specifically"))
+        XCTAssertTrue(GradedQuiz.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("record each with `mastery`"))
+        XCTAssertFalse(GradedQuiz.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0, ungraded: 1).contains("Praise specifically"))
         // After a result the reply ends with the feedback: the learner answers before the next set of questions.
-        XCTAssertTrue(QuizTool.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0).contains("No new quiz or ask_learner in this reply"))
+        XCTAssertTrue(GradedQuiz.feedbackSteps(wrong: 0, sureButWrong: [], luckyGuesses: [], hinted: 0).contains("No new quiz or ask_learner in this reply"))
     }
 
     /// A live re-check on "the chain rule" stayed open: the tutor's question said "chain rule".

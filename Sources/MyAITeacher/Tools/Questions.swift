@@ -1,6 +1,6 @@
 import Foundation
 
-/// Shared question model for `ask_learner` (ungraded) and `quiz` (graded). The web view renders each `type`
+/// Shared question model for `ask_learner`, ungraded and graded (`GradedQuiz`). The web view renders each `type`
 /// with a matching component; answers come back in the shapes documented below.
 enum Questions {
     static let types = ["single_choice", "multiple_choice", "true_false", "short_text", "long_text", "numeric",
@@ -594,7 +594,7 @@ struct AskLearnerTool: Tool {
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let hasForm = !(input["questions"]?.array ?? []).isEmpty, hasQuick = !(input["question"]?.string ?? "").isEmpty
-        if input["graded"]?.bool == true, hasForm { return try await QuizTool().run(input, ctx) }
+        if input["graded"]?.bool == true, hasForm { return try await GradedQuiz.run(input, ctx) }
         if input["graded"]?.bool == true, !ctx.quizzes { return .error(Testing.refusal) }
         // Some models send `graded` with no questions, or nothing at all: say exactly what to send (they repeat a bare error).
         guard hasForm || hasQuick else { return .error(Questions.missingQuestions) }
@@ -626,27 +626,11 @@ struct AskLearnerTool: Tool {
     }
 }
 
-struct QuizTool: Tool {
-    let name = "quiz"
-    let description = """
-    Show a graded interactive quiz in the chat and WAIT for the answers. Auto-grades single/multiple choice, true/false, \
-    numeric, short text (accepted answers), fill-in-the-blanks, ordering, matching and math (symbolic equivalence via SymPy); \
-    returns long text, code and drawings for you to grade. Results update concept mastery. Like a real exam: a `case` \
-    (a realistic scenario, code, data or a passage) the questions refer to, needing reading and reasoning rather than \
-    recall; 2-6 questions on what was just taught, each worth answering. Refused while the learner has quizzes off.
-    """
-    let risk = ToolRisk.interactive
-    var schema: JSON {
-        Schema.object([
-            "title": Schema.string("Quiz title."),
-            "subject": Schema.string("Subject, e.g. algebra."),
-            "case": Schema.string("Markdown shown above the questions: the whole scenario, code, data or passage they refer to, in full (not a pointer to your reply)."),
-            "questions": Schema.array(Questions.schema(graded: true), "Questions."),
-        ], required: ["title", "questions"])
-    }
-    func summary(_ input: JSON) -> String { input["title"]?.string ?? "Quiz" }
-
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+/// A graded quiz: `ask_learner` with `graded: true` and questions. The form waits for the answers, which are auto-graded
+/// (choice, true/false, numeric, short text, blanks, ordering, matching, symbolic math) and update mastery; long text,
+/// code and drawings go back to the teacher to grade. (It was also a `quiz` tool, a second name for the same thing.)
+enum GradedQuiz {
+    static func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         guard ctx.quizzes else { return .error(Testing.refusal) }
         let questions = Questions.normalize(input["questions"]?.array ?? [])
         guard !questions.isEmpty else { return .error(Questions.missingQuestions) }
@@ -727,7 +711,7 @@ struct QuizTool: Tool {
         if let c = reply["confidence"]?.int { text += "Self-rated confidence before answering: \(c)/5.\n" }
         if let s = reply["seconds"]?.double { text += "Time taken: \(Int(s)) s.\n" }
         text += "\n" + lines.joined(separator: "\n")
-        text += "\n\n" + Self.feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
+        text += "\n\n" + feedbackSteps(wrong: wrong, missedAgain: missedAgain, sureButWrong: sureButWrong, luckyGuesses: luckyGuesses, hinted: hinted,
                                             ungraded: questions.count - autoTotal - unknown.count, unknown: unknown)
         text += Questions.writingNote(questions, answers: answers, ungraded: Set(graded.enumerated().filter { $0.element["correct"]?.isNull ?? true }.map(\.offset)))
         return ToolOutput(text: text, images: Questions.images(from: answers),
