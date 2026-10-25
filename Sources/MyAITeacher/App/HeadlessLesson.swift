@@ -24,6 +24,7 @@ enum HeadlessLesson {
         app.settings.value.providerID = provider
         app.settings.value.model = model
         if let t = thinking.flatMap(ThinkingLevel.init(rawValue:)) { app.settings.value.thinking = t }
+        if let deep = spec["deepWork"]?.bool { app.settings.value.deepWork = deep }
         app.openFolder(folder, askAccess: false)
         app.setAccess(.full, for: app.workspace)
         app.accessPrompt = nil
