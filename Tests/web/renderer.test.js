@@ -887,10 +887,22 @@
     T.status('', false); T.reset([U('go'), A([b]), R('tgen', 'quantum_lookup', 'the answer')], {});
     const card = $('[data-tool-id="tgen"]');
     eq($('.tool .name', card).textContent, 'quantum_lookup', 'the generic title is the tool name');
+    eq($('.tool .sum', card).textContent, 'q: 42', 'the generic summary is the arguments in brief');
+    ok($('.tool .icon svg', card), 'icons are drawn, not emoji');
     click($('.head', card));
     ok(/Input/.test(card.textContent) && /"q": 42/.test(card.textContent) && /Result/.test(card.textContent) && /the answer/.test(card.textContent), 'generic body: input and result');
     const d = TeacherUI.tool('bash');
-    eq([d.icon, d.title], ['⌘', 'Terminal']);
+    eq([d.icon, d.title, d.tone], ['terminal', 'Terminal', 'slate']);
+    // A failed call says why on its closed card; boxed cards in a row join into one list, compact ones stay lines.
+    T.reset([U('go'), A([{ kind: 'toolUse', id: 'tx1', name: 'read', input: { path: 'a.py' } }, { kind: 'toolUse', id: 'tx2', name: 'grep', input: { pattern: 'x' } },
+      { kind: 'toolUse', id: 'tx3', name: 'memory', input: { action: 'search', query: 'q' } }]),
+      R('tx1', 'read', 'Error: no such file a.py\nmore detail', { isError: true }), R('tx2', 'grep', 'a.py:1:x'), R('tx3', 'memory', 'none')], {});
+    const failed = $('[data-tool-id="tx1"]');
+    eq($('.why', failed).textContent, 'no such file a.py', 'the first line of the error, without its "Error:" prefix');
+    ok(/Failed/.test($('.state', failed).textContent), 'the state says it failed');
+    click($('.head', failed)); ok(!$('.why', failed), 'opened, the body shows the whole error instead');
+    ok($('[data-tool-id="tx1"]').classList.contains('framed') && $('[data-tool-id="tx2"]').classList.contains('framed'), 'boxed cards are framed (and join)');
+    ok($('[data-tool-id="tx3"]').classList.contains('quiet') && !$('[data-tool-id="tx3"]').classList.contains('framed'), 'a compact card is a quiet line');
     eq(TeacherUI.tool('memory').title({ props: { input: { action: 'search' } } }), 'Recall', 'a title can depend on the call');
     // A descriptor that throws degrades to a readable note inside the card, never a blank card.
     TeacherUI.defineTool({ name: 'faulty', icon: '✗', title: 'Faulty', summary: () => { throw new Error('nope'); }, body: () => { throw new Error('body broke'); } });

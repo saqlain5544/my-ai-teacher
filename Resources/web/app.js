@@ -312,6 +312,7 @@
     document.head.appendChild(s);
   }
 
+  const RUN_LABEL = R.icon('play') + '<span>Run</span>';
   function renderCode(code, lang, env) {
     code = code.replace(/\n$/, '');
     const key = 'c' + hash(lang + '|' + code);
@@ -323,8 +324,8 @@
     const plain = env && env.live && code.length > 1600;
     const out = S.codeOutputs.get(key);
     return '<div class="code-block" dir="ltr" data-key="' + key + '" data-lang="' + esc(l) + '">' +
-      '<div class="code-head"><span class="lang">' + esc(l || 'text') + '</span><span>' +
-      (runnable ? '<button class="run" data-act="run">▶ Run</button>' : '') + '<button data-act="copy-code">Copy</button></span></div>' +
+      '<div class="code-head"><span class="lang">' + R.icon('code') + esc(l || 'text') + '</span><span class="code-acts">' +
+      (runnable ? '<button class="run" data-act="run">' + RUN_LABEL + '</button>' : '') + '<button data-act="copy-code">' + R.icon('copy') + '<span>Copy</span></button></span></div>' +
       '<pre><code class="hljs">' + (plain ? esc(code) : highlight(code, l)) + '</code></pre>' +
       (out ? '<div class="code-output' + (out.failed ? ' failed' : '') + '"><span class="label">Output</span>' + esc(out.text) + '</div>' : '') + '</div>';
   }
@@ -848,10 +849,10 @@
     unmountComponents(root);
   }
   function agentReportHTML(p) {
-    if (p.task) return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">⌘</span><span>Background command <b>' + esc(p.handle || '') + '</b> · ' +
+    if (p.task) return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">' + R.icon('terminal') + '</span><span>Background command <b>' + esc(p.handle || '') + '</b> · ' +
       esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state)) + (p.seconds != null ? ' in ' + p.seconds + ' s' : '') + '</span></div>' +
       '<details><summary>Output</summary>' + pre(p.text || '') + '</details></div>';
-    return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">◈</span><span>Background agent <b>' + esc(p.handle || '') + '</b> · ' +
+    return '<div class="agent-report"><div class="ar-head"><span class="ar-icon">' + R.icon('bot') + '</span><span>Background agent <b>' + esc(p.handle || '') + '</b> · ' +
       esc(p.title || '') + ' — ' + (p.state === 'done' ? 'finished' : esc(p.state || 'finished')) + '</span>' +
       '<button class="btn mini" data-act="agent-open" data-agent="' + esc(p.agent) + '">Open</button></div>' +
       '<details><summary>Report</summary><div class="md">' + markdown(p.text || '', false) + '</div></details></div>';
@@ -874,7 +875,7 @@
   R.defineNode({ type: 'attachment', render(el, n) {
     el.className = 'attachments';
     const p = n.props;
-    setHTML(el, p.kind === 'image' ? '<img src="' + esc(imageSrc(p)) + '" alt="">' : '<span class="file-chip">📄 ' + esc(p.name || 'file') + '</span>');
+    setHTML(el, p.kind === 'image' ? '<img src="' + esc(imageSrc(p)) + '" alt="">' : '<span class="file-chip">' + R.icon('paperclip') + esc(p.name || 'file') + '</span>');
   } });
   R.defineNode({ type: 'agentReport', render(el, n) { el.className = ''; setHTML(el, agentReportHTML(n.props)); } });
   R.defineNode({ type: 'error', render(el, n) { el.className = 'node-error'; setHTML(el, nodeError(esc(n.props.message))); } });
@@ -927,10 +928,10 @@
     el.hidden = !text && !imgs.length && !files.length;
     if (imgs.length || files.length) {
       html += '<div class="attachments">' + imgs.map(imageSrc).filter(Boolean).map(s => '<img src="' + esc(s) + '" alt="">').join('') +
-        files.map(b => (R.fileView && R.fileView(b, m)) || '<span class="file-chip">📄 ' + esc(b.name || 'file') + '</span>').join('') + '</div>';
+        files.map(b => (R.fileView && R.fileView(b, m)) || '<span class="file-chip">' + R.icon('paperclip') + esc(b.name || 'file') + '</span>').join('') + '</div>';
     }
     if (text) html += '<div class="bubble"><div class="md">' + markdown(text, false) + '</div></div>';
-    if (!el.hidden) html += '<div class="msg-actions"><button data-act="edit">Edit</button><button data-act="copy-msg">Copy</button>' + (R.userActions ? R.userActions(m) : '') + '</div>';
+    if (!el.hidden) html += '<div class="msg-actions">' + act('edit', 'pencil', 'Edit') + act('copy-msg', 'copy', 'Copy') + (R.userActions ? R.userActions(m) : '') + '</div>';
     setHTML(el, html);
   }
 
@@ -983,23 +984,22 @@
     if (!tail) { tail = document.createElement('div'); tail.className = 'tail'; el.appendChild(tail); }
     let th = '';
     // Stopping is the learner's choice, not an error: a quiet note with a way to try again.
-    if (m.error === 'Stopped.') th += '<div class="msg-stopped"><span>⏹ Stopped before the reply began.</span><button class="btn link" data-act="retry">Try again</button></div>';
-    else if (m.error) th += '<div class="msg-error"><span>⚠️ ' + esc(m.error) + '</span><button data-act="retry">Retry</button></div>';
+    if (m.error === 'Stopped.') th += '<div class="msg-stopped">' + R.icon('stop') + '<span>Stopped before the reply began.</span><button class="btn link" data-act="retry">Try again</button></div>';
+    else if (m.error) th += '<div class="msg-error">' + R.icon('alert') + '<span>' + esc(m.error) + '</span><button data-act="retry">' + R.icon('refresh') + 'Retry</button></div>';
     if (!streaming && m.turn) {
       const { msgs, user } = turnOf(m.id);
       th += R.footers.map(f => f(m, msgs, user, ctx)).join('');
     }
     if (!streaming && endsTurn(m) && msgNode.children.some(n => n.type === 'text' && n.props.markdown.trim())) {
-      th += '<div class="msg-actions"><button data-act="copy-msg">Copy</button><button data-act="speak">Read aloud</button>' +
-        '<button data-act="regenerate">Regenerate</button>' +
-        '<button class="chip" data-act="quick" data-q="simpler">Explain simpler</button>' +
-        '<button class="chip" data-act="quick" data-q="deeper">Go deeper</button>' +
-        '<button class="chip" data-act="quick" data-q="example">Another example</button>' +
-        '<button class="chip" data-act="quick" data-q="quiz">Quiz me</button>' +
-        '<button class="chip" data-act="quick" data-q="flashcards">Make flashcards</button></div>';
+      th += '<div class="msg-actions">' + act('copy-msg', 'copy', 'Copy') + act('speak', 'volume', 'Read aloud') + act('regenerate', 'refresh', 'Regenerate') +
+        '<span class="chips">' + QUICK.map(([q, icon, label]) => '<button class="chip" data-act="quick" data-q="' + q + '">' + R.icon(icon) + label + '</button>').join('') + '</span></div>';
     }
     if (tail._html !== th) { tail.innerHTML = th; tail._html = th; }
   }
+
+  /** An icon-only action under a message: the label is its tooltip and its accessible name. */
+  const act = (a, icon, label) => '<button data-act="' + a + '" title="' + label + '" aria-label="' + label + '">' + R.icon(icon) + '</button>';
+  const QUICK = [['simpler', 'bulb', 'Explain simpler'], ['deeper', 'layers', 'Go deeper'], ['example', 'flask', 'Another example'], ['quiz', 'help', 'Quiz me'], ['flashcards', 'cards', 'Make flashcards']];
 
   function endsTurn(m) {
     if (m.turn) return true;
@@ -1025,7 +1025,7 @@
     node.className = '';
     let d = node.querySelector('details');
     if (!d) {
-      node.innerHTML = '<details class="thinking"><summary></summary><div class="thinking-body md"></div></details>';
+      node.innerHTML = '<details class="thinking"><summary>' + R.icon('sparkles') + '<span class="t-label"></span>' + R.icon('chevron-right', 'chev') + '</summary><div class="thinking-body md"></div></details>';
       d = node.querySelector('details');
       d.addEventListener('toggle', () => {
         if (d._prog) { d._prog = false; return; }
@@ -1039,7 +1039,7 @@
     d.classList.toggle('live', live);
     if (!d._user) setOpen(live);
     const words = (b.text || '').trim().split(/\s+/).length;
-    d.querySelector('summary').textContent = live ? 'Thinking…' : 'Thought process · ' + words + ' words';
+    d.querySelector('.t-label').textContent = live ? 'Thinking…' : 'Thought process · ' + words + ' words';
     const body = d.querySelector('.thinking-body');
     if (!live) d.classList.remove('raw');
     if (!d.open) return;
@@ -1073,7 +1073,7 @@
   // open, compact, headActions, card) over the generic default below. The core draws only the frame.
   const pre = (t, max = 20000) => '<pre>' + esc(t.length > max ? t.slice(0, max) + '\n…' : t) + '</pre>';
   const fmtMs = ms => ms < 1000 ? Math.round(ms) + ' ms' : (ms / 1000).toFixed(1) + ' s';
-  R.defineTool({ name: 'default', icon: '🔧', title: n => n.props.name, summary: () => '',
+  R.defineTool({ name: 'default', icon: 'wrench', tone: 'grey', title: n => n.props.name, summary: () => '',
     body(n, c) {
       const i = n.props.input || {}, out = n.props.output || '';
       return (Object.keys(i).length ? '<div class="label">Input</div>' + c.pre(JSON.stringify(i, null, 2)) : '') + (out ? '<div class="label">Result</div>' + c.pre(out) : '');
@@ -1114,31 +1114,43 @@
     const pendingCall = p.status === 'pending';
     if (d.card && !pendingCall && !(pend && pend.kind === 'permission')) {
       const out = guard(b.name, () => d.card(b, r, pend, ctx));
-      if (out != null) return setHTML(node, out);
+      if (out != null) { node.classList.remove('framed', 'quiet'); return setHTML(node, out); }
     }
-    const icon = d.icon || '🔧';
     const title = typeof d.title === 'function' ? guard(b.name, () => d.title(tn), b.name) : (d.title || b.name);
     const running = pendingCall || p.status === 'running';
     const isErr = p.status === 'error';
+    const asking = !!(pend && pend.kind === 'permission');
     const compact = !!(typeof d.compact === 'function' ? guard(b.name, () => d.compact(tn), false) : d.compact) && !pend;
     const open = S.openTools.has(b.id) || !!(d.open && guard(b.name, () => d.open(tn), false));
-    let state = running ? '<span class="spinner"></span>' : (isErr ? 'failed' : (r && r.meta && r.meta.ms ? fmtMs(r.meta.ms) : '✓'));
-    if (pend && pend.kind === 'permission') state = 'needs approval';
+    let state = running ? '<span class="spinner"></span>'
+      : isErr ? '<span class="badge bad">' + R.icon('x-circle') + 'Failed</span>'
+      : r && r.meta && r.meta.ms ? '<span class="dur">' + fmtMs(r.meta.ms) + '</span>' : R.icon('check', 'done');
+    if (asking) state = '<span class="badge warn">' + R.icon('shield') + 'Needs approval</span>';
     let html = '';
-    if (pend && pend.kind === 'permission') html += renderApproval(b, pend);
+    if (asking) html += renderApproval(b, pend);
     const acts = d.headActions ? guard(b.name, () => d.headActions(tn, ctx) || '', '') : '';
-    const summary = d.summary ? guard(b.name, () => d.summary(tn) || '', '') : '';
-    html += '<div class="tool' + (open ? ' open' : '') + (isErr ? ' error' : '') + (compact && !open ? ' compact' : '') + '">' +
-      '<div class="head" data-act="toggle-tool"><span class="icon">' + icon + '</span><span class="name">' + esc(title) + '</span>' +
-      '<span class="sum">' + esc(summary) + '</span>' + acts + '<span class="state">' + state + '</span></div>' +
+    const summary = d.generic ? argsBrief(p.input) : d.summary ? guard(b.name, () => d.summary(tn) || '', '') : '';
+    // A failed call says why on its closed card: "Failed" alone sent the learner digging for the reason.
+    const why = isErr && !open && p.output ? String(p.output).trim().split('\n')[0].replace(/^Error:\s*/i, '').slice(0, 200) : '';
+    // Boxed cards in a row join into one list; compact ones are quiet lines (see app.css). A card asking for approval
+    // stands apart, joined to its question instead.
+    node.classList.toggle('framed', !(compact && !open) && !asking);
+    node.classList.toggle('quiet', compact && !open);
+    html += '<div class="tool tone-' + esc(d.tone || 'grey') + (open ? ' open' : '') + (isErr ? ' error' : '') + (running ? ' running' : '') + (asking ? ' asking' : '') + (compact && !open ? ' compact' : '') + '">' +
+      '<div class="head" data-act="toggle-tool" data-focus="tool-head" role="button" tabindex="0" aria-expanded="' + open + '"><span class="icon">' + R.icon(d.icon || 'wrench') + '</span><span class="name">' + esc(title) + '</span>' +
+      '<span class="sum">' + esc(summary) + '</span>' + acts + '<span class="state">' + state + '</span>' + R.icon('chevron-right', 'chev') + '</div>' +
+      (why ? '<div class="why">' + esc(why) + '</div>' : '') +
       '<div class="body">' + (open ? guard(b.name, () => (d.body || R.tools.default.body)(tn, ctx)) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
     setHTML(node, html);
   }
 
+  /** A tool nothing describes: its arguments in brief ("q: 42 · lang: es"), so its card still says what it did. */
+  const argsBrief = i => Object.entries(i || {}).map(([k, v]) => k + ': ' + (typeof v === 'string' ? v : JSON.stringify(v))).join(' · ').slice(0, 300);
+
   function renderApproval(b, pend) {
     const p = pend.payload || {};
     const opts = p.options || [{ id: 'once', label: 'Allow', style: 'primary' }, { id: 'deny', label: 'Deny', style: 'danger' }];
-    return '<div class="approval"><div class="q">' + esc(p.title || ('Allow Teacher to use ' + b.name + '?')) + '</div>' + (p.detail ? '<pre>' + esc(String(p.detail).slice(0, 4000)) + '</pre>' : '') +
+    return '<div class="approval"><div class="q">' + R.icon('shield') + '<span>' + esc(p.title || ('Allow Teacher to use ' + b.name + '?')) + '</span></div>' + (p.detail ? '<pre>' + esc(String(p.detail).slice(0, 4000)) + '</pre>' : '') +
       '<div class="btn-row">' + opts.map(o => '<button class="btn ' + (o.style === 'primary' ? 'primary' : o.style === 'danger' ? 'danger' : '') + '" data-act="approve" data-v="' + esc(o.id) + '">' + esc(o.label) + '</button>').join('') + '</div></div>';
   }
 
@@ -1157,7 +1169,12 @@
     imageSrc: b => imageSrc(b || {}),
     code: (code, lang) => renderCode(String(code == null ? '' : code), lang || '', { streamingFence: true }),
     md: (s) => markdown(String(s == null ? '' : s), false),
-    flash(el, text) { const t = el.textContent; el.textContent = text; setTimeout(() => { el.textContent = t; }, 1100); },
+    // A button says what just happened ("Copied") for a moment, then shows its own icon and label again.
+    flash(el, text) {
+      if (el._flash == null) el._flash = el.innerHTML;
+      el.innerHTML = R.icon('check') + '<span>' + esc(text) + '</span>';
+      clearTimeout(el._flashT); el._flashT = setTimeout(() => { el.innerHTML = el._flash; el._flash = null; }, 1100);
+    },
     refreshCard,
     rerender(msgId) { const rec = S.byId.get(msgId); if (rec && rec.el) { const tail = rec.el.querySelector('.tail'); if (tail) tail._html = null; renderMessage(rec.msg); } },
     message(id) { const r = S.byId.get(id); return r && r.msg; },
@@ -1199,7 +1216,7 @@
       case 'copy-src': post({ type: 'copy', text: mermaidSrc.get(el.getAttribute('data-src-key')) || '' }); ctx.flash(el, 'Copied'); break;
       case 'run': {
         const blk = el.closest('.code-block'); const k = blk.getAttribute('data-key');
-        el.textContent = 'Running…'; el.disabled = true;
+        el.innerHTML = '<span class="spinner"></span><span>Running…</span>'; el.disabled = true;
         post({ type: 'run', key: k, lang: blk.getAttribute('data-lang'), code: codeSources.get(k) || '' }); break;
       }
       case 'draft-toggle': { const msg = el.closest('.msg'); if (msg) msg.classList.toggle('open'); break; }
@@ -1230,6 +1247,8 @@
     if (t.matches && t.matches('[data-ask-text]') && e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault(); const btns = t.closest('.ask').querySelectorAll('[data-act="ask-submit"]'); btns[btns.length - 1].click();
     }
+    // A tool card's head is a button for the keyboard too: Return or Space opens and closes it.
+    if (t.matches && t.matches('.tool > .head') && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); t.click(); }
     if (t.matches && t.matches('.edit-box textarea')) {
       if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); t.closest('.msg').querySelector('[data-act="edit-save"]').click(); }
       if (e.key === 'Escape') t.closest('.msg').querySelector('[data-act="edit-cancel"]').click();
@@ -1276,9 +1295,9 @@
 
   function renderWelcome() {
     const w = S.welcome || {};
-    const sug = (w.suggestions || []).map(s => '<div class="suggestion' + (s.board ? ' continue' : '') + '" data-act="suggest" data-text="' + esc(s.prompt) + '"' + (s.board ? ' data-board="' + esc(s.board) + '"' : '') + '><div class="t">' + esc(s.title) + '</div><div class="d">' + esc(s.subtitle || '') + '</div></div>').join('');
+    const sug = (w.suggestions || []).map(s => '<div class="suggestion' + (s.board ? ' continue' : '') + '" data-act="suggest" data-text="' + esc(s.prompt) + '"' + (s.board ? ' data-board="' + esc(s.board) + '"' : '') + '><div class="t">' + esc(s.title) + '</div><div class="d">' + esc(s.subtitle || '') + '</div>' + R.icon('arrow-right', 'go') + '</div>').join('');
     const stats = (w.stats || []).map(s => '<span class="pill">' + esc(s) + '</span>').join('');
-    thread.innerHTML = '<div class="welcome"><div class="logo">🎓</div><h1>' + esc(w.title || 'What would you like to learn?') + '</h1><p>' + esc(w.subtitle || '') + '</p><div class="suggestions">' + sug + '</div>' + (stats ? '<div class="stats">' + stats + '</div>' : '') + '</div>';
+    thread.innerHTML = '<div class="welcome"><div class="logo">' + R.icon('cap') + '</div><h1>' + esc(w.title || 'What would you like to learn?') + '</h1><p>' + esc(w.subtitle || '') + '</p><div class="suggestions">' + sug + '</div>' + (stats ? '<div class="stats">' + stats + '</div>' : '') + '</div>';
   }
 
   /** The floating status pill steps aside while a question it would announce is on screen: it sat on top of the quiz's
@@ -1404,7 +1423,7 @@
         if (!o) { o = document.createElement('div'); el.appendChild(o); }
         o.className = 'code-output' + (failed ? ' failed' : '');
         o.innerHTML = '<span class="label">Output</span>' + esc(text);
-        const btn = el.querySelector('[data-act="run"]'); if (btn) { btn.textContent = '▶ Run'; btn.disabled = false; }
+        const btn = el.querySelector('[data-act="run"]'); if (btn) { btn.innerHTML = RUN_LABEL; btn.disabled = false; }
       });
     },
     notice(text) { if (window.TeacherToast) window.TeacherToast(text); },

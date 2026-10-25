@@ -12,7 +12,7 @@
       (run.failing && run.failing.length ? '<div class="tests-failing">' + run.failing.slice(0, 12).map(f => '<code>' + ctx.esc(f) + '</code>').join(' ') + '</div>' : '');
   };
 
-  R.defineTool({ name: 'project_tests', icon: '🧪', title: 'Project tests',
+  R.defineTool({ name: 'project_tests', icon: 'flask', tone: 'green', title: 'Project tests',
     summary: n => {
       const i = input(n), m = meta(n), r = m.run;
       const what = i.action === 'set' ? 'register ' + (i.command || '') : i.action === 'run' ? 'run' : 'status';
@@ -21,11 +21,11 @@
     open: n => n.props.status === 'error' || !!(meta(n).run && (meta(n).run.failed || meta(n).run.errored)) && input(n).action !== 'set',
     body: (n, ctx) => bar(meta(n).run, ctx) + (n.props.output ? ctx.pre(n.props.output) : '') });
 
-  R.defineTool({ name: 'project_review', icon: '🔍', title: 'Code review',
+  R.defineTool({ name: 'project_review', icon: 'eye', tone: 'indigo', title: 'Code review',
     summary: n => {
       const i = input(n), m = meta(n);
       if (i.action === 'start') return 'round ' + (m.round || '') + (m.changes ? ' · ' + m.changes.length + ' file' + (m.changes.length === 1 ? '' : 's') + ' changed' : '');
-      if (i.action === 'findings') { const r = m.round || {}; const open = (r.findings || []).filter(f => !f.resolved).length; return 'round ' + (r.number || '') + ' · ' + (r.verdict === 'pass' ? '✅ pass' : 'changes requested') + (open ? ' · ' + open + ' open' : ''); }
+      if (i.action === 'findings') { const r = m.round || {}; const open = (r.findings || []).filter(f => !f.resolved).length; return 'round ' + (r.number || '') + ' · ' + (r.verdict === 'pass' ? 'passed' : 'changes requested') + (open ? ' · ' + open + ' open' : ''); }
       return 'rounds';
     },
     open: n => input(n).action === 'findings',
@@ -33,7 +33,7 @@
       const i = input(n), m = meta(n);
       if (i.action === 'findings' && m.round) {
         const r = m.round;
-        let h = '<div class="review-head ' + (r.verdict === 'pass' ? 'pass' : 'changes') + '"><b>' + (r.verdict === 'pass' ? '✅ Ready' : '✎ Changes requested') + '</b>' + (r.summary ? '<span class="md">' + ctx.inline(r.summary) + '</span>' : '') + '</div>';
+        let h = '<div class="review-head ' + (r.verdict === 'pass' ? 'pass' : 'changes') + '"><b>' + (r.verdict === 'pass' ? R.icon('check-circle') + 'Ready' : R.icon('pencil') + 'Changes requested') + '</b>' + (r.summary ? '<span class="md">' + ctx.inline(r.summary) + '</span>' : '') + '</div>';
         h += bar(r.tests, ctx);
         const byFile = {};
         (r.findings || []).forEach(f => { (byFile[f.file] = byFile[f.file] || []).push(f); });
@@ -58,6 +58,7 @@
     .tests-bar.errored { background: var(--warn-soft); padding: 0 8px; line-height: 22px; }
     .tests-failing { font-size: .8em; color: var(--bad); margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 4px; }
     .review-head { display: flex; gap: 10px; align-items: baseline; margin-bottom: 6px; flex-wrap: wrap; }
+    .review-head b { display: inline-flex; align-items: center; gap: 5px; } .review-head b .i { width: 15px; height: 15px; }
     .review-head.pass b { color: var(--good); } .review-head.changes b { color: var(--warn); }
     .review-file { margin-top: 8px; }
     .rf-name { font-family: var(--mono); font-size: .85em; color: var(--muted); margin-bottom: 2px; }

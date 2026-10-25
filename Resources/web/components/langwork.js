@@ -515,12 +515,12 @@
     if (!targetLang()) return '';
     let h = '';
     (m.blocks || []).forEach((b, i) => {
-      if (b.kind === 'file' && String(b.text || '').trim().length >= 20) h += '<button data-act="read-own" data-kind="file" data-i="' + i + '">📖 Read ' + esc(b.name || 'the file') + '</button>';
+      if (b.kind === 'file' && String(b.text || '').trim().length >= 20) h += '<button data-act="read-own" data-kind="file" data-i="' + i + '">' + R.icon('book') + 'Read ' + esc(b.name || 'the file') + '</button>';
     });
     const t = ownText(m), url = (URL_RE.exec(t) || [])[0] || '';
-    if (/\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|mov)(\?|#|$)/i.test(url)) h += '<button data-act="read-own" data-kind="audio">🎧 Listen with a transcript</button>';
-    else if (url) h += '<button data-act="read-own" data-kind="url">📖 Read this page</button>';
-    else if (t.replace(/\s+/g, '').length >= 40) h += '<button data-act="read-own" data-kind="text">📖 Read as a passage</button>';
+    if (/\.(mp3|m4a|aac|wav|ogg|opus|flac|mp4|mov)(\?|#|$)/i.test(url)) h += '<button data-act="read-own" data-kind="audio">' + R.icon('volume') + 'Listen with a transcript</button>';
+    else if (url) h += '<button data-act="read-own" data-kind="url">' + R.icon('book') + 'Read this page</button>';
+    else if (t.replace(/\s+/g, '').length >= 40) h += '<button data-act="read-own" data-kind="text">' + R.icon('book') + 'Read as a passage</button>';
     return h;
   };
   function mountOwn(msgEl, id, props) {

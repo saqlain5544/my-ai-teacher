@@ -6,7 +6,7 @@
   const meta = n => (n.props.result && n.props.result.meta) || {};
 
   R.defineTool({
-    name: 'task', icon: '🧭', title: 'Sub-agent',
+    name: 'task', icon: 'bot', tone: 'indigo', title: 'Sub-agent',
     summary: n => { const i = input(n); return (i.resume ? '↻ ' + i.resume + ' · ' : '') + (i.description || '') + (i.model ? ' · ' + i.model : ''); },
     // Open the live transcript in the right-hand panel, or stop just this one.
     headActions(n, ctx) {
@@ -23,5 +23,5 @@
         (out ? '<div class="label">Report</div><div class="md">' + ctx.md(out) + '</div>' : (ctx.progress(n.props.callId) ? ctx.pre(ctx.progress(n.props.callId)) : ''));
     },
   });
-  R.defineTool({ name: 'agents', icon: '🧭', title: 'Sub-agents', summary: n => (input(n).action || '') + (input(n).id ? ' ' + input(n).id : '') });
+  R.defineTool({ name: 'agents', icon: 'users', tone: 'indigo', title: 'Sub-agents', summary: n => (input(n).action || '') + (input(n).id ? ' ' + input(n).id : '') });
 })();

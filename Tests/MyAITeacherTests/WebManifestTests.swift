@@ -33,6 +33,6 @@ final class WebManifestTests: XCTestCase {
         let scripts = html.matches(of: #/<script src="([^"]+)"/#).map { String($0.1) }
         XCTAssertEqual(scripts.filter { $0.hasPrefix("components/") }, ["components/manifest.js"])
         XCTAssertFalse(scripts.contains("app.js"), "the bootstrap loads the core after the modules")
-        XCTAssertEqual(scripts.suffix(4), ["registry.js", "nodes.js", "components/manifest.js", "bootstrap.js"])
+        XCTAssertEqual(scripts.suffix(5), ["registry.js", "icons.js", "nodes.js", "components/manifest.js", "bootstrap.js"])
     }
 }

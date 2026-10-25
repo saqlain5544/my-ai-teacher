@@ -6,21 +6,21 @@
   const meta = n => (n.props.result && n.props.result.meta) || {};
   const finished = n => n.props.status === 'done' || n.props.status === 'error';
 
-  R.defineTool({ name: 'flashcards', icon: '🗂', title: 'Flashcards',
+  R.defineTool({ name: 'flashcards', icon: 'cards', tone: 'orange', title: 'Flashcards',
     summary: n => { const i = input(n); return (i.action || '') + ' ' + (i.deck || '') + (i.cards ? ' · ' + i.cards.length + ' cards' : ''); },
     body(n, ctx) {
       const i = input(n), out = n.props.output;
       if (i.action === 'add' && i.cards) return '<div class="md">' + i.cards.slice(0, 30).map(c => '<p><b>Q:</b> ' + ctx.inline(c.front) + '<br><b>A:</b> ' + ctx.inline(c.back) + '</p>').join('') + '</div>' + (out ? ctx.pre(out) : '');
       return out ? ctx.pre(out) : '';
     } });
-  R.defineTool({ name: 'mastery', icon: '📈', title: 'Mastery', compact: true, summary: n => (input(n).action || '') + ' ' + (input(n).concept || input(n).subject || '') });
-  R.defineTool({ name: 'math', icon: '∑', title: 'Math', summary: n => (input(n).operation || '') + ' ' + (input(n).expression || ''),
+  R.defineTool({ name: 'mastery', icon: 'trend', tone: 'orange', title: 'Mastery', compact: true, summary: n => (input(n).action || '') + ' ' + (input(n).concept || input(n).subject || '') });
+  R.defineTool({ name: 'math', icon: 'sigma', tone: 'orange', title: 'Math', summary: n => (input(n).operation || '') + ' ' + (input(n).expression || ''),
     body: (n, ctx) => (meta(n).latex ? ctx.tex(meta(n).latex, true) : '') + (n.props.output ? ctx.pre(n.props.output) : '') });
-  R.defineTool({ name: 'todo_write', icon: '☑︎', title: 'Checklist', open: () => true,
-    body: (n, ctx) => '<ul class="todo">' + (input(n).todos || []).map(t => '<li class="' + ctx.esc(t.status) + '">' + (t.status === 'completed' ? '✓' : t.status === 'in_progress' ? '▸' : '○') + ' <span>' + ctx.esc(t.content) + '</span></li>').join('') + '</ul>' });
+  R.defineTool({ name: 'todo_write', icon: 'list-checks', tone: 'orange', title: 'Checklist', open: () => true,
+    body: (n, ctx) => '<ul class="todo">' + (input(n).todos || []).map(t => '<li class="' + ctx.esc(t.status) + '">' + R.icon(t.status === 'completed' ? 'check-circle' : t.status === 'in_progress' ? 'circle-dot' : 'circle') + '<span>' + ctx.esc(t.content) + '</span></li>').join('') + '</ul>' });
 
   // ── Language mentor: the learner's word deck and language utilities ───
-  R.defineTool({ name: 'vocab', icon: '📚', title: 'Vocabulary',
+  R.defineTool({ name: 'vocab', icon: 'book', tone: 'orange', title: 'Vocabulary',
     compact: n => ['remove', 'stats'].includes(input(n).action),
     summary: n => { const i = input(n), w = Array.isArray(i.words) ? i.words : [];
       return (i.action || '') + (w.length ? ' · ' + w.length + ' word' + (w.length === 1 ? '' : 's') + ': ' + w.slice(0, 4).map(x => x.term || x.word || '').join('、') + (w.length > 4 ? '…' : '') : i.term ? ' ' + i.term : i.query ? ' “' + i.query + '”' : ''); },
@@ -30,12 +30,12 @@
         (x.reading ? ' <span class="muted">' + ctx.esc(x.reading) + '</span>' : '') + '</td><td>' + ctx.inline(x.meaning || x.translation || '') + '</td></tr>').join('') + '</tbody></table>' : '';
       return list + (n.props.output ? ctx.pre(n.props.output) : '');
     } });
-  R.defineTool({ name: 'language', icon: '🌐', title: 'Language',
+  R.defineTool({ name: 'language', icon: 'languages', tone: 'orange', title: 'Language',
     compact: n => input(n).action === 'profile',
     summary: n => { const i = input(n); return (i.action || '') + ' ' + (i.word || i.target || (i.text ? String(i.text).slice(0, 40) : '') || '') + (i.to ? ' → ' + i.to : ''); } });
 
   // ── The course board / learning plan ──────────────────────────────────
-  R.defineTool({ name: 'lesson_plan', icon: '🗺', title: 'Learning plan', open: finished,
+  R.defineTool({ name: 'lesson_plan', icon: 'map', tone: 'orange', title: 'Learning plan', open: finished,
     summary: n => { const i = input(n); return (i.action || '') + ' ' + (i.title || i.card || i.id || i.plan || ''); },
     body: (n, ctx) => planBody(n, ctx) });
 
@@ -58,7 +58,7 @@
     if (structured.goal) html += '<div class="plan-goal"><b>Goal</b> ' + ctx.inline(structured.goal) + '</div>';
     html += '<ol class="plan-mods">' + mods.map((m, k) => {
       const status = ['done', 'in_progress', 'todo'].includes(m.status) ? m.status : 'todo';
-      const mark = status === 'done' ? '✓' : status === 'in_progress' ? '▸' : '';
+      const mark = status === 'done' ? R.icon('check') : status === 'in_progress' ? R.icon('dot') : '';
       const objs = (m.objectives || []).filter(o => o != null && String(o).trim());
       return '<li class="plan-mod plan-' + status + '"><span class="plan-mark" aria-hidden="true">' + mark + '</span><div class="plan-body">' +
         '<div class="plan-mtitle"><span class="plan-n">' + (k + 1) + '</span>' + ctx.inline(m.title || '') + '</div>' +
@@ -112,7 +112,7 @@
       const cs = cards.filter(c => c.lane === lane);
       if (!cs.length) continue;
       html += '<div class="board-lane board-' + lane + '"><div class="board-lane-name">' + name + ' · ' + cs.length + '</div><ol class="plan-mods">' + cs.map(c =>
-        '<li class="plan-mod plan-' + (lane === 'done' ? 'done' : 'todo') + '"><span class="plan-mark" aria-hidden="true">' + (lane === 'done' ? '✓' : lane === 'review' ? '↻' : '') + '</span><div class="plan-body">' +
+        '<li class="plan-mod plan-' + (lane === 'done' ? 'done' : 'todo') + '"><span class="plan-mark" aria-hidden="true">' + (lane === 'done' ? R.icon('check') : lane === 'review' ? R.icon('refresh') : '') + '</span><div class="plan-body">' +
         '<div class="plan-mtitle">' + id(c) + inline(c.title || '') + '</div>' +
         (c.next && lane !== 'done' ? '<div class="board-cnext">' + inline(c.next) + '</div>' : '') +
         (c.after && c.after.length && lane !== 'done' ? '<div class="board-after">after ' + esc(c.after.map(a => String(a).toUpperCase()).join(', ')) + '</div>' : '') +

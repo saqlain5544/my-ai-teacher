@@ -293,8 +293,10 @@
   R.registerAction('copy-raw', (el, e, ctx) => { ctx.post({ type: 'copy', text: el.getAttribute('data-raw') }); ctx.flash(el, 'Copied'); });
 
   // ── Callouts: > [!NOTE] … ─────────────────────────────────────────────
-  const CALLOUTS = { note: 'ℹ️ Note', tip: '💡 Tip', important: '❗ Important', warning: '⚠️ Warning', caution: '🛑 Caution', example: '🧪 Example',
-    definition: '📘 Definition', theorem: '📐 Theorem', proof: '✍️ Proof', summary: '📝 Summary', question: '❓ Question', info: 'ℹ️ Info', success: '✅ Success' };
+  const CALLOUTS = { note: 'info Note', tip: 'bulb Tip', important: 'flag Important', warning: 'alert Warning', caution: 'octagon Caution', example: 'flask Example',
+    definition: 'book Definition', theorem: 'ruler Theorem', proof: 'pencil Proof', summary: 'list Summary', question: 'help Question', info: 'info Info', success: 'check-circle Success' };
+  /** A callout's title: its kind's icon, then `title` (html) or the kind's own name. */
+  const calloutTitle = (kind, title) => { const [icon, name] = CALLOUTS[kind].split(' '); return '<span class="callout-title">' + R.icon(icon) + '<span>' + (title || name) + '</span></span>'; };
   R.registerMarkdown(md => {
     md.core.ruler.after('inline', 'callouts', state => {
       const t = state.tokens;
@@ -314,13 +316,13 @@
         if (custom && custom.length <= 60) {
           // Short text after the marker is a title.
           inl.children.splice(0, Math.min(inl.children.length, k + 1));
-          title.content = '<span class="callout-title">' + CALLOUTS[kind].split(' ')[0] + ' ' + md.renderInline(custom) + '</span>';
+          title.content = calloutTitle(kind, md.renderInline(custom));
         } else {
           // Long text is the body: drop only the marker.
           const first = inl.children[0];
           if (first && first.type === 'text') first.content = first.content.replace(/^\[!\w+\][+-]?\s*/, '');
           if (!custom) inl.children.splice(0, Math.min(inl.children.length, k + 1));
-          title.content = '<span class="callout-title">' + CALLOUTS[kind] + '</span>';
+          title.content = calloutTitle(kind);
         }
         inl.children.unshift(title);
       }
