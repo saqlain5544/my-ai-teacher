@@ -29,4 +29,26 @@ final class TurnContinuationTests: XCTestCase {
             XCTAssertNil(ChatSession.unfinished(reply: "The project is set up.\n\n" + line, usedTools: true, todos: []), line)
         }
     }
+
+    /// The step that must write the reply offers no tools: Anthropic's own API refuses a history with tool calls and no
+    /// tools declared (a 400 ended the turn), so it keeps them with tool_choice none; everyone else gets none.
+    func testAStepWithToolsOffStillDeclaresThemWhereTheAPINeedsIt() {
+        let history = [ChatMessage(role: .user, blocks: [.text("17 × 23?")]),
+                       ChatMessage(role: .assistant, blocks: [.toolUse(id: "t1", name: "math", input: ["expression": "17*23"])]),
+                       ChatMessage(role: .user, blocks: [.toolResult(id: "t1", name: "math", content: "391")])]
+        var r = LLMRequest(model: "claude-opus-5-5", system: "s", messages: history, tools: [MathTool().spec])
+        r.toolsOff = true
+        let anthropic = ProviderConfig(id: "anthropic", name: "A", api: .anthropic, baseURL: "https://api.anthropic.com/v1", envKeys: [], defaultModel: "claude-opus-5-5")
+        let body = AnthropicClient(config: anthropic, apiKey: nil).buildBody(r)
+        XCTAssertEqual(body["tools"]?.array?.count, 1)
+        XCTAssertEqual(body["tool_choice"]?["type"]?.string, "none")
+        let minimax = ProviderCatalog.presets.first { $0.id == "minimax" }!
+        let compat = AnthropicClient(config: minimax, apiKey: nil).buildBody(r)
+        XCTAssertNil(compat["tools"], "MiniMax ignores tool_choice; without tools it can't call one")
+        XCTAssertNil(compat["tool_choice"])
+        let openrouter = ProviderCatalog.presets.first { $0.id == "openrouter" }!
+        XCTAssertNil(OpenAIClient(config: openrouter, apiKey: nil).buildBody(r)["tools"])
+        r.toolsOff = false
+        XCTAssertNil(AnthropicClient(config: anthropic, apiKey: nil).buildBody(r)["tool_choice"], "an ordinary step lets the model choose")
+    }
 }

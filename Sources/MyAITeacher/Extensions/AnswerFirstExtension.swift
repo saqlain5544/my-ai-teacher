@@ -19,7 +19,7 @@ final class AnswerFirstExtension: AgentExtension {
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
         if turnStart[session.id] == nil { turnStart[session.id] = max(0, session.messages.count - 1); calls[session.id] = 0 }
         guard !session.conversation.mode.isAgent, (calls[session.id] ?? 0) >= Self.cutoff, !answered(session) else { return }
-        request.tools = []
+        request.toolsOff = true
     }
 
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) { turnStart[session.id] = nil; calls[session.id] = nil }

@@ -182,7 +182,7 @@ struct OpenAIClient: LLMClient {
         ]
         body[q.contains(.maxCompletionTokens) ? "max_completion_tokens" : "max_tokens"] = .number(Double(r.maxTokens))
         if !q.contains(.noStreamOptions) { body["stream_options"] = ["include_usage": true] }
-        if !r.tools.isEmpty {
+        if !r.tools.isEmpty, !r.toolsOff {
             body["tools"] = .array(r.tools.map { t in
                 ["type": "function", "function": ["name": .string(t.name), "description": .string(t.description), "parameters": t.schema]]
             })

@@ -192,7 +192,8 @@ struct AnthropicClient: LLMClient {
                 return .object(o)
             })
         }
-        if !r.tools.isEmpty {
+        if !r.tools.isEmpty, !r.toolsOff || isFirstParty {
+            if r.toolsOff { body["tool_choice"] = ["type": "none"] }
             var tools: [JSON] = r.tools.map { t in
                 if isFirstParty, let native = t.native { return native }
                 var o: [String: JSON] = ["name": .string(t.name), "description": .string(t.description), "input_schema": t.schema]

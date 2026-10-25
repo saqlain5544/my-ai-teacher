@@ -37,6 +37,10 @@ struct LLMRequest: Sendable {
     var system: String
     var messages: [ChatMessage]
     var tools: [ToolSpec] = []
+    /// No tool may be called this step (the reply has to be written now). Anthropic's own API refuses a history with tool
+    /// calls unless their tools are declared, so it gets them with `tool_choice: none`; every other API gets no tools
+    /// (compatible hosts accept that history, and some, MiniMax among them, ignore `tool_choice`).
+    var toolsOff = false
     var maxTokens = 16384
     var temperature: Double?
     var thinking: ThinkingLevel = .off

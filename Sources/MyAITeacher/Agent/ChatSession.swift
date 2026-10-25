@@ -381,13 +381,14 @@ final class ChatSession: ObservableObject, Identifiable {
             steps += 1
             let history = await compactIfNeeded(client: client)
             setStatus(wrapping ? "Writing it up…" : steps == 1 ? "Thinking…" : "Continuing…")
-            let tools = wrapping ? [] : ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
+            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: history,
                                      tools: tools.map { $0.name == "task" ? taskSpec() : $0.spec },
                                      maxTokens: Self.maxTokens(provider: provider, model: conversation.model, info: info),
                                      thinking: info?.reasoning == false ? .off : settings.thinking.supported(by: info), sessionID: conversation.id)
+            request.toolsOff = wrapping
             host.willRequest(&request, self)
             var assistant = ChatMessage(role: .assistant, blocks: [], model: conversation.model)
             var step = StepMetrics(provider: provider.id, model: conversation.model, startedAt: Date())

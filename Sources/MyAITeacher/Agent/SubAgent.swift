@@ -732,9 +732,9 @@ enum SubAgent {
             await w { $0.setStatus(now) }
             var (assistant, metrics) = (ChatMessage(role: .assistant, blocks: [], model: cfg.model), StepMetrics(provider: cfg.providerID, model: cfg.model, startedAt: Date()))
             do {
-                // The report call (past the budget) needs only a report's room.
+                // The report call (past the budget) needs only a report's room, and may not call a tool: one there left no report.
                 try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc,
-                               maxTokens: wrapUp ? min(cfg.maxOutput, 8192) : cfg.maxOutput)
+                               maxTokens: wrapUp ? min(cfg.maxOutput, 8192) : cfg.maxOutput, toolsOff: wrapUp)
             } catch {
                 if Task.isCancelled { try handOver(w); stopped = true }
                 else if ChatSession.isTransient(error) {
@@ -786,7 +786,7 @@ enum SubAgent {
                 await w { $0.upsert(fix); $0.setStatus("Fixing the report's format…") }
                 var (assistant, metrics) = (ChatMessage(role: .assistant, blocks: [], model: cfg.model), StepMetrics(provider: cfg.providerID, model: cfg.model, startedAt: Date()))
                 do { try await step(&assistant, &metrics, w, cfg, client: client, system: system, messages: messages, tools: tools, ctx: ctx, proc: proc,
-                                    maxTokens: min(cfg.maxOutput, 4096)) }
+                                    maxTokens: min(cfg.maxOutput, 4096), toolsOff: true) }
                 catch { try handOver(w); assistant.error = error.localizedDescription }
                 assistant.metrics = metrics
                 turn.steps += 1
@@ -822,7 +822,7 @@ enum SubAgent {
     /// One model call, streamed into `assistant` (and the panel). Every event is a heartbeat for the watchdog.
     private static func step(_ assistant: inout ChatMessage, _ metrics: inout StepMetrics, _ w: RunWriter, _ cfg: SubAgentConfig, client: LLMClient,
                              system: String, messages: [ChatMessage], tools: [Tool], ctx: ToolContext, proc: ProcContext<SubAgentNote>,
-                             maxTokens: Int) async throws {
+                             maxTokens: Int, toolsOff: Bool = false) async throws {
         let first = assistant
         await w { $0.upsert(first) }
         defer {
@@ -831,8 +831,9 @@ enum SubAgent {
             assistant.blocks.removeAll { $0.kind == .toolUse && $0.meta?["pending"]?.bool == true }
             metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count
         }
-        let request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort,
+        var request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort,
                                  sessionID: ctx.toolCallID)
+        request.toolsOff = toolsOff
         for try await ev in client.stream(request) {
             proc.heartbeat()
             if metrics.timeToFirstToken == nil { metrics.timeToFirstToken = Date().timeIntervalSince(metrics.startedAt) }

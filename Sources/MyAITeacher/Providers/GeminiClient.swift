@@ -81,7 +81,7 @@ struct GeminiClient: LLMClient {
     func buildBody(_ r: LLMRequest) -> JSON {
         var body: [String: JSON] = ["contents": .array(convert(r.messages, model: r.model))]
         if !r.system.isEmpty { body["systemInstruction"] = ["parts": [["text": .string(r.system)]]] }
-        if !r.tools.isEmpty {
+        if !r.tools.isEmpty, !r.toolsOff {
             body["tools"] = [["functionDeclarations": .array(r.tools.map { t in
                 ["name": .string(t.name), "description": .string(t.description), "parametersJsonSchema": t.schema]
             })]]
