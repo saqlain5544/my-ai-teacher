@@ -329,8 +329,6 @@ actor Proc {
         if let r = exitReason { return r }
         return await withCheckedContinuation { waiters.append($0) }
     }
-
-    var linkCount: Int { links.count }
 }
 
 /// A typed handle to a process: send to its mailbox, stop it, wait for it.

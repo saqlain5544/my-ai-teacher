@@ -61,7 +61,6 @@ extension StudyStore {
                         code, r, l, n, Date())
         return languageProfile(code)
     }
-    func removeLanguageProfile(_ code: String) { db.run("DELETE FROM languages WHERE code=?", Languages.code(code) ?? code) }
 
     // MARK: Vocabulary
 

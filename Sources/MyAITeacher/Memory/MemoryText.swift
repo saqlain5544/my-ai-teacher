@@ -92,11 +92,6 @@ enum MemoryText {
         return subjectAliases[t] ?? t
     }
 
-    static func jaccard(_ a: Set<String>, _ b: Set<String>) -> Double {
-        let u = a.union(b).count
-        return u == 0 ? 0 : Double(a.intersection(b).count) / Double(u)
-    }
-
     static func clip(_ s: String, _ n: Int) -> String { s.count <= n ? s : String(s.prefix(n - 1)) + "…" }
 
     private static let negation = try! NSRegularExpression(pattern: #"\b(not|no|never|none|cannot|without|nor)\b|n['’]t\b"#, options: [.caseInsensitive])

@@ -27,8 +27,6 @@ enum MemoryKind: String, Codable, CaseIterable, Sendable, Identifiable {
         case .fact: "note.text"
         }
     }
-    /// Kinds that are always summarised in the core block (so per-turn recall skips them).
-    var isCore: Bool { [.profile, .preference, .goal].contains(self) }
 }
 
 /// `learner` memories follow the learner everywhere (global DB); `folder` memories live in `<folder>/.teacher`.

@@ -1444,7 +1444,6 @@
         (show ? '<div class="divider"></div><div class="face back md">' + markdown(back || '', false) + '</div>' : '') + '</div>';
       processNode(thread);
     },
-    scrollToBottom() { stick = true; scrollBottom(true); },
   };
   darkMQ.addEventListener('change', () => {
     mermaidSvg.clear();   // diagram placeholders are keyed by the theme

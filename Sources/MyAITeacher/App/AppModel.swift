@@ -354,8 +354,6 @@ final class AppModel: ObservableObject {
 
     func flushAll() { for s in sessions.values { s.close() } }
     func isRunning(_ id: String) -> Bool { sessions[id]?.isRunning ?? false }
-    var anyRunning: Bool { sessions.values.contains { $0.isRunning } || !interactions.pending.isEmpty }
-
     // MARK: In-app navigation (nothing opens another app)
 
     /// Opens a link in the in-app browser (a tab of the learner's); mailto copies the address instead of launching Mail.

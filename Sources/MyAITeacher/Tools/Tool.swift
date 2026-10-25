@@ -220,10 +220,6 @@ enum ProcessRunner {
         for q in tree { kill(q, SIGTERM) }
         DispatchQueue.global().asyncAfter(deadline: .now() + 2) { for q in tree where kill(q, 0) == 0 { kill(q, SIGKILL) } }
     }
-    /// Sends `signal` to a process and its descendants, deepest first.
-    static func killTree(_ root: Int32, _ signal: Int32) {
-        for pid in descendants(of: root) + [root] { kill(pid, signal) }
-    }
     private static func descendants(of root: Int32) -> [Int32] {
         var all: [Int32] = [], frontier = [root]
         for _ in 0..<6 where !frontier.isEmpty {   // a shell, its script, their children…

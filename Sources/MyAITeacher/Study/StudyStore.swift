@@ -208,7 +208,6 @@ final class StudyStore: @unchecked Sendable {
 
     /// Its reviews stay: they are the learner's study history (Insights counts them by day).
     func deleteCard(_ id: Int64) { db.run("DELETE FROM cards WHERE id=?", id) }
-    func updateCard(_ id: Int64, front: String, back: String) { db.run("UPDATE cards SET front=?, back=? WHERE id=?", front, back, id) }
 
     // MARK: Mastery
     /// One answer on a concept. A wrong answer always counts; a right one raises mastery only without help (with help it is
@@ -260,16 +259,6 @@ final class StudyStore: @unchecked Sendable {
         guard let s = r.string("subject"), let c = r.string("concept") else { return nil }
         return MasteryItem(subject: s, concept: c, pKnown: r.double("p_known") ?? 0.2, attempts: r.int("attempts") ?? 0,
                            correct: r.int("correct") ?? 0, streak: r.int("streak") ?? 0, notes: r.string("notes"), updatedAt: r.date("updated_at") ?? Date())
-    }
-
-    /// Compact summary for the system prompt.
-    func masterySummary(limit: Int = 25) -> String {
-        let items = ((try? db.query("SELECT * FROM mastery ORDER BY updated_at DESC LIMIT ?", limit)) ?? []).compactMap(masteryRow)
-        guard !items.isEmpty else { return "" }
-        return items.map { m in
-            let pct = Int(m.pKnown * 100)
-            return "- \(m.subject) › \(m.concept): \(pct)% (\(m.correct)/\(m.attempts) correct)\(m.mastered ? " ✓ mastered" : "")"
-        }.joined(separator: "\n")
     }
 
     // MARK: Answers & follow-ups

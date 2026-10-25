@@ -4,8 +4,6 @@ import Foundation
 /// Settings) plus what only the app knows: today's date, the model, the folder, the learner and their memory.
 enum SystemPrompt {
     /// The mode's instructions (the default text; a lesson uses `Instructions.text` with its settings).
-    static func modeInstructions(_ mode: TeachingMode) -> String { Instructions.mode(mode) }
-
     /// Where the lesson-specific part starts (everything before it is identical across lessons).
     static let dynamicMarker = "\n\n# Environment\n"
 

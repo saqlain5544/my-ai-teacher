@@ -275,13 +275,6 @@ final class ConceptGraph: @unchecked Sendable {
         return nil
     }
 
-    func addAlias(_ id: Int64, _ name: String) {
-        let k = MemoryText.conceptKey(name)
-        guard !k.isEmpty else { return }
-        db.run("INSERT OR IGNORE INTO concept_aliases(norm, concept_id) VALUES(?,?)", k, id)
-        refresh([id])
-    }
-
     func link(_ src: Int64, _ dst: Int64, _ rel: ConceptRelation) {
         guard src != dst else { return }
         // Prerequisite edges must not form a 2-cycle (A needs B and B needs A): keep the newest claim. A longer cycle

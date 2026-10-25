@@ -151,8 +151,6 @@ final class TelemetryStore: @unchecked Sendable {
         var promptTotal: Int { input + cacheRead + cacheWrite }
         var cacheHitRate: Double? { promptTotal > 0 ? Double(cacheRead) / Double(promptTotal) : nil }
         var errorRate: Double? { calls > 0 ? Double(errors) / Double(calls) : nil }
-        var meanTTFT: Double? { ttftN > 0 ? ttftSum / Double(ttftN) : nil }
-        var meanDecode: Double? { genSeconds > 0.05 && genOutput > 1 ? Double(genOutput) / genSeconds : nil }
     }
 
     private func llmRow(_ r: Row, provider: String, model: String) -> LLMRow {

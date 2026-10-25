@@ -70,10 +70,6 @@ extension StudyStore {
         }
         return n
     }
-    func removeGrammarPoint(lang raw: String, name: String) -> Bool {
-        guard let code = Languages.code(raw) else { return false }
-        return (db.run("DELETE FROM grammar_points WHERE lang=? AND name=?", code, name) ?? 0) > 0
-    }
 
     /// The syllabus in level order (A1 first, then the order points were added), each with its mastery.
     func grammarSyllabus(lang raw: String) -> [GrammarPoint] {
