@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 
 /// Headless mode for testing the harness without the UI:
 ///   MyAITeacher --cli "prompt" [--provider minimax] [--model MiniMax-M3] [--thinking low] [--no-tools] [--tool name '{json}']
@@ -82,7 +83,7 @@ enum CLI {
             let kv = args[i + 1].split(separator: "=", maxSplits: 1).map(String.init)
             if kv.count == 2 { Experiments.forced[kv[0]] = kv[1] }
         }
-        let valued: Set<String> = ["--spec", "--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
+        let valued: Set<String> = ["--lesson", "--spec", "--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
         let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()
         let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model, lessonID: "cli")
@@ -136,6 +137,18 @@ enum Main {
         if let i = args.firstIndex(of: "--post"), i + 1 < args.count {
             DistributedNotificationCenter.default().postNotificationName(DebugHooks.channel, object: args[i + 1], userInfo: nil, deliverImmediately: true)
             exit(0)
+        }
+        // A headless lesson needs AppKit's main run loop (the app model starts WebKit), but no window.
+        if let i = args.firstIndex(of: "--lesson"), i + 1 < args.count {
+            setvbuf(stdout, nil, _IONBF, 0)
+            func opt(_ n: String) -> String? { args.firstIndex(of: n).flatMap { $0 + 1 < args.count ? args[$0 + 1] : nil } }
+            let app = NSApplication.shared
+            app.setActivationPolicy(.prohibited)
+            Task { @MainActor in
+                let code = await HeadlessLesson.run(specPath: args[i + 1], provider: opt("--provider") ?? "minimax", model: opt("--model") ?? "MiniMax-M3.1-Flash", thinking: opt("--thinking"))
+                exit(code)
+            }
+            app.run()
         }
         if args.contains("--cli") {
             setvbuf(stdout, nil, _IONBF, 0)
