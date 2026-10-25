@@ -43,6 +43,22 @@ final class PermissionExtension: AgentExtension {
                 }
             }
         }
+        // The learner's own servers and devices are fetched only with their approval, as the browser's local sites are.
+        if tool.name == "web_fetch", let host = WebFetchTool.localHost(input) {
+            if app.interactions.isGranted(Self.localFetch, conversationID: conv) { return .allow }
+            return .ask(ApprovalRequest(
+                title: "Allow Teacher to fetch from \(host)?",
+                detail: "\(input["url"]?.string ?? host) is on this Mac or your local network.",
+                options: [ApprovalOption(id: "once", label: "Allow once", style: .primary),
+                          ApprovalOption(id: "lesson", label: "Allow local fetches for this lesson"),
+                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
+                switch choice {
+                case "once": return .allow
+                case "lesson": self?.app.interactions.grant(Self.localFetch, conversationID: conv); return .allow
+                default: return .deny("The learner declined fetching from their own Mac or network.")
+                }
+            }
+        }
         switch tool.risk {
         case .readOnly, .network, .interactive, .control:   // .control: sites and apps are gated by ComputerUseExtension
             return .allow
@@ -97,6 +113,9 @@ final class PermissionExtension: AgentExtension {
             }
         }
     }
+
+    /// The lesson grant for `web_fetch` on this Mac or the local network.
+    nonisolated static let localFetch = "local-fetch"
 
     nonisolated static func isPython(_ tool: Tool, _ input: JSON) -> Bool {
         if tool.name == "math" { return true }

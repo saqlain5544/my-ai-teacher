@@ -72,7 +72,7 @@ struct AppAgentHost: AgentHost {
             let app = AppModel.shared, s = app.settings.value
             let quick = folder.standardizedFileURL.path == AppPaths.quickFolder.standardizedFileURL.path
             return LessonGrants(access: s.folderAccess[folder.path] ?? (quick ? .full : .read),   // as AppModel.access(for:)
-                                granted: Set(["write", "bash", "run_code", "python"].filter { app.interactions.isGranted($0, conversationID: conversationID) }),
+                                granted: Set(["write", "bash", "run_code", "python", PermissionExtension.localFetch].filter { app.interactions.isGranted($0, conversationID: conversationID) }),
                                 python: s.python, disabled: Set(s.disabledTools))
         }
     }

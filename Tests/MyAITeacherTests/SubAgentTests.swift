@@ -260,6 +260,21 @@ final class SubAgentTests: XCTestCase {
         if case .allow = SubAgentPolicy.decide(BashTool(), ["command": "ls"], scope: scope, grants: LessonGrants(access: .full)) { XCTFail("not in its tools") }
     }
 
+    /// The learner's own machine and network are fetched only with their approval, like the browser's local sites: a page
+    /// could otherwise have the agent read a local service and pass on what came back.
+    func testLocalFetchesNeedTheLearnersApproval() {
+        for local in ["http://localhost:3000/admin", "127.0.0.1:8888/tree", "http://192.168.1.1", "http://[::1]/", "http://printer.local/", "http://nas/"] {
+            XCTAssertNotNil(WebFetchTool.localHost(["url": .string(local)]), local)
+        }
+        for publicURL in ["https://example.com", "en.wikipedia.org/wiki/Chain_rule", "http://8.8.8.8/"] {
+            XCTAssertNil(WebFetchTool.localHost(["url": .string(publicURL)]), publicURL)
+        }
+        let scope = AgentScope(type: "explore", tools: ["web_fetch"], readOnly: true, root: dir, folderName: "f")
+        if case .allow = SubAgentPolicy.decide(WebFetchTool(), ["url": "http://localhost:3000"], scope: scope, grants: LessonGrants()) { XCTFail("sub-agents can't ask") }
+        if case .deny = SubAgentPolicy.decide(WebFetchTool(), ["url": "http://localhost:3000"], scope: scope, grants: LessonGrants(granted: [PermissionExtension.localFetch])) { XCTFail("approved for the lesson") }
+        if case .deny = SubAgentPolicy.decide(WebFetchTool(), ["url": "https://example.com"], scope: scope, grants: LessonGrants()) { XCTFail("public pages need nothing") }
+    }
+
     // MARK: Structured output
 
     func testStructuredOutputIsCheckedAndRepairedOnce() async throws {

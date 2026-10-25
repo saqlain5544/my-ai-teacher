@@ -4,7 +4,7 @@ import Foundation
 /// the learner), so a sub-agent can do what the lesson may do without asking — and nothing more.
 struct LessonGrants: Sendable, Equatable {
     var access: FolderAccess = .read
-    /// Approvals the learner gave in this lesson ("write", "bash", "run_code", "python").
+    /// Approvals the learner gave in this lesson ("write", "bash", "run_code", "python", "local-fetch").
     var granted: Set<String> = []
     var python: PythonPolicy = .allow
     /// Tools the learner turned off (Settings → Tools).
@@ -44,6 +44,9 @@ enum SubAgentPolicy {
                 return .deny("Python needs the learner's approval in this lesson, and sub-agents can't ask. Work without it or report what you'd run.")
             default: if tool.name == "math" { return .allow }   // SymPy computes; it changes nothing
             }
+        }
+        if tool.name == "web_fetch", let host = WebFetchTool.localHost(input), !grants.granted.contains(PermissionExtension.localFetch) {
+            return .deny("\(host) is on the learner's Mac or local network: fetching from it needs their approval in the lesson, and sub-agents can't ask.")
         }
         switch tool.risk {
         case .readOnly, .network: return .allow

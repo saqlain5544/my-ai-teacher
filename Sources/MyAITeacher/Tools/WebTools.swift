@@ -192,10 +192,29 @@ struct WebFetchTool: Tool {
             "max_length": Schema.integer("Max characters to return (default 40000)."),
         ], required: ["url"])
     }
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        var raw = try input.req("url")
+    /// The URL to fetch ("example.com/x" is https).
+    static func url(_ input: JSON) -> URL? {
+        guard var raw = input["url"]?.string?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
         if !raw.hasPrefix("http") { raw = "https://" + raw }
-        guard let url = URL(string: raw), let scheme = url.scheme, ["http", "https"].contains(scheme) else { return .error("Invalid URL.") }
+        guard let url = URL(string: raw), let scheme = url.scheme, ["http", "https"].contains(scheme) else { return nil }
+        return url
+    }
+    /// The host when it is this Mac or the local network (the learner's own servers and devices): fetching from there
+    /// needs their approval, as the browser's local sites do. A page that tells the agent to fetch from localhost and pass
+    /// on what came back is what this stops.
+    static func localHost(_ input: JSON) -> String? {
+        guard let host = url(input)?.host, LocalNetwork.isLocal(host) else { return nil }
+        return host
+    }
+
+    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
+        _ = try input.req("url")
+        guard let url = Self.url(input) else { return .error("Invalid URL.") }
+        // A public name that resolves to a local address is a local fetch: refused here, then asked for like one (the name
+        // is remembered as local, so the approval gate sees it next time).
+        if let host = url.host, !LocalNetwork.isLocal(host), await LocalNetwork.resolvesLocal(host) {
+            return .error("\(host) resolves to an address on this Mac or the local network, so fetching it needs the learner's approval: call web_fetch again and they will be asked.")
+        }
         let start = max(0, input["start_index"]?.int ?? 0)
         let maxLen = min(100_000, max(1000, input["max_length"]?.int ?? 40_000))
         let md: String, title: String?
@@ -207,7 +226,11 @@ struct WebFetchTool: Tool {
             req.setValue("text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5", forHTTPHeaderField: "Accept")
             req.setValue("en-US,en;q=0.9", forHTTPHeaderField: "Accept-Language")
             req.timeoutInterval = 25
-            let (data, resp) = try await URLSession.shared.data(for: req)
+            let redirects = LocalRedirectGuard(fromLocal: LocalNetwork.isLocal(url.host ?? ""))
+            let (data, resp) = try await URLSession.shared.data(for: req, delegate: redirects)
+            if let host = redirects.blocked.get() {
+                return .error("\(url.absoluteString) redirects to \(host), on this Mac or the local network: not followed. Fetch that address directly if it's wanted (the learner will be asked).")
+            }
             let http = resp as? HTTPURLResponse
             let code = http?.statusCode ?? 0
             if code >= 400 { return .error("HTTP \(code) fetching \(url.absoluteString)") }
@@ -239,6 +262,19 @@ struct WebFetchTool: Tool {
         var text = (title.map { "# \($0)\n" } ?? "") + "Source: \(url.absoluteString)\n\n" + String(chars[start..<end])
         if end < chars.count { text += "\n\n[Content truncated: \(chars.count - end) more characters. Call again with start_index=\(end).]" }
         return ToolOutput(text: text, meta: ["url": .string(url.absoluteString), "title": .string(title ?? "")])
+    }
+}
+
+/// Follows a fetch's redirects, except from a public address into this Mac or the local network: the approval for a local
+/// fetch is asked for the URL the agent named, and a redirect would skip it.
+private final class LocalRedirectGuard: NSObject, URLSessionTaskDelegate {
+    let fromLocal: Bool
+    let blocked = Locked<String?>(nil)
+    init(fromLocal: Bool) { self.fromLocal = fromLocal }
+    func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+        if !fromLocal, let host = request.url?.host, LocalNetwork.isLocal(host) { blocked.mutate { $0 = host }; completionHandler(nil) }
+        else { completionHandler(request) }
     }
 }
 

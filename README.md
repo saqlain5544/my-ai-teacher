@@ -212,7 +212,7 @@ OpenAI-, Anthropic- or Gemini-compatible endpoint can be added as a custom provi
   come from Apple's on-device model when it's available.
 * **Telemetry:** the Insights dashboard is local only. Nothing is sent anywhere.
 * **Permissions:** folders start read-only, and you grant *Read & write* or *Full access* for each one. Commands, writes
-  outside what you granted, browser sites and Mac apps all ask first.
+  outside what you granted, browser sites, Mac apps and fetches from your own Mac or local network all ask first.
 
 ## Build from source
 

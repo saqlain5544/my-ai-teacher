@@ -318,7 +318,9 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
 
 * **Folder access.** The agent can read anywhere. Each folder starts **read-only**, and you grant *Read & write* or
   *Full access* per folder; grants live in **Settings › Tools**. Writes and commands outside what you granted ask
-  first. You can allow once or for the lesson, grant the folder write or full access, or deny.
+  first. You can allow once or for the lesson, grant the folder write or full access, or deny. Fetching a page from your
+  own Mac or local network (localhost, 192.168.…, a `.local` name) asks too, once or for the lesson; sub-agents can't ask,
+  so they fetch from there only after you allowed it in the lesson.
 * **Tools.**
   * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed), and `symbols` (a file's outline, or
     where a name is defined).
