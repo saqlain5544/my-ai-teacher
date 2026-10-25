@@ -51,6 +51,27 @@ final class FeatureTests: XCTestCase {
         XCTAssertEqual(t.correct, true)
     }
 
+    func testSingleChoiceKeyNamesAnOption() async {
+        // A string key is the option's text first: "2" among "1","2","3","4" is option 1, not index 2.
+        let q: JSON = ["type": "single_choice", "prompt": "1 + 1?", "options": ["1", "2", "3", "4"], "answer": "2"]
+        let right = await Questions.grade(q, answer: 1)
+        XCTAssertEqual(right.correct, true)
+        XCTAssertEqual(right.expected, "2")
+        XCTAssertEqual(Questions.reviewKey(q), 1, "the review card highlights the option by index")
+        // What the learner typed under "Other…" is text, never an option index.
+        let other = await Questions.grade(["type": "single_choice", "options": ["a", "b", "c"], "answer": 2], answer: "2")
+        XCTAssertNotEqual(other.correct, true)
+        // A key that names no option (1-based, a letter) goes back to the model instead of marking everyone wrong.
+        for bad: JSON in [4, -1, "D"] {
+            let errs = Questions.validate([["type": "single_choice", "prompt": "?", "options": ["red", "green", "blue", "grey"], "answer": bad]])
+            XCTAssertTrue(errs.contains { $0.contains("0-based index") }, "\(bad): \(errs)")
+            let g = await Questions.grade(["type": "single_choice", "options": ["red", "green", "blue", "grey"], "answer": bad], answer: 3)
+            XCTAssertNil(g.correct, "\(bad) grades nothing (and never traps)")
+        }
+        XCTAssertTrue(Questions.validate([["type": "multiple_choice", "prompt": "?", "options": ["a", "b"], "answer": [0, "b"]]]).isEmpty)
+        XCTAssertFalse(Questions.validate([["type": "multiple_choice", "prompt": "?", "options": ["a", "b"], "answer": [0, 2]]]).isEmpty)
+    }
+
     func testShortTextNeedsTeacherWhenUnmatched() async {
         let q: JSON = ["type": "short_text", "answer": ["photosynthesis"]]
         let ok = await Questions.grade(q, answer: "Photosynthesis.")

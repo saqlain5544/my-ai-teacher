@@ -109,7 +109,15 @@ enum Questions {
             }
             switch type {
             case "single_choice", "multiple_choice":
-                if (q["options"]?.array?.count ?? 0) < 2 { errs.append("Q\(n): \(q["type"]!.string!) needs at least 2 options.") }
+                let opts = q["options"]?.array?.compactMap(\.string) ?? []
+                if opts.count < 2 { errs.append("Q\(n): \(type) needs at least 2 options.") }
+                // A key that names no option (1-based, a letter) marks every learner wrong.
+                else if let key = q["answer"], !key.isNull {
+                    let bad = (type == "multiple_choice" ? key.array ?? [key] : [key]).filter { optionIndex($0, opts) == nil }
+                    if !bad.isEmpty {
+                        errs.append("Q\(n): `answer` names options by 0-based index (0…\(opts.count - 1)) or exact text; \(bad.map(describe).joined(separator: ", ")) is neither.")
+                    }
+                }
             case "matching":
                 let pairs = q["pairs"]?.array ?? []
                 if pairs.count < 2 || pairs.contains(where: { ($0.array?.count ?? 0) != 2 }) {
@@ -166,11 +174,7 @@ enum Questions {
     static func misconception(_ q: JSON, answer a: JSON) -> String? {
         guard !a.isNull, let tags = q["misconceptions"]?.array else { return nil }
         let opts = q["options"]?.array?.compactMap(\.string) ?? []
-        // Options may be named by index or by their text.
-        let index = { (j: JSON) -> Int? in
-            if let s = j.string, let i = opts.firstIndex(where: { norm($0) == norm(s) }) { return i }
-            return j.int
-        }
+        let index = { (j: JSON) in optionIndex(j, opts) }
         for t in tags {
             guard let text = t["misconception"]?.string ?? t["why"]?.string, !text.isEmpty, let tagged = t["answer"] else { continue }
             switch q["type"]?.string ?? "" {
@@ -311,18 +315,15 @@ enum Questions {
         switch type {
         case "single_choice":
             let opts = q["options"]?.array?.compactMap(\.string) ?? []
-            guard let e = ans?.int ?? opts.firstIndex(of: ans?.string ?? "") else { return Grade() }
-            if let g = a.int { return Grade(correct: g == e, score: g == e ? 1 : 0, expected: e < opts.count ? opts[e] : "\(e)") }
-            if let t = a.string, e < opts.count { return Grade(correct: norm(t) == norm(opts[e]) ? true : nil, expected: opts[e]) }
+            guard let e = ans.flatMap({ optionIndex($0, opts) }) else { return Grade() }
+            // The form sends the option's index; a string is what the learner typed under "Other…" (a typed "2" is not option 2).
+            if case .number = a, let g = a.int { return Grade(correct: g == e, score: g == e ? 1 : 0, expected: opts[e]) }
+            if let t = a.string { return Grade(correct: norm(t) == norm(opts[e]) ? true : nil, expected: opts[e]) }
             return Grade()
         case "multiple_choice":
             // Answers may be indices or the options' text (models write either).
             let opts = q["options"]?.array?.compactMap(\.string) ?? []
-            // A string answer is the option's text first ("2" among options "2","4","5" is option 0), then an index.
-            let index = { (j: JSON) -> Int? in
-                if let s = j.string, let i = opts.firstIndex(where: { norm($0) == norm(s) }) { return i }
-                return j.int
-            }
+            let index = { (j: JSON) in optionIndex(j, opts) }
             let e = Set(ans?.array?.compactMap(index) ?? [])
             guard !e.isEmpty else { return Grade() }
             let g = Set(a.array?.compactMap(index) ?? [])
@@ -384,6 +385,24 @@ enum Questions {
     }
 
     static func describe(_ j: JSON) -> String { j.string ?? j.compact }
+
+    /// The option an answer key names: its text first ("2" among options "1","2","3" is option 1), then a 0-based index;
+    /// nil when it names none. Read as an index first, a single choice's "2" keyed the option "3".
+    static func optionIndex(_ j: JSON, _ opts: [String]) -> Int? {
+        if let s = j.string, let i = opts.firstIndex(where: { norm($0) == norm(s) }) { return i }
+        return j.int.flatMap { opts.indices.contains($0) ? $0 : nil }
+    }
+
+    /// The key as the review card reads it: a choice question's options by index, however the key named them.
+    static func reviewKey(_ q: JSON) -> JSON {
+        guard let key = q["answer"], !key.isNull else { return .null }
+        let opts = q["options"]?.array?.compactMap(\.string) ?? []
+        switch q["type"]?.string {
+        case "single_choice": return optionIndex(key, opts).map { .number(Double($0)) } ?? key
+        case "multiple_choice": return .array((key.array ?? [key]).compactMap { optionIndex($0, opts) }.map { .number(Double($0)) })
+        default: return key
+        }
+    }
 
     /// Human-readable rendering of a learner's answer for the model.
     static func describeAnswer(_ q: JSON, _ a: JSON) -> String {
@@ -655,7 +674,7 @@ struct QuizTool: Tool {
             if certainties[safe: i]?.int == 0 {
                 unknown.append("Q\(i + 1)" + (q["concept"]?.string.map { " (\($0))" } ?? ""))
                 lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(q["concept"]?.string.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   → 🤷 the learner doesn't know this yet")
-                graded.append(["correct": .null, "unknown": true, "explanation": q["explanation"] ?? .null, "answer": q["answer"] ?? .null, "given": a])
+                graded.append(["correct": .null, "unknown": true, "explanation": q["explanation"] ?? .null, "answer": Questions.reviewKey(q), "given": a])
                 continue
             }
             var g = await Questions.grade(q, answer: a)
@@ -695,7 +714,7 @@ struct QuizTool: Tool {
             lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(concept.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   Learner: \(Questions.describeAnswer(q, a))\n   Expected: \(g.expected ?? "—")\n   → \(verdict)\(g.score.map { $0 > 0 && $0 < 1 ? String(format: " (partial %.0f%%)", $0 * 100) : "" } ?? "")\(notes.isEmpty ? "" : " · " + notes.joined(separator: " · "))")
             graded.append(["correct": g.correct.map { .bool($0) } ?? .null, "score": g.score.map { .number($0) } ?? .null,
                            "explanation": q["explanation"] ?? .null, "expected": g.expected.map { .string($0) } ?? .null,
-                           "answer": q["answer"] ?? .null, "given": a, "misconception": mis.map { .string($0) } ?? .null,
+                           "answer": Questions.reviewKey(q), "given": a, "misconception": mis.map { .string($0) } ?? .null,
                            "certainty": certainty.map { .number(Double($0.rawValue)) } ?? .null, "hints": .number(Double(hints)),
                            "diff": Questions.diff(q, answer: a).map(Questions.diffJSON) ?? .null])
         }
