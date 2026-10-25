@@ -42,7 +42,7 @@ enum DeepWork {
         Grounding: the real code, library, system or paper the idea lives in, chosen to fit this learner — for a beginner \
         an everyday program, for an expert the actual implementation or primary source.
         Concepts: in order, each with how you'll make it concrete for them, and where an analogy breaks.
-        Check before teaching: every example to run and every claim to verify, and how (run_code, the installed source, docs).
+        Check before teaching: the few examples you will show (to run) and the claims you're unsure of (to verify), and how (run_code, the installed source, docs) — proportionate to the request: a question needs a few checks, not an investigation.
         Practice: only if it fits the request — a question to answer, an exercise, or a project (starter, tests that fail \
         until they do the work). None if they just asked a question.
         Pitfalls: the misconceptions and bugs learners hit here.
@@ -59,7 +59,7 @@ enum DeepWork {
             \(plan.trimmingCharacters(in: .whitespacesAndNewlines))
 
             Carry it out: check what it lists (run every example with `run_code` or against the folder's toolchain, read the \
-            installed source or the docs it names, and cite what you use), then write the lesson at their level. Practice comes \
+            installed source or the docs it names, and cite what you use), then write the lesson at their level. Keep the checking short (a handful of tool calls for a question): the learner is waiting, and what you couldn't verify you say. Practice comes \
             only as the design says; a project's starter never holds the solution, and its tests go in `.teacher/tests`. \
             Never show solutions to work the learner is to do.
             </context>
