@@ -402,6 +402,31 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(back.instructions[Instructions.Key.codeAgent.raw], "Ship it carefully.")
     }
 
+    @MainActor func testTheCodeMentorWorksWithoutABoard() throws {
+        XCTAssertTrue(BoardSystem.applies(to: .tutor) && BoardSystem.applies(to: .exam) && BoardSystem.applies(to: .language))
+        XCTAssertFalse(BoardSystem.applies(to: .code), "its project keeps that state")
+        XCTAssertFalse(BoardSystem.applies(to: .agent))
+        XCTAssertFalse(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).contains { $0.name == "lesson_plan" })
+        XCTAssertFalse(SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m").contains("# Course board"))
+        // A code lesson linked to a board sends none of it: no state card, nothing for the summary, no boards in the prompt.
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        study.save(try sample(), conversationID: session.id)
+        let ext = CourseBoardExtension(), context = TeachingContextExtension(app: AppModel.shared)
+        func card() -> Bool {
+            var req = LLMRequest(model: "m", system: "s", messages: [ChatMessage(role: .user, blocks: [.text("next?")])])
+            ext.willRequest(&req, session: session)
+            return req.messages.last!.blocks.contains { $0.text?.contains("<lesson_state") == true }
+        }
+        func listed() -> Bool { context.systemPromptSections(session).contains { $0.hasPrefix("# Course boards") } }
+        XCTAssertFalse(card()); XCTAssertTrue(ext.summaryContext(session).isEmpty); XCTAssertFalse(listed())
+        // The same lesson in a teaching mode has its board back.
+        session.setMode(.tutor)
+        XCTAssertTrue(card()); XCTAssertFalse(ext.summaryContext(session).isEmpty); XCTAssertTrue(listed())
+        BoardSystem.chosen = "off"; defer { BoardSystem.chosen = nil }
+        XCTAssertFalse(BoardSystem.applies(to: .tutor) || card(), "off is off in every mode")
+    }
+
     func testPromptCarriesTheBoardRulesOnce() {
         let p = SystemPrompt.build(settings: AppSettings(), mode: .tutor, coreMemory: "", model: "m")
         XCTAssertEqual(p.components(separatedBy: "# Course board").count, 2)

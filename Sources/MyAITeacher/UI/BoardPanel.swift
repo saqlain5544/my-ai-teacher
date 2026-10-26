@@ -40,7 +40,10 @@ struct BoardPanel: View {
 
     var body: some View {
         Group {
-            if let b = model.board {
+            if session?.conversation.mode == .code {
+                ContentUnavailableView("No course board in Code mentor", systemImage: "hammer",
+                                       description: Text("The project keeps track instead: its tests, reviews and what's left are in the Project tab."))
+            } else if let b = model.board {
                 ScrollView {
                     VStack(alignment: .leading, spacing: 14) {
                         header(b)
@@ -249,7 +252,7 @@ struct BoardStrip: View {
         // Always a real view, even with no board yet: modifiers on an empty Group never attach, so a strip that starts
         // empty (every new lesson) would never bind its model and never appear once the board is created.
         VStack(spacing: 0) {
-            if let b = model.board, !session.conversation.mode.isAgent {
+            if let b = model.board, BoardSystem.applies(to: session.conversation.mode) {
                 Button {
                     app.inspectorTab = .plan
                     app.inspectorShown = true

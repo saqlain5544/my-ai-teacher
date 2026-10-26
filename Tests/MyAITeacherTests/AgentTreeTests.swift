@@ -19,7 +19,8 @@ final class AgentTreeTests: XCTestCase {
         }
         let teacher = Set(AgentTree.core("teacher") + AgentTree.deferred("teacher"))
         let mentor = Set(AgentTree.core("code-mentor") + AgentTree.deferred("code-mentor"))
-        XCTAssertTrue(teacher.isSubset(of: mentor), "the code mentor is a teacher")
+        XCTAssertTrue(teacher.subtracting(["lesson_plan"]).isSubset(of: mentor), "the code mentor is a teacher")
+        XCTAssertFalse(mentor.contains("lesson_plan"), "without the course board: a node drops what its own work replaces")
         XCTAssertFalse(teacher.contains("run_tests") || teacher.contains("grep"), "a parent can't use its child's tools")
         XCTAssertFalse(mentor.contains("browser") || mentor.contains("project_memory"), "nor a sibling branch's")
         XCTAssertFalse(Set(AgentTree.core("engineer")).contains("lesson_plan"), "the code agent isn't a teacher")

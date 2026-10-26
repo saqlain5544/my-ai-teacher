@@ -8,17 +8,17 @@ final class CourseBoardExtension: AgentExtension {
     let id = "course-board"
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        guard !session.conversation.mode.isAgent, !BoardSystem.off else { return }
+        guard BoardSystem.applies(to: session.conversation.mode) else { return }
         Self.inject(Self.stateBlock(session) ?? Self.noBoard(existing: session.services.study.plans().prefix(3).map { CourseBoard(plan: $0) }), into: &request)
     }
 
     func summaryContext(_ session: ChatSession) -> [String] {
-        guard let b = session.services.study.board(forLesson: session.id) else { return [] }
+        guard BoardSystem.applies(to: session.conversation.mode), let b = session.services.study.board(forLesson: session.id) else { return [] }
         return [b.header()]
     }
 
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {
-        guard !session.conversation.mode.isAgent, result.isError != true else { return }
+        guard BoardSystem.applies(to: session.conversation.mode), result.isError != true else { return }
         let study = session.services.study
         switch call.name {
         case "mastery":

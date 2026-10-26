@@ -169,3 +169,16 @@ Headless reruns on the fixed build (same model): the JS project in an empty fold
 toolchain probing; node:test runs counted); a review of a green solution that broke the starter's ordering rule took
 37 s, 7 calls, 81k and recorded it as a `must`. A three-turn rerun (project, review, fixed review with an open
 `should`) took 45 s / 58k, 87 s / 100k and 180 s / 288k, ending in a recorded pass.
+
+### The course board leaves Code mentor
+
+In code lessons the board was a second plan beside the project, which already keeps the long-term state (`project.json`,
+rounds, findings, the Project panel). The prompt kept nudging the mentor to create one ("No course board in this
+lesson… create one"). In the three-turn rerun it did so after the pass: four board calls, and a focus card that told the
+learner to edit `.teacher/tests`. It cost about 1.7k tokens on every request: the `lesson_plan` schema (~1.35k), the
+rules (~190) and the state card (up to 200), plus the boards listed in the prompt.
+
+The code mentor's node now drops `lesson_plan` (`AgentNode.drops`: an inherited tool a branch's own work replaces), and
+`BoardSystem.applies(to:)` ties the rules, the state card, the summary's board state, the boards in the prompt, the
+strip above the composer and the welcome screen's Continue to the agent having the tool. The teaching modes keep the
+board; a lesson switched from Code mentor to a teaching mode has its board back.

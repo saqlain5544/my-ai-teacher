@@ -1,13 +1,14 @@
 import Foundation
 
 /// Every agent in the app is a node in one tree. A node declares what it adds; an agent gets everything on its path to
-/// the root, never what its children add:
+/// the root, never what its children add, and a node can drop an inherited tool its own work replaces:
 ///
 ///     root ── core for every agent: files, batch edit, web, sub-agents, the core visualisations
 ///     ├── teacher ── teaching: questions and quizzes, the course board, learner memory, math, code to show things
 ///     │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (their instructions differ, not their tools)
 ///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones, reading, correction
-///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views
+///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views;
+///     │                      no course board (the project keeps that state)
 ///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control
 ///
 /// Per node there are three sets: tools sent with every request (`core`), tools loaded at runtime with `load_tools`
@@ -17,6 +18,8 @@ struct AgentNode: Sendable {
     let id: String
     let parent: String?
     var core: [String] = []
+    /// Inherited tools this branch goes without (and so do its children).
+    var drops: [String] = []
     var deferred: [String] = []
     var components: [String] = []
     var guide: String = ""
@@ -46,6 +49,7 @@ enum AgentTree {
                   components: ["listen", "gloss", "dialogue", "conjugation", "tones", "reading", "correction"]),
         AgentNode(id: "code-mentor", parent: "teacher",
                   core: ["run_tests", "project_tests", "project_review", "symbols", "diagnostics", "source"],
+                  drops: ["lesson_plan"],   // the project is its long-term state: a board beside it was a second plan that drifted
                   deferred: ["glob", "grep"],
                   components: ["layout", "tree"],
                   guide: Guides.codeMentor),
@@ -74,12 +78,17 @@ enum AgentTree {
         return out
     }
 
-    /// What an agent inherits, in path order without repeats. A tool core somewhere on the path is never also deferred.
-    static func core(_ id: String) -> [String] { unique(path(id).flatMap(\.core)) }
-    static func deferred(_ id: String) -> [String] { let c = Set(core(id)); return unique(path(id).flatMap(\.deferred)).filter { !c.contains($0) } }
+    /// What an agent inherits, in path order without repeats, less what a node on the path drops. A tool core somewhere on
+    /// the path is never also deferred.
+    static func core(_ id: String) -> [String] { inherited(id, \.core) }
+    static func deferred(_ id: String) -> [String] { let c = Set(core(id)); return inherited(id, \.deferred).filter { !c.contains($0) } }
     static func components(_ id: String) -> [String] { unique(path(id).flatMap(\.components)) }
     static func guides(_ id: String) -> [String] { path(id).map(\.guide).filter { !$0.isEmpty } }
 
+    private static func inherited(_ id: String, _ tools: KeyPath<AgentNode, [String]>) -> [String] {
+        let p = path(id), dropped = Set(p.flatMap(\.drops))
+        return unique(p.flatMap { $0[keyPath: tools] }).filter { !dropped.contains($0) }
+    }
     private static func unique(_ xs: [String]) -> [String] { var seen = Set<String>(); return xs.filter { seen.insert($0).inserted } }
 }
 

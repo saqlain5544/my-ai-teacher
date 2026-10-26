@@ -505,7 +505,9 @@ final class AppModel: ObservableObject {
         ]
         if isQuick(workspace) { suggestions.removeAll { $0["title"]?.string == "Study this folder" } }
         // The course in progress comes first: one click picks it up where the board says (linked before the first message).
-        if !BoardSystem.off, let b = services.study.plans().lazy.map(CourseBoard.init(plan:)).first(where: { $0.doneCount < $0.courseCount }) {
+        if let b = services.study.plans().lazy.map(CourseBoard.init(plan:)).first(where: { b in
+            b.doneCount < b.courseCount && BoardSystem.applies(to: b.mode.flatMap(TeachingMode.init(rawValue:)) ?? .tutor)
+        }) {
             let where_ = b.focus.map { "\($0.id.uppercased()) \($0.title)" } ?? "the next card"
             suggestions.insert(["title": .string("Continue: \(b.title)"), "subtitle": .string("\(b.doneCount) of \(b.courseCount) done · next: \(where_)"),
                                 "prompt": .string("Let's continue my course \"\(b.title)\". Pick up from the board: " + (b.focus.map { f in "the focus is \(f.title)" + (f.next.map { ", next: \($0)" } ?? "") } ?? "start the next card") + "."),

@@ -183,7 +183,8 @@ final class CodeMentorTests: XCTestCase {
 
     func testMentorModeHasTheEngineersToolsAndTheLoopInItsInstructions() {
         let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).map(\.name))
-        for t in ["project_tests", "project_review", "diagnostics", "symbols", "ask_learner", "lesson_plan"] { XCTAssertTrue(names.contains(t), t) }
+        for t in ["project_tests", "project_review", "diagnostics", "symbols", "ask_learner"] { XCTAssertTrue(names.contains(t), t) }
+        XCTAssertFalse(names.contains("lesson_plan"), "the project is the mentor's long-term state, not a board")
         XCTAssertFalse(Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name)).contains("project_review"))
         XCTAssertFalse(ToolRegistry.deferredIndex("code-mentor").contains("`diagnostics`"))
         let text = Instructions.mode(.code)

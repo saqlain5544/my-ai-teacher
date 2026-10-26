@@ -24,6 +24,11 @@ enum BoardSystem {
     }
     static var off: Bool { current == "off" }
 
+    /// Whether lessons in this mode work from a board: the system is on and the mode's agent has `lesson_plan` (the code
+    /// agent never did; the code mentor drops it, since its project keeps that state). The board's rules in the prompt,
+    /// its state card, the boards listed in the prompt and the strip above the composer follow the tool.
+    static func applies(to mode: TeachingMode) -> Bool { !off && AgentTree.core(AgentTree.node(for: mode)).contains("lesson_plan") }
+
     /// Reads `course_board=<arm>` from "name=value" pairs separated by commas (`MYAITEACHER_EXP`, `--exp`).
     static func force(_ pairs: String) {
         for pair in pairs.split(separator: ",") {

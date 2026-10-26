@@ -18,13 +18,14 @@ struct SettingsView: View {
 
     /// What each course board system does, in the learner's terms.
     static func boardHelp(_ choice: String) -> String {
+        let code = " Code mentor keeps track with its project instead."
         switch choice {
         case "shallow":
-            return "Cards only: a goal that spans many replies gets 4–8 cards (one in focus, with its next step), kept across detours, summaries and lessons. Lighter, without chapter outlines."
+            return "Cards only: a goal that spans many replies gets 4–8 cards (one in focus, with its next step), kept across detours, summaries and lessons. Lighter, without chapter outlines." + code
         case "off":
             return "Off: no board. The teacher follows the conversation and its memory of you. Fine for one-off questions; long courses can lose their thread after a summary or in a new lesson."
         default:
-            return "Book outlines: a course is a set of cards, each with an outline of sections the teacher ticks off as it teaches, so it reads like a book and picks up exactly where you left off, across detours, summaries and lessons."
+            return "Book outlines: a course is a set of cards, each with an outline of sections the teacher ticks off as it teaches, so it reads like a book and picks up exactly where you left off, across detours, summaries and lessons." + code
         }
     }
 }

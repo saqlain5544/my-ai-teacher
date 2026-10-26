@@ -49,10 +49,8 @@ enum SystemPrompt {
         var s = Instructions.text(.teacher, settings).replacingOccurrences(of: "{learner}", with: name)
         s += "\n\n# Current teaching mode\n" + Instructions.text(.mode(mode), settings)
             + "\n(If the learner switches modes later you'll see a note in their message.)"
-        switch BoardSystem.current {
-        case "off": break
-        case "shallow": s += "\n\n" + Instructions.boardShallow
-        default: s += "\n\n" + Instructions.text(.board, settings)
+        if BoardSystem.applies(to: mode) {
+            s += "\n\n" + (BoardSystem.current == "shallow" ? Instructions.boardShallow : Instructions.text(.board, settings))
         }
         s += "\n\n" + guides(AgentTree.node(for: mode), settings)
         s += """
