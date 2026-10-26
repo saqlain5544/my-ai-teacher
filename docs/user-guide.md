@@ -322,9 +322,27 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   first. You can allow once or for the lesson, grant the folder write or full access, or deny. Fetching a page from your
   own Mac or local network (localhost, 192.168.…, a `.local` name) asks too, once or for the lesson; sub-agents can't ask,
   so they fetch from there only after you allowed it in the lesson.
+  * Commands that only look (`ls`, `cat`, `rg`, `git status`, `git diff`, `git log`…) never ask. They run without a
+    shell, and git runs with hooks, fsmonitor and diff drivers off, so a cloned repository's config can't start a program.
+  * **Always allow “npm test …” in this folder** on an approval makes a rule like Claude Code's `Bash(npm test:*)`:
+    that command, with any arguments, runs without asking again in that folder. A rule only matches one plain command
+    (no `;`, `&&`, pipes, redirections or `$(…)`). Rules are listed in **Settings › Tools**, where you can remove them.
+    git commands other than the looking ones ask each time.
+  * Installing packages (`pip install`, `brew install`…) asks every time; in lessons it stays off.
+* **Plan mode** (⇧⌘P, or **Plan mode** under the message box). The agent researches with read-only tools and presents
+  a plan: the changes file by file, the order, how it will verify them. Nothing in the folder changes until you click
+  **Approve and start**; **Keep planning** lets you say what to change first. (A background sub-agent already running
+  when you turn plan mode on carries on; stop it from the Agents panel if needed.)
+* **Message it while it works.** Press Return while the agent is busy: the message waits above the box and joins the
+  conversation at the agent's next step, so you can steer without stopping it. Take one back with its ×; if you stop
+  the agent, waiting messages return to the box.
+* **It never overwrites what it hasn't seen.** `write` refuses to replace a file the agent hasn't read, or one that
+  changed since it last looked (you saved it in your editor, a formatter ran), as Claude Code does. `edit` still
+  applies (it matches exact text) and tells the agent the file had changed.
 * **Tools.**
-  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed), and `symbols` (a file's outline, or
-    where a name is defined).
+  * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed: both honour `.gitignore`; grep takes
+    `-A`/`-B`/`-C`, `type`, `multiline` and `offset`), and `symbols` (a file's outline, or where a name is defined).
+    Models used to Claude Code's tools may call them by its argument names (`file_path`, `run_in_background`).
   * Commands: bash (with `background: true` for long builds and test suites, whose output arrives as a message), and
     run_code in 12 languages.
   * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
@@ -334,13 +352,23 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   spot, and it is told to run the project's check and tests before it reports.
 * **Undo.** Under each reply that changed files: **Undo this turn's changes** puts every file back as it was before that
   turn (the app keeps a checkpoint per turn in `.teacher/checkpoints`, no git needed). The agent is told you did.
-* **Your own commands.** A file `.teacher/commands/review.md` becomes `/review`; type `/review src/app.py` and the file's
-  text, with `$ARGUMENTS` filled in, goes to the agent with your message.
-  * `project_memory`, which keeps build commands, conventions and gotchas in `.teacher/code-memory.md`. The agent
-    also reads `CLAUDE.md` and `AGENTS.md`.
+* **Commands.** Built in: `/init` writes an `AGENTS.md` for the project (or improves the one there), `/review [what]`
+  reviews your uncommitted changes (or what you name) without changing files, and `/compact [what to keep]` summarises
+  the session so far so the next request starts small.
+  * Your own: `review.md` in the project's `.teacher/commands/` or `.claude/commands/`, or in `~/.teacher/commands/` or
+    `~/.claude/commands/` for every project, becomes `/review`; a subfolder makes a namespace (`frontend/test.md` is
+    `/frontend:test`). Type `/review src/app.py` and the file's text, with `$ARGUMENTS` (and `$1`, `$2`…) filled in,
+    goes to the agent with your message. A file named like a built-in replaces it.
+* **Project instructions.** `project_memory` keeps build commands, conventions and gotchas in
+  `.teacher/code-memory.md`. The agent also follows the instruction files Claude Code and other agents use: your own
+  `~/.claude/CLAUDE.md` or `~/.teacher/AGENTS.md`; `CLAUDE.md` or `AGENTS.md` in each folder above the project (a
+  package in a monorepo gets the repository's); the project's `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`,
+  `CLAUDE.local.md` and `.github/copilot-instructions.md`. `@docs/style.md` in one of them pulls that file in. A
+  subfolder's own `CLAUDE.md` or `AGENTS.md` reaches the agent the first time it reads a file there.
 * **Changes panel.** A git diff of what changed, with checkpoints.
 * **Sub-agents.** The agent can delegate to `explore`, `coder`, `reviewer` (read-only) and `tester` agents, or to your
-  own types: add them in **Settings › Agents**, or as Markdown files in `.teacher/agents/`.
+  own types: add them in **Settings › Agents**, or as Markdown files in `.teacher/agents/` or Claude Code's
+  `.claude/agents/` (its tool names, like `Read, Grep, Bash`, are understood; `model: sonnet` means the lesson's model).
   * Each run can have its own provider, model, reasoning effort, and budget (model calls, tokens, time).
   * Runs can go in the background and work in a git worktree.
   * You can steer a running sub-agent from the Agents panel. They recover from crashes and stop cleanly.

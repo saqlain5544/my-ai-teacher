@@ -47,6 +47,9 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// InteractionCenter; localhost and file:// are never stored here (they're approved per lesson).
     var browserSites: [String] = []
     var computerApps: [String] = []
+    /// Commands approved with "Always allow in this folder" (folder path → command prefixes like `npm test`), as Claude
+    /// Code's `Bash(npm test:*)` rules. Stored in the app, never in the folder (a cloned repo can't pre-approve itself).
+    var commandRules: [String: [String]] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
 
@@ -88,6 +91,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         agents = (try? c.decode(SubAgentSettings.self, forKey: .agents)) ?? d.agents
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
+        commandRules = (try? c.decode([String: [String]].self, forKey: .commandRules)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }

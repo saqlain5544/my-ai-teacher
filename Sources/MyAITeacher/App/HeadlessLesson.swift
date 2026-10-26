@@ -5,7 +5,9 @@ import Foundation
 /// would. Prints one JSON object per turn (with each tool call's input and the turn's prompt tokens). Run it with its own MYAITEACHER_HOME so the learner's data is never touched:
 ///   MYAITEACHER_HOME=/tmp/x MyAITeacher --lesson spec.json --provider minimax --model MiniMax-M3.1-Flash
 /// spec: {"mode": "code", "folder": "/path", "seed": {"rel/path": "text"}, "budget": 300,
-///        "turns": [{"text": "…", "files": {"rel/path": "text"}}]}
+///        "turns": [{"text": "…", "files": {"rel/path": "text"}, "plan": true, "steer": {"after": 20, "text": "…"}}]}
+/// `plan` turns the code agent's plan mode on before the turn (its plan is approved like any approval); `steer` sends a
+/// message while the turn runs, `after` seconds in (the agent reads it at its next step).
 @MainActor
 enum HeadlessLesson {
     static func run(specPath: String, provider: String, model: String, thinking: String?) async -> Int32 {
@@ -39,9 +41,15 @@ enum HeadlessLesson {
             let start = s.messages.count, t0 = Date()
             var firstReply: Double?
             let replied = { s.messages[min(start, s.messages.count)...].contains { $0.role == .assistant && $0.blocks.contains { $0.kind == .text && ($0.text?.count ?? 0) > 300 } } }
+            if let plan = turn["plan"]?.bool { s.setPlanMode(plan) }
+            var steer = turn["steer"]
             s.send(turn["text"]?.string ?? "")
             try? await Task.sleep(for: .milliseconds(300))
             while s.isRunning, Date().timeIntervalSince(t0) < budget {
+                if let st = steer, Date().timeIntervalSince(t0) >= Double(st["after"]?.int ?? 10) {
+                    s.send(st["text"]?.string ?? "")
+                    steer = nil
+                }
                 for p in app.interactions.pending.values where p.conversationID == id {
                     if p.kind == "permission" {
                         let first = p.payload["options"]?.array?.compactMap { $0["id"]?.string }.first { $0 != "deny" } ?? "once"
@@ -72,6 +80,11 @@ enum HeadlessLesson {
                                        "tools": .array(tools), "calls": .array(calls), "tool_result_chars": .number(Double(resultChars)),
                                        "prompt_tokens": .number(Double(promptTokens)), "tool_errors": .array(errors), "chars": .number(Double(reply.count)),
                                        "reply": .string(String(reply.prefix(20_000)))]
+            if s.conversation.mode.isAgent {
+                out["plan_mode"] = .bool(s.conversation.planMode == true)
+                out["steered"] = .number(Double(msgs.filter { $0.blocks.contains { $0.text == ChatSession.queuedNote } }.count))
+                out["compacted"] = .bool(s.conversation.compactSummary != nil)
+            }
             if let p = ProjectStore.load(s.services.workspace) {
                 out["project"] = ["registered": .bool(p.snapshotAt != nil), "command": p.testCommand.map { .string($0) } ?? .null,
                                   "rounds": .array(p.rounds.map { .string($0.verdict) }), "runs": .array(p.runs.map { .string($0.line) })]

@@ -43,7 +43,7 @@ final class CodeAgentExtension: AgentExtension {
         Checkpoints.prune(ws)
     }
 
-    func sessionWillClose(_ session: ChatSession) { turnKeys[session.id] = nil }
+    func sessionWillClose(_ session: ChatSession) { turnKeys[session.id] = nil; FileViews.shared.forget(agent: session.id) }
 
     /// The user pressed Undo under a reply: the turn's files go back, and the agent hears about it with the next message.
     func revert(_ session: ChatSession, turn: String) -> String {

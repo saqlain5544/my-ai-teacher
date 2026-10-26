@@ -218,6 +218,22 @@ struct ToolsSettings: View {
                         }.labelsHidden().frame(width: 140)
                     }
                 }
+                let ruled = settings.value.commandRules.filter { !$0.value.isEmpty }
+                if !ruled.isEmpty {
+                    DisclosureGroup("Always-allowed commands (\(ruled.values.reduce(0) { $0 + $1.count }))") {
+                        ForEach(ruled.keys.sorted(), id: \.self) { path in
+                            ForEach(ruled[path] ?? [], id: \.self) { rule in
+                                HStack {
+                                    Text(rule + " …").font(.callout.monospaced())
+                                    Text((path as NSString).lastPathComponent).font(.caption).foregroundStyle(.tertiary)
+                                    Spacer()
+                                    Button("Remove") { settings.value.commandRules[path]?.removeAll { $0 == rule } }.controlSize(.small)
+                                }
+                            }
+                        }
+                    }
+                }
+                Text("Read-only commands (`ls`, `rg`, `git status`, `git diff`…) never ask.").font(.caption).foregroundStyle(.secondary)
             }
             ComputerUseSettings()
             Section("Default folder") {

@@ -10,7 +10,13 @@ actor ShellState {
 
 struct BashTool: Tool {
     var subAgentVariant: Tool? { self }
-    func timeout(_ input: JSON) -> Double? { Double(min(600, max(1, input["timeout"]?.int ?? 120))) + 20 }
+    func timeout(_ input: JSON) -> Double? { Double(Self.seconds(input)) + 20 }
+    /// The call's timeout in seconds (default 120, at most 600). 1000 and more is milliseconds, as Claude Code's Bash
+    /// takes it (models trained on it send `"timeout": 120000`).
+    static func seconds(_ input: JSON) -> Int {
+        let t = input["timeout"]?.int ?? 120
+        return min(600, max(1, t >= 1000 ? t / 1000 : t))
+    }
     let name = "bash"
     let description = """
     Run a shell command (zsh) on the learner's Mac. The working directory persists between calls (starts in the workspace). \
@@ -36,7 +42,16 @@ struct BashTool: Tool {
         let command = try input.req("command")
         let session = ctx.shellID ?? ctx.conversationID
         let cwd = await ShellState.shared.dir(session, default: ctx.workspace)
-        let timeout = TimeInterval(min(600, max(1, input["timeout"]?.int ?? 120)))
+        let timeout = TimeInterval(Self.seconds(input))
+        // Looking around (`git status`, `ls`, `rg`…, the strict read-only list) needs no approval, so it never reaches a
+        // shell: the programs run directly, git with nothing a repository's config could start (fsmonitor, hooks, diff drivers).
+        if input["background"]?.bool != true, ReadOnlyShell.allows(command) {
+            var out = await ReadOnlyShell.run(command, cwd: cwd, timeout: timeout)
+            out.text = out.text.trimmingTrailingNewlines   // as a shell run's output is
+            let jobs = ShellJobs.shared.summary(ctx.conversationID)
+            if !jobs.isEmpty { out.text += "\n" + jobs }
+            return out
+        }
         let cwdFile = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-cwd-\(UUID().uuidString)")
         let script = "trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)"
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"

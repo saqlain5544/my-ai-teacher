@@ -1164,6 +1164,20 @@
     T.interaction({ id: 'pm1', kind: 'permission' }, false); ok(!$('.approval', card), 'approval cleared');
   });
 
+  test('plan mode: the plan shows as Markdown under its approval, and stays readable after', () => {
+    const a = A([{ kind: 'toolUse', id: 'xp1', name: 'exit_plan_mode', input: { plan: '## Plan\n1. Fix `median` in **calc/stats.py**\n2. Add a test' } }]);
+    T.reset([U('fix it'), a], {});
+    T.interaction({ id: 'xp1', kind: 'permission', payload: { title: 'Approve this plan?', detail: 'Approving ends plan mode.', options: [{ id: 'approve', label: 'Approve and start', style: 'primary' }, { id: 'keep', label: 'Keep planning' }] } }, true);
+    const card = $('[data-tool-id="xp1"]');
+    ok($('.approval', card) && $('.plan-md h2', card) && $('.plan-md strong', card), 'buttons and the rendered plan');
+    posts.length = 0; click($('[data-act="approve"][data-v="approve"]', card));
+    eq(lastPost('answer'), { type: 'answer', id: 'xp1', value: { decision: 'approve' } });
+    T.interaction({ id: 'xp1', kind: 'permission' }, false);
+    T.reset([U('fix it'), a, R('xp1', 'exit_plan_mode', 'approved', { meta: { planApproved: true } })], {});
+    const done = $('[data-tool-id="xp1"]');
+    ok(!$('.approval', done) && $('.plan-md li', done) && done.textContent.includes('approved'), 'approved: the plan stays open, no buttons');
+  });
+
   // ───────────── Questions ─────────────
   const QUIZ = {
     title: 'Check', questions: [

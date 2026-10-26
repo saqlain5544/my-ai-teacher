@@ -127,14 +127,29 @@ enum AgentCatalog {
         return list.first { $0.name == n }
     }
 
-    /// `<folder>/.teacher/agents/*.md` (user-authored project files; the app never writes them).
+    /// `<folder>/.teacher/agents/*.md`, then Claude Code's `<folder>/.claude/agents/*.md` (user-authored project files;
+    /// the app never writes them). A name in both is the `.teacher` one.
     static func project(_ folder: URL) -> [AgentDefinition] {
-        let dir = folder.appendingPathComponent(Workspace.stateDirName).appendingPathComponent("agents")
-        let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-        return files.filter { $0.pathExtension.lowercased() == "md" }.sorted { $0.path < $1.path }.compactMap { url in
-            (try? String(contentsOf: url, encoding: .utf8)).flatMap { parse($0, fileName: url.deletingPathExtension().lastPathComponent) }
+        var out: [AgentDefinition] = []
+        for dir in [folder.appendingPathComponent(Workspace.stateDirName).appendingPathComponent("agents"), folder.appendingPathComponent(".claude/agents")] {
+            let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
+            for url in files.filter({ $0.pathExtension.lowercased() == "md" }).sorted(by: { $0.path < $1.path }) {
+                guard let d = (try? String(contentsOf: url, encoding: .utf8)).flatMap({ parse($0, fileName: url.deletingPathExtension().lastPathComponent) }),
+                      !out.contains(where: { $0.name == d.name }) else { continue }
+                out.append(d)
+            }
         }
+        return out
     }
+
+    /// Claude Code's tool names, as this app's (a `.claude/agents` file lists `Read, Grep, Glob, Bash`).
+    static let claudeToolNames: [String: String] = ["read": "read", "write": "write", "edit": "edit", "multiedit": "edit", "ls": "ls", "glob": "glob",
+                                                    "grep": "grep", "bash": "bash", "bashoutput": "bash_jobs", "killbash": "bash_jobs", "killshell": "bash_jobs",
+                                                    "webfetch": "web_fetch", "websearch": "web_search", "todowrite": "todo_write", "task": "task", "agent": "task"]
+    static func toolName(_ n: String) -> String {
+        n.contains("_") ? n : claudeToolNames[n.lowercased()] ?? n
+    }
+    private static func unique(_ xs: [String]) -> [String] { var seen = Set<String>(); return xs.filter { seen.insert($0).inserted } }
 
     /// Frontmatter (`key: value`, lists as `a, b`, `[a, b]` or `- a` lines) then the system prompt:
     ///
@@ -191,9 +206,11 @@ enum AgentCatalog {
         return AgentDefinition(
             name: name, description: fields["description"] ?? "",
             prompt: lines[(end + 1)...].joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines),
-            tools: list("tools"), deny: list("deny") ?? list("deny_tools") ?? list("disallowed_tools") ?? list("disallowedtools") ?? [],
+            tools: list("tools").map { Self.unique($0.map(toolName)) },
+            deny: (list("deny") ?? list("deny_tools") ?? list("disallowed_tools") ?? list("disallowedtools") ?? []).map(toolName),
             readOnly: truthy("read_only") || truthy("readonly"), provider: fields["provider"].flatMap { $0.isEmpty ? nil : $0 },
-            model: fields["model"].flatMap { $0.isEmpty || $0 == "inherit" ? nil : $0 },
+            // Claude Code's model aliases name Anthropic's models: here they mean "the lesson's model".
+            model: fields["model"].flatMap { $0.isEmpty || ["inherit", "sonnet", "opus", "haiku", "fable"].contains($0.lowercased()) ? nil : $0 },
             effort: fields["effort"].flatMap { ThinkingLevel(rawValue: $0.lowercased()) }, budget: budget,
             canIsolate: fields["isolation"]?.lowercased() == "worktree", source: .project)
     }

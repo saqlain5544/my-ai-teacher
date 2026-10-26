@@ -4,7 +4,7 @@
   'use strict';
   const R = window.TeacherUI;
   const input = n => n.props.input || {};
-  const path = n => input(n).path || '';
+  const path = n => input(n).path || input(n).file_path || '';   // models used to Claude Code's tools send file_path (the app maps it)
   const output = (n, ctx, label) => n.props.output ? (label ? '<div class="label">' + label + '</div>' : '') + ctx.pre(n.props.output) : '';
 
   R.defineTool({ name: 'bash', icon: 'terminal', tone: 'slate', title: 'Terminal', summary: n => input(n).command || '',
@@ -25,7 +25,7 @@
     body: (n, ctx) => {
       const i = input(n);
       const changes = (i.old_string != null ? [i] : []).concat(Array.isArray(i.edits) ? i.edits : []);
-      return '<div class="label path">' + ctx.esc(i.path) + (changes.length > 1 ? ' · ' + changes.length + ' changes' : '') + '</div>' +
+      return '<div class="label path">' + ctx.esc(path(n)) + (changes.length > 1 ? ' · ' + changes.length + ' changes' : '') + '</div>' +
         changes.map(c => '<pre class="diff"><span class="del">' + ctx.esc(c.old_string || '') + '</span><span class="add">' + ctx.esc(c.new_string || '') + '</span></pre>').join('') +
         output(n, ctx, 'Result');
     } });

@@ -53,6 +53,7 @@ struct ChatView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopGenerating)) { _ in session.stop() }
+        .onReceive(NotificationCenter.default.publisher(for: .togglePlanMode)) { _ in session.setPlanMode(session.conversation.planMode != true) }
     }
 }
 

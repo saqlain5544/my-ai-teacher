@@ -281,8 +281,39 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 * `symbols`: a file's outline or the definitions of a name across the folder, by per-language regular expressions
   (ripgrep for the search) — definitions, not mentions. `edit` matches a block whose lines differ only in indentation
   or trailing whitespace when that match is unique, and re-indents the replacement. `ProjectCommands`:
-  `.teacher/commands/<name>.md` typed as `/name args` in a code session goes to the agent as hidden context with
-  `$ARGUMENTS` filled in.
+  `<name>.md` in `.teacher/commands`, `.claude/commands`, `~/.teacher/commands` or `~/.claude/commands` (first found;
+  `ns/name.md` is `/ns:name`) typed as `/name args` in a code session goes to the agent as hidden context with
+  `$ARGUMENTS` and `$1`…`$9` filled in; `/init` and `/review` are built in unless a file replaces them, and `/compact
+  [focus]` makes `ChatSession.compactNow` summarise everything so far (`Compaction.codingPrompt`) with no model turn.
+* **Writes never erase unseen work** (`FileViews`, per agent: `shellID ?? conversationID`, so each sub-agent has its
+  own): `read`, `write` and `edit` record a file's modification date and size; `write` refuses an existing file the
+  agent hasn't read or whose stamp changed since (the user saved it, a command rewrote it); `edit` applies (exact
+  match) and notes the change. Code agent and code mentor only (`ToolContext.codeAgent`, which sub-agents inherit).
+* **Approvals** (`PermissionExtension`, execute risk): a command `ReadOnlyShell.allows` (the reviewer's strict
+  allowlist) never asks, and `bash` runs exactly those through `ReadOnlyShell.run` (no shell, git hardened), so the
+  same strictness that lets it skip approval decides how it runs. `CommandRules`: "Always allow “npm test …” in this
+  folder" stores a prefix in `AppSettings.commandRules[folder]` (never in the folder, so a repository can't approve
+  itself); a rule matches one simple command (no `; & | < > ( ) { } $` backquotes, backslashes or newlines outside
+  single quotes; one leading `cd dir &&` allowed). git and hg never get rules: a repository's config can make them run
+  programs, and a rule would let variants of their looking commands run outside `ReadOnlyShell`'s hardening. Package
+  installs ask in agent mode, stay refused in lessons.
+* **Arguments.** `ToolArgs.canonical` renames other agents' argument names (`file_path`, `run_in_background`,
+  camelCase) to the tool's own in `ChatSession.execute` and the sub-agent loop, before any gate reads them.
+* **Plan mode** (`PlanModeExtension`, before the permission gate; `Conversation.planMode`, ⇧⌘P or the composer): a
+  hidden note on each message while it is on (and once after it goes off); `refusal` lets through only what looks —
+  read-only risks, `ReadOnlyShell` commands, new `explore`/`reviewer` sub-agents (no resume or steering),
+  `todo_write`, `project_memory`, `ask_learner`, the browser's reading actions. `exit_plan_mode` shows the plan
+  (rendered Markdown on its card) under Approve / Keep planning; approval (`meta.planApproved`) turns plan mode off in
+  `didRun`. It gates new calls only: a background coder started before plan mode went on keeps working.
+* **Queued messages.** `send` while a code agent runs appends to `ChatSession.queued` (shown above the composer, each
+  can be taken back); `drainInbox` adds them, with a hidden note and the usual `willSend` context, at the next step
+  boundary, and a reply with no tool calls continues instead of ending the turn. A turn that ends without reading
+  them (an error, the step limit) starts the next one with them; a stopped turn hands their text back to the draft.
+* **Instruction files** (`ProjectMemory.contextBlock`): the user's `~/.claude/CLAUDE.md` and `~/.teacher/AGENTS.md`,
+  each parent folder's CLAUDE.md / AGENTS.md up to the home folder (outermost first), then the project's CLAUDE.md,
+  .claude/CLAUDE.md, AGENTS.md, CLAUDE.local.md and .github/copilot-instructions.md; `@path` mentions of files that
+  exist are appended (relative to the file, three deep, each once; 20k per file, 40k in all). A subfolder's own
+  CLAUDE.md / AGENTS.md rides on the agent's first `read` of a file under it (`ProjectMemory.nested`).
 
 ## Browser and computer use (code agent)
 * **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
@@ -828,22 +859,26 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Bash | `bash` | zsh, persistent cwd per lesson, timeout (≤600 s), 30k-char head/tail truncation, huge output spilled to `.teacher/outputs` |
 | Background jobs | `bash_jobs` | each command runs in its own process group (`ShellJob`); a server or watcher (a known command, or a printed localhost URL), a `cmd &`, or `background: true` moves to the background as B1… and the call returns; list, read new output, stop (the whole group); stopped when the lesson is deleted or the app quits |
 | Read | `read` | `cat -n` lines, offset/limit, images (sent to the model), PDFs with page ranges, binary detection |
-| Write | `write` | creates parents; permission-gated by folder access |
-| Edit | `edit` | exact unique match or `replace_all`, helpful errors |
-| Glob | `glob` | `**` globs, newest first, skips build/vcs folders |
-| Grep | `grep` | ripgrep when installed (fallback `grep`), files (by match count)/content (grouped by file)/count modes, paths relative to the folder searched, context, `-i`, glob filter |
+| Write | `write` | creates parents; permission-gated by folder access; refuses a file not read, or changed since (`FileViews`) |
+| Edit | `edit` | exact unique match or `replace_all`, helpful errors; notes a file changed since it was read |
+| Glob | `glob` | `**` globs, newest first; `rg --files` (honours .gitignore), the folder walk when that finds nothing |
+| Grep | `grep` | ripgrep when installed (fallback `grep`), files (by match count)/content (grouped by file)/count modes, paths relative to the folder searched, `-A`/`-B`/`-C`, `-i`, glob and `type` filters, `multiline`, `offset` + `head_limit` paging |
+| ExitPlanMode / plan mode | `exit_plan_mode` | ⇧⌘P; only looking tools run until the plan is approved |
+| Queued messages | `ChatSession.queued` | sent while the agent works, read at its next step |
+| Bash permission rules | `CommandRules` | "Always allow “npm test …” in this folder"; read-only commands never ask |
+| CLAUDE.md | `ProjectMemory.contextBlock` | user, parent folders, project, CLAUDE.local.md, `@imports`, subfolders on first read |
 | LS | `ls` | sizes, hidden-noise filtering |
 | WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); papers mode (OpenAlex: relevance overall and among works cited 25+ times, fused, a log-citation boost); `read` adds the top pages' best passages |
 | WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, 15-min cache; `query` returns the BM25-best passages (`Passages`), pages of 12k characters list their later sections' offsets, same-site link addresses left out; `urls` reads up to 4 more pages in parallel in a shared budget (local addresses skipped) |
 | TodoWrite | `todo_write` | rendered as a live checklist |
-| Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app and `.teacher/agents/*.md`), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
+| Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app, `.teacher/agents/*.md` and `.claude/agents/*.md` with Claude Code's tool names), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
-| /command | `.teacher/commands/*.md` | project slash commands with `$ARGUMENTS` |
+| /command | `.teacher/commands`, `.claude/commands` (project and user) | slash commands with `$ARGUMENTS`, `$1`…`$9`, namespaces; built-in `/init`, `/review`, `/compact` |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |

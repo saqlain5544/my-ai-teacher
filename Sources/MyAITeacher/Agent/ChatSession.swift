@@ -135,6 +135,13 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
+    /// Code agent: plan first, change nothing until the plan is approved. The agent hears of it with the next message.
+    func setPlanMode(_ on: Bool) {
+        guard conversation.mode.isAgent, (conversation.planMode == true) != on else { return }
+        conversation.planMode = on ? true : nil
+        save()
+    }
+
     /// Redraws the welcome of a lesson with no messages yet (it shows the folder and its access).
     func refreshWelcome() { if messages.isEmpty { sink?.reset(messages, conversation: conversation) } }
 
@@ -146,9 +153,32 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
+    /// What the user sent to the code agent while it worked: each joins the conversation at the agent's next step (after
+    /// the tools it is running), as Claude Code's queued messages do, so the user steers without stopping it.
+    @Published private(set) var queued: [ChatMessage] = []
+    static let queuedNote = "<context>\nThe user sent this while you were working: take it into account from your next step.\n</context>"
+
+    /// Takes a queued message back (its text returns to the composer).
+    func unqueue(_ id: String) -> ChatMessage? {
+        guard let i = queued.firstIndex(where: { $0.id == id }) else { return nil }
+        return queued.remove(at: i)
+    }
+
     func send(_ text: String, attachments: [Block] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !isRunning, !(trimmed.isEmpty && attachments.isEmpty) else { return }
+        guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
+        if isRunning {
+            guard conversation.mode.isAgent else { return }
+            if ProjectCommands.compactFocus(trimmed) != nil { sink?.notice("/compact runs once the agent has finished this turn."); return }
+            var blocks = attachments
+            if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
+            if let expanded = ProjectCommands.expand(trimmed, folder: services.workspace.url) {
+                blocks.append(Block(kind: .text, text: "<context>\n\(expanded)\n</context>", meta: ["hidden": true]))
+            }
+            queued.append(ChatMessage(role: .user, blocks: blocks))
+            return
+        }
+        if conversation.mode.isAgent, attachments.isEmpty, let focus = ProjectCommands.compactFocus(trimmed) { compactNow(focus: focus); return }
         trimWindow()
         var blocks: [Block] = []
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
@@ -267,10 +297,17 @@ final class ChatSession: ObservableObject, Identifiable {
         start()
     }
 
+    /// Background reports, then what the user queued, join the conversation (at a step boundary of a running turn).
     private func drainInbox() {
-        guard !inbox.isEmpty else { return }
+        guard !inbox.isEmpty || !queued.isEmpty else { return }
         for m in inbox { append(m) }
         inbox.removeAll()
+        for var m in queued {
+            m.blocks.insert(Block(kind: .text, text: Self.queuedNote, meta: ["hidden": true, "ephemeral": true]), at: 0)
+            host.willSend(&m, self)
+            append(m)
+        }
+        queued.removeAll()
         save()
     }
 
@@ -318,6 +355,22 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
         if !detached { app.sessionDidFinishTurn(self) }
+        flushQueued(stopped: turn.cancelled)
+    }
+
+    /// Messages queued during work that ended without reading them (a turn's error or step limit, a /compact): they start
+    /// the next turn, as if sent now; after a stop, their text goes back to the composer instead.
+    private func flushQueued(stopped: Bool) {
+        guard !queued.isEmpty, !discarded else { return }
+        if stopped {
+            let back = queued.flatMap(\.blocks)
+            queued.removeAll()
+            let text = back.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
+            draft = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            return
+        }
+        drainInbox()
+        start()
     }
 
     private func loop() async {
@@ -501,8 +554,8 @@ final class ChatSession: ObservableObject, Identifiable {
                 continue
             }
             if calls.isEmpty {
-                // A background report arrived during this step: read it before ending the turn.
-                if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
+                // A background report or a message from the user arrived during this step: read it before ending the turn.
+                if !Task.isCancelled, !inbox.isEmpty || !queued.isEmpty { drainInbox(); continue }
                 break
             }
             if Task.isCancelled {
@@ -675,7 +728,10 @@ final class ChatSession: ObservableObject, Identifiable {
     private func execute(_ call: Block, client: LLMClient) async -> Block {
         let name = call.name ?? ""
         let callID = call.id ?? UUID().uuidString
-        let input = call.input ?? .object([:])
+        // Other agents' argument names (`file_path`…) as this tool's, before any gate reads them.
+        let input = ToolRegistry.byName[name].map { ToolArgs.canonical(call.input ?? .object([:]), schema: $0.schema) } ?? call.input ?? .object([:])
+        var call = call
+        call.input = input
         let started = Date()
         var waited: Double = 0
         func record(_ ok: Bool) {
@@ -829,7 +885,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let state = host.summaryContext(self).joined(separator: "\n\n")
         let throughID = messages[range.upperBound - 1].id
         let result = await Compaction.summarise(Array(messages[range]), previous: conversation.compactSummary, state: state,
-                                                client: client, model: conversation.model, sessionID: conversation.id)
+                                                client: client, model: conversation.model, sessionID: conversation.id, coding: conversation.mode.isAgent)
         result.usage.forEach(recordAuxiliary)
         if result.cancelled { return prepared }   // stopped mid-summary: the lesson stays as it was
         conversation.compactSummary = result.text
@@ -838,6 +894,36 @@ final class ChatSession: ObservableObject, Identifiable {
         sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
         save()
         return requestMessages()
+    }
+
+    /// `/compact [focus]` in a code session: everything so far becomes the summary now (Claude Code's /compact), so the
+    /// next request starts small. No model turn follows.
+    private func compactNow(focus: String) {
+        guard let provider = app.settings.provider(conversation.providerID) else { errorMessage = "Unknown provider \(conversation.providerID)."; return }
+        let start = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }.map { $0 + 1 } ?? 0
+        guard messages.count - start >= 2, let last = messages.last else { sink?.notice("Nothing to compact yet."); return }
+        let client = provider.client(apiKey: KeyStore.shared.key(for: provider))
+        isRunning = true
+        beginActivity()
+        setStatus("Summarising the session…")
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            let result = await Compaction.summarise(Array(self.messages[start...]), previous: self.conversation.compactSummary,
+                                                    state: self.host.summaryContext(self).joined(separator: "\n\n"), client: client,
+                                                    model: self.conversation.model, sessionID: self.conversation.id, coding: true, focus: focus)
+            result.usage.forEach(self.recordAuxiliary)
+            if !result.cancelled, !result.text.isEmpty {
+                self.conversation.compactSummary = result.text
+                self.conversation.compactedThrough = last.id
+                self.conversation.usage?.input = 0
+                self.sink?.notice("The session so far was summarised" + (focus.isEmpty ? "" : " (keeping: \(focus))") + ". The next request starts from the summary.")
+            }
+            self.isRunning = false
+            self.endActivity()
+            self.setStatus(nil)
+            self.save()
+            self.flushQueued(stopped: result.cancelled)
+        }
     }
 
     // MARK: Persistence helpers

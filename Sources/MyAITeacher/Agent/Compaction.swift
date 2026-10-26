@@ -39,13 +39,16 @@ enum Compaction {
     /// A rolling summary of `msgs` merged into `previous`, chunk by chunk, so nothing is silently dropped however long the
     /// range is. `state` is app-held context the summary must carry verbatim (the course board is not in the transcript).
     /// A failed call falls back to a deterministic digest, so the request still shrinks.
+    /// `coding`: a code agent's session, summarised as engineering work; `focus`: what the user asked the summary to keep
+    /// (`/compact focus`).
     static func summarise(_ msgs: [ChatMessage], previous: String?, state: String, client: LLMClient, model: String,
-                          sessionID: String) async -> Summary {
+                          sessionID: String, coding: Bool = false, focus: String? = nil) async -> Summary {
         var summary = previous
         var usage: [Usage] = []
         for chunk in ContextPolicy.chunks(msgs, maxChars: chunkChars) {
-            let req = LLMRequest(model: model, system: "You write precise, dense summaries of tutoring sessions.",
-                                 messages: [ChatMessage(role: .user, blocks: [.text(prompt(chunk, previous: summary, state: state))])],
+            let req = LLMRequest(model: model, system: coding ? "You write precise, dense summaries of software engineering sessions." : "You write precise, dense summaries of tutoring sessions.",
+                                 messages: [ChatMessage(role: .user, blocks: [.text(coding ? codingPrompt(chunk, previous: summary, focus: focus)
+                                                                                           : prompt(chunk, previous: summary, state: state, focus: focus))])],
                                  maxTokens: 4096, sessionID: sessionID, cache: false)
             // A supervised job (Runtime › jobs): a failed call, or one silent for 120 s (every streamed event is a heartbeat),
             // is retried with backoff, then the digest below.
@@ -70,13 +73,32 @@ enum Compaction {
         return Summary(text: (summary ?? "").trimmingCharacters(in: .whitespacesAndNewlines), usage: usage)
     }
 
-    static func prompt(_ chunk: [ChatMessage], previous: String?, state: String) -> String {
+    static func prompt(_ chunk: [ChatMessage], previous: String?, state: String, focus: String? = nil) -> String {
         """
         Summarise this part of a tutoring session so the lesson can continue seamlessly. \
         \(previous.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
         Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Tests & results / \
         Decisions & preferences / Files & artifacts / Course state / Next steps. Be specific (formulas, examples, scores).\
-        \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)
+        \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)\
+        \(focus.flatMap { $0.isEmpty ? nil : "\n\nThe learner asked the summary to keep in particular: " + $0 } ?? "")
+
+        <transcript>
+        \(Reflection.transcriptExcerpt(chunk, maxChars: chunkChars))
+        </transcript>
+        """
+    }
+
+    /// A code agent's session, as Claude Code compacts one: what the next step needs to carry on without re-reading.
+    static func codingPrompt(_ chunk: [ChatMessage], previous: String?, focus: String?) -> String {
+        """
+        Summarise this part of a coding session so the agent can continue the work seamlessly. \
+        \(previous.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
+        Use these headings: The user's requests (every one, in their words where it matters) / Key technical facts (APIs, \
+        conventions, commands that worked) / Files read and changed (paths, what changed and why, important snippets) / \
+        Errors and how they were fixed / Verification (builds, tests and their results) / Decisions and the user's \
+        feedback / Pending tasks / Current work (exactly where it stopped) / Next step (only what the user asked for). Be \
+        specific: paths, names, commands, error messages.\
+        \(focus.flatMap { $0.isEmpty ? nil : "\n\nThe user asked the summary to keep in particular: " + $0 } ?? "")
 
         <transcript>
         \(Reflection.transcriptExcerpt(chunk, maxChars: chunkChars))

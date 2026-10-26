@@ -148,8 +148,14 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
 
 ### A coding agent too
 **Code sessions** work in a folder, much like Claude Code:
-* read, edit and search files, and run commands, with your approval;
-* a plan checklist, and project memory kept in `.teacher/code-memory.md`, `CLAUDE.md` or `AGENTS.md`;
+* read, edit and search files, and run commands, with your approval. Read-only commands (`git status`, `rg`, `ls`…)
+  never ask, and "Always allow `npm test …` in this folder" makes a rule;
+* **plan mode** (⇧⌘P): the agent researches and presents a plan, and nothing changes until you approve it;
+* message the agent while it works: it reads your message at its next step;
+* it never overwrites a file it hasn't read, or one you changed since it looked;
+* a plan checklist, and project memory kept in `.teacher/code-memory.md`, plus the `CLAUDE.md` / `AGENTS.md` files of
+  the project, its parent folders and its subfolders (with `@file` imports);
+* `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
 * a git diff panel with checkpoints.
 
 The agent can also:

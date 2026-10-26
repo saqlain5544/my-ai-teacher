@@ -51,6 +51,7 @@ struct MyAITeacherApp: App {
                 Button("Memory") { app.selection = .memory }.keyboardShortcut("3", modifiers: [.command, .option])
                 Divider()
                 Button("Stop Generating") { NotificationCenter.default.post(name: .stopGenerating, object: nil) }.keyboardShortcut(".")
+                Button("Plan Mode (Code Sessions)") { NotificationCenter.default.post(name: .togglePlanMode, object: nil) }.keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Stop Speaking") { app.speech.stop() }
             }
             CommandGroup(after: .textFormatting) {
@@ -70,5 +71,6 @@ struct MyAITeacherApp: App {
 
 extension Notification.Name {
     static let stopGenerating = Notification.Name("stopGenerating")
+    static let togglePlanMode = Notification.Name("togglePlanMode")
     static let focusComposer = Notification.Name("focusComposer")
 }

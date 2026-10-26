@@ -143,9 +143,7 @@ struct ProjectProfile: Sendable, Equatable {
         if has(".github/workflows") { p.notes.append("GitHub Actions workflows in .github/workflows (what CI runs)") }
         if has(".pre-commit-config.yaml") { p.notes.append("pre-commit hooks configured") }
         if has(".editorconfig") { p.notes.append(".editorconfig sets indentation") }
-        if has(".teacher/commands"), let cmds = try? fm.contentsOfDirectory(atPath: folder.appendingPathComponent(".teacher/commands").path) {
-            p.commandsDir = cmds.filter { $0.hasSuffix(".md") }.map { String($0.dropLast(3)) }.sorted()
-        }
+        p.commandsDir = ProjectCommands.names(folder, home: nil)   // the project's own; the user knows their personal ones
 
         // Languages by file count, bounded.
         walks += 1
@@ -286,7 +284,7 @@ struct ProjectProfile: Sendable, Equatable {
         if let g = git { s += "- Git: branch `\(g.branch)`, \(g.dirty == 0 ? "clean" : "\(g.dirty) changed file\(g.dirty == 1 ? "" : "s") uncommitted")\n" }
         for n in notes { s += "- \(n)\n" }
         if !toolchains.isEmpty { s += "- Installed: " + toolchains.joined(separator: ", ") + "\n" }
-        if !commandsDir.isEmpty { s += "- Project commands the user can run as /name (from .teacher/commands): " + commandsDir.joined(separator: ", ") + "\n" }
+        if !commandsDir.isEmpty { s += "- The user's commands, run as /name (from .teacher/commands or .claude/commands): " + commandsDir.joined(separator: ", ") + "\n" }
         return s.trimmingCharacters(in: .newlines)
     }
 }

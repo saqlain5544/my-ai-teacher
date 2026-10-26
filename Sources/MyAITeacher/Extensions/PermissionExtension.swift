@@ -17,7 +17,17 @@ final class PermissionExtension: AgentExtension {
         let input = call.input ?? .object([:])
         let conv = session.id
         if let installing = Self.packageInstall(tool: tool, input: input) {
-            return .deny("Installing packages isn't allowed (\(installing)). Use the standard library or what's already installed.")
+            // An engineer installs a project's dependencies as part of the work, with the user's say-so; a lesson doesn't.
+            guard session.conversation.mode.isAgent else {
+                return .deny("Installing packages isn't allowed (\(installing)). Use the standard library or what's already installed.")
+            }
+            return .ask(ApprovalRequest(
+                title: "Allow the agent to install packages?",
+                detail: String((input["command"]?.string ?? input["code"]?.string ?? installing).prefix(4000)),
+                options: [ApprovalOption(id: "once", label: "Allow this install", style: .primary),
+                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { choice in
+                choice == "once" ? .allow : .deny("The user declined the install. Work with what is installed, or ask them to install it.")
+            }
         }
         // Python follows the learner's Python setting, independent of folder access.
         if Self.isPython(tool, input) {
@@ -105,21 +115,33 @@ final class PermissionExtension: AgentExtension {
             let impliedByBash = grant == "tests" || grant == "run_code"
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
                 || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
-            var detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
+            let command = tool.name == "bash" ? input["command"]?.string ?? "" : ""
+            // Looking around needs no approval (`git status`, `ls`, `rg`…: the strict read-only list, run hardened by
+            // `bash`), and nor does a command the user always allows in this folder.
+            if !command.isEmpty, input["background"]?.bool != true, ReadOnlyShell.allows(command) { return .allow }
+            if !command.isEmpty, CommandRules.matches(command, app.settings.value.commandRules[ws.url.path] ?? []) { return .allow }
+            let rule = command.isEmpty ? nil : CommandRules.prefix(command)
+            var detail = tool.name == "bash" ? command : (input["code"]?.string ?? tool.summary(input))
             var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
             if grant == "tests" {
                 what = tool.name == "project_review" ? "run your tests for the review" : "run the project's tests"
                 detail = input["command"]?.string ?? ProjectStore.load(ws)?.testCommand ?? detail
             }
-            return .ask(ApprovalRequest(
-                title: "Allow Teacher to \(what)?",
-                detail: String(detail.prefix(4000)),
-                options: [ApprovalOption(id: "once", label: "Allow once", style: .primary),
-                          ApprovalOption(id: "lesson", label: "Allow for this lesson"),
-                          ApprovalOption(id: "grant_full", label: "Give full access to “\(ws.name)”"),
-                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
+            var options = [ApprovalOption(id: "once", label: "Allow once", style: .primary)]
+            if let rule { options.append(ApprovalOption(id: "rule", label: "Always allow “\(rule) …” in this folder")) }
+            options += [ApprovalOption(id: "lesson", label: "Allow for this lesson"),
+                        ApprovalOption(id: "grant_full", label: "Give full access to “\(ws.name)”"),
+                        ApprovalOption(id: "deny", label: "Deny", style: .danger)]
+            return .ask(ApprovalRequest(title: "Allow Teacher to \(what)?", detail: String(detail.prefix(4000)), options: options)) { [weak self] choice in
                 switch choice {
                 case "once": return .allow
+                case "rule":
+                    if let rule, let self {
+                        var rules = self.app.settings.value.commandRules[ws.url.path] ?? []
+                        if !rules.contains(rule) { rules.append(rule) }
+                        self.app.settings.value.commandRules[ws.url.path] = rules
+                    }
+                    return .allow
                 case "lesson": self?.app.interactions.grant(grant, conversationID: conv); return .allow
                 case "grant_full": self?.app.setAccess(.full, for: ws); return .allow
                 default: return .deny("The learner declined.")
@@ -176,4 +198,72 @@ final class PermissionExtension: AgentExtension {
         #"\b(npm|pnpm|bun)\s+(-g|--global|--location[= ]global)\s+(i|install|add)\b"#,
         #"\byarn\s+global\s+add\b"#,
     ]
+}
+
+/// "Always allow in this folder" for shell commands, like Claude Code's `Bash(npm test:*)`: a rule is a command's leading
+/// words (`npm test`, `swift build`, `npm run lint`, `python3 -m pytest`), and a command matches when it is one simple
+/// command starting with them. Chaining, pipes, redirections and substitutions never match (they could append anything),
+/// except one leading `cd dir &&`, which models add out of habit.
+enum CommandRules {
+    /// Programs that take a subcommand: a rule without one ("git", "npm") would allow everything they do.
+    static let needsSubcommand: Set<String> = ["git", "npm", "pnpm", "yarn", "bun", "npx", "bunx", "cargo", "go", "swift", "docker", "kubectl", "gh",
+                                               "brew", "pip", "pip3", "uv", "poetry", "deno", "dotnet", "mvn", "gradle", "./gradlew", "zig",
+                                               "rustup", "xcrun", "bundle", "rails", "mix", "composer", "terraform", "make",
+                                               "python", "python3", "node", "ruby", "perl"]
+    /// Never offered as a rule: removing, privilege, raw devices, network transfer, process control, running other code.
+    /// git and hg too: a repository's own config can make them run programs (fsmonitor, diff drivers, hooks), and their
+    /// looking commands already run hardened without asking; a rule would let a variant of those run unhardened.
+    static let never: Set<String> = ["git", "hg", "rm", "rmdir", "sudo", "su", "doas", "dd", "mkfs", "chmod", "chown", "chflags", "kill", "killall", "pkill",
+                                     "curl", "wget", "ssh", "scp", "sftp", "rsync", "nc", "sh", "bash", "zsh", "fish", "eval", "exec", "env",
+                                     "xargs", "osascript", "open", "launchctl", "defaults", "security", "diskutil", "shutdown", "reboot", "crontab",
+                                     "mv", "cp", "ln", "tee", "truncate", "shred", "find"]
+    static let runners: Set<String> = ["npm", "pnpm", "yarn", "bun"]
+
+    /// The rule to offer for `command`, or nil when it can't have one.
+    static func prefix(_ command: String) -> String? {
+        guard let words = simpleWords(command), let w0 = words.first, !never.contains(w0), !w0.contains("=") else { return nil }
+        let isWord = { (w: String) in !w.hasPrefix("-") && w.allSatisfy { $0.isLetter || $0.isNumber || "-_:.@".contains($0) } && !w.isEmpty }
+        var rule = [w0]
+        if ["python", "python3"].contains(w0), words.count > 2, words[1] == "-m", isWord(words[2]) { rule += ["-m", words[2]] }
+        else if words.count > 1, isWord(words[1]) {
+            rule.append(words[1])
+            if runners.contains(w0), ["run", "run-script", "exec", "x"].contains(words[1]), words.count > 2, isWord(words[2]) { rule.append(words[2]) }
+        }
+        if rule.count == 1, needsSubcommand.contains(w0) { return nil }
+        // A runner's bare `run`/`exec` would allow every script or binary.
+        if rule.count == 2, runners.contains(w0), ["run", "run-script", "exec", "x"].contains(rule[1]) { return nil }
+        return rule.joined(separator: " ")
+    }
+
+    static func matches(_ command: String, _ rules: [String]) -> Bool {
+        guard !rules.isEmpty, let words = simpleWords(command), let w0 = words.first, !never.contains(w0) else { return false }
+        return rules.contains { r in
+            let rw = r.split(separator: " ").map(String.init)
+            return !rw.isEmpty && words.count >= rw.count && Array(words.prefix(rw.count)) == rw
+        }
+    }
+
+    /// The words of a single simple command (after one optional `cd dir &&`), or nil when it is anything more.
+    static func simpleWords(_ command: String) -> [String]? {
+        var c = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let r = c.range(of: #"^cd\s+[^\s;&|<>$`\\(){}'"]+\s*&&\s*"#, options: .regularExpression) { c = String(c[r.upperBound...]) }
+        guard !c.isEmpty, isSimple(c), let words = ReadOnlyShell.tokens(c), !words.isEmpty else { return nil }
+        return words
+    }
+
+    /// No shell syntax outside single quotes beyond words: no `; & | < > ( ) { }` or newlines, no `$`, backquotes or
+    /// backslashes (which also expand inside double quotes).
+    static func isSimple(_ s: String) -> Bool {
+        var quote: Character?
+        for ch in s {
+            if quote == "'" { if ch == "'" { quote = nil }; continue }
+            if quote == "\"" {
+                if ch == "\"" { quote = nil } else if "$`\\".contains(ch) { return false }
+                continue
+            }
+            if ch == "'" || ch == "\"" { quote = ch; continue }
+            if ";&|<>(){}$`\\\n".contains(ch) { return false }
+        }
+        return quote == nil
+    }
 }

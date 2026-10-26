@@ -24,6 +24,12 @@
     summary: n => (input(n).path ? 'outline of ' + input(n).path : 'definitions of ' + (input(n).query || '')) + (meta(n).count != null ? ' · ' + meta(n).count : ''),
     body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });
 
+  // Plan mode's plan, for the user's approval: always open, rendered as Markdown under the Approve / Keep planning buttons.
+  R.defineTool({ name: 'exit_plan_mode', icon: 'list-checks', tone: 'blue', title: 'Plan',
+    summary: n => { const m = meta(n); return n.props.status === 'running' ? 'waiting for your approval' : m.planApproved ? 'approved' : n.props.status === 'done' ? 'kept planning' : ''; },
+    open: () => true,
+    body: (n, ctx) => input(n).plan ? '<div class="plan-md">' + ctx.md(input(n).plan) + '</div>' : '' });
+
   // A write or edit whose syntax check failed is marked on its card.
   R.registerProcessor(root => {
     const cards = (root.matches && root.matches('[data-tool-id]') ? [root] : []).concat(Array.from(root.querySelectorAll('[data-tool-id]')));

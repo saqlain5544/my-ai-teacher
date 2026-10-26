@@ -423,6 +423,22 @@ enum ToolArgs {
         return nil
     }
 
+    /// Argument names models bring from other agents' tools (Claude Code's `file_path` and `run_in_background`, camelCase
+    /// spellings), as this app's tools name them.
+    static let aliases: [String: String] = ["file_path": "path", "filePath": "path", "filepath": "path", "run_in_background": "background",
+                                            "oldString": "old_string", "newString": "new_string", "replaceAll": "replace_all",
+                                            "outputMode": "output_mode", "headLimit": "head_limit"]
+
+    /// `input` with aliased names renamed to the tool's own, where the tool has that property and the call didn't give it.
+    /// Applied before the gates, so a permission check sees the same path the tool then writes.
+    static func canonical(_ input: JSON, schema: JSON) -> JSON {
+        guard var o = input.object, let props = schema["properties"]?.object else { return input }
+        for (from, to) in aliases where o[to] == nil && props[to] != nil && props[from] == nil {
+            if let v = o.removeValue(forKey: from) { o[to] = v }
+        }
+        return .object(o)
+    }
+
     /// Top-level arguments coerced to the schema's types; anything already right is untouched.
     static func coerce(_ input: JSON, schema: JSON) -> JSON {
         guard var o = input.object, let props = schema["properties"]?.object else { return input }

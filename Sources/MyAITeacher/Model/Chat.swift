@@ -161,4 +161,6 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var trimmedThrough: String?
     /// The model refused a request over an attached image (a text-only model): from then on images travel as a note.
     var imagesUnsupported: Bool?
+    /// Code agent: research and present a plan, change nothing until the user approves it (`PlanModeExtension`).
+    var planMode: Bool?
 }

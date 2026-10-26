@@ -871,7 +871,7 @@ enum SubAgent {
                 return (.toolResult(id: callID, name: name, content: "Unknown tool `\(name)`. Your tools: \(cfg.tools.joined(separator: ", ")).", isError: true),
                         ToolMetric(name: name, duration: 0, ok: false))
             }
-            let input = c.input ?? .object([:])
+            let input = ToolArgs.canonical(c.input ?? .object([:]), schema: tool.schema)
             if input["_raw"] != nil {
                 return (.toolResult(id: callID, name: name, content: "Tool input was not valid JSON. Retry with valid JSON arguments.", isError: true), ToolMetric(name: name, duration: 0, ok: false))
             }
@@ -887,6 +887,7 @@ enum SubAgent {
             sub.agentCeiling = AgentCeiling(handle: handle, readOnly: cfg.scope.readOnly, tools: Set(cfg.tools))
             sub.agentProvider = cfg.providerID
             sub.checkpointTurn = ctx.checkpointTurn
+            sub.codeAgent = ctx.codeAgent   // a coder's writes are syntax-checked and guarded like the lesson's own
             // Working in the lesson's own folder (not a worktree copy): the change joins the turn's Undo.
             if let turn = ctx.checkpointTurn, name == "write" || name == "edit", let p = input["path"]?.string {
                 let root = cfg.scope.root.standardizedFileURL.path, home = ctx.workspace.standardizedFileURL.path

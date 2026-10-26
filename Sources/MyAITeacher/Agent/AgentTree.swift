@@ -55,7 +55,7 @@ enum AgentTree {
                   guide: Guides.codeMentor),
         AgentNode(id: "engineer", parent: "root",
                   core: ["bash", "bash_jobs", "run_code", "glob", "grep", "symbols", "source", "diagnostics", "run_tests", "todo_write", "agents", "ask_learner", "project_memory",
-                         "browser", "mac", "computer"],
+                         "exit_plan_mode", "browser", "mac", "computer"],
                   components: ["layout", "tree"],
                   guide: Guides.engineer),
     ]

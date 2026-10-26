@@ -38,6 +38,24 @@ struct Composer: View {
                 .onAppear { loadKanaWords(layout.code) }
             }
             VStack(alignment: .leading, spacing: 6) {
+                ForEach(session.queued, id: \.id) { m in
+                    HStack(spacing: 6) {
+                        Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
+                        Text(m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: " "))
+                            .font(.caption).lineLimit(2).truncationMode(.tail)
+                        Spacer()
+                        Text("next step").font(.caption2).foregroundStyle(.tertiary)
+                        Button {
+                            if let back = session.unqueue(m.id) {
+                                let text = back.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n")
+                                session.draft = [text, session.draft].filter { !$0.isEmpty }.joined(separator: "\n")
+                            }
+                        } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                        .buttonStyle(.borderless).accessibilityLabel("Take this message back").help("Take it back into the message box")
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 4)
+                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
+                }
                 ForEach(session.pendingMedia.keys.sorted(), id: \.self) { name in
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
@@ -126,6 +144,18 @@ struct Composer: View {
                 .shadow(color: .black.opacity(0.07), radius: 10, y: 3))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
             HStack(spacing: 10) {
+                if session.conversation.mode.isAgent {
+                    let planning = session.conversation.planMode == true
+                    Button { session.setPlanMode(!planning) } label: {
+                        Label(planning ? "Plan mode on" : "Plan mode", systemImage: planning ? "checklist.checked" : "checklist")
+                            .padding(.horizontal, 6).padding(.vertical, 1)
+                            .background(Capsule().fill(planning ? Color.accentColor.opacity(0.15) : Color.clear))
+                            .foregroundStyle(planning ? Color.accentColor : Color.secondary)
+                    }
+                    .buttonStyle(.plain).accessibilityLabel(planning ? "Plan mode is on" : "Turn plan mode on")
+                    .help(planning ? "The agent researches and presents a plan; nothing changes until you approve it (⇧⌘P turns it off)"
+                                   : "Plan first: the agent researches and presents a plan for your approval before changing anything (⇧⌘P)")
+                }
                 if let u = session.conversation.usage, u.input > 0 {
                     Text("Context \(Self.short(u.input)) tokens · \(Self.short(u.output)) generated")
                 }
@@ -150,7 +180,8 @@ struct Composer: View {
 
     private var placeholder: String {
         session.conversation.mode.isAgent
-            ? (session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
+            ? (session.isRunning ? "Message the agent while it works: it reads it at its next step…"
+               : session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
             : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
     }
     private var canSend: Bool {
@@ -162,7 +193,8 @@ struct Composer: View {
     }
 
     private func send() {
-        guard canSend, !session.isRunning else { return }
+        // While a code agent works, a message is queued for its next step (lessons wait for the reply).
+        guard canSend, !session.isRunning || session.conversation.mode.isAgent else { return }
         if speech.isListening { speech.stopListening() }
         let text = session.draft
         let blocks = session.attachments.map(\.block)
