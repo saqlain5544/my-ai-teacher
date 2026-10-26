@@ -70,7 +70,7 @@ final class MentorLessonTests: XCTestCase {
         let note = DeepWork.planNote("Grounding: a shopping list", mode: .code)
         XCTAssertTrue(note.contains("`run_code`") && note.contains("`.teacher/tests`") && note.contains("Never show solutions"), note)
         let prompt = SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m")
-        XCTAssertTrue(prompt.contains("first-time programmer") && prompt.contains("`.teacher/tests`") && prompt.contains("own editor"), prompt)
+        XCTAssertTrue(prompt.contains("First-timer") && prompt.contains("`.teacher/tests`") && prompt.contains("code in their editor"), prompt)
     }
 
     func testTheMentorWorksInTheFolderWithTestsInTheTeacherDirectory() {

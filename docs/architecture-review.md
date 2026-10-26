@@ -102,3 +102,33 @@ A second pass over the whole app for bugs and for features that cost more than t
 ## Verification
 * 451 unit tests, 155 renderer tests in light and dark, the watchdog check; a clean build with no warnings (17 before).
 * Live headless lessons on MiniMax-M3.1-Flash (tutor and explain, with plans, reviews and graded questions).
+
+## Live code-mentor session (26 October 2026)
+
+Three tasks in the real app, driven through the UI (a test profile, MiniMax-M3.1-Flash, thinking off, quizzes off,
+Read & write access): an LRU cache project with two review rounds, an expression-evaluator project started in the
+same lesson, and a question about a slow asyncio downloader.
+
+| Turn | Wall time | Model calls | Prompt tokens | Where the time went |
+|---|---|---|---|---|
+| LRU project created | 3 m 01 s | 7 | 121k | model 116 s, approvals 42 s, tools 0.6 s |
+| Review 1 (both bugs found, one the tests missed) | 1 m 53 s | 8 | 196k | model 69 s, approvals 24 s |
+| Review 2 | 2 m 21 s | 8 | 260k | model 120 s |
+| Evaluator project | 10 m 11 s | 29 | 1.72M | model 413 s, approvals 170 s: the locked previous project |
+| Evaluator review | 2 m 03 s | 10 | 666k | model 104 s |
+| asyncio question | 1 m 21 s | 8 | 540k | model 61 s |
+
+Tools took under 10 s a turn; the model's own steps took 60–90% of every turn. MiniMax reasons whenever tools are
+present even with `thinking: disabled` (42k reasoning tokens over the session); an explicit budget was slower (8k
+output tokens against 3.4k), so off stays the setting. The reviewer pass rewrote four of six drafts and each time for
+a real reason (a claimed test fix that had been refused, a giveaway fix, two factual errors), so it stays on.
+
+What it fixed, besides the UI:
+
+| Problem seen | Fix |
+|---|---|
+| A second project in the same lesson dead-ended: the mentor's own new test file was refused as "the learner's", so it recorded a pass that never happened to get out | Files the mentor creates while a project is open stay its own (`mentorFiles`, also outside the command fence); `project_tests` park puts a project aside unfinished with the learner's approval; a headless rerun switches projects in 61 s with no refusal |
+| Tests locked the moment they were registered, so fixing a wrong expectation needed the learner to unlock | Tests are the mentor's draft until the learner changes a file (`testsAreDraft`); set again, still red-first |
+| Four approvals for one lesson's tests (bash, set, review start, status) | One `tests` grant for the three test tools, implied by a shell grant; actions that run nothing don't ask; Request review grants it; prompts say "run your tests for the review" with the command, not "start" |
+| Every scratch write of a reference solution asked again | Writes in the system's temporary folder don't ask |
+| Startup instructions ~10.4k characters for a code lesson | Terse defaults (teacher, Code mentor, board, app and tools guides): 7.9k, every rule and format kept |

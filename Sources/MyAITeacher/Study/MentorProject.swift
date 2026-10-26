@@ -83,6 +83,12 @@ struct MentorProject: Codable, Sendable, Equatable {
     /// What the guard stopped (refused writes, undone changes, withheld code), for the learner to see. No code in it.
     struct GuardEvent: Codable, Sendable, Equatable { var at: Date; var kind: String; var detail: String }
     var guardLog: [GuardEvent]? = nil
+    /// Files the mentor created while the project was open (a second exercise, its tests, a scratch example): its own to
+    /// keep editing, never the learner's work. Relative to the lesson folder.
+    var mentorFiles: [String]? = nil
+    /// Put aside unfinished (`project_tests` park, with the learner's approval): no longer open, and never a pass.
+    var parkedAt: Date? = nil
+    var parkedWhy: String? = nil
 
     var helpSinceReview: Help {
         let since = rounds.last?.at ?? .distantPast
@@ -97,8 +103,8 @@ struct MentorProject: Codable, Sendable, Equatable {
     }
 
     var lastRun: TestRun? { runs.last }
-    /// Baselined and not yet passed: the learner is working on it, so its files are theirs.
-    var isOpen: Bool { snapshotAt != nil && rounds.last?.verdict != "pass" }
+    /// Baselined, not passed and not put aside: the learner is working on it, so its files are theirs.
+    var isOpen: Bool { snapshotAt != nil && parkedAt == nil && rounds.last?.verdict != "pass" }
     var openFindings: [Finding] { rounds.last?.findings.filter { !$0.resolved } ?? [] }
     var nextFindingID: Int { (rounds.flatMap(\.findings).map(\.id).max() ?? 0) + 1 }
 }
@@ -204,6 +210,15 @@ enum ProjectStore {
     }
 
     /// How many files differ from the snapshot by date or size (cheap: for the state line on every request).
+    /// The tests are still the mentor's draft: no review yet and the learner hasn't changed a file since the baseline
+    /// (files the mentor created don't count). A wrong expectation found right after `set` is fixed without an unlock.
+    static func testsAreDraft(_ ws: Workspace, _ p: MentorProject) -> Bool {
+        guard p.rounds.isEmpty, let d = try? Data(contentsOf: manifestURL(ws)),
+              let m = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { return false }
+        let mine = Set(p.mentorFiles ?? []), now = projectFiles(ws).filter { !mine.contains($0) }
+        return now.allSatisfy { m[$0] == stamp(ws.url.appendingPathComponent($0)) } && m.keys.allSatisfy { now.contains($0) || mine.contains($0) }
+    }
+
     static func changedCount(_ ws: Workspace) -> Int? {
         guard let d = try? Data(contentsOf: manifestURL(ws)), let m = try? JSONSerialization.jsonObject(with: d) as? [String: String] else { return nil }
         let now = projectFiles(ws)

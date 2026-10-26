@@ -367,7 +367,7 @@ final class BoardTests: XCTestCase {
     func testEveryMentorIsToldToVisualise() {
         for mode in TeachingMode.allCases where !mode.isAgent {
             let p = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: "", model: "m")
-            XCTAssertTrue(p.contains("```mermaid") && p.contains("```visual") && p.contains("3D") && p.contains("Show it as well as say it"), "\(mode)")
+            XCTAssertTrue(p.contains("```mermaid") && p.contains("```visual") && p.contains("3D") && p.contains("Draw what has structure"), "\(mode)")
             XCTAssertFalse(p.contains("lightest form"), "nothing discourages visuals")
         }
         let agent = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "")

@@ -85,6 +85,9 @@ final class PermissionExtension: AgentExtension {
                     }
                 }
             }
+            // Scratch files in the system's temporary folder (a code mentor checks its tests against a reference solution
+            // there, never in the learner's folder): no one's data, so no question each time.
+            if Self.isScratch(url) { return .allow }
             return .ask(ApprovalRequest(
                 title: "Allow Teacher to \(verb) a file outside “\(ws.name)”?",
                 detail: url.path,
@@ -93,10 +96,20 @@ final class PermissionExtension: AgentExtension {
                 choice == "once" ? .allow : .deny("The learner declined writing outside the folder.")
             }
         case .execute:
-            let grant = tool.name == "diagnostics" ? "bash" : tool.name   // diagnostics runs shell commands: one grant for both
-            if access == .full || app.interactions.isGranted(grant, conversationID: conv) { return .allow }
-            let detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
-            let what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
+            // The project tools run the project's tests only in some actions (status, findings, park… run nothing).
+            if let runs = Self.runsTests(tool, input), !runs { return .allow }
+            // One grant per kind of run: diagnostics runs shell commands like bash; the three test tools run the project's
+            // tests (asking three times in one lesson for the same suite was the mentor's main friction), and a lesson
+            // that may run shell commands may run its tests.
+            let grant = tool.name == "diagnostics" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : tool.name
+            if access == .full || app.interactions.isGranted(grant, conversationID: conv)
+                || (grant == "tests" && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
+            var detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
+            var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
+            if grant == "tests" {
+                what = tool.name == "project_review" ? "run your tests for the review" : "run the project's tests"
+                detail = input["command"]?.string ?? ProjectStore.load(ws)?.testCommand ?? detail
+            }
             return .ask(ApprovalRequest(
                 title: "Allow Teacher to \(what)?",
                 detail: String(detail.prefix(4000)),
@@ -111,6 +124,23 @@ final class PermissionExtension: AgentExtension {
                 default: return .deny("The learner declined.")
                 }
             }
+        }
+    }
+
+    /// Inside the system's temporary folder ($TMPDIR, /tmp).
+    nonisolated static func isScratch(_ url: URL) -> Bool {
+        let roots = [FileManager.default.temporaryDirectory, URL(fileURLWithPath: "/tmp"), URL(fileURLWithPath: "/private/tmp")]
+        return roots.contains { url.isInside($0) }
+    }
+
+    /// For the project tools: whether this call runs the tests (nil for any other tool).
+    nonisolated static func runsTests(_ tool: Tool, _ input: JSON) -> Bool? {
+        let action = input["action"]?.string ?? ""
+        switch tool.name {
+        case "run_tests": return true
+        case "project_tests": return ["set", "run"].contains(action)
+        case "project_review": return action == "start"
+        default: return nil
         }
     }
 

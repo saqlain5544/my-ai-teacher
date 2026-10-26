@@ -60,12 +60,16 @@ struct ProjectTestsTool: Tool {
     Read the output it returns: red should mean failing tests, not a build error. After a review passes, `set` starts \
     the next project. action="run": run them now (`test` narrows to one where the runner allows it). action="status": \
     the command, the runs, the locks, what changed since the last review. action="unlock": ask the learner to let you \
-    change the locked tests (a wrong test, a stretch goal); edit them, then `set` again to re-baseline.
+    change the locked tests (a wrong test, a stretch goal); edit them, then `set` again to re-baseline. Until the learner \
+    changes a file the tests are still your draft: fix them and `set` again, no unlock. action="park" with `reason`: the \
+    learner moves on before a pass — they approve, it stays on the record as unfinished, and `set` starts the next \
+    project (its own folder, tests in `.teacher/tests/<name>/`). Never record a pass to get out of a project.
     """
     let risk = ToolRisk.execute
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("Action.", enum: ["set", "run", "status", "unlock"]),
+            "action": Schema.string("Action.", enum: ["set", "run", "status", "unlock", "park"]),
+            "reason": Schema.string("park: why it's put aside (the learner's words)."),
             "command": Schema.string("set: the test command, run from the lesson folder."),
             "test": Schema.string("run: only this test (a failing test's name as reported)."),
             "title": Schema.string("set: the project's name."),
@@ -86,7 +90,9 @@ struct ProjectTestsTool: Tool {
             let p = ProjectStore.load(ws) ?? MentorProject()
             // A passed project is finished: `set` starts the next one (the last record is kept beside it).
             let next = p.snapshotAt != nil && !p.isOpen
-            let rebaseline = p.isOpen
+            // Still the mentor's draft (no review, the learner hasn't changed a file): set again as if it were the first.
+            let draft = p.isOpen && p.testsUnlockedAt == nil && ProjectStore.testsAreDraft(ws, p)
+            let rebaseline = p.isOpen && !draft
             if rebaseline, p.testsUnlockedAt == nil {
                 return .error("This project has its baseline and its tests are locked: a review measures the learner against them. To change the tests or the command, call `project_tests` unlock (the learner approves), edit the tests, then set again.")
             }
@@ -121,6 +127,14 @@ struct ProjectTestsTool: Tool {
                               "\n--- output (tail) ---\n" + String(out.suffix(2000)) + "\nCheck the output: red should mean failing tests, not a build or import error (if it is, unlock the tests, fix them and set again)." +
                               "\nThe starter is the review baseline and the tests are locked: `project_review` start shows what the learner changed since. Tell the learner how to run the tests themselves: `\(command)` (or Run tests in the Project panel).",
                               meta: ["run": Self.json(run), "command": .string(command)])
+        case "park":
+            guard let p = ProjectStore.load(ws), p.isOpen else { return ToolOutput(text: "No open project to put aside: `set` starts one.") }
+            let why = input["reason"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            ProjectStore.mutate(ws) { q in
+                q.parkedAt = Date(); q.parkedWhy = why.isEmpty ? nil : why
+                q.log("parked", "put aside unfinished" + (why.isEmpty ? "" : ": " + why))
+            }
+            return ToolOutput(text: "“\(p.title ?? "The project")” is put aside unfinished (\(p.lastRun?.line ?? "no runs yet")): on the record as not passed. `set` starts the next project — its own folder, tests in `.teacher/tests/<name>/` — and the learner can come back to this one.")
         case "unlock":
             guard let p = ProjectStore.load(ws), p.snapshotAt != nil else { return ToolOutput(text: "The tests aren't locked yet: there is no baseline (`project_tests` set takes it).") }
             ProjectStore.mutate(ws) { $0.testsUnlockedAt = Date(); $0.log("unlocked", "the learner let the mentor change the tests") }
@@ -137,6 +151,7 @@ struct ProjectTestsTool: Tool {
             guard let p = ProjectStore.load(ws) else { return ToolOutput(text: "No project yet in this folder: write the starter and tests, then `project_tests` set.") }
             var s = "Project: \(p.title ?? "(untitled)")\(p.concept.map { " · concept \($0)" } ?? "")\nTest command: \(p.testCommand ?? "(not set)")"
             if p.isOpen { s += "\nTests: " + (p.testsUnlockedAt != nil ? "unlocked by the learner (set re-baselines)" : "locked since the baseline") }
+            else if p.parkedAt != nil { s += "\nPut aside unfinished\(p.parkedWhy.map { " (\($0))" } ?? ""): `set` starts the next project." }
             else if p.snapshotAt != nil { s += "\nPassed: `set` starts the next project." }
             if let r = p.lastRun { s += "\nLast run (\(r.why), \(Self.ago(r.at))): \(r.line)" + (r.failing.isEmpty ? "" : " — failing: " + r.failing.joined(separator: ", ")) }
             if !p.runs.isEmpty { s += "\nHistory: " + p.runs.suffix(8).map { "\($0.passed)/\($0.passed + $0.failed)" }.joined(separator: " → ") }

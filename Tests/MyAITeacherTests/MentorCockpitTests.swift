@@ -90,6 +90,10 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertFalse(ok.isError, ok.text)
         XCTAssertTrue(ok.text.contains("FAIL low"), ok.text)
         XCTAssertEqual(ProjectStore.load(ws)?.isOpen, true)
+        // Until the learner changes a file the tests are the mentor's draft: set again, but it must still fail first.
+        let draft = try await tool.run(["action": "set", "command": "true"], ctx())
+        XCTAssertTrue(draft.isError && draft.text.contains("prove nothing"), draft.text)
+        try write("calc.py", "def evaluate(src):\n    return 0\n")   // the learner starts
         let again = try await tool.run(["action": "set", "command": "true"], ctx())
         XCTAssertTrue(again.isError && again.text.contains("locked"), again.text)
         _ = try await tool.run(["action": "unlock"], ctx())
@@ -104,6 +108,51 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertFalse(next.isError, next.text)
         XCTAssertEqual(ProjectStore.load(ws)?.title, "calc 2"); XCTAssertEqual(ProjectStore.load(ws)?.rounds.count, 0)
         XCTAssertNotNil(read(".teacher/projects/1.json"))
+    }
+
+    @MainActor func testTheMentorKeepsItsOwnFilesAndDraftTestsAndCanPutAProjectAside() async throws {
+        let tool = ProjectTestsTool(), guard_ = MentorGuard()
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        func decide(_ name: String, _ input: JSON, _ t: Tool) -> String {
+            switch guard_.shouldRun(.toolUse(id: UUID().uuidString, name: name, input: input), tool: t, session: session) {
+            case .allow: return "allow"; case .deny: return "deny"; case .ask: return "ask"
+            }
+        }
+        try write("lru.py", "class LRU: pass\n")
+        try write(".teacher/tests/test_lru.py", "def test_x(): assert False\n")
+        _ = try await tool.run(["action": "set", "command": "exit 1", "title": "LRU"], ctx())
+        // Draft tests: the mentor fixes its own expectation right after set; the starter stays the learner's.
+        XCTAssertEqual(decide("edit", ["path": ".teacher/tests/test_lru.py"], EditTool()), "allow")
+        XCTAssertEqual(decide("edit", ["path": "lru.py"], EditTool()), "deny")
+        // A file the mentor creates mid-project stays its own (a second exercise's tests used to lock on their first edit).
+        XCTAssertEqual(decide("write", ["path": "calc/.teacher/tests/test_expr.py"], WriteTool()), "allow")
+        try write("calc/.teacher/tests/test_expr.py", "def test_y(): assert False\n")
+        XCTAssertEqual(decide("edit", ["path": "calc/.teacher/tests/test_expr.py"], EditTool()), "allow")
+        XCTAssertTrue(MentorGuard.fence(ws).contains("lru.py") && !MentorGuard.fence(ws).contains("test_expr.py"), "commands may change the mentor's files too")
+        // Once the learner works, the tests lock; the mentor's own files don't count as their work.
+        XCTAssertTrue(ProjectStore.testsAreDraft(ws, ProjectStore.load(ws)!))
+        try write("lru.py", "class LRU:\n    pass\n")
+        XCTAssertFalse(ProjectStore.testsAreDraft(ws, ProjectStore.load(ws)!))
+        XCTAssertEqual(decide("edit", ["path": ".teacher/tests/test_lru.py"], EditTool()), "deny")
+        // Moving on before a pass: the learner approves, it's on the record unfinished, and set starts the next project.
+        XCTAssertEqual(decide("project_tests", ["action": "park", "reason": "moving on"], tool), "ask")
+        let parked = try await tool.run(["action": "park", "reason": "moving on"], ctx())
+        XCTAssertTrue(parked.text.contains("put aside unfinished"), parked.text)
+        XCTAssertEqual(ProjectStore.load(ws)?.isOpen, false); XCTAssertNil(ProjectStore.load(ws)?.rounds.last, "never a pass")
+        XCTAssertEqual(decide("edit", ["path": "lru.py"], EditTool()), "allow", "no longer guarded")
+        let next = try await tool.run(["action": "set", "command": "exit 1", "title": "Calc"], ctx())
+        XCTAssertFalse(next.isError, next.text); XCTAssertEqual(ProjectStore.load(ws)?.title, "Calc")
+        XCTAssertNil(ProjectStore.load(ws)?.parkedAt); XCTAssertNil(ProjectStore.load(ws)?.mentorFiles)
+    }
+
+    @MainActor func testTheProjectToolsShareOneTestGrantAndOnlyRunsAsk() {
+        XCTAssertEqual(PermissionExtension.runsTests(ProjectTestsTool(), ["action": "status"]), false)
+        XCTAssertEqual(PermissionExtension.runsTests(ProjectTestsTool(), ["action": "set"]), true)
+        XCTAssertEqual(PermissionExtension.runsTests(ProjectReviewTool(), ["action": "findings"]), false)
+        XCTAssertEqual(PermissionExtension.runsTests(ProjectReviewTool(), ["action": "start"]), true)
+        XCTAssertEqual(PermissionExtension.runsTests(RunTestsTool(), [:]), true)
+        XCTAssertNil(PermissionExtension.runsTests(BashTool(), ["command": "ls"]))
     }
 
     // MARK: Reviews

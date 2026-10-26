@@ -40,6 +40,8 @@ final class ProjectModel: ObservableObject {
     func requestReview(_ r: MentorProject.SelfReview) {
         guard let ws, let session else { return }
         ProjectStore.mutate(ws) { $0.selfReview = r }
+        // Asking for a review is asking for the tests to run: the mentor's review shouldn't stop to ask again.
+        AppModel.shared.interactions.grant("tests", conversationID: session.id)
         var msg = "Please review my project."
         if !r.fixed.isEmpty { msg += "\nWhat I fixed: \(r.fixed)" }
         if !r.unsure.isEmpty { msg += "\nWhat I'm unsure about: \(r.unsure)" }
@@ -184,7 +186,8 @@ struct ProjectPanel: View {
             trend(p.runs.suffix(24))
             HStack(spacing: 10) {
                 if let r = p.lastRun { Label(r.line, systemImage: r.green ? "checkmark.circle.fill" : r.errored ? "exclamationmark.triangle" : "xmark.circle").foregroundStyle(r.green ? .green : r.errored ? .orange : .red) }
-                if let r = p.rounds.last { Text("Round \(r.number): \(r.verdict)").foregroundStyle(.secondary) }
+                if p.parkedAt != nil { Text("Put aside").foregroundStyle(.secondary) }
+                else if let r = p.rounds.last { Text("Round \(r.number): \(r.verdict)").foregroundStyle(.secondary) }
             }.font(.caption)
             if let e = p.explainBack {
                 Label(e.verdict.map { "Explain-back: \($0)" } ?? "Explain-back: your mentor will ask you to explain a choice", systemImage: "text.bubble").font(.caption).foregroundStyle(.secondary)
@@ -192,18 +195,32 @@ struct ProjectPanel: View {
         }
     }
 
-    /// Pass rate per run, oldest first: green bars are all-green runs, grey ones couldn't run.
+    /// The last run as a progress bar ("17 of 19"), then the pass rate per run, oldest first: green bars are all-green
+    /// runs, grey ones couldn't run. A lone pair of unlabelled bars didn't read as progress.
     private func trend(_ runs: ArraySlice<MentorProject.TestRun>) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if let r = runs.last, !r.errored {
+                ProgressView(value: Double(r.passed), total: Double(max(1, r.passed + r.failed)))
+                    .tint(r.green ? .green : .orange)
+                    .accessibilityLabel("Last run: \(r.passed) of \(r.passed + r.failed) passing")
+            }
+            if runs.count > 1 {
+                HStack(alignment: .bottom, spacing: 6) { bars(runs); Text("runs").font(.caption2).foregroundStyle(.tertiary) }
+            }
+        }
+    }
+
+    private func bars(_ runs: ArraySlice<MentorProject.TestRun>) -> some View {
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(Array(runs.enumerated()), id: \.offset) { _, r in
                 let total = max(1, r.passed + r.failed)
                 RoundedRectangle(cornerRadius: 1)
                     .fill(r.errored ? Color.secondary.opacity(0.4) : r.green ? Color.green : Color.orange)
-                    .frame(width: 6, height: r.errored ? 4 : max(3, 24 * CGFloat(r.passed) / CGFloat(total)))
+                    .frame(width: 6, height: r.errored ? 3 : max(2, 14 * CGFloat(r.passed) / CGFloat(total)))
                     .help("\(r.line) · \(r.why) · \(ProjectTestsTool.ago(r.at))")
             }
         }
-        .frame(height: 26, alignment: .bottom)
+        .frame(height: 15, alignment: .bottom)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Test history: " + runs.map { "\($0.passed) of \($0.passed + $0.failed)" }.joined(separator: ", "))
     }

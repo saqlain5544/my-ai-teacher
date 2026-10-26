@@ -83,7 +83,9 @@ struct QuizToggle: View {
             let forced = mode == .quiz || mode == .exam
             let on = forced || settings.value.quizzes
             Button { settings.value.quizzes.toggle() } label: {
+                // Tinted when on: the two checklist glyphs alone were hard to tell apart (the state was only in the tooltip).
                 Label("Quizzes: \(on ? "On" : "Off")", systemImage: on ? "checklist.checked" : "checklist.unchecked")
+                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
             }
             .disabled(forced)
             .help(forced ? "\(mode.title) mode always tests you."
@@ -116,6 +118,7 @@ struct ThinkingPicker: View {
             Label("Thinking: \(on ? settings.value.thinking.rawValue.capitalized : "Off")", systemImage: on ? "lightbulb.max" : "lightbulb")
         }
         .help("Reasoning effort")
+        .accessibilityLabel("Thinking: \(reasoning != false && settings.value.thinking != .off ? settings.value.thinking.rawValue.capitalized : "Off")")
         .fixedSize()
     }
 }
@@ -134,6 +137,7 @@ struct ModelPickerButton: View {
             }
         }
         .help("Provider and model")
+        .accessibilityLabel("Model: \(label)")
         .popover(isPresented: $show, arrowEdge: .bottom) {
             ModelPickerPopover(session: session, dismiss: { show = false }).environmentObject(app)
         }

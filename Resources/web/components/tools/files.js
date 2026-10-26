@@ -11,7 +11,8 @@
     // Running: the learner can send it to the background (the agent carries on). Backgrounded: its handle, and Stop.
     headActions(n, ctx) {
       const m = (n.props.result && n.props.result.meta) || {};
-      if (n.props.status === 'running') return '<span class="tool-acts"><button class="btn mini" data-act="tool-background" title="Let it run in the background; the agent carries on">Background</button></span>';
+      // Running, not waiting for approval: "Background" for a command that hasn't started made no sense.
+      if (n.props.status === 'running' && !(n.props.interaction && n.props.interaction.kind === 'permission')) return '<span class="tool-acts"><button class="btn mini" data-act="tool-background" title="Let it run in the background; the agent carries on">Background</button></span>';
       if (!m.background || n.props.status === 'pending') return '';
       return '<span class="tool-acts"><span class="agent-handle">' + ctx.esc(m.background) + ' · background' + (m.url ? ' · ' + ctx.esc(m.url) : '') + '</span>' +
         '<button class="btn mini danger" data-act="job-stop" data-job="' + ctx.esc(m.background) + '">Stop</button></span>';

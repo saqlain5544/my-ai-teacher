@@ -429,7 +429,8 @@ final class AppModel: ObservableObject {
     }
 
     func modelList(_ p: ProviderConfig) -> [String] {
-        var list = models[p.id] ?? p.suggestedModels
+        // A catalogue entry without an id drew a blank row in the picker.
+        var list = (models[p.id] ?? p.suggestedModels).filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
         if !list.contains(p.defaultModel) { list.insert(p.defaultModel, at: 0) }
         let rec = p.suggestedModels.filter { list.contains($0) }
         return rec + list.filter { !rec.contains($0) }
@@ -467,6 +468,24 @@ final class AppModel: ObservableObject {
             return ["title": .string(profiles.isEmpty ? "Which language are we learning?" : "Back to \(learning)?"),
                     "subtitle": "Say the language and how far along you are. The mentor places you, shows the keyboard for its script, and keeps the words you learn for review.",
                     "suggestions": .array(sug), "stats": .array(profiles.map { p in let v = services.study.vocabStats(lang: p.code); return Self.stat("languages", "\(Languages.englishName(p.code)): \(v.total) words, \(v.due) due") })]
+        }
+        if mode == .code {
+            var stats = [Self.stat("folder", "\(workspace.name) · \(access(for: workspace).title)")]
+            if let p = ProjectStore.load(workspace), let title = p.title {
+                let state = p.isOpen ? (p.lastRun.map { "\($0.passed)/\($0.passed + $0.failed) passing" } ?? "open") : p.parkedAt != nil ? "put aside" : "passed"
+                stats.insert(Self.stat("flask", "\(title) · \(state)"), at: 0)
+            }
+            return ["title": "What shall we build or learn?",
+                    "subtitle": "Projects with tests sized to you, reviews like a demanding senior engineer, and the real source when you ask how something works. Your code stays yours.",
+                    "suggestions": [
+                        ["title": "Practise with a project", "subtitle": "Starter files and tests, sized to you", "prompt": "Give me a small coding project to practise, sized to my level, with tests I can run. Ask me one question about what I know first if you need to."],
+                        ["title": "Review my code", "subtitle": "Line-level feedback, no rewrite", "prompt": "Review the code in this folder like a demanding senior engineer: point at lines and ask questions, but don't rewrite it for me."],
+                        ["title": "Debug with me", "subtitle": "Find the cause, not just the fix", "prompt": "I have a bug. Help me find its cause step by step, without fixing it for me."],
+                        ["title": "How does it work inside?", "subtitle": "Read a library's real source", "prompt": "Explain how Python's dict works inside, using the real CPython source and small experiments I can run."],
+                        ["title": "Learn a new language", "subtitle": "From one you already know", "prompt": "Teach me Rust starting from what I already know in Python, with small runnable examples."],
+                        ["title": "Build a data structure", "subtitle": "From scratch, with tests", "prompt": "Teach me a data structure by having me build it from scratch with tests, one method at a time."],
+                    ],
+                    "stats": .array(stats)]
         }
         var stats: [JSON] = []
         let streak = services.study.streakDays()
