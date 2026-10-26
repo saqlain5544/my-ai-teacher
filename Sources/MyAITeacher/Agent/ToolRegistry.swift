@@ -57,10 +57,8 @@ struct TaskTool: Tool {
     read-only research (web, files, math); general — research plus files and commands; coder — implements and verifies a \
     code change; reviewer — read-only review (read-only shell commands); tester — runs builds and tests, doesn't edit. \
     Blocking by default; `background: true` returns at once and the report arrives later as a <background-agent> message \
-    (steer it meanwhile with `agents` send). Per call: `model` (and `provider`), `effort` (off/low/medium/high), a budget \
-    (`max_steps`, `max_seconds`, `max_tokens`), `tools`/`deny_tools` to narrow the type's tools, and `output_schema` (a \
-    JSON Schema the report must match; checked, one repair turn). Sub-agents never get more access than this lesson has. \
-    `resume` with a handle (A1…) continues one with a follow-up. Give a complete, specific brief.
+    (steer it meanwhile with `agents` send). Sub-agents never get more access than this lesson has. `resume` with a handle \
+    (A1…) continues one with a follow-up. Give a complete, specific brief.
     """
     let risk = ToolRisk.network
     var schema: JSON {

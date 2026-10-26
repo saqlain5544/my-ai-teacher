@@ -49,9 +49,7 @@ enum MediaTranscript {
     /// least 0.3 s split, stretches are joined up to `target` seconds and cut hard past `maxLen` (Whisper reads 30 s).
     static func chunks(_ s: [Float], rate: Double = 16_000, target: Double = 18, maxLen: Double = 26) -> [(Double, Double)] {
         let frame = max(1, Int(rate * 0.03))
-        var rms: [Float] = []
-        var i = 0
-        while i + frame <= s.count { var sum: Float = 0; for j in i..<(i + frame) { sum += s[j] * s[j] }; rms.append((sum / Float(frame)).squareRoot()); i += frame }
+        let rms = Loudness.frames(s, window: frame, hop: frame)
         guard !rms.isEmpty else { return [] }
         let sorted = rms.sorted()
         let floor = sorted[sorted.count / 10], peak = sorted[sorted.count * 98 / 100]

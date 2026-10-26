@@ -86,4 +86,26 @@ final class SearchQualityTests: XCTestCase {
         XCTAssertEqual(hit.map(\.title), ["Cached"]); XCTAssertTrue(errors.isEmpty)
         XCTAssertEqual(WebSearchTool.day("Sun, 25 Oct 2026 04:26:00 GMT"), "2026-10-25")
     }
+
+    func testPapersReadFromOpenAlex() {
+        let work: JSON = ["display_name": "Carbon-bearing Molecules in a Possible <i>Hycean</i> Atmosphere", "publication_year": 2023,
+                          "doi": "https://doi.org/10.3847/2041-8213/acf577", "cited_by_count": 278,
+                          "authorships": [["author": ["display_name": "N. Madhusudhan"]], ["author": ["display_name": "S. Sarkar"]],
+                                          ["author": ["display_name": "S. Constantinou"]], ["author": ["display_name": "M. Holmberg"]]],
+                          "primary_location": ["source": ["display_name": "The Astrophysical Journal Letters"]],
+                          "abstract_inverted_index": ["JWST": [1], "The": [0], "spectrum": [3], "transmission": [2]]]
+        let p = WebSearch.paper(work)
+        XCTAssertEqual(p?.title, "Carbon-bearing Molecules in a Possible Hycean Atmosphere (2023)")
+        XCTAssertEqual(p?.url, "https://doi.org/10.3847/2041-8213/acf577")
+        XCTAssertEqual(p?.snippet, "N. Madhusudhan, S. Sarkar, S. Constantinou et al. · The Astrophysical Journal Letters · 278 citations — The JWST transmission spectrum")
+        // Among equally matching papers, the cited one leads.
+        var obscure = p!; obscure.url = "https://doi.org/x"; obscure.citations = 0
+        XCTAssertEqual(WebSearch.rank([[obscure, p!]], query: "hycean atmosphere").first?.citations, 278)
+    }
+
+    func testABatchReadSkipsLocalAddressesAndReportsFailures() async throws {
+        let out = await WebFetchTool.batch([URL(string: "https://example.invalid/a")!, URL(string: "http://127.0.0.1:9/b")!], query: "x", maxLen: 6000, links: false)
+        XCTAssertTrue(out.text.contains("--- https://example.invalid/a\n(couldn't be read"), out.text)
+        XCTAssertTrue(out.text.contains("--- http://127.0.0.1:9/b\n(on this Mac or the local network"), "a batch can't ask the learner: \(out.text)")
+    }
 }

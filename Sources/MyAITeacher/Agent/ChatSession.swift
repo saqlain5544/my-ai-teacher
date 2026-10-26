@@ -97,17 +97,6 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Messages in the whole lesson (loaded or not).
     var totalCount: Int { base + messages.count }
 
-    /// Pages in up to `count` earlier messages (the learner scrolled back).
-    func loadEarlier(_ count: Int = 200) {
-        guard base > 0, !isRunning else { return }
-        let from = max(0, base - count)
-        let older = services.conversations.messages(id, from: from, to: base)
-        messages.insert(contentsOf: older, at: 0)
-        base = from
-        spillLoaded(0..<older.count)
-        sink?.reset(messages, conversation: conversation)
-    }
-
     /// Rows saved before blobs existed still carry their images inline: move them to disk and re-save them once
     /// (without touching the lesson's date).
     private func spillLoaded(_ range: Range<Int>) {

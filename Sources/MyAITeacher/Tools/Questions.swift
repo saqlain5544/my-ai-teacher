@@ -242,23 +242,6 @@ enum Questions {
         return out
     }
 
-    /// How much of `target` the learner's speech contained: words (characters for scripts without spaces) matched as a multiset.
-    static func speechMatch(target: String, heard: String) -> Double {
-        func tokens(_ s: String) -> [String] {
-            let noSpaces = s.trimmingCharacters(in: .whitespaces).contains(" ") == false
-            let cjk = s.unicodeScalars.contains { [.han, .kana, .hangul, .thai].contains(ScriptRuns.script(of: $0)) }
-            if cjk && noSpaces { return s.filter { $0.isLetter || $0.isNumber }.map(String.init) }
-            return norm(s).split(separator: " ").map(String.init)
-        }
-        let t = tokens(target), h = tokens(heard)
-        guard !t.isEmpty else { return 0 }
-        var pool: [String: Int] = [:]
-        for w in h { pool[w, default: 0] += 1 }
-        var hit = 0
-        for w in t where (pool[w] ?? 0) > 0 { pool[w]! -= 1; hit += 1 }
-        return Double(hit) / Double(t.count)
-    }
-
     /// The number in an answer: "12 seconds", "12 m/s" → 12; "1 1/2" → 1.5; "3/4"; "3,5" → 3.5; "1,234" → 1234;
     /// "5%" → 5; "10^3" → 1000; "2.5e3". Units and words around it are ignored.
     static func number(_ a: JSON) -> Double? {

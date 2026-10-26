@@ -103,15 +103,19 @@ enum Passages {
     /// without spaces (Chinese, Japanese) as character pairs.
     static func terms(_ s: String) -> [String] {
         var out: [String] = []
-        for raw in s.lowercased().split(whereSeparator: { !($0.isLetter || $0.isNumber) }) {
-            let w = String(raw)
-            if w.unicodeScalars.contains(where: isCJK) {
-                let cs = Array(w)
-                if cs.count == 1 { out.append(w) } else { for i in 0..<(cs.count - 1) { out.append(String(cs[i...i + 1])) } }
-                continue
-            }
-            guard !stopwords.contains(w), w.count > 1 || w.first?.isNumber == true else { continue }
+        func add(_ w: String) {
+            guard !stopwords.contains(w), w.count > 1 || w.first?.isNumber == true else { return }
             out.append(stem(w))
+        }
+        // Plain ASCII words straight from the bytes; words with other scripts in them the Unicode way.
+        FastText.words(s, isWordByte: FastText.isAlnum, ascii: add) { segment in
+            for raw in segment.lowercased().split(whereSeparator: { !($0.isLetter || $0.isNumber) }) {
+                let w = String(raw)
+                if w.unicodeScalars.contains(where: isCJK) {
+                    let cs = Array(w)
+                    if cs.count == 1 { out.append(w) } else { for i in 0..<(cs.count - 1) { out.append(String(cs[i...i + 1])) } }
+                } else { add(w) }
+            }
         }
         return out
     }

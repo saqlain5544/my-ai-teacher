@@ -208,8 +208,9 @@ OpenAI-, Anthropic- or Gemini-compatible endpoint can be added as a custom provi
   * each folder's lessons: `<folder>/.teacher/`;
   * quick questions: `~/.teacher/no-dir-conversations/`.
 * **API keys** you paste in are stored on this Mac, readable only by your user account.
-* **Where messages go:** only to the provider you choose. Web search is keyless (DuckDuckGo and Bing). Lesson titles
-  come from Apple's on-device model when it's available.
+* **Where messages go:** only to the provider you choose. Web search is keyless: DuckDuckGo and Bing, and OpenAlex
+  when the teacher looks for scholarly papers (only the search words are sent). Lesson titles come from Apple's
+  on-device model when it's available.
 * **Telemetry:** the Insights dashboard is local only. Nothing is sent anywhere.
 * **Permissions:** folders start read-only, and you grant *Read & write* or *Full access* for each one. Commands, writes
   outside what you granted, browser sites, Mac apps and fetches from your own Mac or local network all ask first.

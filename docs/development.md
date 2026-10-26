@@ -86,7 +86,8 @@ Run `scripts/e2e.sh` after every change, and the live suite before a release.
 ## Debugging
 
 * `MYAITEACHER_HOME=/some/dir` gives the app its own database, settings, folders and log.
-* `MYAITEACHER_DEBUG=1` turns on the debug hooks, which a second process drives:
+* `MYAITEACHER_DEBUG=1` turns on the debug hooks, which a second process drives (with the same `MYAITEACHER_HOME`, if
+  the app was started with one):
 
   ```bash
   .build/debug/MyAITeacher --post '{"action":"report","path":"/tmp/r.json"}'
@@ -103,6 +104,30 @@ Run `scripts/e2e.sh` after every change, and the live suite before a release.
 `scripts/perf/perf.py` runs the release bundle under real workloads (lessons, streaming, recall, fetching, agents,
 rendering). It records CPU heatmaps, call stacks, allocations and memory over time into an HTML report. See
 ARCHITECTURE.md › Performance for the workloads and the numbers measured so far.
+
+The CPU-bound hot paths (page conversion, passage ranking, token estimates, stream folding, JSON) have their own timed
+suite, run on a release build:
+
+```bash
+BENCH=1 swift test -c release -Xswiftc -enable-testing --filter HotPathBenchmarks
+```
+
+Set `BENCH_HTML=/path/to/page.html` to also time a real page.
+
+## Scripts
+
+| Script | What it does |
+|---|---|
+| `build-app.sh`, `make-dmg.sh` | The release bundle, then a drag-to-install disk image |
+| `e2e.sh` | Build, unit tests and the renderer suite (light and dark); `--live` adds the scripted lessons |
+| `e2e-live.py` | Live end-to-end scenarios against the real app, on a free model, in a throwaway profile |
+| `eval-lessons.py`, `eval-mentor.py` | Lesson and code-mentor quality, judged by a model against a rubric |
+| `mentor-bench.py` | Several headless code-mentor lessons at once, with a time budget per turn |
+| `ab-board.py` | A/B run of the course board (`--exp course_board=…`) on long courses |
+| `benchmark.sh` | Cold launch, idle footprint and a same-machine memory comparison |
+| `perf/perf.py` | Workload profiling into an HTML report (`perf/profiles.py` records, `perf/report.py` draws, `perf/mockllm.py` stands in for a provider) |
+| `gen-web-manifest.py` | Regenerates `Resources/web/components/manifest.js` after adding a component |
+| `serve-web.py` | Serves the repository for working on the transcript in a browser (`web-src/fixture*.js` are sample lessons) |
 
 ## Releasing
 

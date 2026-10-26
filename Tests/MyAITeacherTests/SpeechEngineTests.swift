@@ -98,14 +98,14 @@ final class SpeechEngineTests: XCTestCase {
     func testSilentTakesAreNotTranscribed() {
         let rate = 16_000.0
         let hiss = (0..<16_000).map { _ in Float.random(in: -0.002...0.002) }
-        XCTAssertLessThan(Speech.voicedSeconds(hiss, rate: rate), 0.1, "room noise isn't a voice")
+        XCTAssertLessThan(Speech.levels(hiss, rate: rate).voiced, 0.1, "room noise isn't a voice")
         let voice = (0..<16_000).map { i in Float(0.2 * sin(Double(i) * 2 * .pi * 220 / rate)) }
-        XCTAssertGreaterThan(Speech.voicedSeconds(hiss + voice, rate: rate), 0.9, "a second of speech-level sound")
+        XCTAssertGreaterThan(Speech.levels(hiss + voice, rate: rate).voiced, 0.9, "a second of speech-level sound")
         let farVoice = (0..<16_000).map { i in Float(0.006 * sin(Double(i) * 2 * .pi * 220 / rate)) }   // about -47 dBFS
-        XCTAssertGreaterThan(Speech.voicedSeconds(hiss + farVoice, rate: rate), 0.9, "a voice across the room, still clear above the hiss")
-        XCTAssertEqual(Speech.voicedSeconds([Float](repeating: 0, count: 16_000), rate: rate), 0, "a denied microphone records zeros")
+        XCTAssertGreaterThan(Speech.levels(hiss + farVoice, rate: rate).voiced, 0.9, "a voice across the room, still clear above the hiss")
+        XCTAssertEqual(Speech.levels([Float](repeating: 0, count: 16_000), rate: rate).voiced, 0, "a denied microphone records zeros")
         let pausesAround = hiss + (hiss.prefix(8_000).enumerated().map { i, n in n + Float(0.006 * sin(Double(i) * 2 * .pi * 220 / rate)) }) + hiss
-        XCTAssertEqual(Speech.voicedSeconds(pausesAround, rate: rate), 0.5, accuracy: 0.05, "half a second of voice between pauses")
+        XCTAssertEqual(Speech.levels(pausesAround, rate: rate).voiced, 0.5, accuracy: 0.05, "half a second of voice between pauses")
     }
 
     func testPitchContoursCompareTheMelody() {

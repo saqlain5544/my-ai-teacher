@@ -19,7 +19,11 @@ enum MemoryText {
 
     /// Lower-cased raw tokens (keeps non-Latin scripts; keeps "c++", "c#").
     static func tokens(_ s: String) -> [String] {
-        s.lowercased().components(separatedBy: separators).filter { !$0.isEmpty }
+        var out: [String] = []
+        FastText.words(s, isWordByte: { FastText.isAlnum($0) || $0 == 0x2B || $0 == 0x23 }, ascii: { out.append($0) }) { segment in
+            out += segment.lowercased().components(separatedBy: separators).filter { !$0.isEmpty }
+        }
+        return out
     }
 
     /// Significant stems, in first-seen order, deduplicated.

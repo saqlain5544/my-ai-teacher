@@ -23,16 +23,7 @@ enum Prosody {
 
     /// Loudness per 10 ms frame (RMS) of 16 kHz-equivalent audio.
     static func energy(_ s: [Float], rate: Double) -> [Float] {
-        let hop = max(1, Int(rate * 0.01)), win = max(1, Int(rate * 0.03))
-        var out: [Float] = []
-        var i = 0
-        while i + win <= s.count {
-            var sum: Float = 0
-            for k in i..<(i + win) { sum += s[k] * s[k] }
-            out.append((sum / Float(win)).squareRoot())
-            i += hop
-        }
-        return out
+        Loudness.frames(s, window: max(1, Int(rate * 0.03)), hop: max(1, Int(rate * 0.01)))
     }
 
     /// `n` syllables. Voiced stretches first (pitch present, 40 ms gaps or more between them): when there are exactly

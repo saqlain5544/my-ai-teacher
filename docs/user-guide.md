@@ -382,7 +382,8 @@ Stop the agent any time with ⌘. or Esc twice.
 | Default folder | `~/AI Teacher Workspace/` |
 | Log | `~/Library/Logs/MyAITeacher.log` |
 
-* **Network traffic.** Messages go only to the provider you choose. Web search and fetching are keyless.
+* **Network traffic.** Messages go only to the provider you choose. Web search and fetching are keyless (searches go to
+  DuckDuckGo and Bing, paper searches to OpenAlex).
 * **Telemetry** for Insights is stored locally and can be turned off.
 * **Backups.** Copy the files above.
 * **Starting over.** Use **Forget everything** in Memory, or delete `teacher.sqlite` with the app closed.

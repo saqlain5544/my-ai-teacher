@@ -7,6 +7,8 @@ struct SearchResult: Sendable, Hashable {
     var snippet: String
     var source: String
     var date: String?
+    /// Papers: how often the work is cited (a small boost in ranking).
+    var citations: Int? = nil
 }
 
 /// Free, keyless live web search: DuckDuckGo HTML + Bing RSS in parallel (Brave HTML as a fallback), ranked together.
@@ -19,6 +21,16 @@ enum WebSearch {
     static func search(_ query: String, kind: String = "web", limit: Int = 10) async -> (results: [SearchResult], errors: [String]) {
         let key = kind + "|" + query.lowercased().trimmingCharacters(in: .whitespaces)
         if let hit = await SearchCache.shared.get(key) { return (Array(hit.prefix(limit)), []) }
+        if kind == "papers" {
+            var ranked = await papers(query)
+            // OpenAlex's keyless tier is shared per network address and sometimes refuses a burst: once more, then the
+            // web (the reply says so), rather than an error the model spends a step working around.
+            if ranked.0.isEmpty && ranked.1 != "OpenAlex found no papers" {
+                try? await Task.sleep(nanoseconds: 800_000_000)
+                ranked = await papers(query)
+            }
+            if !ranked.0.isEmpty { await SearchCache.shared.put(key, ranked.0); return (Array(ranked.0.prefix(limit)), []) }
+        }
         if kind == "news" {
             let r = await bingRSS(query, news: true)
             let ranked = rank([r.0], query: query)
@@ -80,7 +92,9 @@ enum WebSearch {
             let title = Set(Passages.terms(e.r.title)), rest = Set(Passages.terms(e.r.snippet + " " + (URL(string: e.r.url)?.path ?? "")))
             let covered = q.filter { title.contains($0) || rest.contains($0) }.count, inTitle = q.filter { title.contains($0) }.count
             let coverage = (Double(covered) + 0.5 * Double(inTitle)) / (1.5 * Double(q.count))
-            return (e.r, e.score * (0.25 + 0.75 * coverage), e.order)
+            // A paper's citations count a little: ×1.4 at 100, ×1.6 at 1,000.
+            let cited = e.r.citations.map { 1 + 0.2 * log10(1 + Double($0)) } ?? 1
+            return (e.r, e.score * (0.25 + 0.75 * coverage) * cited, e.order)
         }.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.2 < $1.2 }
         var perSite: [String: Int] = [:], first: [SearchResult] = [], later: [SearchResult] = []
         for (r, _, _) in scored {
@@ -135,6 +149,50 @@ enum WebSearch {
         let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
         guard code == 200 else { throw ToolError("HTTP \(code)") }
         return String(decoding: data, as: UTF8.self)
+    }
+
+    /// Scholarly works from OpenAlex (free, keyless; 250M papers with abstracts): the most relevant overall and the most
+    /// relevant among works cited more than 25 times, fetched together and ranked as one list, so an established paper
+    /// isn't lost behind a dozen obscure ones (sorting by citations alone brought in famous papers off the topic).
+    static func papers(_ q: String) async -> ([SearchResult], String?) {
+        let fields = "id,display_name,publication_year,authorships,primary_location,cited_by_count,doi,open_access,abstract_inverted_index"
+        @Sendable func list(_ extra: String) async -> [SearchResult]? {
+            guard let url = URL(string: "https://api.openalex.org/works?search=\(q.formEncoded)&per-page=10&select=\(fields)\(extra)") else { return nil }
+            do {
+                guard let works = JSON.parse(try await fetch(URLRequest(url: url)))?["results"]?.array else { return nil }
+                return works.compactMap(paper)
+            } catch { AppLog.write("openalex: \(error.localizedDescription)"); return nil }
+        }
+        async let relevant = list("")
+        async let cited = list("&filter=cited_by_count:%3E25")
+        let (a, b) = await (relevant, cited)
+        if a == nil && b == nil { return ([], "OpenAlex didn't answer") }
+        let ranked = rank([a ?? [], b ?? []], query: q)
+        return (ranked, ranked.isEmpty ? "OpenAlex found no papers" : nil)
+    }
+
+    /// One OpenAlex work as a result: "Title (year)", its DOI (or open-access copy), and "Authors · Venue · citations —
+    /// abstract" as the snippet.
+    static func paper(_ w: JSON) -> SearchResult? {
+        guard let title = w["display_name"]?.string, !title.isEmpty else { return nil }
+        let year = w["publication_year"]?.int.map { " (\($0))" } ?? ""
+        let url = w["doi"]?.string ?? w["open_access"]?["oa_url"]?.string ?? w["id"]?.string ?? ""
+        let names = (w["authorships"]?.array ?? []).compactMap { $0["author"]?["display_name"]?.string }
+        let authors = names.prefix(3).joined(separator: ", ") + (names.count > 3 ? " et al." : "")
+        let venue = w["primary_location"]?["source"]?["display_name"]?.string
+        let cites = w["cited_by_count"]?.int.map { "\($0) citation\($0 == 1 ? "" : "s")" }
+        let about = [authors.isEmpty ? nil : authors, venue, cites].compactMap { $0 }.joined(separator: " · ")
+        return SearchResult(title: HTMLToMarkdown.stripTags(title) + year, url: url, snippet: about + (abstract(w["abstract_inverted_index"]).map { " — " + $0 } ?? ""),
+                            source: "OpenAlex", date: nil, citations: w["cited_by_count"]?.int)
+    }
+
+    /// OpenAlex stores abstracts as word → positions; this puts the words back in order.
+    static func abstract(_ index: JSON?) -> String? {
+        guard let words = index?.object, !words.isEmpty else { return nil }
+        var at: [Int: String] = [:]
+        for (w, ps) in words { for p in ps.array ?? [] { if let i = p.int { at[i] = w } } }
+        let text = at.keys.sorted().compactMap { at[$0] }.joined(separator: " ")
+        return text.isEmpty ? nil : text
     }
 
     static func duckDuckGo(_ q: String) async -> ([SearchResult], String?) {
@@ -224,22 +282,23 @@ struct WebSearchTool: Tool {
     var schema: JSON {
         Schema.object([
             "query": Schema.string("Search query."),
-            "kind": Schema.string("web (default) or news.", enum: ["web", "news"]),
+            "kind": Schema.string("web (default), news, or papers (scholarly works: authors, venue, citations, abstract).", enum: ["web", "news", "papers"]),
             "max_results": Schema.integer("1-8 (default 6)."),
             "read": Schema.integer("1-3: also the best-matching passages of that many top pages (saves a web_fetch)."),
         ], required: ["query"])
     }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let q = try input.req("query")
-        let news = input["kind"]?.string == "news"
+        let kind = input["kind"]?.string ?? "web"
+        let news = kind == "news"
         let n = min(8, max(1, input["max_results"]?.int ?? 6))
-        let (results, errors) = await WebSearch.search(q, kind: news ? "news" : "web", limit: n)
+        let (results, errors) = await WebSearch.search(q, kind: ["news", "papers"].contains(kind) ? kind : "web", limit: n)
         if results.isEmpty { return .error("No results for \"\(q)\". \(errors.joined(separator: "; "))") }
         // A page read for its passages skips its snippet in the list (the passages say more).
         let reads = min(3, max(0, input["read"]?.int ?? 0))
         let pages = reads > 0 ? await WebPage.passages(for: Array(results.prefix(reads + 2)).map(\.url), query: q, pages: reads, budget: 1_400) : []
         let read = Set(pages.map(\.url))
-        var text = ""
+        var text = kind == "papers" && results.first?.source != "OpenAlex" ? "(The paper index didn't answer: web results instead.)\n" : ""
         for (i, r) in results.enumerated() {
             text += "\(i + 1). \(r.title)\n   \(r.url)\n"
             // Bing's dates on ordinary results are crawl dates, not publication dates: only news shows them.
@@ -390,6 +449,7 @@ struct WebFetchTool: Tool {
             "start_index": Schema.integer("Character offset (default 0)."),
             "max_length": Schema.integer("Max characters (default 12000; 6000 with query)."),
             "links": Schema.boolean("Keep same-site link URLs (default: text only)."),
+            "urls": Schema.array(Schema.string("URL"), "Up to 4 more pages, read in parallel with `url` (max_length is shared)."),
         ], required: ["url"])
     }
     /// The URL to fetch ("example.com/x" is https).
@@ -418,6 +478,8 @@ struct WebFetchTool: Tool {
         let query = (input["query"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines)).flatMap { $0.isEmpty ? nil : $0 }
         let start = max(0, input["start_index"]?.int ?? 0)
         let maxLen = min(100_000, max(1000, input["max_length"]?.int ?? (query == nil ? 12_000 : 6_000)))
+        let more = (input["urls"]?.array ?? []).compactMap { Self.url(["url": $0]) }.filter { $0 != url }.prefix(4)
+        if !more.isEmpty { return await Self.batch([url] + more, query: query, maxLen: maxLen, links: input["links"]?.bool == true) }
         let loaded: WebPage.Loaded
         do { loaded = try await WebPage.load(url) } catch let e as ToolError { return .error(e.localizedDescription) }
         guard case .text(var md, let title) = loaded else {
@@ -450,6 +512,44 @@ struct WebFetchTool: Tool {
         }
         if dropped > 0 && start == 0 { text += "\n[Addresses of \(dropped) links within the site left out; links=true keeps them.]" }
         return ToolOutput(text: text, meta: meta)
+    }
+
+    /// Several pages read at once (in parallel, 20 s each), each in an equal share of `maxLen`: its best passages for
+    /// `query`, else its start. An address on this Mac or the local network is skipped (a batch can't ask the learner),
+    /// except the first, which the approval gate has already asked about.
+    static func batch(_ urls: [URL], query: String?, maxLen: Int, links: Bool) async -> ToolOutput {
+        let share = max(1_500, maxLen / urls.count)
+        let parts = await withTaskGroup(of: (Int, String).self) { g -> [(Int, String)] in
+            for (i, u) in urls.enumerated() {
+                g.addTask {
+                    let name = u.absoluteString
+                    guard let host = u.host else { return (i, "--- \(name)\n(not a web address)") }
+                    let local = LocalNetwork.isLocal(host) ? true : await LocalNetwork.resolvesLocal(host)
+                    if i > 0, local {
+                        return (i, "--- \(name)\n(on this Mac or the local network: fetch it on its own, and the learner will be asked)")
+                    }
+                    do {
+                        guard case .text(var md, let title) = try await withDeadline(seconds: 20, { try await WebPage.load(u, timeout: 20) }) else {
+                            return (i, "--- \(name)\n(an image: fetch it on its own to see it)")
+                        }
+                        if !links { md = WebPage.compactLinks(md, site: WebSearch.site(host)).0 }
+                        let head = "--- " + (title.map { "\($0) · " } ?? "") + name + "\n"
+                        if let query {
+                            let picked = Passages.best(md, query: query, budget: share)
+                            if !picked.isEmpty { return (i, head + Passages.render(picked)) }
+                        }
+                        guard !md.isEmpty else { return (i, head + "(no readable content: it may need JavaScript)") }
+                        return (i, head + (query != nil ? "(nothing matched the query; here is the start)\n" : "") + String(md.prefix(share))
+                                + (md.count > share ? "\n[\(md.count - share) more characters: web_fetch this URL with start_index=\(share).]" : ""))
+                    } catch { return (i, "--- \(name)\n(couldn't be read: \(error.localizedDescription))") }
+                }
+            }
+            var out: [(Int, String)] = []
+            for await p in g { out.append(p) }
+            return out
+        }
+        return ToolOutput(text: parts.sorted { $0.0 < $1.0 }.map(\.1).joined(separator: "\n\n"),
+                          meta: ["url": .string(urls[0].absoluteString), "title": .string("\(urls.count) pages")])
     }
 
     /// The page's headings after `offset`, with the `start_index` of each (at most 24, top levels first when there are

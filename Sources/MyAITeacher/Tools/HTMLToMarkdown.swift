@@ -158,17 +158,8 @@ enum HTMLToMarkdown {
         }
     }
 
-    /// Runs of whitespace (and no-break spaces) become one space. A plain scan: a regex per text node was the converter's main cost.
-    static func collapseWhitespace(_ s: String) -> String {
-        var r = ""; r.reserveCapacity(s.utf8.count)
-        var space = false
-        for u in s.unicodeScalars {
-            if u.properties.isWhitespace || u == "\u{00A0}" {
-                if !space { r.unicodeScalars.append(" "); space = true }
-            } else { r.unicodeScalars.append(u); space = false }
-        }
-        return r
-    }
+    /// Runs of whitespace (and no-break spaces) become one space: on UTF-8 bytes, 16 at a time through plain ASCII.
+    static func collapseWhitespace(_ s: String) -> String { FastText.collapseWhitespace(s) }
 
     private static func render(_ node: XMLNode, _ out: inout String, _ ctx: inout Ctx) {
         if ctx.stop { return }

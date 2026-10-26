@@ -365,9 +365,7 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         init(after: Double, rate: Double) { self.after = after; self.rate = rate }
         func feed(_ p: UnsafeBufferPointer<Float>) -> Bool {
             guard !fired, !p.isEmpty else { return false }
-            var sum: Float = 0
-            for v in p { sum += v * v }
-            let rms = (sum / Float(p.count)).squareRoot()
+            let rms = Loudness.rms(p)
             levels.append(rms); if levels.count > 400 { levels.removeFirst(levels.count - 400) }
             let floor = levels.sorted()[levels.count / 10]
             let secs = Double(p.count) / rate
@@ -378,23 +376,13 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         }
     }
 
-    /// Seconds of the recording that stand out as a voice: 30 ms frames well above the take's own noise floor (4×, about
-    /// 12 dB) and above a low absolute floor (-56 dBFS). A denied or muted microphone records zeros; a quiet room records
+    /// A take's voiced seconds, noise floor and peak. Voice is 30 ms frames well above the take's own noise floor (4×,
+    /// about 12 dB) and above a low absolute floor (-56 dBFS). A denied or muted microphone records zeros; a quiet room records
     /// a flat floor; both come out near zero. Relative, because a voice heard across a room is quiet but still clear
     /// above its background (an absolute -42 dB threshold rejected a voice Whisper read perfectly).
-    nonisolated static func voicedSeconds(_ samples: [Float], rate: Double) -> Double {
-        levels(samples, rate: rate).voiced
-    }
     nonisolated static func levels(_ samples: [Float], rate: Double) -> (voiced: Double, floor: Float, peak: Float) {
         let frame = max(1, Int(rate * 0.03))
-        var rms: [Float] = []
-        var i = 0
-        while i + frame <= samples.count {
-            var sum: Float = 0
-            for j in i..<(i + frame) { sum += samples[j] * samples[j] }
-            rms.append((sum / Float(frame)).squareRoot())
-            i += frame
-        }
+        let rms = Loudness.frames(samples, window: frame, hop: frame)
         guard !rms.isEmpty else { return (0, 0, 0) }
         let sorted = rms.sorted()
         let floor = sorted[sorted.count / 10], peak = sorted[sorted.count - 1]

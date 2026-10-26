@@ -11,7 +11,8 @@
       if (!res) return n.props.output ? ctx.pre(n.props.output) : '';
       return '<ul class="results">' + res.map(x => '<li><a class="t" href="' + ctx.esc(x.url) + '">' + ctx.esc(x.title) + '</a><div class="u">' + ctx.esc(x.url) + '</div><div class="s">' + ctx.esc(x.snippet) + '</div></li>').join('') + '</ul>';
     } });
-  R.defineTool({ name: 'web_fetch', icon: 'link', tone: 'teal', title: 'Read page', summary: n => input(n).url || '',
+  R.defineTool({ name: 'web_fetch', icon: 'link', tone: 'teal', title: n => (input(n).urls || []).length ? 'Read pages' : 'Read page',
+    summary: n => (input(n).url || '') + ((input(n).urls || []).length ? ' +' + input(n).urls.length + ' more' : '') + (input(n).query ? ' · “' + input(n).query + '”' : ''),
     body(n, ctx) {
       const url = input(n).url, t = meta(n).title;
       return '<div><a href="' + ctx.esc(url) + '">' + ctx.esc(t || url) + '</a></div>' + (n.props.output ? '<div class="label">Extracted</div>' + ctx.pre(n.props.output, 4000) : '');

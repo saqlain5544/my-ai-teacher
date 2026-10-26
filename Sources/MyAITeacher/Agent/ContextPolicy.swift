@@ -45,22 +45,11 @@ enum ContextPolicy {
     /// The token estimate of one string, for callers cutting text themselves.
     static func estimate(_ text: String) -> Int { Int(tokens(text)) }
 
+    /// A CJK character is about a token; anything else about a quarter of one.
     private static func tokens(_ s: String) -> Double {
         guard !s.isEmpty else { return 0 }
-        var cjk = 0, total = 0
-        for u in s.unicodeScalars {
-            total += 1
-            if isCJK(u) { cjk += 1 }
-        }
+        let (total, cjk) = FastText.scalarCounts(s)
         return Double(cjk) + Double(total - cjk) / 4.0
-    }
-    private static func isCJK(_ u: Unicode.Scalar) -> Bool {
-        switch u.value {
-        case 0x1100...0x11FF, 0x2E80...0x2FDF, 0x3000...0x30FF, 0x3130...0x318F, 0x3400...0x4DBF,
-             0x4E00...0x9FFF, 0xA960...0xA97F, 0xAC00...0xD7AF, 0xF900...0xFAFF, 0xFF00...0xFFEF:
-            return true
-        default: return false
-        }
     }
 
     /// Indices of messages that start a learner turn (real user messages, not tool results).

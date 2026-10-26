@@ -88,4 +88,25 @@ final class HotPathBenchmarks: XCTestCase {
         time("embed the same query again") { b = Embedder.shared.vector(q) }
         XCTAssertEqual(a, b)
     }
+
+    /// The page and text scans a web lesson runs: converting a fetched page, ranking its passages, indexing words.
+    func testPageAndTextScans() {
+        let row = "<p>Photosynthesis <a href=\"/wiki/Light\">light</a> reactions split <b>water</b> and release oxygen —\u{00A0}“quoted”.</p>\n"
+        let html = "<html><head><title>T</title></head><body><div id=\"content\">" + String(repeating: row, count: bench ? 8_000 : 50) + "</div></body></html>"
+        let prose = String(repeating: "The light reactions of photosynthesis happen in the thylakoid membranes — “quoted” text 1234. ", count: bench ? 10_000 : 100)
+        var md = "", ws = "", terms: [String] = [], stems: [String] = []
+        time("collapse whitespace, \(prose.utf8.count / 1000) KB") { ws = HTMLToMarkdown.collapseWhitespace(prose) }
+        time("HTML→Markdown, \(html.utf8.count / 1000) KB page") { md = HTMLToMarkdown.convert(html: html, baseURL: URL(string: "https://en.wikipedia.org/wiki/X")).markdown }
+        time("passage terms, \(prose.utf8.count / 1000) KB") { terms = Passages.terms(prose) }
+        time("best passages of the page") { _ = Passages.best(md, query: "what splits water in photosystem II", budget: 6000) }
+        time("memory stems, \(prose.utf8.count / 1000) KB") { stems = MemoryText.stems(prose, limit: 100_000) }
+        XCTAssertEqual(ws.count, prose.count)
+        XCTAssertTrue(md.contains("reactions split **water** and release oxygen — “quoted”."), String(md.prefix(200)))
+        if bench, let page = ProcessInfo.processInfo.environment["BENCH_HTML"].flatMap({ try? String(contentsOfFile: $0, encoding: .utf8) }) {
+            time("HTML→Markdown, \(page.utf8.count / 1000) KB real page") { md = HTMLToMarkdown.convert(html: page, baseURL: URL(string: "https://en.wikipedia.org/wiki/X")).markdown }
+            time("best passages of the real page") { _ = Passages.best(md, query: "what splits water in photosystem II", budget: 6000) }
+        }
+        XCTAssertTrue(terms.contains("reaction") && terms.contains("thylakoid"))
+        XCTAssertTrue(stems.contains("photosynthesi") || stems.contains("photosynthesis"), "\(stems.prefix(8))")
+    }
 }

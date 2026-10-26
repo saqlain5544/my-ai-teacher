@@ -114,7 +114,11 @@ Neural Engine/CPU; tool calls run in waves (consecutive read-only and network ca
 sub-agents — at once; a write, command, browser action or question alone, in the model's order); telemetry writes on a
 background queue; SQLite uses WAL. Profiled with `scripts/perf` (mock model): the main thread is idle most of a turn and
 its short stalls are WebKit IPC and transcript repaints, not computation, so there is no hand-written assembly — the
-CPU-bound work is already native (ripgrep for `grep`, Accelerate for pitch, the Neural Engine for embeddings).
+CPU-bound work is already native (ripgrep for `grep`, Accelerate for pitch, loudness (`Loudness`, one `vDSP_rmsqv` per
+frame) and memory search, the Neural Engine for embeddings). Text scans over whole pages run on UTF-8 bytes in
+`FastText`, 16 at a time with SIMD through plain ASCII and Unicode-exact elsewhere: token estimates (~20× the scalar
+loop), whitespace collapsing in page conversion (42 → 2 ms/MB), and the word splitting of passage ranking (71 → 19
+ms/MB) and memory indexing (85 → 58 ms/MB); `FastTextTests` checks they match the code they replaced on random text.
 A lesson turn holds `ProcessInfo.beginActivity(.userInitiatedAllowingIdleSystemSleep)` for its duration: the learner now
 leaves for their own editor mid-turn, and App Nap would otherwise throttle the stream and tool processes.
 
@@ -829,8 +833,8 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Glob | `glob` | `**` globs, newest first, skips build/vcs folders |
 | Grep | `grep` | ripgrep when installed (fallback `grep`), files (by match count)/content (grouped by file)/count modes, paths relative to the folder searched, context, `-i`, glob filter |
 | LS | `ls` | sizes, hidden-noise filtering |
-| WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); `read` adds the top pages' best passages |
-| WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, 15-min cache; `query` returns the BM25-best passages (`Passages`), pages of 12k characters list their later sections' offsets, same-site link addresses left out |
+| WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); papers mode (OpenAlex: relevance overall and among works cited 25+ times, fused, a log-citation boost); `read` adds the top pages' best passages |
+| WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, 15-min cache; `query` returns the BM25-best passages (`Passages`), pages of 12k characters list their later sections' offsets, same-site link addresses left out; `urls` reads up to 4 more pages in parallel in a shared budget (local addresses skipped) |
 | TodoWrite | `todo_write` | rendered as a live checklist |
 | Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app and `.teacher/agents/*.md`), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
