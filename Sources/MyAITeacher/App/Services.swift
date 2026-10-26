@@ -50,6 +50,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Commands approved with "Always allow in this folder" (folder path → command prefixes like `npm test`), as Claude
     /// Code's `Bash(npm test:*)` rules. Stored in the app, never in the folder (a cloned repo can't pre-approve itself).
     var commandRules: [String: [String]] = [:]
+    /// The user's own hooks for the code agent: Claude Code's `hooks` JSON (event → matchers → shell commands), as typed
+    /// in Settings › Hooks (`HooksExtension`).
+    var hooks = ""
+    /// Folders whose own hooks (`.claude/settings.json`) the user approved: folder path → the approved configuration's
+    /// fingerprint. Stored in the app, never in the folder, so a cloned repo can't approve itself, and a change asks again.
+    var approvedHooks: [String: String] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
 
@@ -92,6 +98,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
         commandRules = (try? c.decode([String: [String]].self, forKey: .commandRules)) ?? [:]
+        hooks = (try? c.decode(String.self, forKey: .hooks)) ?? ""
+        approvedHooks = (try? c.decode([String: String].self, forKey: .approvedHooks)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }

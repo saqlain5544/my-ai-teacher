@@ -109,6 +109,7 @@ final class AppModel: ObservableObject {
     private func registerExtensions() {
         extensions.register(CodeAgentExtension(app: self))   // before permissions: a file is checkpointed before any gate can pause the call
         extensions.register(PlanModeExtension())   // before permissions: what plan mode refuses is never asked about
+        extensions.register(HooksExtension(app: self))   // after plan mode (a refused call runs no hook), before permissions (a blocked one is never asked about)
         extensions.register(PermissionExtension(app: self))
         for module in Features.all { module.extensions(self).forEach(extensions.register) }
         extensions.register(MemoryExtension(app: self))
