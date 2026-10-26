@@ -49,6 +49,8 @@ enum DeepWork {
         an everyday program, for someone new to this topic (whatever else they know) a small program in a language they know, for an expert in it the actual implementation or primary source.
         Concepts: in order, each with how you'll make it concrete for them, and where an analogy breaks.
         Check before teaching: the few examples you will show (to run) and the claims you're unsure of (to verify), and how (run_code, the installed source, docs) — proportionate to the request: a question needs a few checks, not an investigation.
+        Show: what they should see rather than read, if anything — `trace` (state changing step by step), `bench` (cost as \
+        input grows), ```predict (they guess the output first), ```annotate (a walk-through of real code).
         Practice: only if it fits the request — a question to answer, an exercise, or a project (starter, tests that fail \
         until they do the work). None if they just asked a question.
         Pitfalls: the misconceptions and bugs learners hit here.

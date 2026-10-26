@@ -101,12 +101,12 @@ final class PermissionExtension: AgentExtension {
             // One grant per kind of run: diagnostics runs shell commands like bash; the three test tools run the project's
             // tests (asking three times in one lesson for the same suite was the mentor's main friction), and a lesson
             // that may run shell commands may run its tests and code snippets (a live lesson asked for both, minutes apart).
-            let grant = tool.name == "diagnostics" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : tool.name
+            let grant = tool.name == "diagnostics" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : Self.runsSnippets(tool) ? "run_code" : tool.name
             let impliedByBash = grant == "tests" || grant == "run_code"
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
                 || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
             var detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
-            var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
+            var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? (tool.name == "trace" ? "Python" : "")) code"
             if grant == "tests" {
                 what = tool.name == "project_review" ? "run your tests for the review" : "run the project's tests"
                 detail = input["command"]?.string ?? ProjectStore.load(ws)?.testCommand ?? detail
@@ -148,15 +148,18 @@ final class PermissionExtension: AgentExtension {
     /// The lesson grant for `web_fetch` on this Mac or the local network.
     nonisolated static let localFetch = "local-fetch"
 
+    /// The tools that run a snippet of the model's code: one lesson grant covers them all.
+    nonisolated static func runsSnippets(_ tool: Tool) -> Bool { ["run_code", "trace", "bench"].contains(tool.name) }
+
     nonisolated static func isPython(_ tool: Tool, _ input: JSON) -> Bool {
-        if tool.name == "math" { return true }
-        guard tool.name == "run_code" else { return false }
+        if tool.name == "math" || tool.name == "trace" { return true }
+        guard runsSnippets(tool) else { return false }
         return ["python", "python3", "py"].contains((input["language"]?.string ?? "").lowercased())
     }
 
     /// Package installs in shell commands or code (pip, uv, conda, poetry, npm -g…). Returns what matched.
     nonisolated static func packageInstall(tool: Tool, input: JSON) -> String? {
-        guard tool.name == "bash" || tool.name == "run_code" else { return nil }
+        guard tool.name == "bash" || runsSnippets(tool) else { return nil }
         let text = (input["command"]?.string ?? "") + "\n" + (input["code"]?.string ?? "")
         for pattern in installPatterns {
             if let r = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) { return String(text[r]) }

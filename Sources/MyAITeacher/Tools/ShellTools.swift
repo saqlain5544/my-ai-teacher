@@ -209,6 +209,23 @@ struct RunCodeTool: Tool {
             && code.range(of: #"(?m)^\s*(import|export)\s"#, options: .regularExpression) == nil
     }
 
+    /// A Python traceback as the learner's own run would print it: without the frames of the `runpy` launcher (seven
+    /// lines before their code in every error) and with `main.py` for the scratch file's path.
+    static func tidyTraceback(_ s: String, scratch: String) -> String {
+        guard s.contains("Traceback (most recent call last)") else { return s }
+        var out: [Substring] = [], skipSource = false
+        for line in s.split(separator: "\n", omittingEmptySubsequences: false) {
+            if skipSource, line.hasPrefix("    "), !line.hasPrefix("    File ") { skipSource = false; continue }
+            skipSource = false
+            let t = line.trimmingCharacters(in: .whitespaces)
+            if t.hasPrefix("File \"<string>\", line 1, in <module>") || (t.hasPrefix("File \"") && t.contains("/runpy.py\", line ")) {
+                skipSource = !t.contains("<string>"); continue
+            }
+            out.append(line)
+        }
+        return out.joined(separator: "\n").replacingOccurrences(of: "/private" + scratch + "/", with: "").replacingOccurrences(of: scratch + "/", with: "")
+    }
+
     /// Sources/binaries live in a scratch dir; the program runs in `workingDirectory` (the lesson's folder)
     /// so relative paths like open("notes.txt") work.
     static func execute(language: String, code: String, stdin: String?, timeout: TimeInterval,
@@ -267,7 +284,7 @@ struct RunCodeTool: Tool {
                 if r.exitCode != 0 { return RunResult(text: "Compilation failed:\n" + truncateMiddle(r.combined, max: 20_000), failed: true) }
                 continue
             }
-            output = truncateMiddle(r.combined, max: 30_000)
+            output = truncateMiddle(lang == "python" ? tidyTraceback(r.combined, scratch: dir.path) : r.combined, max: 30_000)
             let elapsed = String(format: "%.2f s", Date().timeIntervalSince(start))
             if r.timedOut { return RunResult(text: output + "\n[timed out after \(Int(timeout)) s]", failed: true) }
             return RunResult(text: (output.isEmpty ? "(no output)" : output) + "\n[exit \(r.exitCode) · \(elapsed)]", failed: r.exitCode != 0)
