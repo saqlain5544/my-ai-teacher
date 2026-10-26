@@ -50,6 +50,13 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Commands approved with "Always allow in this folder" (folder path → command prefixes like `npm test`), as Claude
     /// Code's `Bash(npm test:*)` rules. Stored in the app, never in the folder (a cloned repo can't pre-approve itself).
     var commandRules: [String: [String]] = [:]
+    /// The user's own MCP servers (Settings → MCP), for the code agent in every folder.
+    var mcpServers: [MCPServerConfig] = []
+    /// A folder's `.mcp.json` servers the user approved or declined (folder path → server name → the config they saw).
+    /// Stored in the app, never in the folder: a cloned repo can't approve its own servers.
+    var mcpProjectDecisions: [String: [String: MCPDecision]] = [:]
+    /// MCP servers whose tools run without asking, per folder (folder path → server names).
+    var mcpAlwaysAllow: [String: [String]] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
 
@@ -92,6 +99,9 @@ struct AppSettings: Codable, Sendable, Equatable {
         browserSites = (try? c.decode([String].self, forKey: .browserSites)) ?? []
         computerApps = (try? c.decode([String].self, forKey: .computerApps)) ?? []
         commandRules = (try? c.decode([String: [String]].self, forKey: .commandRules)) ?? [:]
+        mcpServers = (try? c.decode([MCPServerConfig].self, forKey: .mcpServers)) ?? []
+        mcpProjectDecisions = (try? c.decode([String: [String: MCPDecision]].self, forKey: .mcpProjectDecisions)) ?? [:]
+        mcpAlwaysAllow = (try? c.decode([String: [String]].self, forKey: .mcpAlwaysAllow)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }

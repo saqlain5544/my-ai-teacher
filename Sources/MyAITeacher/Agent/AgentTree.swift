@@ -9,7 +9,8 @@ import Foundation
 ///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones, reading, correction
 ///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views;
 ///     │                      no course board (the project keeps that state)
-///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control
+///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control;
+///                     the user's MCP servers' tools (deferred, `mcp__<server>__<tool>`)
 ///
 /// Per node there are three sets: tools sent with every request (`core`), tools loaded at runtime with `load_tools`
 /// (`deferred`, one line each in the prompt, so context stays small), and rendering components (fences the agent may
@@ -23,6 +24,8 @@ struct AgentNode: Sendable {
     var deferred: [String] = []
     var components: [String] = []
     var guide: String = ""
+    /// The user's MCP servers' tools are loadable here (and below): `mcp__<server>__<tool>`, one line each in the prompt.
+    var mcp = false
 }
 
 enum AgentTree {
@@ -57,7 +60,7 @@ enum AgentTree {
                   core: ["bash", "bash_jobs", "run_code", "glob", "grep", "symbols", "source", "diagnostics", "run_tests", "todo_write", "agents", "ask_learner", "project_memory",
                          "exit_plan_mode", "browser", "mac", "computer"],
                   components: ["layout", "tree"],
-                  guide: Guides.engineer),
+                  guide: Guides.engineer, mcp: true),
     ]
 
     static let byID: [String: AgentNode] = Dictionary(uniqueKeysWithValues: nodes.map { ($0.id, $0) })
@@ -84,6 +87,8 @@ enum AgentTree {
     static func deferred(_ id: String) -> [String] { let c = Set(core(id)); return inherited(id, \.deferred).filter { !c.contains($0) } }
     static func components(_ id: String) -> [String] { unique(path(id).flatMap(\.components)) }
     static func guides(_ id: String) -> [String] { path(id).map(\.guide).filter { !$0.isEmpty } }
+    /// Whether this agent can load MCP servers' tools.
+    static func usesMCP(_ id: String) -> Bool { path(id).contains { $0.mcp } }
 
     private static func inherited(_ id: String, _ tools: KeyPath<AgentNode, [String]>) -> [String] {
         let p = path(id), dropped = Set(p.flatMap(\.drops))

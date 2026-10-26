@@ -68,7 +68,9 @@ struct RuntimeError: LocalizedError, Sendable {
 ///     ├── services  (one-for-one, 5 in 60 s)   permanent periodic work: telemetry.flush
 ///     ├── jobs      (one-for-one, 20 in 60 s)  one-shot background work: memory.reflect:<lesson>, memory.consolidate,
 ///     │                                         embeddings.warmup, lesson.compact#n (each with its own restart limit)
-///     └── agents    (one-for-one, 30 in 60 s)  sub-agent runs agent:A1… (each 3 restarts in 60 s, backoff 1 → 8 s)
+///     ├── agents    (one-for-one, 30 in 60 s)  sub-agent runs agent:A1… (each 3 restarts in 60 s, backoff 1 → 8 s)
+///     └── mcp       (one-for-one, 50 in 60 s)  MCP servers mcp:<server>@<folder>#n, one per folder and server, started
+///                                               on first use (each 3 restarts in 60 s, backoff 1 → 8 s)
 ///
 /// Started on first use. A supervisor that gives up is restarted by root with backoff; its dynamic children are gone
 /// (their `onExit` ran), as with an Erlang simple_one_for_one supervisor.
@@ -80,6 +82,7 @@ enum Runtime {
             .supervisor("services", intensity: Intensity(maxRestarts: 5, period: 60)),
             .supervisor("jobs", intensity: Intensity(maxRestarts: 20, period: 60)),
             .supervisor("agents", intensity: Intensity(maxRestarts: 30, period: 60)),
+            .supervisor("mcp", intensity: Intensity(maxRestarts: 50, period: 60)),
         ])
     }
 

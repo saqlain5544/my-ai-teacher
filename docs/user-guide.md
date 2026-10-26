@@ -347,6 +347,23 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     run_code in 12 languages.
   * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
   * Planning: a todo checklist.
+* **MCP servers.** Tools from Model Context Protocol servers, as in Claude Code: a program the app starts and talks to
+  over its input and output (`npx -y @modelcontextprotocol/server-memory`, `uvx mcp-server-git`…), or a URL speaking
+  streamable HTTP. (The old HTTP+SSE transport isn't supported.)
+  * **Your servers**, for every folder: **Settings › MCP › Add server**, or **Add from JSON…** with the snippet from a
+    server's README (`{"mcpServers": {…}}`). `${VAR}` and `${VAR:-default}` in a command, argument, variable, URL or
+    header read your shell environment, so a token can stay out of the settings.
+  * **The project's servers**: a `.mcp.json` at the top of the folder, in Claude Code's format
+    (`{"mcpServers": {"name": {"command", "args", "env"}}}` or `{"type": "http", "url", "headers"}`). A server from it
+    never starts until you approve it, when the agent first loads it or in Settings › MCP: a cloned repository can't run
+    programs by itself. The approval is for exactly what you saw: if the file later changes its command, arguments or
+    environment, you're asked again. A project server wins over one of yours with the same name.
+  * The agent sees each tool as `mcp__<server>__<tool>`, one line each in its instructions, and loads the ones it needs.
+    **Every call asks**, whatever the folder's access: allow once, the server for the lesson, or **Always allow
+    “server” in this folder**. In plan mode only the tools a server marks read-only run.
+  * Servers start the first time a code session needs them, restart by themselves after a crash (three times a minute
+    at most), and end when you quit the app. **Settings › MCP** shows each one's state for the open folder (running,
+    pid, tools, restarts, the last error) and what it wrote to its error output, with Start, Stop and Restart.
 * **It knows your project.** The agent's instructions carry a profile read from your manifests: the build system, how
   to build, check, test and lint, the languages, the git state. Every file it writes or edits is syntax-checked on the
   spot, and it is told to run the project's check and tests before it reports.
@@ -396,6 +413,7 @@ Stop the agent any time with ⌘. or Esc twice.
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
 | Agents | Sub-agent defaults, limits and custom agent types |
+| MCP | Your MCP servers for code sessions (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor, code agent), the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
 | Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |

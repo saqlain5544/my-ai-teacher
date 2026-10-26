@@ -106,6 +106,7 @@ final class PermissionExtension: AgentExtension {
                 choice == "once" ? .allow : .deny("The learner declined writing outside the folder.")
             }
         case .execute:
+            if let mcp = tool as? MCPTool { return mcpGate(mcp, input, ws: ws, conv: conv) }
             // The project tools run the project's tests only in some actions (status, findings, park… run nothing).
             if let runs = Self.runsTests(tool, input), !runs { return .allow }
             // One grant per kind of run: diagnostics runs shell commands like bash; the three test tools run the project's
@@ -146,6 +147,35 @@ final class PermissionExtension: AgentExtension {
                 case "grant_full": self?.app.setAccess(.full, for: ws); return .allow
                 default: return .deny("The learner declined.")
                 }
+            }
+        }
+    }
+
+    /// An MCP server's tool: asked every time, whatever the folder's access (a server reaches what the folder grant doesn't
+    /// cover: other services, accounts, the network), unless the user allows that server for the lesson or always in
+    /// this folder.
+    private func mcpGate(_ tool: MCPTool, _ input: JSON, ws: Workspace, conv: String) -> ToolDecision {
+        let grant = "mcp:" + tool.server
+        if app.interactions.isGranted(grant, conversationID: conv) || (app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []).contains(tool.server) { return .allow }
+        let args = input.object?.isEmpty == false ? input.pretty : "(no arguments)"
+        return .ask(ApprovalRequest(
+            title: "Allow Teacher to use “\(tool.info.name)” from the MCP server “\(tool.server)”?",
+            detail: String(args.prefix(4000)) + (tool.readOnly ? "\n\nThe server marks this tool read-only." : ""),
+            options: [ApprovalOption(id: "once", label: "Allow once", style: .primary),
+                      ApprovalOption(id: "lesson", label: "Allow “\(tool.server)” for this lesson"),
+                      ApprovalOption(id: "always", label: "Always allow “\(tool.server)” in this folder"),
+                      ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
+            switch choice {
+            case "once": return .allow
+            case "lesson": self?.app.interactions.grant(grant, conversationID: conv); return .allow
+            case "always":
+                if let self {
+                    var names = self.app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []
+                    if !names.contains(tool.server) { names.append(tool.server) }
+                    self.app.settings.value.mcpAlwaysAllow[ws.url.path] = names
+                }
+                return .allow
+            default: return .deny("The user declined this \(tool.server) call.")
             }
         }
     }

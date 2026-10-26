@@ -20,7 +20,7 @@ enum SystemPrompt {
     }
 
     /// The code agent's prompt: an autonomous software engineer in the open folder, with the project's own memory.
-    static func buildAgent(settings: AppSettings, folder: URL, model: String, projectMemory: String, project: String? = nil) -> String {
+    static func buildAgent(settings: AppSettings, folder: URL, model: String, projectMemory: String, project: String? = nil, mcp: String? = nil) -> String {
         var s = Instructions.text(.codeAgent, settings)
         s += "\n\n" + guides("engineer", settings)
         s += """
@@ -32,6 +32,7 @@ enum SystemPrompt {
         """
         if let project { s += "\n\n" + project }
         if let t = Toolchains.section(Toolchains.shared.entries) { s += "\n\n" + t }
+        if let mcp { s += "\n\n" + mcp }
         if !projectMemory.isEmpty { s += "\n\n# Project memory\n" + projectMemory }
         return s
     }

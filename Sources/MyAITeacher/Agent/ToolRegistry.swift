@@ -31,12 +31,23 @@ enum ToolRegistry {
     }
 
     /// Tools for a request: the agent's core tools, then whatever this lesson has loaded (in load order, so the prefix
-    /// only ever grows).
-    static func active(_ settings: AppSettings, loaded: [String], lessonID: String? = nil, mode: TeachingMode = .tutor) -> [Tool] {
+    /// only ever grows), MCP servers' tools among them for an agent that has them (`folder`'s servers).
+    static func active(_ settings: AppSettings, loaded: [String], lessonID: String? = nil, mode: TeachingMode = .tutor, folder: URL? = nil) -> [Tool] {
         let node = AgentTree.node(for: mode), off = off(settings)
         let canLoad = Set(AgentTree.deferred(node))
-        let names = AgentTree.core(node) + loaded.filter { canLoad.contains($0) }
-        return names.compactMap { byName[$0] }.filter { !off.contains($0.name) }
+        var mcp: [String: Tool] = [:]
+        if let folder, AgentTree.usesMCP(node), loaded.contains(where: { $0.hasPrefix("mcp__") }) {
+            for t in MCPHub.shared.tools(folder, settings) where mcp[t.name] == nil { mcp[t.name] = t }
+        }
+        let names = AgentTree.core(node) + loaded.filter { canLoad.contains($0) || mcp[$0] != nil }
+        return names.compactMap { byName[$0] ?? mcp[$0] }.filter { !off.contains($0.name) }
+    }
+
+    /// A tool by name: the app's own, else one of `folder`'s MCP servers' (`mcp__<server>__<tool>`).
+    static func named(_ name: String, folder: URL?, settings: AppSettings) -> Tool? {
+        if let t = byName[name] { return t }
+        guard let folder else { return nil }
+        return MCPHub.shared.tool(named: name, folder: folder, settings: settings)
     }
 
     /// One line per runtime-loadable tool, for an agent's prompt.
@@ -210,16 +221,23 @@ struct AgentsTool: Tool {
 /// Runtime tool discovery: loads deferred tools into the lesson.
 struct LoadToolsTool: Tool {
     let name = "load_tools"
-    let description = "Load extra tools listed under “More tools” in your instructions. They become callable from your next step."
+    let description = "Load extra tools listed under “More tools” (and MCP servers) in your instructions. They become callable from your next step."
     let risk = ToolRisk.readOnly
     var schema: JSON { Schema.object(["names": Schema.array(Schema.string("Tool name"), "Tools to load.")], required: ["names"]) }
     func summary(_ input: JSON) -> String { input["names"]?.array?.compactMap(\.string).joined(separator: ", ") ?? "" }
+    /// Loading an MCP server may wait for the user's approval of a project server and for its first start.
+    func timeout(_ input: JSON) -> Double? { (input["names"]?.array ?? []).contains { $0.string?.hasPrefix("mcp__") == true } ? nil : 60 }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let wanted = input["names"]?.array?.compactMap(\.string) ?? []
         let known = Set(AgentTree.deferred(ctx.agentNode))
-        let ok = wanted.filter { known.contains($0) }, bad = wanted.filter { !known.contains($0) }
-        guard !ok.isEmpty else { return .error("Unknown tools: \(bad.joined(separator: ", ")). Loadable: \(known.sorted().joined(separator: ", ")).") }
-        return ToolOutput(text: "Loaded \(ok.joined(separator: ", ")). Call them from your next step." + (bad.isEmpty ? "" : " Unknown: \(bad.joined(separator: ", ")).") ,
-                          meta: ["loaded": .array(ok.map { .string($0) })])
+        let mcpNames = AgentTree.usesMCP(ctx.agentNode) ? wanted.filter { $0.hasPrefix("mcp__") } : []
+        let mcp: (loaded: [String], notes: [String]) = mcpNames.isEmpty ? ([], []) : await MCPHub.shared.load(mcpNames, ctx: ctx)
+        let ok = wanted.filter { known.contains($0) } + mcp.loaded
+        let bad = wanted.filter { !known.contains($0) && !mcpNames.contains($0) }
+        let notes = (bad.isEmpty ? "" : " Unknown: \(bad.joined(separator: ", ")).") + (mcp.notes.isEmpty ? "" : " " + mcp.notes.joined(separator: " "))
+        guard !ok.isEmpty else {
+            return .error(bad.isEmpty ? mcp.notes.joined(separator: " ") : "Unknown tools: \(bad.joined(separator: ", ")). Loadable: \(known.sorted().joined(separator: ", "))." + (mcp.notes.isEmpty ? "" : " " + mcp.notes.joined(separator: " ")))
+        }
+        return ToolOutput(text: "Loaded \(ok.joined(separator: ", ")). Call them from your next step." + notes, meta: ["loaded": .array(ok.map { .string($0) })])
     }
 }

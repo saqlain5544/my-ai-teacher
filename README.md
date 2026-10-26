@@ -156,6 +156,9 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
 * a plan checklist, and project memory kept in `.teacher/code-memory.md`, plus the `CLAUDE.md` / `AGENTS.md` files of
   the project, its parent folders and its subfolders (with `@file` imports);
 * `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
+* **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`
+  (Claude Code's format), which runs nothing until you approve each server once. Their tools load when the agent needs
+  them, every call asks unless you always allow that server in the folder, and plan mode runs only read-only ones;
 * a git diff panel with checkpoints.
 
 The agent can also:

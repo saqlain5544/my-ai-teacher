@@ -27,6 +27,9 @@ final class ChatSession: ObservableObject, Identifiable {
         if AgentTree.components(node).contains(name) {
             return "`\(name)` is not a tool: it's a fence. Write it in your reply as ```\(name) followed by its content (see The app), and the learner sees it drawn."
         }
+        if name.hasPrefix("mcp__"), AgentTree.usesMCP(node) {
+            return "Tool `\(name)` is not available: load it (or its whole server, `mcp__<server>`) with `load_tools` first; the MCP servers here are in your instructions."
+        }
         return "Tool `\(name)` is not available."
     }
 
@@ -425,7 +428,7 @@ final class ChatSession: ObservableObject, Identifiable {
             steps += 1
             let history = await compactIfNeeded(client: client)
             setStatus(wrapping ? "Writing it up…" : steps == 1 ? "Thinking…" : "Continuing…")
-            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode)
+            let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode, folder: services.workspace.url)
             let info = app.modelInfo(conversation.providerID, conversation.model)
             var request = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "",
                                      messages: history,
@@ -664,7 +667,7 @@ final class ChatSession: ObservableObject, Identifiable {
     /// writes, runs a command, drives the browser or waits for the learner runs alone, in the order the model gave.
     private func runTools(_ calls: [Block], client: LLMClient) async {
         func concurrent(_ c: Block) -> Bool {
-            guard let t = ToolRegistry.byName[c.name ?? ""] else { return true }   // unknown: answered at once with an error
+            guard let t = ToolRegistry.named(c.name ?? "", folder: services.workspace.url, settings: settings) else { return true }   // unknown: answered at once with an error
             return t.risk == .readOnly || t.risk == .network
         }
         let resultIndex = messages.count
@@ -729,7 +732,9 @@ final class ChatSession: ObservableObject, Identifiable {
         let name = call.name ?? ""
         let callID = call.id ?? UUID().uuidString
         // Other agents' argument names (`file_path`…) as this tool's, before any gate reads them.
-        let input = ToolRegistry.byName[name].map { ToolArgs.canonical(call.input ?? .object([:]), schema: $0.schema) } ?? call.input ?? .object([:])
+        let folder = services.workspace.url
+        let known = ToolRegistry.named(name, folder: folder, settings: settings)
+        let input = known.map { ToolArgs.canonical(call.input ?? .object([:]), schema: $0.schema) } ?? call.input ?? .object([:])
         var call = call
         call.input = input
         let started = Date()
@@ -738,13 +743,15 @@ final class ChatSession: ObservableObject, Identifiable {
             turn.tools.append(ToolMetric(name: name, duration: Date().timeIntervalSince(started), ok: ok, waitedForLearner: waited > 0 ? waited : nil))
         }
         // A direct call to a tool this agent can load loads it (saves the load_tools round trip); its schema is sent from
-        // the next step. Tools of other agents (a child's, a sibling's) stay unavailable.
+        // the next step. Tools of other agents (a child's, a sibling's) stay unavailable. So does an MCP server's tool
+        // until its server is usable here (a project server the user hasn't approved lists none).
         let node = AgentTree.node(for: conversation.mode)
-        if AgentTree.deferred(node).contains(name), !(conversation.loadedTools ?? []).contains(name), !settings.disabledTools.contains(name) {
+        let loadable = AgentTree.deferred(node).contains(name) || (AgentTree.usesMCP(node) && known is MCPTool)
+        if loadable, !(conversation.loadedTools ?? []).contains(name), !settings.disabledTools.contains(name) {
             conversation.loadedTools = (conversation.loadedTools ?? []) + [name]
         }
-        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode).contains { $0.name == name }
-        guard callable, let tool = ToolRegistry.byName[name], !settings.disabledTools.contains(name) else {
+        let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode, folder: folder).contains { $0.name == name }
+        guard callable, let tool = known, !settings.disabledTools.contains(name) else {
             record(false)
             return .toolResult(id: callID, name: name, content: Self.unavailable(name, node: node), isError: true)
         }
@@ -821,8 +828,9 @@ final class ChatSession: ObservableObject, Identifiable {
     private func buildSystemPrompt(model: String) async -> String {
         if conversation.mode.isAgent {
             let profile = await ProjectProfile.detect(services.workspace.url)
+            let mcp = await MCPHub.shared.promptSection(services.workspace.url, settings)
             return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
-                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section())
+                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section(), mcp: mcp)
         }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
@@ -1029,6 +1037,7 @@ final class ChatSession: ObservableObject, Identifiable {
         case "ask_learner": "Waiting for your answer…"
         case "task": "Researching with a sub-agent…"
         case let n where n == "memory" || n.hasPrefix("memory_"): "Updating memory…"
+        case let n where n.hasPrefix("mcp__"): "Using \(n.dropFirst(5).replacingOccurrences(of: "__", with: ": "))…"
         default: "Using \(name)…"
         }
     }

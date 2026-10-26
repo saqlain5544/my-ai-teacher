@@ -309,6 +309,37 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   can be taken back); `drainInbox` adds them, with a hidden note and the usual `willSend` context, at the next step
   boundary, and a reply with no tool calls continues instead of ending the turn. A turn that ends without reading
   them (an error, the step limit) starts the next one with them; a stopped turn hands their text back to the draft.
+* **MCP client** (`MCP/`): stdio servers (newline-delimited JSON-RPC 2.0 on a child's stdin/stdout, `MCPStdioTransport`:
+  `posix_spawn` in its own process group with only fds 0–2, stdin `F_SETNOSIGPIPE`, stderr into a 64 kB `MCPLog`) and
+  streamable HTTP (`MCPHTTPTransport`: a POST per message, the reply as JSON or as an event stream that may carry
+  notifications and the server's requests first, `Mcp-Session-Id` from `initialize` and `MCP-Protocol-Version` after
+  it on every later message, DELETE on close, a 404 ends the link). `MCPConnection` matches responses by id, follows
+  `tools/list` pages, answers the server's `ping` and `roots/list` (the folder), routes `notifications/progress` to the
+  call that sent the token (its card's progress), sends `notifications/cancelled` on a timeout (300 s) or Stop, and
+  fails every waiting call at once when the link ends. Results: text parts joined, images kept, resources as a line,
+  `structuredContent` when there is no text, `isError` kept.
+  * **Config** (`MCPConfig`): `AppSettings.mcpServers` (Settings → MCP) and the folder's `.mcp.json` (Claude Code's
+    format; parsed once per modification date); a project server wins a name clash. `${VAR}` / `${VAR:-default}`
+    expand from the user's shell environment when a server starts, never in what an approval shows. A project server is
+    usable only when `AppSettings.mcpProjectDecisions[folder][name]` holds an approval for its `fingerprint` (a hash of
+    type, command, args, env, url, headers, unexpanded), so a changed `.mcp.json` asks again; decisions live in the
+    app, never in the folder.
+  * **Supervision** (`MCPInstance`, one per folder and server, `MCPHub.instance`): a transient child of Runtime › `mcp`
+    started on first use (a call, `load_tools`, or listing tools never seen before); a link that ends by itself is a
+    crash, restarted with backoff (3 in 60 s, 1 → 8 s), after which it is `failed` until the next use starts it
+    afresh. Stop (Settings, a config change) terminates the child; `applicationWillTerminate` → `MCPHub.shutdownNow`
+    SIGTERMs every group and SIGKILLs what's left within 200 ms, marked so the exit isn't restarted.
+  * **Tools** (`MCPTool`, `ToolRegistry.named` / `active(folder:)`): `mcp__<server>__<tool>` (unsafe characters as
+    `_`, 64 at most with a hash suffix), the server's input schema (`$schema` dropped), `execute` risk. Only nodes with
+    `AgentNode.mcp` (the engineer) get them, always deferred: `MCPHub.promptSection` writes a `# MCP servers` section
+    after `# Environment` with one line per tool (first sentence, "(read-only)"), the servers' `instructions`, and a
+    line per project server awaiting approval. Tool lists are remembered by fingerprint in `mcp-tools.json`, so a
+    lesson's prompt starts no server it has listed before. `load_tools` takes tool names or a whole server
+    (`mcp__<server>`); for an unapproved project server it asks the user first (a `permission` card showing the
+    command) and stores the answer. A direct call to a known MCP tool loads it like any deferred tool.
+  * **Gates**: `PermissionExtension.mcpGate` asks for every call regardless of folder access (once, the server for the
+    lesson, or `AppSettings.mcpAlwaysAllow[folder]`); `PlanModeExtension.refusal` lets an MCP tool through only with
+    the server's `annotations.readOnlyHint`. Sub-agents don't get MCP tools.
 * **Instruction files** (`ProjectMemory.contextBlock`): the user's `~/.claude/CLAUDE.md` and `~/.teacher/AGENTS.md`,
   each parent folder's CLAUDE.md / AGENTS.md up to the home folder (outermost first), then the project's CLAUDE.md,
   .claude/CLAUDE.md, AGENTS.md, CLAUDE.local.md and .github/copilot-instructions.md; `@path` mentions of files that
@@ -770,7 +801,8 @@ The app's footprint must not grow with how much the learner has done: data lives
   flush is ended by its watchdog and restarted, without queuing another tick behind the stuck one), `jobs` (one per name:
   `memory.reflect:<lesson>`, `memory.consolidate`, `embeddings.warmup` (on a GCD thread, not the cooperative pool),
   `worktrees.prune`, and `lesson.compact#n` via `Runtime.call`, which retries a failed summary call with backoff before
-  the digest fallback), `agents` (sub-agent runs). Root never gives up; it restarts a supervisor that did, with backoff.
+  the digest fallback), `agents` (sub-agent runs), `mcp` (MCP servers, one child per folder and server, each with its
+  own OS process). Root never gives up; it restarts a supervisor that did, with backoff.
 * Watchdogs measure silence, not running time: a job's work gets a heartbeat (`Runtime.Job.beat`, `call`'s `beat`), and
   a model client wrapped in `BeatingClient` beats on every streamed event — so a long summary or reflection is never cut
   off mid-answer and billed twice; only one that goes quiet is ended (compaction 120 s, reflection 180 s).
@@ -879,6 +911,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
 | /command | `.teacher/commands`, `.claude/commands` (project and user) | slash commands with `$ARGUMENTS`, `$1`…`$9`, namespaces; built-in `/init`, `/review`, `/compact` |
+| MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every call asked (per-server "always allow" per folder), plan mode only `readOnlyHint` tools; supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |

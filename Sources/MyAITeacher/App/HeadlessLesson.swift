@@ -5,7 +5,10 @@ import Foundation
 /// would. Prints one JSON object per turn (with each tool call's input and the turn's prompt tokens). Run it with its own MYAITEACHER_HOME so the learner's data is never touched:
 ///   MYAITEACHER_HOME=/tmp/x MyAITeacher --lesson spec.json --provider minimax --model MiniMax-M3.1-Flash
 /// spec: {"mode": "code", "folder": "/path", "seed": {"rel/path": "text"}, "budget": 300,
+///        "mcpServers": {"name": {"command": "…", "args": […]}},
 ///        "turns": [{"text": "…", "files": {"rel/path": "text"}, "plan": true, "steer": {"after": 20, "text": "…"}}]}
+/// `mcpServers` are app-level MCP servers (Settings → MCP); a seeded `.mcp.json` gives project servers, approved like
+/// any approval.
 /// `plan` turns the code agent's plan mode on before the turn (its plan is approved like any approval); `steer` sends a
 /// message while the turn runs, `after` seconds in (the agent reads it at its next step).
 @MainActor
@@ -27,6 +30,9 @@ enum HeadlessLesson {
         app.settings.value.model = model
         if let t = thinking.flatMap(ThinkingLevel.init(rawValue:)) { app.settings.value.thinking = t }
         if let deep = spec["deepWork"]?.bool { app.settings.value.deepWork = deep }
+        if let servers = spec["mcpServers"]?.object {
+            app.settings.value.mcpServers = servers.keys.sorted().compactMap { MCPServerConfig(name: $0, json: servers[$0]!, scope: .app) }
+        }
         app.openFolder(folder, askAccess: false)
         app.setAccess(.full, for: app.workspace)
         app.accessPrompt = nil
@@ -81,6 +87,14 @@ enum HeadlessLesson {
                                        "prompt_tokens": .number(Double(promptTokens)), "tool_errors": .array(errors), "chars": .number(Double(reply.count)),
                                        "reply": .string(String(reply.prefix(20_000)))]
             if s.conversation.mode.isAgent {
+                let mcp = MCPHub.shared.all.filter { $0.folder.standardizedFileURL.path == s.services.workspace.url.standardizedFileURL.path }
+                if !mcp.isEmpty {
+                    out["mcp"] = .array(mcp.map { i in
+                        let st = i.status
+                        return ["server": .string(i.config.name), "phase": .string(st.phase.rawValue), "tools": .number(Double(st.tools?.count ?? 0)),
+                                "restarts": .number(Double(st.restarts))]
+                    })
+                }
                 out["plan_mode"] = .bool(s.conversation.planMode == true)
                 out["steered"] = .number(Double(msgs.filter { $0.blocks.contains { $0.text == ChatSession.queuedNote } }.count))
                 out["compacted"] = .bool(s.conversation.compactSummary != nil)

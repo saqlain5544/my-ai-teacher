@@ -41,6 +41,9 @@ final class PlanModeExtension: AgentExtension {
     /// Why a call can't run in plan mode, or nil when it only looks.
     nonisolated static func refusal(_ tool: Tool, _ input: JSON) -> String? {
         let present = "Plan mode is on: nothing may change until the user approves your plan. Finish researching, then present the plan with `exit_plan_mode`."
+        if let mcp = tool as? MCPTool {
+            return mcp.readOnly ? nil : "\(present) Of the MCP servers' tools only those their server marks read-only run now."
+        }
         switch tool.name {
         case ExitPlanModeTool.toolName, "todo_write", "project_memory", "ask_learner": return nil
         case "browser":
