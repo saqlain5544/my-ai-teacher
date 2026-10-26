@@ -153,6 +153,9 @@ final class ToolParityTests: XCTestCase {
         // Grep (content mode)
         o = try await run("grep", ["pattern": "gam+a", "output_mode": "content"])
         XCTAssertTrue(o.text.contains("gamma"), o.text)
+        // Files with matches: paths relative to the folder searched, with their match counts, most first.
+        o = try await run("grep", ["pattern": "a|i"])
+        XCTAssertEqual(o.text.split(separator: "\n").dropFirst().map(String.init), ["src/a.txt:3", "notes/n.md:1", "src/b.py:1"], o.text)
         // Bash with persistent cwd
         o = try await run("bash", ["command": "cd src && pwd"])
         o = try await run("bash", ["command": "ls"])

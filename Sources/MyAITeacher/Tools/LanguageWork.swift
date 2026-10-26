@@ -177,22 +177,10 @@ enum LanguageWork {
         if !s.hasPrefix("http") { s = "https://" + s }
         guard let url = URL(string: s), ["http", "https"].contains(url.scheme ?? "") else { return ["note": "That isn't a web address."] }
         var md: String, title: String?
-        if let cached = await FetchCache.shared.get(url.absoluteString) { (md, title) = cached }
-        else {
-            var req = URLRequest(url: url, timeoutInterval: 25)
-            req.setValue(WebSearch.userAgent, forHTTPHeaderField: "User-Agent")
-            req.setValue("text/html,application/xhtml+xml;q=0.9,text/plain;q=0.8", forHTTPHeaderField: "Accept")
-            guard let (data, resp) = try? await URLSession.shared.data(for: req) else { return ["note": "The page didn't load."] }
-            let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-            guard code < 400 else { return ["note": .string("The site answered \(code).")] }
-            let ct = ((resp as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-            if ct.contains("html") || ct.isEmpty || ct.contains("xml") {
-                let r = HTMLToMarkdown.convert(html: String(decoding: data.prefix(6_000_000), as: UTF8.self), baseURL: resp.url ?? url)
-                (md, title) = (r.markdown, r.title)
-            } else if ct.contains("text/") {
-                (md, title) = (String(decoding: data.prefix(2_000_000), as: UTF8.self), nil)
-            } else { return ["note": "That link isn't a page of text."] }
-            await FetchCache.shared.put(url.absoluteString, md, title)
+        switch try? await WebPage.load(url) {
+        case .text(let m, let t)?: (md, title) = (m, t)
+        case .image?: return ["note": "That link isn't a page of text."]
+        case nil: return ["note": "The page didn't load."]
         }
         md = plainText(md)
         guard md.count >= 20 else { return ["note": "The page has no text to read (it may need JavaScript)."] }

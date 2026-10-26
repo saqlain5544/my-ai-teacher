@@ -827,10 +827,10 @@ The app's footprint must not grow with how much the learner has done: data lives
 | Write | `write` | creates parents; permission-gated by folder access |
 | Edit | `edit` | exact unique match or `replace_all`, helpful errors |
 | Glob | `glob` | `**` globs, newest first, skips build/vcs folders |
-| Grep | `grep` | ripgrep when installed (fallback `grep`), files/content/count modes, context, `-i`, glob filter |
+| Grep | `grep` | ripgrep when installed (fallback `grep`), files (by match count)/content (grouped by file)/count modes, paths relative to the folder searched, context, `-i`, glob filter |
 | LS | `ls` | sizes, hidden-noise filtering |
-| WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback) merged; news mode |
-| WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, pagination, 15-min cache |
+| WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); `read` adds the top pages' best passages |
+| WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, 15-min cache; `query` returns the BM25-best passages (`Passages`), pages of 12k characters list their later sections' offsets, same-site link addresses left out |
 | TodoWrite | `todo_write` | rendered as a live checklist |
 | Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app and `.teacher/agents/*.md`), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |

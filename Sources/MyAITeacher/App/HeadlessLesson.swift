@@ -2,7 +2,7 @@ import Foundation
 
 /// A real lesson with no window, for measuring agents fast: the app's own `ChatSession`, tools and extensions, driven
 /// from a spec, with a hard time budget per turn. Approvals are given once; questions are skipped as a busy learner
-/// would. Prints one JSON object per turn. Run it with its own MYAITEACHER_HOME so the learner's data is never touched:
+/// would. Prints one JSON object per turn (with each tool call's input and the turn's prompt tokens). Run it with its own MYAITEACHER_HOME so the learner's data is never touched:
 ///   MYAITEACHER_HOME=/tmp/x MyAITeacher --lesson spec.json --provider minimax --model MiniMax-M3.1-Flash
 /// spec: {"mode": "code", "folder": "/path", "seed": {"rel/path": "text"}, "budget": 300,
 ///        "turns": [{"text": "…", "files": {"rel/path": "text"}}]}
@@ -60,12 +60,17 @@ enum HeadlessLesson {
             let msgs = Array(s.messages[min(start, s.messages.count)...])
             let blocks = msgs.flatMap(\.blocks)
             let tools = blocks.filter { $0.kind == .toolUse }.map { JSON.string($0.name ?? "") }
+            // What each call asked for, and what the turn cost in prompt tokens (every step resends the history).
+            let calls = blocks.filter { $0.kind == .toolUse }.map { JSON.string(($0.name ?? "") + " " + String(($0.input?.compact ?? "").prefix(160))) }
+            let resultChars = blocks.filter { $0.kind == .toolResult }.reduce(0) { $0 + ($1.text?.count ?? 0) }
+            let promptTokens = msgs.compactMap(\.turn).reduce(0) { $0 + $1.usage.promptTotal }
             let errors = blocks.filter { $0.kind == .toolResult && $0.isError == true }.map { JSON.string("\($0.name ?? ""): " + String(($0.text ?? "").prefix(200))) }
             let reply = msgs.filter { $0.role == .assistant && $0.meta?["superseded"]?.bool != true }
                 .flatMap(\.blocks).filter { $0.kind == .text }.compactMap(\.text).joined(separator: "\n\n")
             var out: [String: JSON] = ["turn": .number(Double(n + 1)), "seconds": .number(Date().timeIntervalSince(t0).rounded()),
                                        "first_reply_seconds": firstReply.map { .number($0.rounded()) } ?? .null, "timed_out": .bool(timedOut),
-                                       "tools": .array(tools), "tool_errors": .array(errors), "chars": .number(Double(reply.count)),
+                                       "tools": .array(tools), "calls": .array(calls), "tool_result_chars": .number(Double(resultChars)),
+                                       "prompt_tokens": .number(Double(promptTokens)), "tool_errors": .array(errors), "chars": .number(Double(reply.count)),
                                        "reply": .string(String(reply.prefix(20_000)))]
             if let p = ProjectStore.load(s.services.workspace) {
                 out["project"] = ["registered": .bool(p.snapshotAt != nil), "command": p.testCommand.map { .string($0) } ?? .null,

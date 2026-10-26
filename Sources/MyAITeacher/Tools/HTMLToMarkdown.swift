@@ -197,7 +197,8 @@ enum HTMLToMarkdown {
         }
         if let cls = el.attribute(forName: "class")?.stringValue?.lowercased(),
            ["mw-editsection", "navbox", "reflist", "sidebar", "cookie", "advert", "share", "noprint", "mw-jump-link",
-             "interlanguage", "vector-", "mw-portlet", "catlinks", "printfooter", "mw-indicator", "navbar", "toc", "breadcrumb", "skip-link", "banner", "newsletter", "related-posts"].contains(where: { cls.contains($0) }) {
+             "interlanguage", "vector-", "mw-portlet", "catlinks", "printfooter", "mw-indicator", "navbar", "toc", "breadcrumb", "skip-link", "banner", "newsletter", "related-posts",
+             "hatnote", "ambox", "mw-empty-elt"].contains(where: { cls.contains($0) }) {
             return
         }
         if el.attribute(forName: "hidden") != nil || (el.attribute(forName: "aria-hidden")?.stringValue == "true" && tag != "span") { return }
@@ -247,7 +248,8 @@ enum HTMLToMarkdown {
             let text = inner.trimmingCharacters(in: .whitespacesAndNewlines)
             if let href = el.attribute(forName: "href")?.stringValue, !href.hasPrefix("javascript:"), !href.hasPrefix("#"), !text.isEmpty,
                let url = URL(string: href, relativeTo: ctx.base)?.absoluteURL {
-                out += "[\(text)](\(url.absoluteString))"
+                // Parentheses in an address (Wikipedia's "Recursion_(computer_science)") would end a Markdown link early.
+                out += "[\(text)](\(url.absoluteString.replacingOccurrences(of: "(", with: "%28").replacingOccurrences(of: ")", with: "%29")))"
             } else { out += text }
         case "img":
             let cls = el.attribute(forName: "class")?.stringValue ?? ""
@@ -312,6 +314,8 @@ enum HTMLToMarkdown {
                 return tidy(s).replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "|", with: "\\|")
             })
         }
+        // Rows with no text (an infobox's spacers) say nothing.
+        grid = grid.enumerated().filter { $0.offset == 0 || $0.element.contains { !$0.trimmingCharacters(in: .whitespaces).isEmpty } }.map(\.element)
         let cols = grid.map(\.count).max() ?? 0
         guard cols > 0 else { return "" }
         var md = ""

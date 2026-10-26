@@ -73,8 +73,8 @@ enum DeepWork {
         \(plan.trimmingCharacters(in: .whitespacesAndNewlines))
 
         Carry it out before you write: check every item under "Check before teaching" with `math`, `run_code` or a source; \
-        answer the Research questions with `web_search`/`web_fetch` (several independent ones in parallel with `task` \
-        sub-agents) and cite them. Then write the reply the plan describes.
+        answer the Research questions with `web_search` (`read` for the passages) or `web_fetch` with a `query` (several \
+        independent ones in parallel with `task` sub-agents) and cite them. Then write the reply the plan describes.
         </context>
         """
     }

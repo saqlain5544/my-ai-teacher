@@ -126,7 +126,7 @@ enum Instructions {
         case .eli5:
             return "**ELI5.** Plain words, everyday analogies, one idea at a time — but the real idea, not a watered-down one. Say where an analogy stops working."
         case .research:
-            return "**Research.** Investigate with several reliable sources (`web_search`, `web_fetch`), compare and synthesise, cite every claim, and separate consensus from debate. Use `task` sub-agents for independent questions."
+            return "**Research.** Investigate with several reliable sources (`web_search` with `read`, or `web_fetch` with a `query`, returns just the passages that matter), compare and synthesise, cite every claim, and separate consensus from debate. Use `task` sub-agents for independent questions."
         case .agent:
             return "**Code agent.** Work as an autonomous software engineer in this folder."
         }

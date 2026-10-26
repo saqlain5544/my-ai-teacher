@@ -5,6 +5,8 @@ import UniformTypeIdentifiers
 private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp"]
 
 struct ReadTool: Tool {
+    /// Characters one read returns at most (about 16k tokens); `offset` reads on.
+    static let budget = 64_000
     let name = "read"
     var subAgentVariant: Tool? { self }
     let description = """
@@ -61,13 +63,20 @@ struct ReadTool: Tool {
         guard offset <= lines.count else { return .error("offset \(offset) is beyond end of file (\(lines.count) lines).") }
         let end = min(lines.count, offset - 1 + limit)
         var out = ""
-        out.reserveCapacity(min(data.count, 200_000))
+        out.reserveCapacity(min(data.count, Self.budget + 4096))
+        // Line numbers padded only as wide as the last one ("  9", " 10"), not to six columns: on a 2000-line read the
+        // padding alone was 8k characters.
+        let width = String(end).count
+        var shown = end
         for i in (offset - 1)..<end {
             var line = lines[i]
             if line.count > 2000 { line = line.prefix(2000) + "… [line truncated]" }
-            out += "\(String(i + 1).leftPad(6))\t\(line)\n"
+            let row = "\(String(i + 1).leftPad(width))\t\(line)\n"
+            // A file of long lines stops at the budget rather than at 2000 lines (which could be 4M characters).
+            if out.utf8.count + row.utf8.count > Self.budget && i > offset - 1 { shown = i; break }
+            out += row
         }
-        if end < lines.count { out += "\n(\(lines.count - end) more lines — use offset=\(end + 1) to continue)" }
+        if shown < lines.count { out += "\n(\(lines.count - shown) more lines — use offset=\(shown + 1) to continue)" }
         return ToolOutput(text: out)
     }
 }
@@ -250,8 +259,9 @@ struct GlobTool: Tool {
         guard var matches = Self.scan(root: root, regex: regex) else { return .error("Cannot search \(root.path)") }
         matches.sort { $0.1 > $1.1 }
         if matches.isEmpty { return ToolOutput(text: "No files match \(pattern) in \(root.path)") }
-        let shown = matches.prefix(200).map(\.0).joined(separator: "\n")
-        return ToolOutput(text: shown + (matches.count > 200 ? "\n… \(matches.count - 200) more" : ""))
+        // Relative to the folder searched (named once on top): absolute paths repeated the same prefix on every line.
+        let shown = matches.prefix(100).map { relative($0.0, to: root.path) }.joined(separator: "\n")
+        return ToolOutput(text: "In \(root.path):\n" + shown + (matches.count > 100 ? "\n… \(matches.count - 100) more (narrow the pattern)" : ""))
     }
 
     /// Synchronous directory walk (FileManager enumerators can't be iterated from async contexts).
@@ -315,7 +325,7 @@ struct GrepTool: Tool {
     var subAgentVariant: Tool? { self }
     let description = """
     Search file contents with a regular expression (ripgrep syntax when available). \
-    output_mode: "files_with_matches" (default), "content" (matching lines with line numbers), or "count". \
+    output_mode: "files_with_matches" (default; file:count, most first), "content" (numbered lines by file) or "count". \
     Filter files with `glob` (e.g. "*.py"). Use -i for case-insensitive, `context` for surrounding lines.
     """
     let risk = ToolRisk.readOnly
@@ -327,21 +337,22 @@ struct GrepTool: Tool {
             "output_mode": Schema.string("Output mode.", enum: ["files_with_matches", "content", "count"]),
             "-i": Schema.boolean("Case-insensitive."),
             "context": Schema.integer("Lines of context around matches (content mode)."),
-            "head_limit": Schema.integer("Max result lines (default 200)."),
+            "head_limit": Schema.integer("Max result lines (default 100)."),
         ], required: ["pattern"])
     }
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let pattern = try input.req("pattern")
         let path = resolvePath(input["path"]?.string ?? ".", workspace: ctx.workspace).path
         let mode = input["output_mode"]?.string ?? "files_with_matches"
-        let limit = max(1, input["head_limit"]?.int ?? 200)
+        let limit = max(1, input["head_limit"]?.int ?? 100)
         var result: ProcessResult
+        // Files with matches are listed by match count (the file that mentions it most is usually the one wanted), so
+        // both modes count.
         if let rg = ProcessRunner.which("rg") {
-            var args = ["--no-heading", "--color=never", "--max-columns=500"]
+            var args = ["--color=never", "--max-columns=400", "--max-columns-preview"]
             switch mode {
-            case "content": args += ["-n"]; if let c = input["context"]?.int { args += ["-C", String(c)] }
-            case "count": args += ["-c"]
-            default: args += ["-l"]
+            case "content": args += ["-n", "--heading"]; if let c = input["context"]?.int { args += ["-C", String(c)] }
+            default: args += ["-c", "--no-heading", "--with-filename"]
             }
             if input["-i"]?.bool == true { args.append("-i") }
             if let g = input["glob"]?.string { args += ["--glob", g] }
@@ -351,8 +362,7 @@ struct GrepTool: Tool {
             var args = ["-r", "-E", "-I", "--exclude-dir=.git", "--exclude-dir=node_modules"]
             switch mode {
             case "content": args += ["-n"]; if let c = input["context"]?.int { args += ["-C", String(c)] }
-            case "count": args += ["-c"]
-            default: args += ["-l"]
+            default: args += ["-c", "-H"]
             }
             if input["-i"]?.bool == true { args.append("-i") }
             if let g = input["glob"]?.string { args.append("--include=\(g)") }
@@ -361,11 +371,30 @@ struct GrepTool: Tool {
         }
         if result.exitCode == 1 && result.stdout.isEmpty { return ToolOutput(text: "No matches.") }
         if result.exitCode > 1 { return .error(result.stderr.isEmpty ? "grep failed" : result.stderr) }
-        var lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: true)
-        if mode == "count" { lines = lines.filter { !$0.hasSuffix(":0") } }
+        let base = (path.hasSuffix("/") ? path : path + "/")
+        var lines = result.stdout.split(separator: "\n", omittingEmptySubsequences: mode != "content")
+            .map { $0.hasPrefix(base) ? String($0.dropFirst(base.count)) : String($0) }
+        if mode != "content" {
+            // "path:count", most matches first.
+            let counted = lines.compactMap { l -> (String, Int)? in
+                guard let c = l.lastIndex(of: ":"), let n = Int(l[l.index(after: c)...]), n > 0 else { return nil }
+                return (String(l[..<c]), n)
+            }.sorted { $0.1 != $1.1 ? $0.1 > $1.1 : $0.0 < $1.0 }
+            lines = counted.map { "\($0.0):\($0.1)" }
+        }
+        while lines.last?.isEmpty == true { lines.removeLast() }
+        if lines.isEmpty { return ToolOutput(text: "No matches.") }
         let shown = lines.prefix(limit).joined(separator: "\n")
-        return ToolOutput(text: shown + (lines.count > limit ? "\n… \(lines.count - limit) more lines" : ""))
+        var isDir: ObjCBool = false
+        let header = FileManager.default.fileExists(atPath: path, isDirectory: &isDir) && isDir.boolValue ? "In \(path):\n" : ""
+        return ToolOutput(text: header + shown + (lines.count > limit ? "\n… \(lines.count - limit) more lines" : ""))
     }
+}
+
+/// `path` relative to `root` when it is inside it.
+func relative(_ path: String, to root: String) -> String {
+    let base = root.hasSuffix("/") ? root : root + "/"
+    return path.hasPrefix(base) ? String(path.dropFirst(base.count)) : path
 }
 
 extension String {
