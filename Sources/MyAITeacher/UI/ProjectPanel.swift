@@ -8,6 +8,7 @@ import UniformTypeIdentifiers
 @MainActor
 final class ProjectModel: ObservableObject {
     @Published private(set) var project: MentorProject?
+    @Published private(set) var earlier: [MentorProject] = []
     @Published private(set) var changes: [ProjectStore.Change] = []
     @Published var running: String?
     @Published var output: String?
@@ -17,8 +18,11 @@ final class ProjectModel: ObservableObject {
     func bind(_ s: ChatSession) { session = s; reload() }
 
     func reload() {
-        guard let ws else { project = nil; return }
-        project = ProjectStore.load(ws)
+        guard let ws else { project = nil; earlier = []; return }
+        let loaded = ProjectStore.load(ws)
+        if loaded?.createdAt != project?.createdAt { output = nil }   // the next project doesn't show the last one's run
+        project = loaded
+        earlier = ProjectStore.earlier(ws)
         Task { [weak self] in
             let c = await ProjectStore.changes(ws)
             self?.changes = c
@@ -35,6 +39,15 @@ final class ProjectModel: ObservableObject {
             self?.output = ProjectTestRunner.describe(run, output: out)
             self?.reload()
         }
+    }
+
+    /// The learner moves on: the project stays on the record unfinished, and the mentor hears it with their next message.
+    func putAside() {
+        guard let ws, let session, project?.isOpen == true else { return }
+        let title = project?.title ?? "the project"
+        ProjectStore.mutate(ws) { $0.parkedAt = Date(); $0.parkedWhy = "put aside by the learner"; $0.log("parked", "put aside by the learner") }
+        session.studyNotes.append("The learner put “\(title)” aside unfinished from the Project panel: it's on the record as not passed. Don't review it; `project_tests` set starts the next project.")
+        reload()
     }
 
     func requestReview(_ r: MentorProject.SelfReview) {
@@ -140,6 +153,7 @@ struct ProjectPanel: View {
     @State private var reviewing = false
     @State private var openDiff: String?
     @State private var confirmRestore = false
+    @State private var confirmPark = false
 
     var body: some View {
         Group {
@@ -153,6 +167,7 @@ struct ProjectPanel: View {
                         findings(p)
                         diff
                         guardBox(p)
+                        earlierBox
                     }
                     .padding(12)
                 }
@@ -171,6 +186,9 @@ struct ProjectPanel: View {
             }
         }
         .sheet(isPresented: $reviewing) { SelfReviewSheet { model.requestReview($0) } }
+        .confirmationDialog("Put “\(model.project?.title ?? "this project")” aside unfinished?", isPresented: $confirmPark) {
+            Button("Put it aside") { model.putAside() }
+        } message: { Text("It stays on your record as not passed, and your files stay as they are. Ask the mentor for the next project when you're ready.") }
         .confirmationDialog("Restore your files to the \(model.project?.snapshotWhy ?? "baseline")?", isPresented: $confirmRestore) {
             Button("Restore \(model.changes.count) file\(model.changes.count == 1 ? "" : "s")", role: .destructive) { model.restoreBaseline() }
         } message: {
@@ -200,9 +218,9 @@ struct ProjectPanel: View {
     private func trend(_ runs: ArraySlice<MentorProject.TestRun>) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             if let r = runs.last, !r.errored {
-                ProgressView(value: Double(r.passed), total: Double(max(1, r.passed + r.failed)))
+                ProgressView(value: r.rate)
                     .tint(r.green ? .green : .orange)
-                    .accessibilityLabel("Last run: \(r.passed) of \(r.passed + r.failed) passing")
+                    .accessibilityLabel("Last run: " + (r.counted == false ? r.line : "\(r.passed) of \(r.passed + r.failed) passing"))
             }
             if runs.count > 1 {
                 HStack(alignment: .bottom, spacing: 6) { bars(runs); Text("runs").font(.caption2).foregroundStyle(.tertiary) }
@@ -213,16 +231,15 @@ struct ProjectPanel: View {
     private func bars(_ runs: ArraySlice<MentorProject.TestRun>) -> some View {
         HStack(alignment: .bottom, spacing: 2) {
             ForEach(Array(runs.enumerated()), id: \.offset) { _, r in
-                let total = max(1, r.passed + r.failed)
                 RoundedRectangle(cornerRadius: 1)
                     .fill(r.errored ? Color.secondary.opacity(0.4) : r.green ? Color.green : Color.orange)
-                    .frame(width: 6, height: r.errored ? 3 : max(2, 14 * CGFloat(r.passed) / CGFloat(total)))
+                    .frame(width: 6, height: r.errored ? 3 : max(2, 14 * CGFloat(r.rate)))
                     .help("\(r.line) · \(r.why) · \(ProjectTestsTool.ago(r.at))")
             }
         }
         .frame(height: 15, alignment: .bottom)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Test history: " + runs.map { "\($0.passed) of \($0.passed + $0.failed)" }.joined(separator: ", "))
+        .accessibilityLabel("Test history: " + runs.map { $0.counted == false ? $0.line : "\($0.passed) of \($0.passed + $0.failed)" }.joined(separator: ", "))
     }
 
     private func actions(_ p: MentorProject) -> some View {
@@ -239,6 +256,7 @@ struct ProjectPanel: View {
                 Button("Export report…") { export() }
                 Button("Restore…") { confirmRestore = true }.disabled(model.changes.isEmpty)
                     .help("Put your files back as they were at the \(p.snapshotWhy ?? "baseline")")
+                if p.isOpen { Button("Put aside…") { confirmPark = true }.help("Move on to something else; this project stays on your record as unfinished") }
             }
             .buttonStyle(.link).font(.caption)
         }
@@ -366,6 +384,27 @@ struct ProjectPanel: View {
                         Text("\(ProjectTestsTool.ago(e.at)) · \(e.kind): \(e.detail)").font(.caption2).foregroundStyle(.secondary).frame(maxWidth: .infinity, alignment: .leading)
                     }
                 }.font(.caption)
+            }
+        }
+    }
+
+    /// What came before this project in the folder: each one's outcome at a glance.
+    @ViewBuilder private var earlierBox: some View {
+        if !model.earlier.isEmpty {
+            section("Earlier projects") {
+                ForEach(Array(model.earlier.enumerated()), id: \.offset) { _, e in
+                    let passed = e.rounds.last?.verdict == "pass"
+                    HStack(spacing: 6) {
+                        Image(systemName: passed ? "checkmark.seal.fill" : e.parkedAt != nil ? "pause.circle" : "circle.dashed")
+                            .foregroundStyle(passed ? Color.green : Color.secondary)
+                        Text(e.title ?? "Project").lineLimit(1)
+                        Spacer(minLength: 4)
+                        Text(passed ? "passed in \(e.rounds.count) round\(e.rounds.count == 1 ? "" : "s")" : e.parkedAt != nil ? "put aside" : (e.lastRun?.line ?? ""))
+                            .font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                    }
+                    .font(.callout)
+                    .help(e.lastRun.map { "Last run: \($0.line)" } ?? "")
+                }
             }
         }
     }

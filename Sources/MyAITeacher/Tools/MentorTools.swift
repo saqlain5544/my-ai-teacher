@@ -38,7 +38,8 @@ enum ProjectTestRunner {
     }
 
     static func describe(_ run: MentorProject.TestRun, output: String) -> String {
-        var s = run.errored ? "The test command couldn't run (exit \(run.exit))." : "\(run.line) (exit \(run.exit), \(String(format: "%.1f", run.seconds)) s)."
+        let exit = run.line.contains("(exit") ? "" : "exit \(run.exit), "   // an uncounted run's line already says it
+        var s = run.errored ? "The test command couldn't run (exit \(run.exit))." : "\(run.line) (\(exit)\(String(format: "%.1f", run.seconds)) s)."
         if !run.failing.isEmpty { s += "\nFailing: " + run.failing.joined(separator: ", ") }
         let items = Diagnostics.parse(output)
         if !items.isEmpty { s += "\n" + Diagnostics.summary(items, cap: 20) }
@@ -186,9 +187,10 @@ struct ProjectReviewTool: Tool {
     their lines; `text` is a question or hint, never the fix; `hints` is a ladder of 2–3 rungs, each a little more \
     specific: a nudge, a targeted hint, the concept or a worked step on a different example — never their code), \
     `resolved` (ids of earlier findings now fixed), and `help` (none|hint|solution: what you gave since the last round). \
-    A pass needs this review's tests green, the tests locked, and no `must` open; it records the \
+    A pass needs this review's tests green, the tests locked, and no `must` open, and when all three hold it is a pass \
+    (`should`/`nit` stay open as suggestions): what must change before it passes is a `must`. A pass records the \
     concept's mastery (as helped if there was help) and opens an explain-back. action="explain": after a pass, record \
-    the learner's explanation — `question` you asked and `verdict` pass|partial|fail. action="status": rounds and open findings.
+    the learner's own explanation (a skipped question is none) — `question` you asked and `verdict` pass|partial|fail. action="status": rounds and open findings.
     """
     let risk = ToolRisk.execute
     var schema: JSON {
@@ -264,6 +266,11 @@ struct ProjectReviewTool: Tool {
                 }
                 if p.testsUnlockedAt != nil { return .error("A pass needs the tests locked, and they are unlocked: re-baseline them (`project_tests` set) and review again, or record `changes`.") }
             }
+            // Findings are about the learner's work. A live review, told its green run with nothing blocking was a pass,
+            // filed a `must` against its own test file (the tests didn't check a rule the learner's code already met).
+            if let mine = (input["findings"]?.array ?? []).compactMap({ $0["file"]?.string }).first(where: { $0.hasPrefix(".teacher/") || $0.hasPrefix("./.teacher/") || $0.contains("/.teacher/") }) {
+                return .error("Nothing recorded: `\(mine)` is yours, not the learner's — findings point at their files. A rule your tests miss is your gap: if their code meets it, it isn't a finding (tighten the tests for the next project, or `project_tests` unlock if a test is wrong).")
+            }
             let stated: Help = ["hint": .hint, "solution": .solution][input["help"]?.string ?? ""] ?? .none
             let helped = Help(rawValue: max(stated.rawValue, p.helpSinceReview.rawValue)) ?? .none
             var next = p.nextFindingID
@@ -293,8 +300,16 @@ struct ProjectReviewTool: Tool {
                     else { carried.append(rounds[last].findings[i]) }
                 }
             }
-            if verdict == "pass", findings.contains(where: { $0.severity == "must" }) || !carried.filter({ $0.severity == "must" }).isEmpty {
+            let blocking = findings.contains { $0.severity == "must" } || carried.contains { $0.severity == "must" }
+            if verdict == "pass", blocking {
                 return .error("A pass can't carry a `must` finding: fix the verdict (changes) or the severities.")
+            }
+            // The pass bar is the tests and the `must`s, not the reviewer's appetite: green, locked and nothing blocking is a
+            // pass, and the `should`s and `nit`s stay open as suggestions. A "changes" with nothing blocking says two things
+            // at once, so it goes back for a decision instead of being guessed at: one live review asked for a third round
+            // with 19/19 green over wording; another, promoted to a pass, had its reply ask for a fix it had filed as `should`.
+            if verdict == "changes", !blocking, open.run?.green == true, p.testsUnlockedAt == nil {
+                return .error("Nothing recorded: the tests are green and no finding is a `must`, which is a pass — unless something must change before it passes, and then that finding is a `must`. Send `findings` again: verdict pass (the `should`/`nit` findings stay open as suggestions), or the blocking findings as `must`.")
             }
             let selfReview = p.selfReview.flatMap { $0.at > (p.rounds.last?.at ?? .distantPast) ? $0 : nil }
             let round = MentorProject.Round(number: p.rounds.count + 1, at: Date(), verdict: verdict, summary: input["summary"]?.string, findings: carried + findings,

@@ -126,6 +126,31 @@ final class ZigRunTests: XCTestCase {
         XCTAssertTrue(r.text.contains("sum=5"), r.text)
         XCTAssertEqual(try FileManager.default.contentsOfDirectory(atPath: lesson.path), ["note.txt"], "no .zig-cache or binary in the lesson's folder")
     }
+
+    func testSnippetsImportTheLessonsFiles() async throws {
+        XCTAssertTrue(RunCodeTool.isCommonJS("const { f } = require('./wf.js');\nconsole.log(f())"))
+        XCTAssertFalse(RunCodeTool.isCommonJS("import fs from 'node:fs';\nconst x = require"))
+        XCTAssertFalse(RunCodeTool.isCommonJS("console.log(1)"))
+        try XCTSkipIf(ProcessRunner.which("node") == nil, "node not installed")
+        let lesson = FileManager.default.temporaryDirectory.appendingPathComponent("cjs-\(UUID().uuidString.prefix(6))")
+        try FileManager.default.createDirectory(at: lesson, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: lesson) }
+        try "module.exports = { twice: n => 2 * n };\n".write(to: lesson.appendingPathComponent("wf.js"), atomically: true, encoding: .utf8)
+        // A learner's files, imported relative to the lesson's folder, as a review checks them: CommonJS, ES module, Python.
+        let cjs = try await RunCodeTool.execute(language: "javascript", code: "const { twice } = require('./wf.js');\nconsole.log('twice=' + twice(21));",
+                                                stdin: nil, timeout: 30, workingDirectory: lesson)
+        XCTAssertFalse(cjs.failed, cjs.text); XCTAssertTrue(cjs.text.contains("twice=42"), cjs.text)
+        let esm = try await RunCodeTool.execute(language: "javascript", code: "import m from './wf.js';\nconsole.log('esm=' + m.twice(2));",
+                                                stdin: nil, timeout: 30, workingDirectory: lesson)
+        XCTAssertFalse(esm.failed, esm.text); XCTAssertTrue(esm.text.contains("esm=4"), esm.text)
+        try XCTSkipIf(ProcessRunner.which("python3") == nil, "python3 not installed")
+        try "def total(xs):\n    return sum(xs)\n".write(to: lesson.appendingPathComponent("shop.py"), atomically: true, encoding: .utf8)
+        let py = try await RunCodeTool.execute(language: "python", code: "import sys\nfrom shop import total\nprint('total=', total([1, 2]), sys.argv[0].endswith('main.py'))",
+                                               stdin: nil, timeout: 30, workingDirectory: lesson)
+        XCTAssertFalse(py.failed, py.text); XCTAssertTrue(py.text.contains("total= 3 True"), py.text)
+        let err = try await RunCodeTool.execute(language: "python", code: "x = 1\nraise ValueError('boom')\n", stdin: nil, timeout: 30, workingDirectory: lesson)
+        XCTAssertTrue(err.failed && err.text.contains("raise ValueError('boom')"), "tracebacks still show the source line: \(err.text)")
+    }
 }
 
 /// Claude requests: history edits must not turn into 400s, and server-side clearing only removes screenshots.

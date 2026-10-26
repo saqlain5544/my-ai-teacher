@@ -1104,6 +1104,16 @@
       (S.progress.get(b.id) || '').length].join('|');
   }
 
+  // The reason a failed call gives, for its closed card: the first line that names an error ("TypeError: …", "error[E0308]:
+  // …"), else the first that isn't a bare location, stack frame or caret (node prints "wf.js:3", the source line and a
+  // "^" before its TypeError; Python's traceback ends with it).
+  function failureReason(out) {
+    const lines = String(out).split('\n').map(l => l.trim()).filter(Boolean);
+    const noise = l => /^\S+:\d+(:\d+)?$/.test(l) || /^at\s/.test(l) || /^[\^~\s]+$/.test(l) || /^(Exit code|exit) -?\d+$/i.test(l);
+    const named = lines.find(l => !noise(l) && /\b\w*(Error|Exception)\b|^(error|fatal)\b|\bpanicked\b/i.test(l));
+    return (named || lines.find(l => !noise(l)) || lines[0] || '').replace(/^Error:\s*/i, '').slice(0, 200);
+  }
+
   function renderToolCard(node, b, force) {
     if (!b) return;
     const sig = toolSignature(b);
@@ -1131,7 +1141,7 @@
     const acts = d.headActions ? guard(b.name, () => d.headActions(tn, ctx) || '', '') : '';
     const summary = d.generic ? argsBrief(p.input) : d.summary ? guard(b.name, () => d.summary(tn) || '', '') : '';
     // A failed call says why on its closed card: "Failed" alone sent the learner digging for the reason.
-    const why = isErr && !open && p.output ? String(p.output).trim().split('\n')[0].replace(/^Error:\s*/i, '').slice(0, 200) : '';
+    const why = isErr && !open && p.output ? failureReason(p.output) : '';
     // Boxed cards in a row join into one list; compact ones are quiet lines (see app.css). A card asking for approval
     // stands apart, joined to its question instead.
     node.classList.toggle('framed', !(compact && !open) && !asking);

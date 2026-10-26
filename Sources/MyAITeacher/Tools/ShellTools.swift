@@ -202,6 +202,13 @@ struct RunCodeTool: Tool {
 
     static let runnable: Set<String> = ["python", "javascript", "typescript", "swift", "c", "cpp", "go", "rust", "ruby", "bash", "java", "zig"]
 
+    /// CommonJS (`require`, `module.exports`, no `import`/`export` statement): it fails as an ES module, and the
+    /// learner's Node projects are often written in it (a live review's `require` of their file failed as ESM).
+    static func isCommonJS(_ code: String) -> Bool {
+        code.range(of: #"\brequire\s*\(|\bmodule\.exports\b"#, options: .regularExpression) != nil
+            && code.range(of: #"(?m)^\s*(import|export)\s"#, options: .regularExpression) == nil
+    }
+
     /// Sources/binaries live in a scratch dir; the program runs in `workingDirectory` (the lesson's folder)
     /// so relative paths like open("notes.txt") work.
     static func execute(language: String, code: String, stdin: String?, timeout: TimeInterval,
@@ -219,8 +226,11 @@ struct RunCodeTool: Tool {
         }
         var steps: [(String, [String])] = []
         switch lang {
-        case "python": steps = [(try need("python3"), ["-u", try write("main.py")])]
-        case "javascript": steps = [(try need("node"), [try write("main.mjs")])]
+        // Imports resolve against the lesson's folder, as a learner's own run would: a review checking their function
+        // (`from shop import total`, `require('./wordfreq.js')`) found nothing beside a scratch file. Python runs the file
+        // from `-c` (sys.path[0] is then the working directory; tracebacks still show its lines); Node evaluates the code.
+        case "python": steps = [(try need("python3"), ["-u", "-c", "import runpy, sys; sys.argv[:] = sys.argv[1:]; runpy.run_path(sys.argv[0], run_name='__main__')", try write("main.py")])]
+        case "javascript": steps = [(try need("node"), isCommonJS(code) ? ["-e", code] : ["--input-type=module", "-e", code])]
         case "typescript":
             if let bun = ProcessRunner.which("bun") { steps = [(bun, ["run", try write("main.ts")])] }
             else if let deno = ProcessRunner.which("deno") { steps = [(deno, ["run", "-A", try write("main.ts")])] }

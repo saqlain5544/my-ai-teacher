@@ -62,6 +62,35 @@ final class CodeMentorTests: XCTestCase {
         XCTAssertFalse(TestOutput.parse("4 passed in 0.1s\n", exit: 0).errored)
     }
 
+    func testMoreRunnersAreCounted() {
+        func counts(_ out: String, _ exit: Int32) -> [Int] { let r = TestOutput.parse(out, exit: exit); return r.counted ? [r.passed, r.failed] : [] }
+        // node:test, spec and TAP: the suite around a failing test is named too, but the count is the tests'.
+        let spec = "✔ adds (0.5ms)\n✖ splits words (1.2ms)\n  AssertionError\nℹ tests 3\nℹ suites 0\nℹ pass 2\nℹ fail 1\nℹ duration_ms 40.5\n\n✖ failing tests:\n\n✖ splits words (1.2ms)\n"
+        XCTAssertEqual(counts(spec, 1), [2, 1]); XCTAssertEqual(TestOutput.parse(spec, exit: 1).failing, ["splits words"])
+        let tap = "TAP version 13\n# Subtest: wordfreq\n    not ok 1 - counts\n    ok 2 - lowercases\n    1..2\nnot ok 1 - wordfreq\n# tests 2\n# suites 1\n# pass 1\n# fail 1\n"
+        XCTAssertEqual(counts(tap, 1), [1, 1]); XCTAssertEqual(TestOutput.parse(tap, exit: 1).failing, ["counts", "wordfreq"])
+        XCTAssertEqual(counts("ℹ tests 4\nℹ pass 4\nℹ fail 0\n", 0), [4, 0])
+        let bun = "(fail) wordfreq > counts [0.42ms]\n(pass) wordfreq > lowercases [0.10ms]\n\n 1 pass\n 1 fail\n 3 expect() calls\nRan 2 tests across 1 files. [15.00ms]\n"
+        XCTAssertEqual(counts(bun, 1), [1, 1]); XCTAssertEqual(TestOutput.parse(bun, exit: 1).failing, ["wordfreq > counts"])
+        XCTAssertEqual(counts("  wordfreq\n    ✔ lowercases\n    1) counts\n\n  1 passing (6ms)\n  1 failing\n", 1), [1, 1])
+        XCTAssertEqual(counts("  3 passing (4ms)\n", 0), [3, 0])
+        let deno = "counts ... FAILED (2ms)\nlowercases ... ok (0ms)\n\n ERRORS \n\ncounts => ./wf_test.ts:3:6\nerror: AssertionError\n\n FAILURES \n\ncounts => ./wf_test.ts:3:6\n\nFAILED | 1 passed | 1 failed (12ms)\n"
+        XCTAssertEqual(counts(deno, 1), [1, 1]); XCTAssertEqual(TestOutput.parse(deno, exit: 1).failing, ["counts"])
+        let unittest = ".F\n=====\nFAIL: test_counts (test_wf.TestWF.test_counts)\n-----\nTraceback\n-----\nRan 2 tests in 0.001s\n\nFAILED (failures=1)\n"
+        XCTAssertEqual(counts(unittest, 1), [1, 1]); XCTAssertEqual(TestOutput.parse(unittest, exit: 1).failing, ["test_counts"])
+        XCTAssertEqual(counts("..\n-----\nRan 2 tests in 0.000s\n\nOK\n", 0), [2, 0])
+        XCTAssertEqual(counts("[INFO] Tests run: 3, Failures: 1, Errors: 0, Skipped: 0, Time elapsed: 0.05 s <<< FAILURE! -- in CalcTest\n[ERROR] Tests run: 5, Failures: 1, Errors: 1, Skipped: 1\n", 1), [2, 2])
+        XCTAssertEqual(counts("[         4 tests successful      ]\n[         1 tests failed          ]\n", 1), [4, 1])
+        let gradle = "CalcTest > adds() FAILED\n    org.opentest4j.AssertionFailedError at CalcTest.java:9\n\n5 tests completed, 1 failed\n"
+        XCTAssertEqual(counts(gradle, 1), [4, 1]); XCTAssertEqual(TestOutput.parse(gradle, exit: 1).failing, ["CalcTest > adds()"])
+        let dotnet = "  Failed CalcTests.Adds [12 ms]\nFailed!  - Failed:     1, Passed:     4, Skipped:     0, Total:     5, Duration: 30 ms - Calc.Tests.dll (net8.0)\n"
+        XCTAssertEqual(counts(dotnet, 1), [4, 1]); XCTAssertEqual(TestOutput.parse(dotnet, exit: 1).failing, ["CalcTests.Adds"])
+        XCTAssertEqual(counts("Test summary: total: 5, failed: 0, succeeded: 5, skipped: 0, duration: 1.2s\n", 0), [5, 0])
+        // An uncounted run's line already carries the exit code: it isn't said twice.
+        let run = MentorProject.TestRun(at: Date(), passed: 0, failed: 0, errored: false, seconds: 0.4, failing: [], exit: 0, why: "run", counted: false)
+        XCTAssertEqual(ProjectTestRunner.describe(run, output: "").components(separatedBy: "exit").count, 2, ProjectTestRunner.describe(run, output: ""))
+    }
+
     // MARK: Snapshots and diffs
 
     func testChangesSinceTheSnapshot() async throws {

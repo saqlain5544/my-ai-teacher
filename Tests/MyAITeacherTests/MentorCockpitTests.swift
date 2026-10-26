@@ -169,6 +169,37 @@ final class MentorCockpitTests: XCTestCase {
         XCTAssertTrue(p1.isError && p1.text.contains("locked"), p1.text)
     }
 
+    @MainActor func testGreenWithNothingBlockingNeedsADecisionAndEarlierProjectsAreListed() async throws {
+        try write("app.py", "def f():\n    return 1\n")
+        ProjectStore.mutate(ws) { $0.title = "f"; $0.concept = "functions"; $0.testCommand = "true" }
+        ProjectStore.snapshot(ws, why: "starter")
+        let tool = ProjectReviewTool()
+        try write("app.py", "def f():\n    return 2\n")
+        _ = try await tool.run(["action": "start"], ctx())
+        // The reviewer asks for another round over a `should` with the tests green: sent back for a decision, nothing recorded.
+        let should: JSON = ["file": "app.py", "line": 2, "severity": "should", "text": "Name the magic number?"]
+        let r = try await tool.run(["action": "findings", "verdict": "changes", "summary": "works", "findings": [should]], ctx())
+        XCTAssertTrue(r.isError && r.text.contains("`must`"), r.text)
+        XCTAssertEqual(ProjectStore.load(ws)?.rounds.count, 0); XCTAssertNotNil(ProjectStore.load(ws)?.openReview)
+        // A finding against the mentor's own tests isn't the learner's: refused, nothing recorded.
+        let own = try await tool.run(["action": "findings", "verdict": "changes", "findings": [["file": ".teacher/tests/test_f.py", "severity": "must", "text": "The tests miss f(0)."]]], ctx())
+        XCTAssertTrue(own.isError && own.text.contains("yours"), own.text); XCTAssertEqual(ProjectStore.load(ws)?.rounds.count, 0)
+        // Decided as a pass: recorded, the `should` kept open as a suggestion.
+        let pass = try await tool.run(["action": "findings", "verdict": "pass", "summary": "works", "findings": [should]], ctx())
+        XCTAssertFalse(pass.isError, pass.text)
+        XCTAssertEqual(ProjectStore.load(ws)?.rounds.last?.verdict, "pass"); XCTAssertEqual(ProjectStore.load(ws)?.rounds.last?.findings.count, 1)
+        // A `must` keeps it at changes.
+        try write("app.py", "def f():\n    return 3\n")
+        _ = try await tool.run(["action": "start"], ctx())
+        let m = try await tool.run(["action": "findings", "verdict": "changes", "findings": [["file": "app.py", "severity": "must", "text": "What does f return for 0?"]]], ctx())
+        XCTAssertFalse(m.isError, m.text); XCTAssertEqual(ProjectStore.load(ws)?.rounds.last?.verdict, "changes")
+        // Past projects show in the panel's list, newest first.
+        ProjectStore.archive(ws); ProjectStore.mutate(ws) { $0 = MentorProject(); $0.title = "g" }; ProjectStore.archive(ws)
+        XCTAssertEqual(ProjectStore.earlier(ws).map(\.title), ["g", "f"])
+        XCTAssertTrue(DeepWork.followsProtocol("Please review my project.\nWhat I fixed: x"))
+        XCTAssertFalse(DeepWork.followsProtocol("Can you explain recursion with a project?"))
+    }
+
     @MainActor func testAPassAfterHintsIsEvidenceNotMasteryThenExplainBack() async throws {
         try write("app.py", "def f():\n    return 1\n")
         ProjectStore.mutate(ws) { $0.title = "f"; $0.concept = "recursion"; $0.testCommand = "true" }
@@ -176,7 +207,7 @@ final class MentorCockpitTests: XCTestCase {
         let tool = ProjectReviewTool()
         try write("app.py", "def f():\n    return 2\n")
         _ = try await tool.run(["action": "start"], ctx())
-        _ = try await tool.run(["action": "findings", "verdict": "changes", "findings": [["file": "app.py", "line": 2, "severity": "should", "text": "What's the base case?", "hints": ["Look at n == 0.", "What should f(0) return?"]]]], ctx())
+        _ = try await tool.run(["action": "findings", "verdict": "changes", "findings": [["file": "app.py", "line": 2, "severity": "must", "text": "What's the base case?", "hints": ["Look at n == 0.", "What should f(0) return?"]]]], ctx())
         let id = try XCTUnwrap(ProjectStore.load(ws)?.rounds.last?.findings.first?.id)
         XCTAssertEqual(ProjectStore.load(ws)?.rounds.last?.findings.first?.hints?.count, 2)
         // The learner reveals a hint in the Project panel: recorded as help.

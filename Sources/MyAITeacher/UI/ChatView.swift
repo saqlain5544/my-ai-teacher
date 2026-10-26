@@ -132,7 +132,8 @@ struct ModelPickerButton: View {
         Button { show.toggle() } label: {
             HStack(spacing: 5) {
                 Image(systemName: "cpu")
-                Text(label).lineLimit(1)
+                // One width whatever the model's name: the controls to its right moved when it changed.
+                Text(label).lineLimit(1).truncationMode(.middle).frame(width: 196, alignment: .leading)
                 Image(systemName: "chevron.down").font(.caption2)
             }
         }
@@ -175,6 +176,12 @@ struct ModelPickerPopover: View {
         .onAppear { for p in app.availableProviders { app.loadModels(p) } }
     }
 
+    /// A catalogue can list a model twice; a repeated row id draws as a blank row.
+    static func unique<S: Sequence<String>>(_ models: S) -> [String] {
+        var seen = Set<String>()
+        return models.filter { seen.insert($0).inserted }
+    }
+
     /// Every provider with its models; while searching, only matches (fuzzy: any word order, typos, partial words),
     /// best first, and the providers with the best match on top.
     private func sections() -> [(provider: ProviderConfig, models: [String])] {
@@ -205,7 +212,7 @@ struct ModelPickerPopover: View {
                     }.buttonStyle(.plain).padding(.horizontal, 14).padding(.vertical, 3)
                 } else {
                     let limit = (search.isEmpty && !expanded.contains(p.id)) ? 8 : 400
-                    ForEach(filtered.prefix(limit), id: \.self) { m in
+                    ForEach(Self.unique(filtered.prefix(limit)), id: \.self) { m in
                         Button {
                             session.setModel(providerID: p.id, model: m)
                             app.settings.value.providerID = p.id
@@ -222,6 +229,7 @@ struct ModelPickerPopover: View {
                             }.contentShape(Rectangle())
                         }
                         .buttonStyle(.plain).padding(.horizontal, 14).padding(.vertical, 3)
+                        .id("\(p.id)/\(m)")   // the lazy stack is flat: a model two providers share left a blank row
                     }
                     if filtered.count > limit {
                         Button("Show all \(filtered.count) models") { expanded.insert(p.id) }

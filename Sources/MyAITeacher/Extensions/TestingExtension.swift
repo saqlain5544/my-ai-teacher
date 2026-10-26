@@ -47,11 +47,13 @@ enum Testing {
     }
 
     /// The tool result for a skip: the reason (when the learner gave one) and what to do about it.
+    /// A skip is no answer: a live review recorded a skipped explain-back as a failed one, against the learner's mastery.
     static func skipped(_ what: String, reason: String?) -> String {
+        let noVerdict = " A skip is no answer: record no verdict or mastery for it (an explain-back stays open)."
         guard let r = reason.flatMap(SkipReason.init(rawValue:)) else {
-            return "The learner skipped the \(what). Don't ask it again right away; carry on with the lesson."
+            return "The learner skipped the \(what). Don't ask it again right away; carry on with the lesson." + noVerdict
         }
-        return "The learner skipped the \(what) — \(r.label). \(r.guidance)"
+        return "The learner skipped the \(what) — \(r.label). \(r.guidance)" + noVerdict
     }
 }
 

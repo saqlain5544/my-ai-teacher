@@ -13,6 +13,12 @@ enum DeepWork {
 
     /// Worth planning and checking: a request with substance, not a reply inside an exchange (quiz answers, attempts,
     /// submissions, "continue", "thanks").
+    /// A request that follows a fixed protocol (the Project panel's review request): reviewed afterwards, but there is
+    /// nothing to plan — the review tool sets the steps.
+    static func followsProtocol(_ text: String) -> Bool {
+        text.trimmingCharacters(in: .whitespacesAndNewlines).lowercased().hasPrefix("please review my project")
+    }
+
     static func isSubstantial(_ text: String) -> Bool {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines), lower = t.lowercased()
         if ["my attempt", "i've submitted", "practice:"].contains(where: { lower.hasPrefix($0) }) { return false }
@@ -118,9 +124,10 @@ enum DeepWork {
         <context>
         A reviewer read your reply before the learner did and found:
         \(issues.map { "- " + $0 }.joined(separator: "\n"))
-        Write the corrected reply now. It replaces your previous reply only (the learner sees that one collapsed as a \
-        draft), so it must stand on its own as that reply — don't repeat what you said before it in this lesson. Fix every \
-        issue, checking with tools where needed; don't mention the review.
+        Write the corrected reply now. It replaces your previous reply's text only (the learner sees that one collapsed as \
+        a draft), so it must stand on its own as that reply — don't repeat what you said before it in this lesson. Its tool \
+        calls already happened and stay done (reviews recorded, files written, boards changed): don't redo them; fix the \
+        words, and call a tool only to check a fact. Fix every issue; don't mention the review.
         </context>
         """
     }

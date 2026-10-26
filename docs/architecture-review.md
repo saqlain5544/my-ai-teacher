@@ -132,3 +132,40 @@ What it fixed, besides the UI:
 | Four approvals for one lesson's tests (bash, set, review start, status) | One `tests` grant for the three test tools, implied by a shell grant; actions that run nothing don't ask; Request review grants it; prompts say "run your tests for the review" with the command, not "start" |
 | Every scratch write of a reference solution asked again | Writes in the system's temporary folder don't ask |
 | Startup instructions ~10.4k characters for a code lesson | Terse defaults (teacher, Code mentor, board, app and tools guides): 7.9k, every rule and format kept |
+
+## Second code-mentor session (26 October 2026)
+
+The same setup, again in the real app: a JavaScript word-frequency project with a review and an explain-back, a Rust
+project in a second folder, and a "briefly" question about CPython's dict.
+
+| Turn | Wall time | Model calls | Prompt tokens |
+|---|---|---|---|
+| JS project created (empty folder) | 2 m 36 s | 9 | 116k |
+| Review (recorded as a pass, then rewritten by the self-check) | 3 m 23 s | 14 | 333k |
+| Explain-back | 49 s | 3 | 120k |
+| Rust project | 5 m 11 s | 15 | 597k |
+| CPython dict, "briefly" | 3 m 54 s | 12 | 586k |
+
+| Problem seen | Fix |
+|---|---|
+| The review filed a contract violation as `should`, the app promoted the green "changes" round to a pass, and the reply still asked for the fix | No promotion: a green round with nothing blocking is sent back for a decision (pass, or the blocking finding as `must`); findings against the mentor's own `.teacher/` files are refused (a rerun filed its own test gap as the learner's `must`) |
+| The self-check's rewrite retried `project_review findings` and got "No review is open" | The rewrite is told its reply's tool calls already happened: fix the words, call a tool only to check a fact |
+| A review request went through the hidden planning step | Requests in the review protocol skip it; the plan request shares the reply's cached prefix |
+| `node --test` runs showed "passed (exit 0)" and an empty bar while green | Counts from node:test (spec and TAP), bun, deno, mocha, unittest, Maven, JUnit's launcher, Gradle and dotnet; an uncounted run's bar is full or empty by its exit code, and its exit code isn't said twice |
+| The panel's "Last run" box showed the previous project's output | Cleared when the project changes |
+| Approvals for `bash`, then `run_code`, minutes apart | A shell grant covers code snippets, as it covers the tests |
+| In an empty folder the mentor probed `which node` and versions | The Project section lists installed toolchains with versions (probed once per run, in parallel; the /usr/bin stubs that open an install dialog are skipped) |
+| A one-off question got a course board; the "briefly" question read library source for 12 calls | "One-off question → no board"; checks in proportion (a starter project needs the toolchain, not library internals) |
+| The starter brief listed the solution's key lines; the tests didn't check a rule the starter stated (ordering), so a wrong solution was green | Neither the solution nor its key lines as a head start; tests check every rule the starter states |
+| `run_code` couldn't load the learner's file in a review (`require('./wordfreq.js')` ran as an ES module, from a scratch folder) | Snippets import against the lesson's folder: Node evaluates CommonJS or ES modules there, Python runs with it on its path (tracebacks keep their lines) |
+| A skipped explain-back was recorded as failed, against the learner's mastery | A skip is no answer: no verdict, no mastery, the explain-back stays open |
+| A failed card's reason was a file path (node prints the location before the error) | The reason is the error's own line |
+| A blank row in the model picker under OpenCode Go | Rows have per-provider ids and a catalogue's repeats are dropped |
+| No way to drop a project from the panel, no record of past ones | "Put aside…" in the Project panel (on the record as not passed) and an "Earlier projects" list |
+
+Default thinking is now Medium (was High).
+
+Headless reruns on the fixed build (same model): the JS project in an empty folder took 55 s, 6 calls, 68k tokens (no
+toolchain probing; node:test runs counted); a review of a green solution that broke the starter's ordering rule took
+37 s, 7 calls, 81k and recorded it as a `must`. A three-turn rerun (project, review, fixed review with an open
+`should`) took 45 s / 58k, 87 s / 100k and 180 s / 288k, ending in a recorded pass.

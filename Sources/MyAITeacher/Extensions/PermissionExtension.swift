@@ -100,10 +100,11 @@ final class PermissionExtension: AgentExtension {
             if let runs = Self.runsTests(tool, input), !runs { return .allow }
             // One grant per kind of run: diagnostics runs shell commands like bash; the three test tools run the project's
             // tests (asking three times in one lesson for the same suite was the mentor's main friction), and a lesson
-            // that may run shell commands may run its tests.
+            // that may run shell commands may run its tests and code snippets (a live lesson asked for both, minutes apart).
             let grant = tool.name == "diagnostics" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : tool.name
+            let impliedByBash = grant == "tests" || grant == "run_code"
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
-                || (grant == "tests" && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
+                || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
             var detail = tool.name == "bash" ? (input["command"]?.string ?? "") : (input["code"]?.string ?? tool.summary(input))
             var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? "") code"
             if grant == "tests" {

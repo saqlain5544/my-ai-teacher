@@ -5,7 +5,7 @@ struct AppSettings: Codable, Sendable, Equatable {
     var providerID = "minimax"
     var model = "MiniMax-M3"
     /// High by default: lessons get the model's best work (Settings › General lowers it).
-    var thinking: ThinkingLevel = .high
+    var thinking: ThinkingLevel = .medium
     /// Access granted per folder path. Folders not listed are read-only. Stored in the app, never in the folder.
     var folderAccess: [String: FolderAccess] = [:]
     var recentFolders: [WorkspaceRef] = []

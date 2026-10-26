@@ -18,6 +18,8 @@ struct MentorProject: Codable, Sendable, Equatable {
         var counted: Bool? = nil
         /// Green is the exit code: every test runner, in any language, exits 0 when its tests pass.
         var green: Bool { !errored && exit == 0 }
+        /// The share passing, for bars: a run whose runner printed no counts is all or nothing by its exit code.
+        var rate: Double { counted == false ? (green ? 1 : 0) : Double(passed) / Double(max(1, passed + failed)) }
         var line: String {
             if errored { return "the tests could not run" }
             if counted == false { return exit == 0 ? "passed (exit 0)" : "failed (exit \(exit))" }
@@ -189,6 +191,17 @@ enum ProjectStore {
         try? FileManager.default.copyItem(at: file(ws), to: dir.appendingPathComponent("\(n).json"))
     }
 
+    /// The projects this folder finished or put aside before the current one, newest first.
+    static func earlier(_ ws: Workspace) -> [MentorProject] {
+        let dir = ws.stateDir.appendingPathComponent("projects", isDirectory: true)
+        let names = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        return names.compactMap { n -> (Int, MentorProject)? in
+            guard let i = Int(n.replacingOccurrences(of: ".json", with: "")), let d = try? Data(contentsOf: dir.appendingPathComponent(n)),
+                  let p = try? dec.decode(MentorProject.self, from: d) else { return nil }
+            return (i, p)
+        }.sorted { $0.0 > $1.0 }.map(\.1)
+    }
+
     /// Records the project's files as the baseline for the next review.
     static func snapshot(_ ws: Workspace, why: String) {
         let fm = FileManager.default
@@ -337,11 +350,43 @@ enum TestOutput {
         }
         // ctest: "100% tests passed, 0 tests failed out of 5"
         if let m = first(#"(\d+)% tests passed, (\d+) tests failed out of (\d+)"#, in: output) { found = true; failed = Int(m[2]) ?? 0; passed = max(0, (Int(m[3]) ?? 0) - failed) }
-        var failing = all(#"^FAILED (\S+)"#, in: output) + goFails + all(#"^\s*[✕×] (.+)$"#, in: output) + all(#"Test Case '-\[\S+ (\S+)\]' failed"#, in: output)
+        // node:test, spec ("ℹ pass 4") or TAP ("# pass 4"): its failing names include the suites around a failing test, so
+        // its count is the one to trust.
+        var exact = false
+        if let p = first(#"^[ℹ#] pass (\d+)\s*$"#, in: output), let f = first(#"^[ℹ#] fail (\d+)\s*$"#, in: output) { found = true; exact = true; passed = Int(p[1]) ?? 0; failed = Int(f[1]) ?? 0 }
+        // bun: " 4 pass" / " 1 fail"
+        if let p = first(#"^\s*(\d+) pass\s*$"#, in: output), let f = first(#"^\s*(\d+) fail\s*$"#, in: output) { found = true; passed = Int(p[1]) ?? 0; failed = Int(f[1]) ?? 0 }
+        // mocha: "  4 passing (12ms)" / "  1 failing"
+        if let p = first(#"^\s*(\d+) passing\b"#, in: output) { found = true; passed = Int(p[1]) ?? 0; failed = Int(first(#"^\s*(\d+) failing\b"#, in: output)?[1] ?? "") ?? 0 }
+        // deno: "ok | 3 passed | 0 failed (12ms)" / "FAILED | 2 passed (3 steps) | 1 failed"
+        if let m = first(#"^(?:ok|FAILED) \| (\d+) passed[^|]*\| (\d+) failed"#, in: output) { found = true; passed = Int(m[1]) ?? 0; failed = Int(m[2]) ?? 0 }
+        // unittest: "Ran 5 tests in 0.001s", then "OK" or "FAILED (failures=1, errors=1)"
+        if let m = first(#"^Ran (\d+) tests? in [\d.]+s"#, in: output) {
+            found = true
+            let verdict = first(#"^FAILED \(([^)]*)\)"#, in: output)?[1] ?? ""
+            failed = all(#"(?:failures|errors)=(\d+)"#, in: verdict).reduce(0) { $0 + (Int($1) ?? 0) }
+            passed = max(0, (Int(m[1]) ?? 0) - failed)
+        }
+        // Maven (surefire): "Tests run: 5, Failures: 1, Errors: 0, Skipped: 0", per class and then the total, which is last
+        if let line = all(#"Tests run: \d+, Failures: \d+, Errors: \d+(?:, Skipped: \d+)?"#, in: output, group: 0).last,
+           let m = first(#"Tests run: (\d+), Failures: (\d+), Errors: (\d+)(?:, Skipped: (\d+))?"#, in: line) {
+            found = true; failed = (Int(m[2]) ?? 0) + (Int(m[3]) ?? 0); passed = max(0, (Int(m[1]) ?? 0) - failed - (Int(m[4]) ?? 0))
+        }
+        // JUnit's console launcher: "[         5 tests successful      ]" / "[         1 tests failed          ]"
+        if let p = first(#"^\[\s*(\d+) tests successful\s*\]"#, in: output) { found = true; passed = Int(p[1]) ?? 0; failed = Int(first(#"^\[\s*(\d+) tests failed\s*\]"#, in: output)?[1] ?? "") ?? 0 }
+        // Gradle (only on failure): "5 tests completed, 1 failed"
+        if let m = first(#"(\d+) tests? completed, (\d+) failed"#, in: output) { found = true; failed = Int(m[2]) ?? 0; passed = max(0, (Int(m[1]) ?? 0) - failed) }
+        // dotnet test: "Failed!  - Failed:     1, Passed:     4, …" / "Test summary: total: 5, failed: 1, succeeded: 4, …"
+        if let m = first(#"Failed:\s+(\d+), Passed:\s+(\d+)"#, in: output) { found = true; failed = Int(m[1]) ?? 0; passed = Int(m[2]) ?? 0 }
+        if let m = first(#"Test summary: total: \d+, failed: (\d+), succeeded: (\d+)"#, in: output) { found = true; failed = Int(m[1]) ?? 0; passed = Int(m[2]) ?? 0 }
+        var failing = all(#"^FAILED ([^\s(|]\S*)"#, in: output) + goFails + all(#"^\s*[✕×] (.+)$"#, in: output) + all(#"Test Case '-\[\S+ (\S+)\]' failed"#, in: output)
             + all(#"^test (\S+) \.\.\. FAILED"#, in: output) + all(#"^rspec \S+ # (.+)$"#, in: output) + all(#"^error: '([^']+)' (?:failed|terminated)"#, in: output)
+        failing += all(#"^\s*✖ (.+?)(?: \([\d.]+m?s\))?$"#, in: output).filter { $0 != "failing tests:" } + all(#"^\s*not ok \d+ - (.+?)(?: # .*)?$"#, in: output)
+            + all(#"^\(fail\) (.+?)(?: \[[\d.]+m?s\])?$"#, in: output) + all(#"^(\S.*?) => \S+:\d+:\d+$"#, in: output)
+            + all(#"^(?:FAIL|ERROR): (\S+) \("#, in: output) + all(#"^(\S.*? > .+?) FAILED$"#, in: output) + all(#"^\s*Failed (\S+) \["#, in: output)
         failing = Array(NSOrderedSet(array: failing)).compactMap { $0 as? String }.prefix(30).map { $0 }
         if !found { return Result(passed: 0, failed: 0, failing: failing, errored: couldNotRun, counted: false) }
-        if failing.count > failed { failed = max(failed, failing.count) }
+        if !exact, failing.count > failed { failed = max(failed, failing.count) }
         // A summary that disagrees with the exit code (cargo's first "test result" is the lib's own, often 0/0) isn't trusted.
         if (exit == 0) != (failed == 0) { return Result(passed: 0, failed: 0, failing: failing, errored: couldNotRun, counted: false) }
         return Result(passed: passed, failed: failed, failing: failing, errored: couldNotRun)

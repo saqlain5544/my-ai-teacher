@@ -903,6 +903,10 @@
     click($('.head', failed)); ok(!$('.why', failed), 'opened, the body shows the whole error instead');
     ok($('[data-tool-id="tx1"]').classList.contains('framed') && $('[data-tool-id="tx2"]').classList.contains('framed'), 'boxed cards are framed (and join)');
     ok($('[data-tool-id="tx3"]').classList.contains('quiet') && !$('[data-tool-id="tx3"]').classList.contains('framed'), 'a compact card is a quiet line');
+    // The reason is the error's own line, not the file location and source line a runtime prints before it.
+    T.reset([U('go'), A([{ kind: 'toolUse', id: 'tx9', name: 'bash', input: { command: 'node wf.js' } }]),
+      R('tx9', 'bash', 'Exit code 1\n/Users/x/wf.js:3\n  return words.split(" ")\n               ^\n\nTypeError: words.split is not a function\n    at count (/Users/x/wf.js:3:16)', { isError: true })], {});
+    eq($('.why', $('[data-tool-id="tx9"]')).textContent, 'TypeError: words.split is not a function', 'the error line, past the location and caret');
     eq(TeacherUI.tool('memory').title({ props: { input: { action: 'search' } } }), 'Recall', 'a title can depend on the call');
     // A descriptor that throws degrades to a readable note inside the card, never a blank card.
     TeacherUI.defineTool({ name: 'faulty', icon: '✗', title: 'Faulty', summary: () => { throw new Error('nope'); }, body: () => { throw new Error('body broke'); } });

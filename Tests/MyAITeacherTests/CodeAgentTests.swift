@@ -51,7 +51,13 @@ final class CodeAgentTests: XCTestCase {
         let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "", project: s)
         XCTAssertTrue(prompt.contains("# Project\n") && prompt.contains("`diagnostics`"), "the agent's prompt carries the profile and the verify loop")
         let empty = await ProjectProfile.detect(FileManager.default.temporaryDirectory.appendingPathComponent("nothing-here-\(UUID().uuidString.prefix(4))"))
-        XCTAssertNil(empty.section())
+        // An empty folder still says what it can be built with: the toolchains on this Mac, with their versions.
+        XCTAssertEqual(empty.section(), empty.toolchains.isEmpty ? nil : "# Project\n- Installed: " + empty.toolchains.joined(separator: ", "))
+        XCTAssertEqual(ProjectProfile.version("swift-driver version: 1.168.6 Apple Swift version 6.4 (swiftlang-6.4.0.34.1 clang-2100.3.34.1)\nTarget: arm64"), "6.4")
+        XCTAssertEqual(ProjectProfile.version("v22.3.0\n"), "22.3.0")
+        XCTAssertEqual(ProjectProfile.version("go version go1.23.0 darwin/arm64"), "1.23.0")
+        XCTAssertEqual(ProjectProfile.version("\nPython 3.12.4"), "3.12.4")
+        XCTAssertNil(ProjectProfile.version("Unable to locate a Java Runtime."))
     }
 
     // MARK: Diagnostics

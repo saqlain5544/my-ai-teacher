@@ -343,14 +343,16 @@ final class ChatSession: ObservableObject, Identifiable {
         let lightThinking = ([.off, .low, .medium].contains(settings.thinking) ? settings.thinking : .medium).supported(by: modelInfo)
         var plan: String?
         var reviewed = !deep
-        if deep, let i = asked, !Task.isCancelled {
+        if deep, let i = asked, !Task.isCancelled, !DeepWork.followsProtocol(askedText) {
             setStatus("Planning…")
             var msgs = requestMessages()
             let ask = DeepWork.planRequest(conversation.mode)
             if msgs.last?.role == .user { msgs[msgs.count - 1].blocks.append(.text(ask)) }
             else { msgs.append(ChatMessage(role: .user, blocks: [.text(ask)])) }
+            // Cached like a step: the history up to this message is the same prefix the turn's steps read (uncached, a long
+            // lesson's plan resent ~60k tokens at full price every planned turn).
             let rq = LLMRequest(model: conversation.model, system: conversation.systemPrompt ?? "", messages: msgs, maxTokens: 4_000,
-                                thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id, cache: false)
+                                thinking: modelInfo?.reasoning == false ? .off : lightThinking, sessionID: conversation.id, cache: true)
             let planned = await DeepWork.collect(client, rq)
             recordAuxiliary(planned.usage)
             if let p = planned.text {

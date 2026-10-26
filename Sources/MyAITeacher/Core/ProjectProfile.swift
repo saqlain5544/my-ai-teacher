@@ -21,6 +21,7 @@ struct ProjectProfile: Sendable, Equatable {
     var git: (branch: String, dirty: Int)?
     var notes: [String] = []                 // CI, Dockerfile, monorepo hints
     var commandsDir: [String] = []           // .teacher/commands/*.md
+    var toolchains: [String] = []            // installed on this Mac: "Node 22.3.0", …
 
     static func == (a: ProjectProfile, b: ProjectProfile) -> Bool { a.section() == b.section() }
 
@@ -163,7 +164,54 @@ struct ProjectProfile: Sendable, Equatable {
         p.languages = counts.sorted { $0.value != $1.value ? $0.value > $1.value : $0.key < $1.key }.prefix(6).map { ($0.key, $0.value) }
 
         p.git = await gitState(folder)
+        p.toolchains = await toolchains()
         return p
+    }
+
+    // MARK: toolchains
+
+    private static let toolchainLock = NSLock()
+    nonisolated(unsafe) private static var toolchainCache: [String]?
+    private static let probes: [(label: String, tool: String, args: [String])] = [
+        ("Swift", "swift", ["--version"]), ("Python", "python3", ["--version"]), ("Node", "node", ["--version"]), ("Deno", "deno", ["--version"]),
+        ("Bun", "bun", ["--version"]), ("Rust", "rustc", ["--version"]), ("Go", "go", ["version"]), ("Zig", "zig", ["version"]),
+        ("Java", "javac", ["-version"]), ("Ruby", "ruby", ["--version"]), ("clang", "clang", ["--version"]),
+    ]
+
+    /// The language toolchains installed on this Mac with their versions, so a mentor in an empty folder knows what it
+    /// can build with instead of probing for it. Probed once per run, in parallel: version commands are slow to spawn.
+    /// The /usr/bin stubs that open an install dialog when nothing stands behind them (Xcode's tools without the
+    /// command-line tools, `javac` without a JDK) are skipped unless what they front exists.
+    static func toolchains() async -> [String] {
+        if let t = toolchainLock.withLock({ toolchainCache }) { return t }
+        let developerDir = await ProcessRunner.run("/usr/bin/xcode-select", ["-p"], timeout: 3).exitCode == 0
+        let jdk = await ProcessRunner.run("/usr/libexec/java_home", [], timeout: 3).exitCode == 0
+        let found = await withTaskGroup(of: (Int, String?).self) { group in
+            for (i, probe) in probes.enumerated() {
+                guard let path = ProcessRunner.which(probe.tool) else { continue }
+                let stub = path.hasPrefix("/usr/bin/") && probe.tool != "ruby"   // macOS's own ruby is real
+                if stub, !(probe.tool == "javac" ? jdk : developerDir) { continue }
+                group.addTask {
+                    let r = await ProcessRunner.run(path, probe.args, timeout: 5)
+                    guard r.exitCode == 0, let v = version(r.stdout + "\n" + r.stderr) else { return (i, nil) }
+                    return (i, "\(probe.label) \(v)")
+                }
+            }
+            var out: [(Int, String)] = []
+            for await (i, s) in group { if let s { out.append((i, s)) } }
+            return out.sorted { $0.0 < $1.0 }.map(\.1)
+        }
+        toolchainLock.withLock { toolchainCache = found }
+        return found
+    }
+
+    /// The version in a tool's `--version` banner: the first dotted number after its last "version " (Swift's banner
+    /// starts with the driver's own version), else the first in its first non-empty line.
+    static func version(_ banner: String) -> String? {
+        guard let line = banner.split(separator: "\n").map({ $0.trimmingCharacters(in: .whitespaces) }).first(where: { !$0.isEmpty }) else { return nil }
+        let tail = line.range(of: "version ", options: .backwards).map { String(line[$0.upperBound...]) } ?? line
+        guard let m = tail.range(of: #"\d+\.\d+(\.\d+)?"#, options: .regularExpression) else { return nil }
+        return String(tail[m])
     }
 
     /// Test hook: how many times the language walk has run.
@@ -223,9 +271,9 @@ struct ProjectProfile: Sendable, Equatable {
         return p
     }
 
-    /// The prompt section. nil for a folder with nothing to say (no manifests, no code).
+    /// The prompt section. nil for a folder with nothing to say (no manifests, no code, no toolchains).
     func section() -> String? {
-        guard !kinds.isEmpty || !languages.isEmpty || git != nil else { return nil }
+        guard !kinds.isEmpty || !languages.isEmpty || git != nil || !toolchains.isEmpty else { return nil }
         var s = "# Project\n"
         if !kinds.isEmpty { s += "- Build system: " + kinds.joined(separator: ", ") + "\n" }
         if !languages.isEmpty { s += "- Languages (files): " + languages.map { "\($0.0) \($0.1)" }.joined(separator: ", ") + " (\(files) files)\n" }
@@ -237,6 +285,7 @@ struct ProjectProfile: Sendable, Equatable {
         if !makeTargets.isEmpty { s += "- make targets: " + makeTargets.joined(separator: ", ") + "\n" }
         if let g = git { s += "- Git: branch `\(g.branch)`, \(g.dirty == 0 ? "clean" : "\(g.dirty) changed file\(g.dirty == 1 ? "" : "s") uncommitted")\n" }
         for n in notes { s += "- \(n)\n" }
+        if !toolchains.isEmpty { s += "- Installed: " + toolchains.joined(separator: ", ") + "\n" }
         if !commandsDir.isEmpty { s += "- Project commands the user can run as /name (from .teacher/commands): " + commandsDir.joined(separator: ", ") + "\n" }
         return s.trimmingCharacters(in: .newlines)
     }
