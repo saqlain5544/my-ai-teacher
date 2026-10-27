@@ -214,6 +214,10 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         append(msg)
         save()
+        ActivityLog.record("message", conv: id, ["mode": .string(conversation.mode.rawValue), "chars": .number(Double(trimmed.count)),
+                                                 "attachments": .number(Double(attachments.count)),
+                                                 "command": trimmed.hasPrefix("/") ? .string(String(trimmed.split(separator: " ").first ?? "")) : .null,
+                                                 "text": ActivityLog.text(trimmed)])
         start(prompted: true)
     }
 
@@ -298,8 +302,22 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Reports from background sub-agents not yet read by the teacher; folded in at the next step of a running turn.
     private var inbox: [ChatMessage] = []
 
+    /// Background work that will wake this lesson's agent when it ends: background sub-agents and shell jobs (not servers
+    /// or watchers, which run until stopped). The composer shows it while the agent waits; a goal waits for it too.
+    var awaitedWork: [String] {
+        let agents = SubAgentCenter.shared.runs(in: id).filter { $0.background && $0.parent == nil && $0.state == .running }
+            .map { "\($0.handle) \($0.title)" }
+        let jobs = ShellJobs.shared.list(id).filter { $0.isRunning && !$0.stopped && !ShellJob.looksLikeServer($0.command) }
+            .map { "\($0.handle ?? "") \($0.title)" }
+        return agents + jobs
+    }
+
     /// A background sub-agent finished: the teacher reads its report at the next step, or in a new turn if the lesson is idle.
     func deliver(_ report: ChatMessage) {
+        let b = report.blocks.first
+        ActivityLog.record("background.report", conv: id, ["handle": b?.meta?["handle"] ?? b?.meta?["backgroundTask"] ?? .null,
+                                                           "title": b?.meta?["title"] ?? .null, "woke": .bool(!isRunning),
+                                                           "text": ActivityLog.text(b?.text)])
         if isRunning { inbox.append(report); return }
         append(report)
         save()
@@ -326,6 +344,9 @@ final class ChatSession: ObservableObject, Identifiable {
         isRunning = true
         beginActivity()
         turn = TurnMetrics(startedAt: Date())
+        ActivityLog.record("turn.start", conv: id, ["mode": .string(conversation.mode.rawValue), "provider": .string(conversation.providerID),
+                                                    "model": .string(conversation.model), "prompted": .bool(prompted),
+                                                    "title": .string(conversation.title), "folder": .string(services.workspace.url.path)])
         EventBus.publish(.turnStarted(conversationID: id))
         runTask = Task { [weak self] in
             if prompted, await self?.admitPrompt() == false { self?.finishTurn(); return }
@@ -382,6 +403,12 @@ final class ChatSession: ObservableObject, Identifiable {
         stats.add(turn, contextTokens: ctx)
         conversation.stats = stats
         save()
+        ActivityLog.record("turn.end", conv: id, ["ms": ActivityLog.ms(turn.duration), "steps": .number(Double(turn.steps)),
+                                                  "tools": .array(turn.tools.map { .string($0.name + ($0.ok ? "" : "!")) }),
+                                                  "usage": ActivityLog.usage(turn.usage), "context_tokens": .number(Double(ctx)),
+                                                  "ttft_ms": turn.timeToFirstToken.map(ActivityLog.ms) ?? .null, "cancelled": .bool(turn.cancelled),
+                                                  "error": (errorMessage ?? turn.error).map { .string($0) } ?? .null,
+                                                  "changed_files": .number(Double(turn.changedFiles?.count ?? 0))])
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
         if !detached { app.sessionDidFinishTurn(self) }
         flushQueued(stopped: turn.cancelled)
@@ -419,6 +446,8 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Sets or clears the goal (the composer shows it) and tells the user.
     func updateGoal(_ g: SessionGoal?, notice: String?) {
+        ActivityLog.record("goal", conv: id, ["state": .string(g?.state.rawValue ?? "cleared"), "turns": .number(Double(g?.turns ?? 0)),
+                                              "text": ActivityLog.text(g?.text), "note": ActivityLog.text(g?.note)])
         conversation.goal = g
         save()
         if let notice { sink?.notice(notice) }
@@ -433,7 +462,9 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         updateGoal(g, notice: nil)
-        if !isRunning { continueGoal() }   // a queued message of the user's already started the next turn
+        // A queued message of the user's already started the next turn; background work the agent launched wakes it with
+        // its report when it ends, so the goal waits for that rather than nudging it on in the meantime.
+        if !isRunning, awaitedWork.isEmpty { continueGoal() }
     }
 
     /// An open goal after one more turn: still active (the next turn starts), or paused by a stop, a failure or the cap.
@@ -598,6 +629,11 @@ final class ChatSession: ObservableObject, Identifiable {
             assistant.usage = step.usage
             turn.steps += 1
             turn.usage = turn.usage + step.usage
+            ActivityLog.record("request", conv: id, ["provider": .string(step.provider), "model": .string(step.model), "ms": ActivityLog.ms(step.duration),
+                                                     "ttft_ms": step.timeToFirstToken.map(ActivityLog.ms) ?? .null, "usage": ActivityLog.usage(step.usage),
+                                                     "estimated": .bool(step.usageEstimated), "finish": .string(step.finishReason),
+                                                     "retries": .number(Double(step.retries)), "tool_calls": .number(Double(step.toolCalls)),
+                                                     "error": assistant.error.map { .string($0) } ?? .null, "text": ActivityLog.text(assistant.plainText)])
             turn.generationSeconds += max(0, step.duration - (step.timeToFirstToken ?? 0))
             if turn.timeToFirstToken == nil, let t = step.timeToFirstToken { turn.timeToFirstToken = Date().timeIntervalSince(turn.startedAt) - step.duration + t }
             messages[idx] = assistant
@@ -858,6 +894,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let callable = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode, folder: folder).contains { $0.name == name }
         guard callable, let tool = known, !settings.disabledTools.contains(name) else {
             record(false)
+            ActivityLog.record("tool", conv: id, ["tool": .string(name), "call": .string(callID), "ok": false, "unavailable": true])
             return .toolResult(id: callID, name: name, content: Self.unavailable(name, node: node), isError: true)
         }
         if input["_raw"] != nil {
@@ -924,6 +961,11 @@ final class ChatSession: ObservableObject, Identifiable {
         host.didRun(call, &result, self)
         await host.afterRun(call, &result, self)
         record(result.isError != true)
+        ActivityLog.record("tool", conv: id, ["tool": .string(name), "call": .string(callID), "ms": ActivityLog.ms(Date().timeIntervalSince(started)),
+                                              "ok": .bool(result.isError != true), "waited_ms": waited > 0 ? ActivityLog.ms(waited) : .null,
+                                              "summary": .string(String(tool.summary(input).prefix(200))),
+                                              "input": ActivityLog.level == .full ? input : .null,
+                                              "result_chars": .number(Double(result.text?.count ?? 0)), "result": ActivityLog.text(result.text)])
         EventBus.publish(.toolFinished(conversationID: id, tool: name, callID: callID, ok: result.isError != true))
         return result
     }

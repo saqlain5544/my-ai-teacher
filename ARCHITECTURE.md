@@ -851,6 +851,28 @@ The app's footprint must not grow with how much the learner has done: data lives
   visible; after 8 s without an answer it ends the web process, reloads, and the lesson renders again with visuals
   paused behind ▶ Run (a notice says why). `MyAITeacher --webtest --watchdog` checks this end to end.
 
+## Activity log and background wake-ups
+* **`ActivityLog`** writes one JSON object per line to `~/Library/Logs/MyAITeacher/activity-<day>.jsonl` (a test
+  profile: `<home>/logs/`), off the caller's thread, a file per day kept 14 days. Events (`ev`):
+  * `app.launch`, `message` (the user's text, attachments, command), `turn.start` and `turn.end` (time, steps, tools,
+    usage, context tokens, time to first token, cancelled, error, changed files);
+  * `request` for every model call, the main agent's and each sub-agent's (provider, model, latency, time to first
+    token, usage with cache and reasoning, finish reason, retries, estimated usage);
+  * `tool` for every call (time, ok, waited on approval, summary, result size; the whole input and result at `full`,
+    and calls to tools the agent doesn't have);
+  * `approval`, `memory`, `notice`, `folder`, `project` (from `EventBus`); `subagent.start` and `subagent.end`;
+    `background.report` (and whether it woke the agent); `goal`; `log` (every `AppLog` line).
+
+  The level (`AppSettings.activityLog`: off, standard, full) is in Settings › General. `--log-summary [day]` totals a
+  day per model and per tool.
+* **Background work wakes the agent** (Claude Code's background tasks):
+  * A background sub-agent's report and a background shell job's end reach the lesson through `AppModel.deliver`.
+  * Mid-turn, the report is read at the next step. In an idle lesson it starts a new turn. A lesson that isn't loaded
+    keeps it in `undelivered` until it is opened.
+  * The root guide tells every agent not to poll: carry on, or end the turn saying what it is waiting for.
+  * `ChatSession.awaitedWork` (background sub-agents, and shell jobs that aren't servers) drives the composer's
+    "Waiting for…" strip, and keeps `/goal` from nudging the agent on while its own work runs.
+
 ## Testing
 * `scripts/e2e.sh [--live]` — the whole loop: build, unit tests, renderer suite (light + dark), and with `--live`
   the scripted lessons. Run it after every change.

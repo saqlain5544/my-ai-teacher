@@ -131,6 +131,12 @@ enum Main {
     static func main() {
         let args = Array(CommandLine.arguments.dropFirst())
         if args.contains("--webtest") { WebTest.main(args) }
+        // A day's totals from the activity log: --log-summary [YYYY-MM-DD] (default today).
+        if let i = args.firstIndex(of: "--log-summary") {
+            let day = i + 1 < args.count && !args[i + 1].hasPrefix("--") ? args[i + 1] : ActivityLog.today
+            print(ActivityLog.summary(day: day), terminator: "")
+            exit(0)
+        }
         // Send one debug command to a running app (launched with MYAITEACHER_DEBUG=1) and exit: --post '{"action":"status"}'.
         // It reaches the instance with the same MYAITEACHER_HOME (none: the instance without one).
         if let i = args.firstIndex(of: "--post"), i + 1 < args.count {

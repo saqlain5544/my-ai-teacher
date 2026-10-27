@@ -78,12 +78,24 @@ final class AppModel: ObservableObject {
         interactions.objectWillChange.sink { [weak self] in self?.objectWillChange.send() }.store(in: &bag)
         BoardSystem.loadForced()
         settings.$value.map(\.courseBoard).removeDuplicates().sink { BoardSystem.chosen = $0 }.store(in: &bag)
+        settings.$value.map(\.activityLog).removeDuplicates().sink { ActivityLog.level = $0 }.store(in: &bag)
+        let info = Bundle.main.infoDictionary
+        ActivityLog.record("app.launch", ["version": .string(info?["CFBundleShortVersionString"] as? String ?? "dev"),
+                                          "build": .string(info?["CFBundleVersion"] as? String ?? "dev"),
+                                          "pid": .number(Double(ProcessInfo.processInfo.processIdentifier)), "folder": .string(ws.url.path)])
         if let first = conversations.first { selection = .lesson(first.id) } else { newLesson() }
         // A sub-agent starting in the open lesson shows up in the right-hand panel, as it works.
         SubAgentCenter.shared.onReport = { [weak self] run, out in
-            self?.session(for: run.conversationID)?.deliver(SubAgent.reportMessage(run, out))
+            ActivityLog.record("subagent.end", conv: run.conversationID, ["handle": .string(run.handle), "state": .string(run.state.rawValue),
+                                                                         "steps": .number(Double(run.steps)), "usage": ActivityLog.usage(run.totalUsage),
+                                                                         "report": ActivityLog.text(out.text)])
+            self?.deliver(SubAgent.reportMessage(run, out), to: run.conversationID)
         }
         SubAgentCenter.shared.onStart = { [weak self] run in
+            ActivityLog.record("subagent.start", conv: run.conversationID, ["handle": .string(run.handle), "title": .string(run.title),
+                                                                           "type": run.config.map { .string($0.type.name) } ?? .null,
+                                                                           "model": run.config.map { .string($0.model) } ?? .null,
+                                                                           "background": .bool(run.background), "parent": run.parent.map { .string($0) } ?? .null])
             guard let self, case .lesson(let id) = self.selection, id == run.conversationID else { return }
             self.showSubAgent(run.id)
         }
@@ -126,6 +138,7 @@ final class AppModel: ObservableObject {
     }
 
     private func handle(_ e: AppEvent) {
+        Self.log(e)
         switch e {
         case .memoryChanged(let c) where c.kind != .recalled: refreshCounts()
         case .studyDataChanged, .turnFinished: refreshCounts()
@@ -220,6 +233,20 @@ final class AppModel: ObservableObject {
 
     // MARK: Lessons
 
+    /// App events into the activity log (turns and tools are logged where they happen, with their numbers).
+    private static func log(_ e: AppEvent) {
+        switch e {
+        case .approval(let conv, let tool, let choice, let allowed, let waited):
+            ActivityLog.record("approval", conv: conv, ["tool": .string(tool), "choice": .string(choice), "allowed": .bool(allowed), "waited_ms": ActivityLog.ms(waited)])
+        case .memoryChanged(let c):
+            ActivityLog.record("memory", conv: c.conversationID, ["kind": .string(c.kind.rawValue), "ids": .array(c.ids.map { .string($0) }), "summary": ActivityLog.text(c.summary)])
+        case .notice(let conv, let text): ActivityLog.record("notice", conv: conv, ["text": ActivityLog.text(text)])
+        case .workspaceChanged(let path): ActivityLog.record("folder", ["path": .string(path)])
+        case .projectChanged(let folder): ActivityLog.record("project", ["folder": .string(folder)])
+        case .turnStarted, .turnFinished, .toolStarted, .toolFinished, .studyDataChanged: break
+        }
+    }
+
     func session(for id: String) -> ChatSession? {
         if let s = sessions[id] { return s }
         guard let c = conversations.first(where: { $0.id == id }) else { return nil }
@@ -227,8 +254,17 @@ final class AppModel: ObservableObject {
         sessions[id] = s
         sessionWatch[id] = s.$isRunning.removeDuplicates().dropFirst().sink { [weak self] _ in self?.objectWillChange.send() }
         evictSessions(keeping: id)
+        // Reports that finished while the lesson couldn't be loaded (its folder wasn't open) wake it now.
+        for r in undelivered.removeValue(forKey: id) ?? [] { s.deliver(r) }
         return s
     }
+
+    /// Background work's report to its lesson: read at the agent's next step, or a new turn when the lesson is idle. A
+    /// lesson of a folder that isn't open gets it when it is next opened, rather than losing it.
+    func deliver(_ report: ChatMessage, to conversationID: String) {
+        if let s = session(for: conversationID) { s.deliver(report) } else { undelivered[conversationID, default: []].append(report) }
+    }
+    private var undelivered: [String: [ChatMessage]] = [:]
 
     /// Keep memory low: only the selected and running sessions stay resident.
     private func evictSessions(keeping id: String) {

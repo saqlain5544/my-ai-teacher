@@ -830,6 +830,10 @@ enum SubAgent {
             // and a restart resumes from this transcript.
             assistant.blocks.removeAll { $0.kind == .toolUse && $0.meta?["pending"]?.bool == true }
             metrics.duration = Date().timeIntervalSince(metrics.startedAt); metrics.toolCalls = assistant.toolUses.count
+            ActivityLog.record("request", conv: ctx.conversationID, ["agent": .string(ctx.toolCallID), "provider": .string(metrics.provider), "model": .string(metrics.model),
+                                                                    "ms": ActivityLog.ms(metrics.duration), "ttft_ms": metrics.timeToFirstToken.map(ActivityLog.ms) ?? .null,
+                                                                    "usage": ActivityLog.usage(metrics.usage), "finish": .string(metrics.finishReason),
+                                                                    "tool_calls": .number(Double(metrics.toolCalls))])
         }
         var request = LLMRequest(model: cfg.model, system: system, messages: lean(messages), tools: cfg.toolSpecs, maxTokens: maxTokens, thinking: cfg.effort,
                                  sessionID: ctx.toolCallID)
@@ -907,6 +911,11 @@ enum SubAgent {
             } catch {
                 block = .toolResult(id: callID, name: name, content: Task.isCancelled ? "Cancelled." : "Error: \(error.localizedDescription)", isError: true)
             }
+            ActivityLog.record("tool", conv: ctx.conversationID, ["agent": .string(handle), "tool": .string(name), "call": .string(callID),
+                                                                 "ms": ActivityLog.ms(Date().timeIntervalSince(t0)), "ok": .bool(!(block.isError ?? false)),
+                                                                 "summary": .string(String(tool.summary(input).prefix(200))),
+                                                                 "input": ActivityLog.level == .full ? input : .null,
+                                                                 "result_chars": .number(Double(block.text?.count ?? 0)), "result": ActivityLog.text(block.text)])
             var kept = block
             _ = kept.spill(into: ctx.services.conversations.blobs)   // a screenshot lives on disk; the transcript holds its reference
             return (kept, ToolMetric(name: name, duration: Date().timeIntervalSince(t0), ok: !(block.isError ?? false)))

@@ -39,6 +39,23 @@ struct Composer: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if session.conversation.mode.isAgent, let g = session.conversation.goal { goalStrip(g) }
+                if !session.isRunning {
+                    // Background work the agent launched: when it ends, its report wakes the agent (checked every 2 s).
+                    TimelineView(.periodic(from: .now, by: 2)) { _ in
+                        let work = session.awaitedWork
+                        if !work.isEmpty {
+                            HStack(spacing: 6) {
+                                ProgressView().controlSize(.small)
+                                Text("Waiting for \(work.joined(separator: " · "))").font(.caption).lineLimit(1).truncationMode(.tail)
+                                Spacer()
+                                Text("the agent carries on when \(work.count == 1 ? "it finishes" : "each finishes")").font(.caption2).foregroundStyle(.tertiary)
+                            }
+                            .padding(.horizontal, 8).padding(.vertical, 4)
+                            .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
+                            .accessibilityElement(children: .combine)
+                        }
+                    }
+                }
                 ForEach(session.queued, id: \.id) { m in
                     HStack(spacing: 6) {
                         Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)

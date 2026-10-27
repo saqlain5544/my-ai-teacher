@@ -37,6 +37,20 @@ struct GeneralSettings: View {
     @AppStorage(Telemetry.enabledKey) private var telemetryEnabled = true
     var body: some View {
         Form {
+            Section("Activity log") {
+                Picker("Detail", selection: $settings.value.activityLog) {
+                    Text("Off").tag(ActivityLog.Level.off)
+                    Text("Standard (summaries)").tag(ActivityLog.Level.standard)
+                    Text("Full (whole inputs and results)").tag(ActivityLog.Level.full)
+                }
+                Text("Everything the app does, one line per event: each message, turn, model call (tokens in, out and cached, latency), tool call (input, time, result), approval, background report, sub-agent and goal. Stays on this Mac, a file per day, kept \(ActivityLog.keepDays) days. Full keeps your messages and tool results in the files too.")
+                    .font(.caption).foregroundStyle(.secondary)
+                HStack {
+                    Button { NSWorkspace.shared.open(ActivityLog.file(for: ActivityLog.today)) } label: { Label("Open today's log", systemImage: "doc.text") }
+                        .disabled(!FileManager.default.fileExists(atPath: ActivityLog.file(for: ActivityLog.today).path))
+                    Button { try? FileManager.default.createDirectory(at: ActivityLog.dir, withIntermediateDirectories: true); NSWorkspace.shared.open(ActivityLog.dir) } label: { Label("Show logs folder", systemImage: "folder") }
+                }
+            }
             Section("About you") {
                 TextField("Your name", text: $settings.value.learnerName)
                 TextField("Level / background (e.g. “Year 12, strong at algebra”)", text: $settings.value.learnerLevel, axis: .vertical)

@@ -171,6 +171,7 @@ enum AppLog {
     nonisolated(unsafe) private static let stamps = ISO8601DateFormatter()
 
     static func write(_ line: String) {
+        ActivityLog.record("log", ["line": .string(String(line.prefix(2000)))])   // the activity log has everything
         let now = Date()
         queue.async {
             let stamp = stamps.string(from: now)

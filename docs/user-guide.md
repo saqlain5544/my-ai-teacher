@@ -381,6 +381,10 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   a plan: the changes file by file, the order, how it will verify them. Nothing in the folder changes until you click
   **Approve and start**; **Keep planning** lets you say what to change first. (A background sub-agent already running
   when you turn plan mode on carries on; stop it from the Agents panel if needed.)
+* **Background work wakes it.** A long build or test run (`bash` in the background) or a background sub-agent reports
+  back when it ends, and if the agent's turn is over the report starts a new one: the agent picks up where it left off,
+  as in Claude Code. Meanwhile a **Waiting for…** strip above the message box lists what's still running, and a `/goal`
+  waits for it too.
 * **Message it while it works.** Press Return (or the send arrow beside Stop) while the agent is busy: the message waits above the box and joins the
   conversation at the agent's next step, so you can steer without stopping it. Take one back with its ×; if you stop
   the agent, waiting messages return to the box.
@@ -504,7 +508,19 @@ Stop the agent any time with ⌘. or Esc twice.
 | Quick questions | `~/.teacher/no-dir-conversations/` |
 | Default folder | `~/AI Teacher Workspace/` |
 | Log | `~/Library/Logs/MyAITeacher.log` |
+| Activity log | `~/Library/Logs/MyAITeacher/activity-<date>.jsonl` |
 
+* **Activity log.** Everything the app does, one JSON line per event:
+  * every message you send;
+  * every turn, with its time, steps, tokens and errors;
+  * every model call, with tokens in, out, cached and reasoning, time to first token, latency and retries;
+  * every tool call, with its input, time, result size and whether it failed, for sub-agents too;
+  * approvals, background reports (and whether they woke the agent), sub-agents, goals, memory changes, notices, and
+    everything in the plain log.
+
+  In **Settings › General › Activity log** choose Off, Standard (summaries; texts cut to 300 characters) or Full
+  (whole inputs and results). There you can also open today's file. Files are kept 14 days. For a day's totals per
+  model and per tool, run `"/Applications/My AI Teacher.app/Contents/MacOS/MyAITeacher" --log-summary [YYYY-MM-DD]`.
 * **Network traffic.** Messages go only to the provider you choose. Web search and fetching are keyless (searches go to
   DuckDuckGo and Bing, paper searches to OpenAlex).
 * **Telemetry** for Insights is stored locally and can be turned off.

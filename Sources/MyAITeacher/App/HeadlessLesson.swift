@@ -51,7 +51,11 @@ enum HeadlessLesson {
             var steer = turn["steer"]
             s.send(turn["text"]?.string ?? "")
             try? await Task.sleep(for: .milliseconds(300))
-            while s.isRunning, Date().timeIntervalSince(t0) < budget {
+            // Background work the agent launched wakes it when it ends: the turn lasts until that has happened too (and a
+            // few seconds of quiet for its report to arrive).
+            var busyAt = Date()
+            while s.isRunning || !s.awaitedWork.isEmpty || Date().timeIntervalSince(busyAt) < 3, Date().timeIntervalSince(t0) < budget {
+                if s.isRunning || !s.awaitedWork.isEmpty { busyAt = Date() }
                 if let st = steer, Date().timeIntervalSince(t0) >= Double(st["after"]?.int ?? 10) {
                     s.send(st["text"]?.string ?? "")
                     steer = nil
@@ -97,6 +101,8 @@ enum HeadlessLesson {
                 }
                 out["plan_mode"] = .bool(s.conversation.planMode == true)
                 out["steered"] = .number(Double(msgs.filter { $0.blocks.contains { $0.text == ChatSession.queuedNote } }.count))
+                // Reports of background work that came back (each wakes the agent if its turn had ended).
+                out["reports"] = .number(Double(msgs.filter { $0.blocks.contains { $0.meta?["backgroundTask"] != nil || $0.meta?["agentReport"] != nil } }.count))
                 out["compacted"] = .bool(s.conversation.compactSummary != nil)
                 if let g = s.conversation.goal {
                     out["goal"] = ["state": .string(g.state.rawValue), "turns": .number(Double(g.turns)), "note": g.note.map { .string($0) } ?? .null]

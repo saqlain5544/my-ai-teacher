@@ -248,7 +248,7 @@ final class ShellJobs: @unchecked Sendable {
             try? await Task.sleep(for: .milliseconds(300))
             guard let self, !job.stopped, !job.exitSeen, self.job(conv, h) != nil else { return }
             let msg = Self.finishedMessage(job, handle: h)
-            await MainActor.run { AppModel.shared.session(for: conv)?.deliver(msg) }
+            await MainActor.run { AppModel.shared.deliver(msg, to: conv) }
         }
         return h
     }

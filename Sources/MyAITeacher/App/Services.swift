@@ -65,6 +65,8 @@ struct AppSettings: Codable, Sendable, Equatable {
     var approvedHooks: [String: String] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
+    /// How much the activity log keeps (`ActivityLog`): summaries by default.
+    var activityLog = ActivityLog.Level.standard
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -111,6 +113,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         hooks = (try? c.decode(String.self, forKey: .hooks)) ?? ""
         approvedHooks = (try? c.decode([String: String].self, forKey: .approvedHooks)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
+        activityLog = (try? c.decode(ActivityLog.Level.self, forKey: .activityLog)) ?? d.activityLog
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }
 }
