@@ -57,6 +57,12 @@ struct AppSettings: Codable, Sendable, Equatable {
     var mcpProjectDecisions: [String: [String: MCPDecision]] = [:]
     /// MCP servers whose tools run without asking, per folder (folder path → server names).
     var mcpAlwaysAllow: [String: [String]] = [:]
+    /// The user's own hooks for the code agent: Claude Code's `hooks` JSON (event → matchers → shell commands), as typed
+    /// in Settings › Hooks (`HooksExtension`).
+    var hooks = ""
+    /// Folders whose own hooks (`.claude/settings.json`) the user approved: folder path → the approved configuration's
+    /// fingerprint. Stored in the app, never in the folder, so a cloned repo can't approve itself, and a change asks again.
+    var approvedHooks: [String: String] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
 
@@ -102,6 +108,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         mcpServers = (try? c.decode([MCPServerConfig].self, forKey: .mcpServers)) ?? []
         mcpProjectDecisions = (try? c.decode([String: [String: MCPDecision]].self, forKey: .mcpProjectDecisions)) ?? [:]
         mcpAlwaysAllow = (try? c.decode([String: [String]].self, forKey: .mcpAlwaysAllow)) ?? [:]
+        hooks = (try? c.decode(String.self, forKey: .hooks)) ?? ""
+        approvedHooks = (try? c.decode([String: String].self, forKey: .approvedHooks)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
     }

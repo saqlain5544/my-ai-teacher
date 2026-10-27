@@ -54,6 +54,8 @@ enum ToolDecision: Sendable {
     case deny(String)
     /// Ask the learner; `resolve` maps the chosen option id to a final decision.
     case ask(ApprovalRequest, resolve: @MainActor @Sendable (String) -> ToolDecision)
+    /// Decided by work the main actor mustn't wait on (a user's hook command): the loop awaits it, then goes on with its answer.
+    case pending(@MainActor @Sendable () async -> ToolDecision)
 }
 
 /// A feature that plugs into the agent loop. All methods are optional (default no-ops), so new features
@@ -75,6 +77,14 @@ protocol AgentExtension: AnyObject {
     func writeFence(_ call: Block, tool: Tool, session: ChatSession) -> String?
     /// Observe or rewrite a tool result.
     func didRun(_ call: Block, result: inout Block, session: ChatSession)
+    /// After every `didRun`, work the call's result waits for off the main actor (a user's hook command); may add to it.
+    func afterRun(_ call: Block, result: inout Block, session: ChatSession) async
+    /// Before the first request of a turn the user's message started: may add to that message, or return why it must not
+    /// reach the agent (the turn then ends at once, and the reason is shown to the user).
+    func willStartTurn(_ message: inout ChatMessage, session: ChatSession) async -> String?
+    /// The agent's reply would end the turn: why it must keep going instead (sent to it as a hidden note), or nil.
+    /// `continued`: how many times this turn was already sent back.
+    func willEndTurn(_ session: ChatSession, continued: Int) async -> String?
     /// Called when a learner turn completes (no more tool calls), with its metrics.
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession)
     /// Called when a lesson goes idle or is closed.
@@ -89,6 +99,9 @@ extension AgentExtension {
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision { .allow }
     func writeFence(_ call: Block, tool: Tool, session: ChatSession) -> String? { nil }
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {}
+    func afterRun(_ call: Block, result: inout Block, session: ChatSession) async {}
+    func willStartTurn(_ message: inout ChatMessage, session: ChatSession) async -> String? { nil }
+    func willEndTurn(_ session: ChatSession, continued: Int) async -> String? { nil }
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {}
     func sessionWillClose(_ session: ChatSession) {}
 }
@@ -112,24 +125,22 @@ final class ExtensionHost {
         return Self.observed(Self.chain(gates[...]), tool: t.name, conversationID: s.id)
     }
 
-    /// Runs gates in registration order: a deny ends it; an approval the learner gives goes on to the remaining gates.
-    /// (Returning the first `.ask` as final let an approval for one gate skip every gate after it.)
+    /// Runs gates in registration order: a deny ends it; an approval the learner gives, or a pending gate's answer that
+    /// allows, goes on to the remaining gates. (Returning the first `.ask` as final let an approval for one gate skip every
+    /// gate after it.)
     static func chain(_ gates: ArraySlice<@MainActor () -> ToolDecision>) -> ToolDecision {
-        for i in gates.indices {
-            let d = gates[i]()
-            switch d {
-            case .allow: continue
-            case .deny: return d
-            case .ask(let req, let resolve):
-                let rest = gates[(i + 1)...]
-                return .ask(req, resolve: { choice in
-                    let r = resolve(choice)
-                    guard case .allow = r else { return r }
-                    return chain(rest)
-                })
-            }
+        guard let first = gates.first else { return .allow }
+        return then(first(), gates.dropFirst())
+    }
+
+    /// `d`, and once it allows, the remaining gates.
+    private static func then(_ d: ToolDecision, _ rest: ArraySlice<@MainActor () -> ToolDecision>) -> ToolDecision {
+        switch d {
+        case .allow: return chain(rest)
+        case .deny: return d
+        case .ask(let req, let resolve): return .ask(req, resolve: { choice in then(resolve(choice), rest) })
+        case .pending(let decide): return .pending { then(await decide(), rest) }
         }
-        return .allow
     }
 
     /// Publishes `.approval` events for gated calls without the loop knowing (one emit point).
@@ -148,10 +159,22 @@ final class ExtensionHost {
                                            waited: Date().timeIntervalSince(askedAt)))
                 return observed(r, tool: tool, conversationID: conversationID, resolved: true)
             })
+        case .pending(let decide):
+            return .pending { observed(await decide(), tool: tool, conversationID: conversationID, resolved: resolved) }
         }
     }
     func writeFence(_ c: Block, _ t: Tool, _ s: ChatSession) -> String? { extensions.lazy.compactMap { $0.writeFence(c, tool: t, session: s) }.first }
     func didRun(_ c: Block, _ r: inout Block, _ s: ChatSession) { for e in extensions { e.didRun(c, result: &r, session: s) } }
+    func afterRun(_ c: Block, _ r: inout Block, _ s: ChatSession) async { for e in extensions { await e.afterRun(c, result: &r, session: s) } }
+    func willStartTurn(_ m: inout ChatMessage, _ s: ChatSession) async -> String? {
+        for e in extensions { if let why = await e.willStartTurn(&m, session: s) { return why } }
+        return nil
+    }
+    func willEndTurn(_ s: ChatSession, continued: Int) async -> String? {
+        var reasons: [String] = []
+        for e in extensions { if let why = await e.willEndTurn(s, continued: continued) { reasons.append(why) } }
+        return reasons.isEmpty ? nil : reasons.joined(separator: "\n\n")
+    }
     func didFinishTurn(_ m: inout TurnMetrics, _ s: ChatSession) { for e in extensions { e.didFinishTurn(&m, session: s) } }
     func sessionWillClose(_ s: ChatSession) { for e in extensions { e.sessionWillClose(s) } }
 }

@@ -90,6 +90,7 @@ final class ComputerUseGate {
         case .allow: return next()
         case .deny: return d
         case .ask(let req, let resolve): return .ask(req) { choice in self.then(resolve(choice), next) }
+        case .pending(let decide): return .pending { self.then(await decide(), next) }
         }
     }
 

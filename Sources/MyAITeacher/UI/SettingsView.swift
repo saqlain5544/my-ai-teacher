@@ -10,6 +10,7 @@ struct SettingsView: View {
             ToolsSettings().tabItem { Label("Tools", systemImage: "hammer") }
             AgentsSettings().tabItem { Label("Agents", systemImage: "person.2") }
             MCPSettings().tabItem { Label("MCP", systemImage: "puzzlepiece.extension") }
+            HooksSettings().tabItem { Label("Hooks", systemImage: "bolt") }
             InstructionsSettings().tabItem { Label("Instructions", systemImage: "text.alignleft") }
             MemorySettings().tabItem { Label("Memory", systemImage: "brain.head.profile") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }

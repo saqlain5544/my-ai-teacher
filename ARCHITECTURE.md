@@ -157,7 +157,8 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 | Add a provider | Add a `ProviderConfig` preset (Anthropic/OpenAI/Gemini wire format + quirks) to `ProviderCatalog`, or add a custom provider in Settings | none |
 | Add a wire protocol | Implement `LLMClient` (emit `StreamEvent`s) and a case in `APIKind` | 1 switch |
 | Summarise a long history (another agent, an import) | `Compaction.summaryRange(…)` picks the messages, `Compaction.summarise(…)` writes the rolling summary (digest fallback, usage per call, cancellation-safe) | none |
-| Gate tool calls (budgets, policies) | Implement `shouldRun` in an `AgentExtension`; gates chain in registration order (`ExtensionHost.chain`) | none |
+| Gate tool calls (budgets, policies) | Implement `shouldRun` in an `AgentExtension`; gates chain in registration order (`ExtensionHost.chain`). A gate that must wait on slow work (a command) returns `.pending { … }`, which the loop awaits without holding the main actor | none |
+| Do slow work at a turn's edges or after a call | `willStartTurn` (the message that starts a turn: add to it or hold it back), `afterRun` (append to a result), `willEndTurn` (send the agent back to work): async, awaited by the loop | none |
 | Run background work | `Runtime.job(name) { … }` (one per name, watchdog, restart on a crash), `Runtime.call` (returns a value), `Runtime.every` (periodic service) — not `Task.detached` | none |
 | Add a sub-agent type | Settings → Agents, or a `.teacher/agents/<name>.md` in the folder (or `AgentCatalog.builtIns`) | none |
 | Render a new fenced block (```xyz) or ```ui component | `TeacherUI.defineComponent({ names: ['xyz'], schema, render(props, ctx, env) })` in a file under `Resources/web/components/` (`raw: true` for text forms, `// @lazy` at the top to load on first use), then `scripts/gen-web-manifest.py` | none |
@@ -305,6 +306,24 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   `todo_write`, `project_memory`, `ask_learner`, the browser's reading actions. `exit_plan_mode` shows the plan
   (rendered Markdown on its card) under Approve / Keep planning; approval (`meta.planApproved`) turns plan mode off in
   `didRun`. It gates new calls only: a background coder started before plan mode went on keeps working.
+* **Hooks** (`HooksExtension`, registered after `PlanModeExtension` and before `PermissionExtension`: a call plan mode
+  refuses runs no hook, and a call a hook blocks is never put to the user). `HookSet` parses Claude Code's `hooks`
+  JSON from `AppSettings.hooks` (Settings › Hooks) and the folder's `.claude/settings.json` + `settings.local.json`;
+  matchers follow Claude Code's rules over both its tool names (`HookSet.claudeNames`) and the app's. `HookRunner` runs
+  `/bin/sh -c` in the folder through `ProcessRunner` (off the main actor; `$CLAUDE_PROJECT_DIR`; the event as JSON on
+  stdin, long strings clamped; per-hook timeout, 60 s default, 600 max; 64 KB of output kept, 8k characters shown to the
+  agent), the matching hooks of an event at once, and maps exit codes and JSON decisions to `HookOutcome` (exit 2 or
+  `block`/`deny` blocks; `ask` asks; `allow` is ignored, so hooks never widen permissions; other exits are reported to
+  the user). The extension points: PreToolUse is `shouldRun` returning `ToolDecision.pending` (awaited by
+  `ChatSession.execute`, chained like an approval by `ExtensionHost.chain`); PostToolUse is `afterRun` (successful calls;
+  output and a "the hook rewrote the file" note appended to the result); UserPromptSubmit is `willStartTurn`
+  (`ChatSession.admitPrompt` for turns `send`, `edit` or queued messages start: hidden context, or the message is
+  removed and its text returned to the draft); Stop is `willEndTurn` (a hidden note and another step, at most
+  `ChatSession.sendBackLimit` times per turn). Code agent only; sub-agents' calls don't pass through the extension
+  host. A folder's hooks run only when `AppSettings.approvedHooks[folder]` equals the configuration's `fingerprint`
+  (SHA-256 of every event, matcher, timeout and command), so a cloned repo never runs anything and any change asks
+  again; the question is an `.ask` on the lesson's first tool call (cards render on tool calls), listing every command,
+  and a decline holds for the lesson.
 * **Queued messages.** `send` while a code agent runs appends to `ChatSession.queued` (shown above the composer, each
   can be taken back); `drainInbox` adds them, with a hidden note and the usual `willSend` context, at the next step
   boundary, and a reply with no tool calls continues instead of ending the turn. A turn that ends without reading
@@ -898,6 +917,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | ExitPlanMode / plan mode | `exit_plan_mode` | ⇧⌘P; only looking tools run until the plan is approved |
 | Queued messages | `ChatSession.queued` | sent while the agent works, read at its next step |
 | Bash permission rules | `CommandRules` | "Always allow “npm test …” in this folder"; read-only commands never ask |
+| Hooks | `HooksExtension` | PreToolUse (matcher; exit 2 or `decision: block` blocks, the reason goes to the model), PostToolUse (output reaches the model), UserPromptSubmit (context, or holds the message back), Stop (sends the agent back); Settings › Hooks and the project's `.claude/settings.json` in Claude Code's format, a project's only once approved for that folder and configuration; command hooks only, `allow` decisions ignored, the main agent's calls only |
 | CLAUDE.md | `ProjectMemory.contextBlock` | user, parent folders, project, CLAUDE.local.md, `@imports`, subfolders on first read |
 | LS | `ls` | sizes, hidden-noise filtering |
 | WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); papers mode (OpenAlex: relevance overall and among works cited 25+ times, fused, a log-citation boost); `read` adds the top pages' best passages |

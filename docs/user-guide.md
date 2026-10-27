@@ -376,6 +376,27 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     `~/.claude/commands/` for every project, becomes `/review`; a subfolder makes a namespace (`frontend/test.md` is
     `/frontend:test`). Type `/review src/app.py` and the file's text, with `$ARGUMENTS` (and `$1`, `$2`…) filled in,
     goes to the agent with your message. A file named like a built-in replaces it.
+* **Hooks.** Shell commands that run at steps of the agent's work, in Claude Code's format, so its hooks work as they
+  are. Put your own in **Settings › Hooks**; a project's go in its `.claude/settings.json` (or `settings.local.json`)
+  under `hooks`.
+  * **PreToolUse** runs before a tool call its `matcher` picks (`Edit|Write`, `Bash`, a regular expression like
+    `Web.*`, or `*` for all; this app's names such as `edit` work too). Exit code 2 blocks the call, and what the hook
+    printed to stderr tells the agent why (so does `{"decision": "block", "reason": "…"}` on stdout). A hook can't
+    approve a call: the usual approvals still apply.
+  * **PostToolUse** runs after a call that succeeded: a formatter after an edit, say. What it prints reaches the agent,
+    and if it rewrote the file the agent is told to read it again.
+  * **UserPromptSubmit** runs when your message starts a turn: what it prints goes to the agent with your message;
+    exit 2 holds the message back (its text returns to the box, and you see why).
+  * **Stop** runs when the agent would finish: exit 2 sends it back to work with the hook's reason, three times at
+    most per turn.
+  * Each hook gets the event as JSON on stdin (`tool_name`, `tool_input` with `file_path`, `tool_response`, `prompt`,
+    `session_id`, `cwd`), runs in the folder with `$CLAUDE_PROJECT_DIR` set, and is stopped after its `timeout`
+    (60 seconds unless set). A hook that fails otherwise is reported to you and the work goes on.
+  * **A project's hooks never run by themselves.** At the agent's first step in a lesson in that folder, a card lists
+    every command; they run only once you choose **Run this folder's hooks**. The approval is kept for that folder and
+    that exact configuration: if the hooks change (a pull, or the agent editing the file), you're asked again.
+    **Settings › Hooks** lists approved folders, with **Revoke**.
+  * Hooks run for the agent's own tool calls, not its sub-agents'.
 * **Project instructions.** `project_memory` keeps build commands, conventions and gotchas in
   `.teacher/code-memory.md`. The agent also follows the instruction files Claude Code and other agents use: your own
   `~/.claude/CLAUDE.md` or `~/.teacher/AGENTS.md`; `CLAUDE.md` or `AGENTS.md` in each folder above the project (a
@@ -414,6 +435,7 @@ Stop the agent any time with ⌘. or Esc twice.
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
 | Agents | Sub-agent defaults, limits and custom agent types |
 | MCP | Your MCP servers for code sessions (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
+| Hooks | Your own hooks for the code agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor, code agent), the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
 | Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |

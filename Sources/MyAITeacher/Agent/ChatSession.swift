@@ -208,7 +208,7 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         append(msg)
         save()
-        start()
+        start(prompted: true)
     }
 
     func stop() {
@@ -231,7 +231,7 @@ final class ChatSession: ObservableObject, Identifiable {
         m.blocks = m.blocks.filter { ($0.kind != .text || $0.meta?["hidden"]?.bool == true) && $0.meta?["deepPlan"]?.bool != true } + [.text(newText)]
         truncate(after: idx - 1)
         append(m)
-        start()
+        start(prompted: true)
     }
 
     func retry() {
@@ -314,16 +314,36 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    private func start() {
+    /// `prompted`: the turn answers a message the user just sent, which the extensions see first (`admitPrompt`).
+    private func start(prompted: Bool = false) {
         errorMessage = nil
         isRunning = true
         beginActivity()
         turn = TurnMetrics(startedAt: Date())
         EventBus.publish(.turnStarted(conversationID: id))
         runTask = Task { [weak self] in
+            if prompted, await self?.admitPrompt() == false { self?.finishTurn(); return }
             await self?.loop()
             self?.finishTurn()
         }
+    }
+
+    /// The extensions' look at the message that starts this turn (a user's UserPromptSubmit hook): it may gain context,
+    /// or be held back: it then leaves the conversation, its text goes back to the composer, and the user is told why.
+    private func admitPrompt() async -> Bool {
+        guard let i = messages.lastIndex(where: { $0.role == .user && !$0.isToolResultOnly }) else { return true }
+        var m = messages[i]
+        let why = await host.willStartTurn(&m, self)
+        guard i < messages.count, messages[i].id == m.id else { return true }
+        if let why {
+            let text = m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
+            truncate(after: i - 1)
+            draft = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
+            sink?.notice(why)
+            return false
+        }
+        if m.blocks != messages[i].blocks { messages[i] = m; persist(i); sink?.upsert(m) }
+        return true
     }
 
     private func finishTurn() {
@@ -373,8 +393,11 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         drainInbox()
-        start()
+        start(prompted: true)
     }
+
+    /// How many times one turn may be sent back to work by `willEndTurn` (a Stop hook that always objects can't loop forever).
+    static let sendBackLimit = 3
 
     private func loop() async {
         guard let provider = app.settings.provider(conversation.providerID) else {
@@ -391,6 +414,7 @@ final class ChatSession: ObservableObject, Identifiable {
         var steps = 0
         var limitContinues = 0
         var nudges = 0   // replies that ended with the work plainly unfinished, sent back to finish it
+        var sentBack = 0   // replies an extension (a user's Stop hook) sent back to work
         // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
         let asked = messages.lastIndex { $0.role == .user && !$0.isToolResultOnly }
         let askedText = asked.map { i in messages[i].blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") } ?? ""
@@ -559,6 +583,13 @@ final class ChatSession: ObservableObject, Identifiable {
             if calls.isEmpty {
                 // A background report or a message from the user arrived during this step: read it before ending the turn.
                 if !Task.isCancelled, !inbox.isEmpty || !queued.isEmpty { drainInbox(); continue }
+                // An extension may send the agent back to work (a user's Stop hook: "the tests fail"), a few times at most.
+                if !Task.isCancelled, !wrapping, sentBack < Self.sendBackLimit, let why = await host.willEndTurn(self, continued: sentBack), !Task.isCancelled {
+                    sentBack += 1
+                    setStatus("Continuing…")
+                    append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: "<context>\n\(why)\n</context>", meta: ["hidden": true, "ephemeral": true])]))
+                    continue
+                }
                 break
             }
             if Task.isCancelled {
@@ -761,15 +792,22 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         // Extensions gate the call (permissions etc.).
         var decision = host.shouldRun(call, tool, self)
-        while case .ask(let req, let resolve) = decision {
-            setStatus("Waiting for your approval…")
-            let t0 = Date()
-            let reply = await app.interactions.request(id: callID, kind: "permission", conversationID: id, payload: [
-                "tool": .string(name), "title": .string(req.title), "detail": .string(req.detail),
-                "options": .array(req.options.map { ["id": .string($0.id), "label": .string($0.label), "style": .string($0.style.rawValue)] }),
-            ])
-            waited += Date().timeIntervalSince(t0)
-            decision = reply["cancelled"]?.bool == true ? .deny("Cancelled.") : resolve(reply["decision"]?.string ?? "deny")
+        gate: while true {
+            switch decision {
+            case .allow, .deny: break gate
+            case .pending(let decide):
+                decision = await decide()
+                if Task.isCancelled { decision = .deny("Cancelled.") }
+            case .ask(let req, let resolve):
+                setStatus("Waiting for your approval…")
+                let t0 = Date()
+                let reply = await app.interactions.request(id: callID, kind: "permission", conversationID: id, payload: [
+                    "tool": .string(name), "title": .string(req.title), "detail": .string(req.detail),
+                    "options": .array(req.options.map { ["id": .string($0.id), "label": .string($0.label), "style": .string($0.style.rawValue)] }),
+                ])
+                waited += Date().timeIntervalSince(t0)
+                decision = reply["cancelled"]?.bool == true ? .deny("Cancelled.") : resolve(reply["decision"]?.string ?? "deny")
+            }
         }
         if case .deny(let reason) = decision {
             record(false)
@@ -810,6 +848,7 @@ final class ChatSession: ObservableObject, Identifiable {
             result = .toolResult(id: callID, name: name, content: "Error: \(error.localizedDescription)", isError: true)
         }
         host.didRun(call, &result, self)
+        await host.afterRun(call, &result, self)
         record(result.isError != true)
         EventBus.publish(.toolFinished(conversationID: id, tool: name, callID: callID, ok: result.isError != true))
         return result

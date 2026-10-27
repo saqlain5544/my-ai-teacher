@@ -116,7 +116,7 @@ final class MentorCockpitTests: XCTestCase {
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         func decide(_ name: String, _ input: JSON, _ t: Tool) -> String {
             switch guard_.shouldRun(.toolUse(id: UUID().uuidString, name: name, input: input), tool: t, session: session) {
-            case .allow: return "allow"; case .deny: return "deny"; case .ask: return "ask"
+            case .allow: return "allow"; case .deny: return "deny"; case .ask: return "ask"; case .pending: return "pending"
             }
         }
         try write("lru.py", "class LRU: pass\n")
