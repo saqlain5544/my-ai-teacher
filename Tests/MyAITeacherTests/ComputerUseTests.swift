@@ -77,6 +77,21 @@ final class ComputerUseTests: XCTestCase {
         catch { XCTAssertTrue("\(error.localizedDescription)".contains(contains), "\(error)", file: file, line: line) }
     }
 
+    /// The agent browser's off-screen window was found over the app as a blank grey rectangle: moved onto a screen, it
+    /// goes straight back, and macOS can't constrain it onto one.
+    @MainActor func testTheBrowsersOffscreenWindowNeverStaysOnScreen() async throws {
+        let p = OffscreenPanel(contentRect: NSRect(origin: OffscreenPanel.home, size: CGSize(width: 1600, height: 1200)),
+                               styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.keepOffscreen()
+        XCTAssertFalse(p.isOnScreen)
+        let pulled = NSRect(x: 100, y: 100, width: 1600, height: 1200)
+        XCTAssertEqual(p.constrainFrameRect(pulled, to: NSScreen.main), pulled, "not constrained onto a screen")
+        p.setFrameOrigin(NSPoint(x: 100, y: 100))   // as macOS does after a display or Space change
+        for _ in 0..<20 where p.frame.origin != OffscreenPanel.home { try await Task.sleep(for: .milliseconds(25)) }
+        XCTAssertEqual(p.frame.origin, OffscreenPanel.home, "back off-screen by itself")
+        XCTAssertFalse(p.canBecomeKey)
+    }
+
     func testMappingIsExactOnEveryDisplay() {
         let size = ScreenMapping.fit(CGSize(width: 1512, height: 982))
         XCTAssertLessThanOrEqual(size.width * size.height, 1_150_000 + 2000)

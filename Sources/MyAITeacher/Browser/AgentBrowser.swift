@@ -44,11 +44,14 @@ final class AgentBrowser: ObservableObject {
     private var nextID = 1
     private var router: MessageRouter?
     private lazy var parking: NSPanel = {
-        let p = NSPanel(contentRect: NSRect(x: -30000, y: -30000, width: 1600, height: 1200), styleMask: [.borderless, .nonactivatingPanel],
-                        backing: .buffered, defer: false)
+        let p = OffscreenPanel(contentRect: NSRect(origin: OffscreenPanel.home, size: CGSize(width: 1600, height: 1200)), styleMask: [.borderless, .nonactivatingPanel],
+                               backing: .buffered, defer: false)
         p.isExcludedFromWindowsMenu = true
-        p.collectionBehavior = [.transient, .ignoresCycle]
+        p.collectionBehavior = [.transient, .ignoresCycle, .stationary]
+        // Never seen or clicked even for a moment on screen: no background, no shadow, clicks pass through.
+        p.isOpaque = false; p.backgroundColor = .clear; p.hasShadow = false; p.ignoresMouseEvents = true
         p.orderFrontRegardless()
+        p.keepOffscreen()
         return p
     }()
 
@@ -499,4 +502,37 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
     func download(_ download: WKDownload, didFailWithError error: Error, resumeData: Data?) { finishDownload(.failure(error)) }
 
     static func sizeText(_ n: Int64?) -> String { n.map { ByteCountFormatter.string(fromByteCount: $0, countStyle: .file) } ?? "size unknown" }
+}
+
+/// The window the agent's pages live in while the side panel isn't showing them: off every screen, so pages keep
+/// running (an on-screen-capable window, not a hidden one, which WebKit would throttle) without being seen. macOS moves
+/// windows back onto a display after display changes, sleep, Spaces and Stage Manager: this one was found over the app as
+/// a blank 1600×1200 grey rectangle while the agent used the browser. It refuses to be constrained onto a screen and goes
+/// straight back whenever it moves or the screens change.
+final class OffscreenPanel: NSPanel {
+    static let home = NSPoint(x: -30_000, y: -30_000)
+    private var observers: [NSObjectProtocol] = []
+
+    override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect { frameRect }
+    override var canBecomeKey: Bool { false }
+    override var canBecomeMain: Bool { false }
+
+    /// Back off-screen now, and whenever it moves or the displays or Spaces change.
+    func keepOffscreen() {
+        if frame.origin != Self.home { setFrameOrigin(Self.home) }
+        guard observers.isEmpty else { return }
+        let back: @Sendable (Notification) -> Void = { [weak self] _ in
+            MainActor.assumeIsolated { if let self, self.frame.origin != Self.home { self.setFrameOrigin(Self.home) } }
+        }
+        observers = [
+            NotificationCenter.default.addObserver(forName: NSWindow.didMoveNotification, object: self, queue: .main, using: back),
+            NotificationCenter.default.addObserver(forName: NSWindow.didChangeScreenNotification, object: self, queue: .main, using: back),
+            NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main, using: back),
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.activeSpaceDidChangeNotification, object: nil, queue: .main, using: back),
+            NSWorkspace.shared.notificationCenter.addObserver(forName: NSWorkspace.didWakeNotification, object: nil, queue: .main, using: back),
+        ]
+    }
+
+    /// Whether any part of it is on a screen (it never should be).
+    var isOnScreen: Bool { NSScreen.screens.contains { $0.frame.intersects(frame) } }
 }
