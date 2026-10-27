@@ -21,6 +21,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/MyAITeacher"
 rsync -a --delete "$ROOT/Resources/web/" "$APP/Contents/Resources/web/"
+rsync -a --delete "$ROOT/Resources/skills/" "$APP/Contents/Resources/skills/"
 
 ICONSET="$ROOT/build/AppIcon.iconset"
 if [[ ! -f "$ROOT/build/AppIcon.icns" || "$ROOT/scripts/make-icon.swift" -nt "$ROOT/build/AppIcon.icns" ]]; then

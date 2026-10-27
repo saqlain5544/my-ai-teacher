@@ -98,6 +98,9 @@ enum HeadlessLesson {
                 out["plan_mode"] = .bool(s.conversation.planMode == true)
                 out["steered"] = .number(Double(msgs.filter { $0.blocks.contains { $0.text == ChatSession.queuedNote } }.count))
                 out["compacted"] = .bool(s.conversation.compactSummary != nil)
+                if let g = s.conversation.goal {
+                    out["goal"] = ["state": .string(g.state.rawValue), "turns": .number(Double(g.turns)), "note": g.note.map { .string($0) } ?? .null]
+                }
             }
             if let p = ProjectStore.load(s.services.workspace) {
                 out["project"] = ["registered": .bool(p.snapshotAt != nil), "command": p.testCommand.map { .string($0) } ?? .null,

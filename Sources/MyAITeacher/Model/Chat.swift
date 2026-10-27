@@ -163,4 +163,20 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var imagesUnsupported: Bool?
     /// Code agent: research and present a plan, change nothing until the user approves it (`PlanModeExtension`).
     var planMode: Bool?
+    /// Code agent: a standing objective it works toward turn after turn until it is met (`/goal`, `GoalExtension`).
+    var goal: SessionGoal?
+}
+
+/// A code session's `/goal`: the agent keeps taking turns toward it until it reports it met (with evidence) or blocked,
+/// the user clears or stops it, or the turn cap is reached.
+struct SessionGoal: Codable, Hashable, Sendable {
+    enum State: String, Codable, Hashable, Sendable { case active, paused, met }
+    var text: String
+    var set = Date()
+    /// Turns taken toward it so far (the user's first one included).
+    var turns = 0
+    var state = State.active
+    /// What the agent last reported: the evidence it's met, or why it's blocked or paused.
+    var note: String?
+    static let maxTurns = 25
 }

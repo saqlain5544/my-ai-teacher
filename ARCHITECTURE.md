@@ -713,18 +713,32 @@ Every agent is a node in one tree (`AgentTree`). A node declares what it adds; a
 the root and never what its children add:
 
 ```
-root ── files (read, write, batch edit, ls), web, sub-agents (task), load_tools; core visualisations
-├── teacher ── ask_learner, math, run_code, bash, memory, lesson_plan; quiz, mastery, flashcards (runtime); vocab, practice, problem
+root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-agents (runtime); core visualisations
+│        skills: web-research, read-long-documents, visual-explanations
+├── teacher ── ask_learner, math, run_code, memory, lesson_plan; bash, mastery, flashcards… (runtime); vocab, practice, problem
+│   │          skills: lesson-design, quiz-writing, feedback-on-answers
 │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
 │   ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
-│   └── code-mentor ── run_tests, project_tests, project_review, symbols, diagnostics, source; glob, grep (runtime); layout, tree
-└── engineer ── the code agent: shell, search, run_tests, todo, project memory, browser and Mac control; layout, tree
+│   │               skills: conversation-practice, grammar-drills, pronunciation-coaching
+│   └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, source, glob, grep (runtime)
+│                      skills: debugging-coaching, code-review-feedback, project-scaffolding
+└── engineer ── the code agent: shell, search, run_tests, todo, task; jobs, browser and Mac control, project memory… (runtime)
+                 skills: git-workflow, systematic-debugging, writing-tests, code-review
 ```
 
-* **Three sets per node.** `core` tools go with every request; `deferred` ones load at runtime with `load_tools` (one line
-  each in the prompt, which keeps context small); `components` are the fences the agent may write. `ToolRegistry.active`,
+* **Three sets per node.** `core` tools go with every request; `deferred` ones load at runtime (one short line each in
+  the prompt: the full description and typed schema arrive only once a tool is loaded, by `load_tools` or by calling it
+  by name, which loads and runs it); `components` are the fences the agent may write. `ToolRegistry.active`,
   `load_tools` and a direct call to a tool all resolve against the agent's path, so a tutor can't load the code mentor's
-  `run_tests` and the code mentor can't reach the code agent's browser.
+  `run_tests` and the code mentor can't reach the code agent's browser. Core is what an agent uses in most turns;
+  everything else is deferred (the code agent's per-request prefix went from ~9.5k to ~5.7k tokens).
+* **Skills follow the tree** (`Skills`, `SkillTool`), in Claude Code's and OpenCode's format: a folder with a `SKILL.md`
+  (front matter `name`, `description`, optional `agents`, `disable-model-invocation`). The app's own live in
+  `Resources/skills/<node>/` and an agent gets those on its path; then the user's (`~/.teacher/skills`,
+  `~/.claude/skills`, `~/.config/opencode/skill(s)`, `~/.agents/skills`, for every agent unless `agents` names some);
+  then the open folder's (`.teacher/skills`, `.claude/skills`, `.opencode/skill(s)`, `.agents/skills`), later winning
+  on a name. The prompt's `# Skills` section names each in one line (at most 40; `skill` with `query` searches the
+  rest); `skill` returns a body only when the agent loads it. Settings › Agents lists each agent's skills.
 * **Components follow the same tree.** The page gets the agent's component list with each `T.reset`; a fence outside it
   renders as its source, never a widget. Changing the set clears the markdown caches.
 * **Guides follow it too.** Each node has a guide (`Guides`, editable in Settings › Instructions as "App guide" and
@@ -930,7 +944,7 @@ The app's footprint must not grow with how much the learner has done: data lives
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
-| /command | `.teacher/commands`, `.claude/commands` (project and user) | slash commands with `$ARGUMENTS`, `$1`…`$9`, namespaces; built-in `/init`, `/review`, `/compact` |
+| /command | `.teacher/commands`, `.claude/commands` (project and user) | slash commands with `$ARGUMENTS`, `$1`…`$9`, namespaces; built-in `/init`, `/review`, `/compact`, `/goal` (`GoalExtension`: `Conversation.goal` rides along hidden on every message; `ChatSession.advanceGoal` starts the next turn by itself until the agent calls `goal` met (with evidence) or blocked, the user stops, a turn fails, or 25 turns) |
 | MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every call asked (per-server "always allow" per folder), plan mode only `readOnlyHint` tools; supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |

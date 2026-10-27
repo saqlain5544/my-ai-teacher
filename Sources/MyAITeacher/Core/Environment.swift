@@ -38,6 +38,12 @@ enum AppPaths {
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/web")
         return src
     }
+    /// The app's own skills (`Resources/skills/<agent tree node>/<skill>/SKILL.md`).
+    static var skillResources: URL {
+        if let r = Bundle.main.resourceURL?.appendingPathComponent("skills"), FileManager.default.fileExists(atPath: r.path) { return r }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/skills")
+    }
 }
 
 /// GUI apps launched from Finder/Dock don't inherit the user's shell environment, so API keys

@@ -8,7 +8,7 @@ enum ToolRegistry {
         WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
         AskLearnerTool(), MathTool(), MemoryTool(), MasteryTool(), FlashcardsTool(),
         ProjectMemoryTool(), LanguageTool(), VocabTool(), SourceTool(), SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool(),
-        TraceTool(), BenchTool(), ExitPlanModeTool(),
+        TraceTool(), BenchTool(), ExitPlanModeTool(), SkillTool(), GoalTool(),
     ] + Features.tools   // optional features' tools (computer use: browser, mac, computer; the course board: lesson_plan)
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
@@ -50,9 +50,18 @@ enum ToolRegistry {
         return MCPHub.shared.tool(named: name, folder: folder, settings: settings)
     }
 
-    /// One line per runtime-loadable tool, for an agent's prompt.
+    /// One short line per runtime-loadable tool, for an agent's prompt: enough to know when to reach for it. Its full
+    /// definition (description and typed schema) is sent once it is loaded, so the prompt never carries it.
     static func deferredIndex(_ node: String, _ settings: AppSettings = AppSettings()) -> String {
-        loadable(node, settings).map { "- `\($0.name)`: \($0.description.components(separatedBy: ". ").first ?? "")" }.joined(separator: "\n")
+        loadable(node, settings).map { "- `\($0.name)`: \(hint($0.description))" }.joined(separator: "\n")
+    }
+
+    /// A description's first sentence, cut at a word boundary past 80 characters.
+    static func hint(_ description: String) -> String {
+        let first = description.components(separatedBy: ". ").first?.components(separatedBy: "\n").first ?? ""
+        guard first.count > 80 else { return first }
+        let cut = first.prefix(80)
+        return (cut.lastIndex(of: " ").map { String(cut[..<$0]) } ?? String(cut)) + "…"
     }
 
     /// Every tool a sub-agent can be given; its type and the `task` call choose from these. Derived from each tool's

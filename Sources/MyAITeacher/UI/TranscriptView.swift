@@ -257,6 +257,9 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func language(_ state: LanguageState?) {
+            // The page's keyboard follows the target, and only the language mentor's lessons get one.
+            var state = state
+            if session?.keyboardLanguage == nil { state?.target = nil }
             guard let state, let target = state.target, let s = session else { run("T.setLanguage(\(state.map { $0.json.compact } ?? "null"))"); return }
             // The keyboard's extras: the learner's kanji words (candidates while typing kana) and the Mac's own input source.
             var j = state.json.object ?? [:]

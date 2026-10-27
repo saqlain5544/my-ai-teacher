@@ -111,6 +111,43 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 * **Edit** any of your messages to redo the lesson from there. Later replies are replaced.
 * **Code blocks** have a **Run** button. Python, JavaScript, TypeScript, Swift, C, C++, Go, Rust, Ruby, Java, Zig and
   Bash run on your Mac when the toolchain is installed.
+* **The on-screen keyboard** for the language you're learning appears only in Language mentor lessons.
+
+### Skills
+
+Every agent knows a set of **skills**: written know-how it loads only when a task needs it (a card marked **Skill**
+shows when it does), so its instructions stay short. They come in a tree, like the agents:
+
+| Who | Skills |
+|---|---|
+| Every agent | web-research, read-long-documents, visual-explanations |
+| Every teaching mode | lesson-design, quiz-writing, feedback-on-answers |
+| Language mentor | conversation-practice, grammar-drills, pronunciation-coaching |
+| Code mentor | debugging-coaching, code-review-feedback, project-scaffolding |
+| Code agent | git-workflow, systematic-debugging, writing-tests, code-review |
+
+**Add your own** in the same format as Claude Code and OpenCode: a folder with a `SKILL.md`, whose front matter has a
+`name` and a `description` (what it's for: the agent chooses by it), then the instructions in Markdown, beside any
+scripts or references it uses.
+
+```markdown
+---
+name: release-notes
+description: Write release notes from the commits since the last tag.
+agents: [code-agent]        # optional: code-agent, code-mentor, language-mentor, teacher; default every agent
+---
+1. `git describe --tags --abbrev=0` for the last tag …
+```
+
+* **Yours, for every lesson:** `~/.teacher/skills/`, and the ones you already have in `~/.claude/skills/`,
+  `~/.config/opencode/skills/` or `~/.agents/skills/`.
+* **A folder's own:** `.teacher/skills/`, `.claude/skills/`, `.opencode/skills/` or `.agents/skills/` in it; a folder's
+  skill replaces one of yours or the app's with the same name.
+* `disable-model-invocation: true` keeps a skill out of the agent's list.
+* **Settings › Agents › Skills** lists every agent's skills and where each comes from, and opens your skills folder.
+
+Tools work the same way: each agent always has the few it uses most, and the rest are named in one line each and load
+the first time it reaches for one.
 
 ## Learning first
 
@@ -383,6 +420,12 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
 * **Commands.** Built in: `/init` writes an `AGENTS.md` for the project (or improves the one there), `/review [what]`
   reviews your uncommitted changes (or what you name) without changing files, and `/compact [what to keep]` summarises
   the session so far so the next request starts small.
+  * **`/goal <objective>`** gives the session a standing goal ("make the whole test suite pass", "port the CLI to
+    the new API"). The agent works toward it turn after turn without you saying "continue", and a strip above the
+    message box shows the goal and its turn count. It stops when the agent reports the goal met (with the evidence:
+    what it ran and saw), when it needs something from you, when you press Stop, after a failed turn, or after 25
+    turns. Then **Resume** (or `/goal resume`) carries on. `/goal` alone shows the goal, and `/goal clear` (or the ×)
+    drops it.
   * Your own: `review.md` in the project's `.teacher/commands/` or `.claude/commands/`, or in `~/.teacher/commands/` or
     `~/.claude/commands/` for every project, becomes `/review`; a subfolder makes a namespace (`frontend/test.md` is
     `/frontend:test`). Type `/review src/app.py` and the file's text, with `$ARGUMENTS` (and `$1`, `$2`…) filled in,
@@ -444,7 +487,7 @@ Stop the agent any time with ⌘. or Esc twice.
 | General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), the course board system for the teaching modes (book outlines, cards only, or off; each is explained under the picker), text size, an optional limit on tool steps per reply (none by default: the teacher works until the reply is done; ⌘. stops it), context budget, Insights telemetry |
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
-| Agents | Sub-agent defaults, limits and custom agent types |
+| Agents | Sub-agent defaults, limits and custom agent types; each agent's skills and where they come from |
 | MCP | Your MCP servers for code sessions (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
 | Hooks | Your own hooks for the code agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor, code agent), the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |

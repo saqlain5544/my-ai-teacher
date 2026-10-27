@@ -230,7 +230,8 @@ final class CodeAgentTests: XCTestCase {
     }
 
     @MainActor func testTheAgentToolset() async throws {
-        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name))
+        // Always sent, or loaded on demand (one line each in the prompt; a direct call loads one).
+        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name) + AgentTree.deferred("engineer"))
         for t in ["diagnostics", "symbols", "source", "bash", "bash_jobs", "edit"] { XCTAssertTrue(names.contains(t), t) }
         XCTAssertFalse(Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name)).contains("diagnostics"))
         // Background commands are ShellJobs (handles, servers, the report when one ends): ShellJobsTests.

@@ -23,7 +23,7 @@ final class CodeLabTests: XCTestCase {
 
     func testTheCodeMentorHasTheToolsAndViews() {
         let core = AgentTree.core("code-mentor")
-        XCTAssertTrue(core.contains("trace") && core.contains("bench"))
+        XCTAssertTrue(core.contains("trace") && AgentTree.deferred("code-mentor").contains("bench"))
         XCTAssertFalse(AgentTree.core("tutor").contains("trace"), "a code mentor's tools, not every teacher's")
         for c in ["trace", "annotate", "predict"] { XCTAssertTrue(AgentTree.components("code-mentor").contains(c), c) }
         // They run code like `run_code`: the Python setting for Python, one lesson grant for all three.

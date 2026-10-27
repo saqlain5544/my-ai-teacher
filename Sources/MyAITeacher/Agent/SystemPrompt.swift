@@ -33,6 +33,7 @@ enum SystemPrompt {
         if let project { s += "\n\n" + project }
         if let t = Toolchains.section(Toolchains.shared.entries) { s += "\n\n" + t }
         if let mcp { s += "\n\n" + mcp }
+        if let skills = Skills.promptSection(node: "engineer", folder: folder) { s += "\n\n" + skills }
         if !projectMemory.isEmpty { s += "\n\n# Project memory\n" + projectMemory }
         return s
     }
@@ -45,7 +46,7 @@ enum SystemPrompt {
         }.joined(separator: "\n\n")
     }
 
-    static func build(settings: AppSettings, mode: TeachingMode, coreMemory: String, model: String, lessonID: String? = nil) -> String {
+    static func build(settings: AppSettings, mode: TeachingMode, coreMemory: String, model: String, lessonID: String? = nil, folder: URL? = nil) -> String {
         let name = settings.learnerName.isEmpty ? "the learner" : settings.learnerName
         var s = Instructions.text(.teacher, settings).replacingOccurrences(of: "{learner}", with: name)
         s += "\n\n# Current teaching mode\n" + Instructions.text(.mode(mode), settings)
@@ -61,6 +62,7 @@ enum SystemPrompt {
         - Today is \(today()). Model: \(model).
         - The learner can attach images, PDFs and files; they review flashcards and see progress\(BoardSystem.applies(to: mode) ? ", boards" : "") and memory in the app.
         """
+        if let skills = Skills.promptSection(node: AgentTree.node(for: mode), folder: folder) { s += "\n\n" + skills }
         if !settings.learnerName.isEmpty || !settings.learnerLevel.isEmpty {
             s += "\n\n# Learner\n"
             if !settings.learnerName.isEmpty { s += "- Name: \(settings.learnerName)\n" }

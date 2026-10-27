@@ -20,4 +20,6 @@
   R.defineTool({ name: 'project_memory', icon: 'bookmark', tone: 'purple', title: 'Project memory', compact: true,
     summary: n => { const i = input(n); return (i.action === 'add' ? (i.section ? i.section + ': ' : '') : (i.action || 'view') + ' ') + (i.text || ''); } });
   R.defineTool({ name: 'load_tools', icon: 'toolbox', tone: 'grey', title: 'Load tools', compact: true, summary: n => (input(n).names || []).join(', ') });
+  R.defineTool({ name: 'skill', icon: 'sparkles', tone: 'grey', title: 'Skill', compact: true,
+    summary: n => input(n).name || (input(n).query ? 'search: ' + input(n).query : '') });
 })();

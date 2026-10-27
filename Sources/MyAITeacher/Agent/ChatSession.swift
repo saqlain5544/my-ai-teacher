@@ -55,6 +55,9 @@ final class ChatSession: ObservableObject, Identifiable {
     var studyNotes: [String] = []
     /// Which language the lesson teaches and in which it is taught (LanguageExtension); the composer's keyboard follows it.
     @Published var language: LanguageState?
+    /// The on-screen keyboard's language: the language mentor's lessons only (any lesson knows the learner's target
+    /// language, but a keyboard for it under a code or tutor lesson only gets in the way).
+    var keyboardLanguage: String? { conversation.mode == .language ? language?.target : nil }
 
     private(set) var messages: [ChatMessage] = []
     unowned let app: AppModel
@@ -135,6 +138,7 @@ final class ChatSession: ObservableObject, Identifiable {
         conversation.mode = mode
         if messages.isEmpty { sink?.reset(messages, conversation: conversation) }   // the welcome fits the mode
         if !messages.isEmpty { pendingModeNote = "[The learner switched the teaching mode to \(mode.title).]\n" + Instructions.text(.mode(mode), settings) }
+        sink?.language(language)   // the page's keyboard comes or goes with the language mentor
         save()
     }
 
@@ -170,6 +174,8 @@ final class ChatSession: ObservableObject, Identifiable {
     func send(_ text: String, attachments: [Block] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
+        // `/goal`: show, clear or resume it here; a new objective is set and then sent (or queued) like any message.
+        if conversation.mode.isAgent, attachments.isEmpty, let arg = ProjectCommands.goalArgument(trimmed), !goalCommand(arg) { return }
         if isRunning {
             guard conversation.mode.isAgent else { return }
             if ProjectCommands.compactFocus(trimmed) != nil { sink?.notice("/compact runs once the agent has finished this turn."); return }
@@ -379,6 +385,74 @@ final class ChatSession: ObservableObject, Identifiable {
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
         if !detached { app.sessionDidFinishTurn(self) }
         flushQueued(stopped: turn.cancelled)
+        advanceGoal()
+    }
+
+    // MARK: Goal
+
+    /// `/goal [objective | clear | resume]`. True when an objective was set and the message should go to the agent.
+    func goalCommand(_ arg: String) -> Bool {
+        switch arg.lowercased() {
+        case "":
+            if let g = conversation.goal {
+                let state = g.state == .met ? "met" : g.state == .paused ? "paused" : "active"
+                sink?.notice("Goal (\(state), \(g.turns) of \(SessionGoal.maxTurns) turns): \(g.text)" + (g.note.map { "\n\($0)" } ?? ""))
+            } else {
+                sink?.notice("No goal set. /goal <objective> sets one: the agent works on it turn after turn until it's met.")
+            }
+            return false
+        case "clear", "off", "stop", "cancel":
+            updateGoal(nil, notice: conversation.goal == nil ? "No goal to clear." : "Goal cleared.")
+            return false
+        case "resume", "continue":
+            guard var g = conversation.goal, g.state != .met else { sink?.notice("No paused goal to resume."); return false }
+            if g.turns >= SessionGoal.maxTurns { g.turns = 0 }   // resuming after the cap grants a fresh run of turns
+            g.state = .active; g.note = nil
+            updateGoal(g, notice: "Goal resumed.")
+            if !isRunning { continueGoal() }
+            return false
+        default:
+            updateGoal(SessionGoal(text: arg), notice: nil)
+            return true
+        }
+    }
+
+    /// Sets or clears the goal (the composer shows it) and tells the user.
+    func updateGoal(_ g: SessionGoal?, notice: String?) {
+        conversation.goal = g
+        save()
+        if let notice { sink?.notice(notice) }
+    }
+
+    /// After a turn: count it toward the goal, then start the next one by itself while the goal is open.
+    private func advanceGoal() {
+        guard conversation.mode.isAgent, let open = conversation.goal, open.state == .active, !discarded else { return }
+        let g = Self.afterTurn(open, cancelled: turn.cancelled, error: errorMessage)
+        guard g.state == .active else {
+            updateGoal(g, notice: "Goal paused: \(g.note ?? ""). /goal resume carries on; /goal clear drops it.")
+            return
+        }
+        updateGoal(g, notice: nil)
+        if !isRunning { continueGoal() }   // a queued message of the user's already started the next turn
+    }
+
+    /// An open goal after one more turn: still active (the next turn starts), or paused by a stop, a failure or the cap.
+    nonisolated static func afterTurn(_ goal: SessionGoal, cancelled: Bool, error: String?) -> SessionGoal {
+        var g = goal
+        g.turns += 1
+        if cancelled { g.state = .paused; g.note = "You stopped it." }
+        else if let error { g.state = .paused; g.note = "A turn failed: \(error)" }
+        else if g.turns >= SessionGoal.maxTurns { g.state = .paused; g.note = "It took \(SessionGoal.maxTurns) turns without being met." }
+        return g
+    }
+
+    /// The next turn toward the goal: a hidden nudge (the goal itself rides along, from `GoalExtension`).
+    private func continueGoal() {
+        var m = ChatMessage(role: .user, blocks: [Block(kind: .text, text: GoalExtension.continueNote, meta: ["hidden": true])])
+        host.willSend(&m, self)
+        append(m)
+        save()
+        start()
     }
 
     /// Messages queued during work that ended without reading them (a turn's error or step limit, a /compact): they start
@@ -871,7 +945,8 @@ final class ChatSession: ObservableObject, Identifiable {
             return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
                                            projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section(), mcp: mcp)
         }
-        var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id)
+        var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
+                                   folder: services.workspace.url)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
         // A code mentor builds in the learner's folder: how it builds and tests is part of the lesson's ground.
         if conversation.mode == .code, let project = await ProjectProfile.detect(services.workspace.url).section() { s += "\n\n" + project }

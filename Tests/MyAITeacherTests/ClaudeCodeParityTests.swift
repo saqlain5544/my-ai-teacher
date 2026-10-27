@@ -148,6 +148,52 @@ final class ClaudeCodeParityTests: XCTestCase {
         XCTAssertFalse(chained.options.map(\.id).contains("rule"), "no rule for a chained command")
     }
 
+    // MARK: Goal
+
+    @MainActor func testGoalIsSetShownResumedAndCleared() async throws {
+        XCTAssertEqual(ProjectCommands.goalArgument("/goal  make the tests pass "), "make the tests pass")
+        XCTAssertEqual(ProjectCommands.goalArgument("/goal"), "")
+        XCTAssertNil(ProjectCommands.goalArgument("/goals"))
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        XCTAssertFalse(session.goalCommand(""), "showing it sends nothing")
+        XCTAssertTrue(session.goalCommand("Make every test pass"), "a new goal goes to the agent")
+        XCTAssertEqual(session.conversation.goal?.text, "Make every test pass")
+        XCTAssertEqual(session.conversation.goal?.state, .active)
+
+        // Every message carries it while it's open.
+        var m = ChatMessage(role: .user, blocks: [.text("hi")])
+        GoalExtension().willSend(&m, session: session)
+        XCTAssertTrue(m.blocks.first?.text?.contains("Make every test pass") == true && m.blocks.first?.meta?["hidden"]?.bool == true)
+
+        // The agent reports it blocked: paused, with what it needs; met ends it.
+        let ext = GoalExtension()
+        let blocked = try await GoalTool().run(["status": "blocked", "evidence": "Which database?"], ctx())
+        var result = Block.toolResult(id: "g1", name: "goal", content: blocked.text, isError: false); result.meta = blocked.meta
+        ext.didRun(Block.toolUse(id: "g1", name: "goal", input: [:]), result: &result, session: session)
+        XCTAssertEqual(session.conversation.goal?.state, .paused); XCTAssertEqual(session.conversation.goal?.note, "Which database?")
+        var quiet = ChatMessage(role: .user, blocks: [.text("hi")]); ext.willSend(&quiet, session: session)
+        XCTAssertEqual(quiet.blocks.count, 1, "a paused goal isn't pressed on the agent")
+        guard case .deny = ext.shouldRun(Block.toolUse(id: "g2", name: "goal", input: [:]), tool: GoalTool(), session: session) else { return XCTFail("nothing to report while paused") }
+        let met = try await GoalTool().run(["status": "met", "evidence": "pytest: 12 passed"], ctx())
+        XCTAssertEqual(met.meta?["goalStatus"]?.string, "met")
+        let bare = try await GoalTool().run(["status": "met", "evidence": " "], ctx())
+        XCTAssertTrue(bare.isError, "met needs evidence")
+
+        // After each turn: on to the next while open; a stop, a failure or the cap pauses it.
+        let open = SessionGoal(text: "x")
+        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: nil).state, .active)
+        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: nil).turns, 1)
+        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: true, error: nil).state, .paused)
+        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: "HTTP 500").note, "A turn failed: HTTP 500")
+        var late = open; late.turns = SessionGoal.maxTurns - 1
+        XCTAssertEqual(ChatSession.afterTurn(late, cancelled: false, error: nil).state, .paused, "the cap")
+
+        XCTAssertFalse(session.goalCommand("clear"))
+        XCTAssertNil(session.conversation.goal)
+        XCTAssertTrue(AgentTree.deferred("engineer").contains("goal") && !AgentTree.deferred("tutor").contains("goal"), "a code agent's tool")
+    }
+
     // MARK: Plan mode
 
     func testPlanModeOnlyLooks() {

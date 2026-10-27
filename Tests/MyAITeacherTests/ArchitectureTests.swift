@@ -197,7 +197,7 @@ final class CompactionTests: XCTestCase {
 final class ToolRegistryTests: XCTestCase {
     func testSubAgentPoolIsDerivedAndUnchanged() {
         let names = Set(ToolRegistry.subagentPool.map(\.name))
-        XCTAssertEqual(names, ["read", "ls", "glob", "grep", "web_search", "web_fetch", "math", "memory", "write", "edit", "bash", "bash_jobs", "run_code", "task", "agents", "symbols", "source", "diagnostics"])
+        XCTAssertEqual(names, ["read", "ls", "glob", "grep", "web_search", "web_fetch", "math", "memory", "write", "edit", "bash", "bash_jobs", "run_code", "task", "agents", "symbols", "source", "diagnostics", "skill"])
         XCTAssertEqual(ToolRegistry.subagentPool.count, names.count, "no duplicates")
         let memory = ToolRegistry.subagentPool.first { $0.name == "memory" } as? MemoryTool
         XCTAssertEqual(memory?.readOnly, true, "sub-agents only search memory")
@@ -210,7 +210,7 @@ final class ToolRegistryTests: XCTestCase {
         XCTAssertEqual(ToolRegistry.all.map(\.name), [
             "read", "write", "edit", "ls", "glob", "grep", "bash", "bash_jobs", "run_code", "run_tests", "web_search", "web_fetch", "task",
             "agents", "load_tools", "visual", "todo_write", "ask_learner", "math", "memory", "mastery",
-            "flashcards", "project_memory", "language", "vocab", "source", "symbols", "diagnostics", "project_tests", "project_review", "trace", "bench", "exit_plan_mode", "browser", "mac", "computer", "lesson_plan"])   // lesson_plan: course board module
+            "flashcards", "project_memory", "language", "vocab", "source", "symbols", "diagnostics", "project_tests", "project_review", "trace", "bench", "exit_plan_mode", "skill", "goal", "browser", "mac", "computer", "lesson_plan"])   // lesson_plan: course board module
         XCTAssertEqual(Set(Features.all.map(\.id)).count, Features.all.count, "module ids are unique")
         for t in Features.tools { XCTAssertNotNil(ToolRegistry.byName[t.name], "\(t.name) reaches the registry") }
         XCTAssertEqual(Features.computerUse.tools.map(\.name), ["browser", "mac", "computer"])

@@ -75,7 +75,7 @@ final class SourceToolTests: XCTestCase {
             XCTAssertTrue(core.text.contains("option.rs"), core.text)
         }
         let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).map(\.name))
-        XCTAssertTrue(names.contains("source"), "core in mentor mode")
+        XCTAssertTrue(names.contains("source") || AgentTree.deferred("code-mentor").contains("source"), "the mentor has it")
         XCTAssertTrue(ToolRegistry.deferredIndex("tutor").contains("`source`"), "loadable in a lesson")
         XCTAssertTrue(Instructions.mode(.code).contains("`source`"))
     }

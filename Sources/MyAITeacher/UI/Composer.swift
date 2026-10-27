@@ -28,7 +28,7 @@ struct Composer: View {
                 .background(RoundedRectangle(cornerRadius: 10).fill(Color.orange.opacity(0.1)))
             }
             if let lang = session.language?.target { TalkArea(talk: session.talk, language: lang) }
-            if showKeyboard, let layout = KeyboardLayouts.layout(for: session.language?.target) {
+            if showKeyboard, let layout = KeyboardLayouts.layout(for: session.keyboardLanguage) {
                 FirstMouse {
                     ScriptKeyboardView(layout: layout, sessionID: session.id, words: kanaWords, draft: session.draft) {
                         showKeyboard = false
@@ -38,6 +38,7 @@ struct Composer: View {
                 .onAppear { loadKanaWords(layout.code) }
             }
             VStack(alignment: .leading, spacing: 6) {
+                if session.conversation.mode.isAgent, let g = session.conversation.goal { goalStrip(g) }
                 ForEach(session.queued, id: \.id) { m in
                     HStack(spacing: 6) {
                         Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
@@ -90,7 +91,7 @@ struct Composer: View {
                                     // (and the learner's own mistakes are theirs to find).
                                     spellCheck: session.conversation.mode != .language && session.language?.target == nil)
                         .frame(height: min(max(height, 24), 220))
-                    if let layout = KeyboardLayouts.layout(for: session.language?.target) {
+                    if let layout = KeyboardLayouts.layout(for: session.keyboardLanguage) {
                         // Labelled with the language, so it's found: a bare keyboard icon went unnoticed. The first click works
                         // even while the window isn't key (a SwiftUI button there only activated the window).
                         FirstMouse {
@@ -191,6 +192,25 @@ struct Composer: View {
                : session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
             : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
     }
+    /// The code session's `/goal`: what it is, how far along, and resume or clear.
+    private func goalStrip(_ g: SessionGoal) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: g.state == .met ? "checkmark.seal.fill" : "scope").foregroundStyle(g.state == .met ? Color.green : Color.accentColor)
+            Text(g.text).font(.caption.bold()).lineLimit(1).truncationMode(.tail).help(g.text + (g.note.map { "\n\n" + $0 } ?? ""))
+            Spacer()
+            Text(g.state == .met ? "met" : g.state == .paused ? "paused · turn \(g.turns) of \(SessionGoal.maxTurns)" : "turn \(g.turns + 1) of \(SessionGoal.maxTurns)")
+                .font(.caption2).foregroundStyle(.tertiary)
+            if g.state == .paused {
+                Button("Resume") { _ = session.goalCommand("resume") }.buttonStyle(.borderless).font(.caption).help("Carry on toward the goal")
+            }
+            Button { _ = session.goalCommand("clear") } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
+                .buttonStyle(.borderless).accessibilityLabel("Clear the goal").help("Clear the goal (/goal clear)")
+        }
+        .padding(.horizontal, 8).padding(.vertical, 4)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
+        .accessibilityElement(children: .contain).accessibilityLabel("Goal: \(g.text)")
+    }
+
     private var canSend: Bool {
         session.pendingMedia.isEmpty && (!session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.attachments.isEmpty)
     }

@@ -75,9 +75,14 @@ enum ProjectCommands {
     }
 
     /// `/compact [focus]`: the session summarises itself now. The focus, or nil when the message isn't that command.
-    static func compactFocus(_ text: String) -> String? {
-        let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard t == "/compact" || t.hasPrefix("/compact ") || t.hasPrefix("/compact\n") else { return nil }
-        return String(t.dropFirst("/compact".count)).trimmingCharacters(in: .whitespacesAndNewlines)
+    static func compactFocus(_ text: String) -> String? { argument(of: "compact", text) }
+
+    /// `/goal …` in a code session: what follows it ("" alone, `clear`, `resume`, or the objective).
+    static func goalArgument(_ text: String) -> String? { argument(of: "goal", text) }
+
+    private static func argument(of command: String, _ text: String) -> String? {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines), c = "/" + command
+        guard t == c || t.hasPrefix(c + " ") || t.hasPrefix(c + "\n") else { return nil }
+        return String(t.dropFirst(c.count)).trimmingCharacters(in: .whitespacesAndNewlines)
     }
 }

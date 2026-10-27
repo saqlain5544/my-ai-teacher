@@ -40,6 +40,26 @@ struct AgentsSettings: View {
                 Text("Projects can define their own in .teacher/agents/*.md (frontmatter: name, description, tools, deny, read_only, provider, model, effort, max_steps, max_seconds, max_tokens; the body is the system prompt). Built-in names can't be redefined.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Skills") {
+                Picker("Agent", selection: $skillsFor) {
+                    Text("Teacher (every teaching mode)").tag("tutor")
+                    Text("Language mentor").tag("language")
+                    Text("Code mentor").tag("code-mentor")
+                    Text("Code agent").tag("engineer")
+                }
+                let skills = Skills.available(node: skillsFor, folder: AppModel.shared.workspace.url)
+                ForEach(skills, id: \.name) { s in
+                    HStack(alignment: .firstTextBaseline) {
+                        Text(s.name).font(.body.monospaced())
+                        Text(s.description).font(.caption).foregroundStyle(.secondary).lineLimit(2).help(s.description)
+                        Spacer()
+                        Text(s.source.label).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                }
+                Text("Each agent names its skills in one line and loads one (`skill`) when a task needs it. Every agent has the base skills; each adds its own. Yours, for every agent: ~/.teacher/skills, ~/.claude/skills, ~/.config/opencode/skills, ~/.agents/skills. A folder's own: .teacher/skills, .claude/skills, .opencode/skills, .agents/skills (it wins on a name clash). A skill is a folder with a SKILL.md: front matter `name`, `description` and optionally `agents: [code-agent, code-mentor, language-mentor, teacher]`, then its instructions.")
+                    .font(.caption).foregroundStyle(.secondary)
+                Button { NSWorkspace.shared.open(Self.userSkills()) } label: { Label("Open your skills folder", systemImage: "folder") }
+            }
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { d in
@@ -51,6 +71,14 @@ struct AgentsSettings: View {
     }
 
     private var a: SubAgentSettings { settings.value.agents }
+    @State private var skillsFor = "engineer"
+
+    /// ~/.teacher/skills, made on first use so the button always opens something.
+    private static func userSkills() -> URL {
+        let url = URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".teacher/skills", isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
 
     private func row(_ d: AgentDefinition) -> some View {
         HStack {

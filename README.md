@@ -156,10 +156,16 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
 * a plan checklist, and project memory kept in `.teacher/code-memory.md`, plus the `CLAUDE.md` / `AGENTS.md` files of
   the project, its parent folders and its subfolders (with `@file` imports);
 * `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
+* `/goal <objective>`: the agent works toward it turn after turn until it reports it met, with evidence;
 * **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`
   (Claude Code's format), which runs nothing until you approve each server once. Their tools load when the agent needs
   them, every call asks unless you always allow that server in the folder, and plan mode runs only read-only ones;
 * a git diff panel with checkpoints.
+
+**Skills for every agent**, in Claude Code's `SKILL.md` format: base skills every agent shares, each agent's own (the
+code agent's git workflow and debugging, the code mentor's coaching, the language mentor's conversation practice),
+then yours from `~/.claude/skills` or `~/.teacher/skills` and the folder's own. Agents see one line per skill and tool,
+and load the instructions or the tool's definition only when a task needs it.
 
 The agent can also:
 * **Know the project before touching it.** Its prompt carries a profile read from the manifests: build system, how to

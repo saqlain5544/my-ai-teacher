@@ -35,7 +35,7 @@ final class ToolParityTests: XCTestCase {
     }
 
     func testCodeAgentHasItsToolsetAndProjectMemory() async throws {
-        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name))
+        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name) + AgentTree.deferred("engineer"))
         for t in ["read", "write", "edit", "glob", "grep", "bash", "todo_write", "task", "project_memory"] { XCTAssertTrue(names.contains(t), t) }
         for t in ["memory", "flashcards", "mastery", "lesson_plan"] { XCTAssertFalse(names.contains(t), t) }
         XCTAssertTrue(names.contains("run_tests") && names.contains("load_tools"), "the root's runtime loading: `visual` comes in on demand")

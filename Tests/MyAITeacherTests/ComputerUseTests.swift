@@ -441,8 +441,8 @@ final class ComputerUseTests: XCTestCase {
     }
 
     func testCodeAgentToolsAndPrompt() {
-        let names = ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name)
-        for t in ["browser", "computer", "mac"] { XCTAssertTrue(names.contains(t), t) }
+        let names = ToolRegistry.loadable("engineer").map(\.name)
+        for t in ["browser", "computer", "mac"] { XCTAssertTrue(names.contains(t), "\(t) loads on demand") }
         XCTAssertFalse(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name).contains("computer"), "tutor lessons don't control the Mac")
         let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: URL(fileURLWithPath: "/tmp"), model: "m", projectMemory: "")
         XCTAssertTrue(prompt.contains("ax_tree") && prompt.contains("snapshot") && prompt.contains("untrusted"))
