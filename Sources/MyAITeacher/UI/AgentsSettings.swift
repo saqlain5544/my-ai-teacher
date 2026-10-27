@@ -60,6 +60,28 @@ struct AgentsSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 Button { NSWorkspace.shared.open(Self.userSkills()) } label: { Label("Open your skills folder", systemImage: "folder") }
             }
+            Section("Code agent's lessons") {
+                let lessons = CodeLessons.shared.all.sorted { $0.lastSeen > $1.lastSeen }
+                if lessons.isEmpty {
+                    Text("None yet. When the code agent fixes a failure it caused (a check failed, then passed after its edits), it may record the mistake and the rule that avoids it. Lessons are kept for every project and the relevant ones reach its prompt.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                ForEach(lessons) { l in
+                    VStack(alignment: .leading, spacing: 2) {
+                        HStack {
+                            Text(l.id).font(.caption.monospaced()).foregroundStyle(.secondary)
+                            Text(l.language).font(.caption.bold())
+                            Text(l.rule).font(.callout).lineLimit(2)
+                            Spacer()
+                            Text(l.retired != nil ? "retired" : "seen \(l.hits)×").font(.caption2).foregroundStyle(.tertiary)
+                            Button("Remove") { CodeLessons.shared.delete(l.id); lessonsTick += 1 }.controlSize(.small)
+                        }
+                        Text("Mistake: \(l.mistake)" + (l.evidence.last.map { " · \($0.project): \($0.note)" } ?? "")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
+                    }
+                    .help(l.retired.map { "Retired: \($0)" } ?? l.evidence.map { "\($0.project), \($0.date.formatted(date: .abbreviated, time: .omitted)): \($0.note)" }.joined(separator: "\n"))
+                }
+                .id(lessonsTick)
+            }
         }
         .formStyle(.grouped)
         .sheet(item: $editing) { d in
@@ -72,6 +94,7 @@ struct AgentsSettings: View {
 
     private var a: SubAgentSettings { settings.value.agents }
     @State private var skillsFor = "engineer"
+    @State private var lessonsTick = 0
 
     /// ~/.teacher/skills, made on first use so the button always opens something.
     private static func userSkills() -> URL {

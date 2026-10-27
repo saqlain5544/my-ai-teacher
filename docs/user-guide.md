@@ -407,6 +407,28 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     run_code in 12 languages.
   * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
   * Planning: a todo checklist.
+* **Code research by index, not just grep.** The agent's `code` tool keeps an index of the folder: every definition,
+  what each file imports and uses, and a graph of which files depend on which. It updates as files change, and is saved
+  outside your project. With it the agent can:
+  * search by meaning ("where are retries backed off" finds the function, even when it isn't called that);
+  * find a name's definition, every use grouped by the function it's in, its callers, and what a function calls;
+  * see the files a file uses and those that use it, and a map of the most central files;
+  * read a file's history.
+
+  `grep` stays for exact text: error messages, strings, config keys. Indexing this app's ~480 source files takes about
+  3 seconds the first time; after that only changed files are read again.
+* **It learns from its own fixes.**
+  * **Lessons:** when a check fails and then passes after the agent's edits, it's asked whether the cause is a mistake
+    that could happen in other projects too (a language pitfall, an API misuse). If so, it records the mistake and the
+    rule that avoids it. Lessons are kept for every project: the few that fit a project's languages are in the agent's
+    instructions, and a lesson seen again ranks higher. One that proves wrong is retired, and one unused for months
+    fades. Review or remove them in **Settings › Agents › Code agent's lessons**. They're hints: a project's own
+    conventions win.
+  * **Project history:** every turn that changes files is recorded in `.teacher/history.jsonl`: what you asked, the
+    files, the checks and how they ended, whether it fixed a failure, commits and pull requests. The agent sees the
+    latest few.
+  * **Against regressions:** when it edits a file an earlier fix touched, it's told about that fix and the check that
+    verified it, and asked to run that check again.
 * **MCP servers.** Tools from Model Context Protocol servers, as in Claude Code: a program the app starts and talks to
   over its input and output (`npx -y @modelcontextprotocol/server-memory`, `uvx mcp-server-git`…), or a URL speaking
   streamable HTTP. (The old HTTP+SSE transport isn't supported.)

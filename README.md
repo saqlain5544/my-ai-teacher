@@ -157,6 +157,10 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
   the project, its parent folders and its subfolders (with `@file` imports);
 * `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
 * `/goal <objective>`: the agent works toward it turn after turn until it reports it met, with evidence;
+* code research through an index of the project (definitions, uses and callers, imports, a usage graph, search by
+  meaning), not just grep;
+* it learns from its own fixes: lessons it carries to every project, a history of each project's changes, and a
+  reminder to re-run the check behind an earlier fix when it edits that code again;
 * background work: a build, test run or sub-agent reports back and wakes the agent when it ends, and the **Tasks**
   page lists everything running (commands, servers, sub-agents, MCP servers, app jobs) with its times and a Stop button;
 * **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`

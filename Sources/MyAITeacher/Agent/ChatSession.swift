@@ -985,7 +985,8 @@ final class ChatSession: ObservableObject, Identifiable {
             let profile = await ProjectProfile.detect(services.workspace.url)
             let mcp = await MCPHub.shared.promptSection(services.workspace.url, settings)
             return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
-                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section(), mcp: mcp)
+                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section(), mcp: mcp,
+                                           languages: profile.languages.map(\.0))
         }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
                                    folder: services.workspace.url)

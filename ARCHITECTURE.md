@@ -851,6 +851,80 @@ The app's footprint must not grow with how much the learner has done: data lives
   visible; after 8 s without an answer it ends the web process, reloads, and the lesson renders again with visuals
   paused behind ▶ Run (a notice says why). `MyAITeacher --webtest --watchdog` checks this end to end.
 
+## Code research and learning (the code agent)
+
+### Research: an index and a graph, not just grep
+
+**What it is.** `CodeIndex` (an actor, one per folder) keeps, per source file:
+* its definitions with the lines they span (`SymbolsTool.outline`, about 20 language families);
+* what it imports, and the identifiers it uses.
+
+From those it derives:
+* where each name is defined;
+* a weighted file graph: a file uses another when it names something only that file defines (names defined in more
+  than 6 places link nothing), or imports it;
+* PageRank over that graph, so central files rank higher (Aider's repo map).
+
+**How search works.** BM25 over chunk words, with identifiers split (`parseHTTPHeader` → parse, http, header) and
+lightly stemmed. The scoring then adjusts for:
+* **Chunks:** a definition with its doc comment. A type's chunk ends at its first member, and a long function also gets
+  40-line windows, reported at their own line.
+* **Synonyms**, at 0.6 weight (approve ↔ allow, permission; run ↔ execute…).
+* **Coverage:** the share of the question matched, squared.
+* **Name and path boosts.**
+* **Length** normalisation.
+* **Centrality** boost; tests are halved unless the question is about tests.
+* **Excluded:** vendored and minified files.
+
+**Updates and cost.** Each query re-lists the folder (ripgrep, gitignore-aware) and re-reads only files whose size or
+date changed. The index is saved in the app's support folder, never in the project. This repository's ~480 files index
+cold in about 3 s.
+
+**The `code` tool** gives `find`, `def`, `refs`/`callers` (exact, through `rg -w -F`, each use with its enclosing
+definition), `callees`, `outline`, `related`, `map` and `history`. It is the code agent's core research tool; `symbols`
+loads on demand.
+
+**Why not embeddings.** The only local model is Apple's sentence `NLEmbedding`: ~25 ms a chunk (minutes for a large
+repository) and trained on prose, not code. BM25 over split identifiers with synonyms and the graph found the right
+definition for the test questions, such as "ask the user to approve running a shell command", which ranks
+`PermissionExtension.shouldRun`, at the line where the approval is built.
+
+**Why grep stays.** Exact text (error messages, strings, config keys) is what an index can't rank, and models are
+trained to reach for it. `grep` stays as that, and the code agent's instructions put `code` first.
+
+### Learning: lessons across projects, history within one
+
+**Worth building? Yes, narrowly.**
+* The case for it: the agent repeats the same language pitfalls from project to project, and a fix verified in one
+  project is evidence of a lesson.
+* The risks:
+  * noise (wrong generalisations);
+  * prompt bloat;
+  * poisoning: a repository whose content leads the agent to record a "lesson" that then reaches every project;
+  * stale rules.
+
+The design answers each risk:
+* **Evidence only.** `CodeLearningExtension` watches each turn's checks: diagnostics, `run_tests`, and bash commands
+  that run a test or build runner, keyed by the runner segment without pipes or redirections. A check fails on a
+  non-zero exit or when its output says so (a failing run piped into `tail` exits 0).
+* **One question per fix.** When a check failed and then passed after the agent's edits, `willEndTurn` asks once
+  whether the cause could recur elsewhere; the agent then records it with `lessons` add, with evidence required.
+* **Merged, not duplicated.** The same language and mostly the same words (Jaccard ≥ 0.45) strengthen one lesson
+  instead of adding another.
+* **Small in the prompt.** Only the 8 strongest lessons for the project's languages are included, scored by hits with a
+  180-day decay. A retired lesson stays on record but leaves the prompt.
+* **Hints, not instructions.** The prompt says the project's own conventions win.
+* **Reviewable.** Settings › Agents lists every lesson, with Remove. Lessons are stored in `code-lessons.json` in the
+  app's support folder.
+
+**Project history and regressions.**
+* `ProjectHistory` (`<folder>/.teacher/history.jsonl`) records each turn that changed files: the request, files,
+  checks, whether it fixed a failure, commits (`git rev-parse` after a successful `git commit`), the pull request URL
+  (from `gh pr create`'s output) and the lessons drawn.
+* The prompt carries the latest 4 records, and `code` history shows a file's past.
+* An edit to a file an earlier fix touched comes back with that fix and its verifying check, and the agent is asked to
+  run that check again.
+
 ## Background tasks panel
 `BackgroundTasks.snapshot()` gathers every background task into one list each second for `TasksView` (the sidebar's
 Tasks page, and the side panel's Tasks tab, which shows the open lesson's tasks by default):

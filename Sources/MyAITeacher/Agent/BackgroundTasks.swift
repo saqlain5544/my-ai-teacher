@@ -77,7 +77,7 @@ final class AppJobs: @unchecked Sendable {
 @MainActor
 enum BackgroundTasks {
     /// Everything now, running first (oldest first), then what ended (latest first).
-    static func snapshot(app: AppModel = .shared) -> [BackgroundTask] {
+    static func snapshot() -> [BackgroundTask] {
         var out: [BackgroundTask] = []
         for j in ShellJobs.shared.all() {
             let server = ShellJob.looksLikeServer(j.command) || !j.urls.isEmpty

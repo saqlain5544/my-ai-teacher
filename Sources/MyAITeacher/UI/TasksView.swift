@@ -14,7 +14,7 @@ struct TasksView: View {
 
     var body: some View {
         TimelineView(.periodic(from: .now, by: 1)) { context in
-            let all = BackgroundTasks.snapshot(app: app)
+            let all = BackgroundTasks.snapshot()
             let shown = compact && onlyLesson && conversationID != nil ? all.filter { $0.conversationID == conversationID || $0.conversationID == nil && $0.state.active } : all
             let running = shown.filter { $0.state.active }, ended = shown.filter { !$0.state.active }
             VStack(alignment: .leading, spacing: 0) {

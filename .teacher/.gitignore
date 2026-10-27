@@ -1,0 +1,10 @@
+# My AI Teacher's own state (lessons, caches) — not part of the project.
+*
+!.gitignore
+!code-memory.md
+!agents/
+!agents/*.md
+!tests/
+!tests/**
+!mentor/
+!mentor/**

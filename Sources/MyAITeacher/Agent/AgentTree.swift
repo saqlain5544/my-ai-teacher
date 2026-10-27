@@ -56,13 +56,13 @@ enum AgentTree {
                   core: ["run_tests", "project_tests", "project_review", "trace", "symbols", "diagnostics", "bash"],
                   // The project is its long-term state (a board beside it was a second plan that drifted); no language lessons.
                   drops: ["lesson_plan", "language", "vocab"],
-                  deferred: ["glob", "grep", "bench", "source"],
+                  deferred: ["glob", "grep", "bench", "source", "code"],
                   components: ["layout", "tree", "trace", "annotate", "predict"],
                   guide: Guides.codeMentor),
         AgentNode(id: "engineer", parent: "root",
-                  core: ["bash", "glob", "grep", "symbols", "diagnostics", "run_tests", "todo_write", "task", "exit_plan_mode"],
+                  core: ["bash", "code", "glob", "grep", "diagnostics", "run_tests", "todo_write", "task", "exit_plan_mode"],
                   // Loaded when a task needs them (one line each in the prompt; a direct call loads one too).
-                  deferred: ["bash_jobs", "run_code", "source", "agents", "ask_learner", "project_memory", "browser", "mac", "computer", "goal"],
+                  deferred: ["bash_jobs", "run_code", "source", "agents", "ask_learner", "project_memory", "browser", "mac", "computer", "goal", "symbols", "lessons"],
                   components: ["layout", "tree"],
                   guide: Guides.engineer, mcp: true),
     ]
