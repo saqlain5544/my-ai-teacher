@@ -739,10 +739,10 @@
     const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
     T.status('Thinking…', true); T.upsert(a);
     T.delta(a.id, 0, 'thinking', 'Let me think about this carefully.'); await sleep(150);
-    const d = $('#m-' + a.id + ' details.thinking'); ok(d && d.open, 'open while thinking');
+    const d = $('#m-' + a.id + ' .thinking'); ok(d && d.open, 'open while thinking');
     T.delta(a.id, 1, 'text', 'Answer.'); await sleep(150);
     T.status('', false); await sleep(150);
-    ok(!d.open, 'collapsed after'); ok(/6 words/.test($('summary', d).textContent), 'word count: ' + $('summary', d).textContent);
+    ok(!d.open, 'collapsed after'); ok(/6 words/.test($('.summary', d).textContent), 'word count: ' + $('.summary', d).textContent);
   });
 
   test('thinking the app withheld is drawn as its notice, not its text', async () => {
@@ -750,7 +750,7 @@
       { kind: 'thinking', text: 'def allow(now): refill then take', signature: 'sig', meta: { shown: '[Thinking withheld: it worked out the learner\'s own allow.]' } },
       { kind: 'text', text: 'Try the refill first.' }] };
     T.reset([U('q'), a], {}); await sleep(150);
-    const d = $('#m-' + a.id + ' details.thinking'); d.open = true; await sleep(150);
+    const d = $('#m-' + a.id + ' .thinking'); d.open = true; await sleep(150);
     const body = $('.thinking-body', d);
     ok(body && /Thinking withheld/.test(body.textContent), 'notice shown');
     ok(!/refill then take/.test($('#m-' + a.id).textContent), 'withheld text not drawn');
@@ -761,19 +761,19 @@
     const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
     T.status('Thinking…', true); T.upsert(a);
     T.delta(a.id, 0, 'thinking', 'Plan the lookup in the source.\n\n\n\n\n\n'); await sleep(150);
-    const d = $('#m-' + a.id + ' details.thinking');
+    const d = $('#m-' + a.id + ' .thinking');
     ok(d.open && d.classList.contains('live'), 'open while it streams');
     const tb = $('.thinking-body', d);
     ok(tb.textContent.trim() === 'Plan the lookup in the source.' && tb.children.length === 1, 'trailing blank lines are not shown: ' + JSON.stringify(tb.innerHTML));
     // The step ends with a tool call; the next step streams in a new message.
     const b = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
     T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next step.'); await sleep(150);
-    const d1 = $('#m-' + a.id + ' details.thinking');
+    const d1 = $('#m-' + a.id + ' .thinking');
     ok(!d1.open && !d1.classList.contains('live'), 'the earlier step\'s thinking is collapsed and finished');
     ok($('.thinking-body', d1).offsetHeight === 0, 'and takes no space: no blank gap where the reasoning was');
-    ok(d1.offsetHeight <= $('summary', d1).offsetHeight + 2, 'the closed block is exactly its summary, not a blank gap');
-    ok(/Thought process · 6 words/.test($('summary', d1).textContent), $('summary', d1).textContent);
-    ok($('#m-' + b.id + ' details.thinking').open, 'the new step streams open');
+    ok(d1.offsetHeight <= $('.summary', d1).offsetHeight + 2, 'the closed block is exactly its summary, not a blank gap');
+    ok(/Thought process · 6 words/.test($('.summary', d1).textContent), $('.summary', d1).textContent);
+    ok($('#m-' + b.id + ' .thinking').open, 'the new step streams open');
     T.status('', false); await sleep(120);
   });
 
@@ -786,22 +786,46 @@
       'and count the tickets each one sends after the handshake, with a short timeout.';
     for (const w of thought.split(' ')) { T.delta(a.id, 0, 'thinking', w + ' '); await sleep(4); }
     await sleep(120);
-    ok($('#m-' + a.id + ' details.thinking').open, 'open while it streams');
+    ok($('#m-' + a.id + ' .thinking').open, 'open while it streams');
     // The tool call arrives in the same message, runs, and the next step starts in a new message.
     T.upsert({ id: a.id, role: 'assistant', blocks: [{ kind: 'thinking', text: thought }, { kind: 'toolUse', id: 'gap1', name: 'bash', input: { command: 'for host in a b; do echo $host; done' } }] });
     await sleep(120);
     T.upsert({ id: 'r' + (++seq), role: 'user', blocks: [{ kind: 'toolResult', id: 'gap1', name: 'bash', text: 'ok' }] });
     const b = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
     T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next.'); await sleep(200);
-    const d = $('#m-' + a.id + ' details.thinking'), card = $('[data-tool-id="gap1"]');
+    const d = $('#m-' + a.id + ' .thinking'), card = $('[data-tool-id="gap1"]');
     ok(!d.open, 'closed once the next step streams');
     eq($('.thinking-body', d).childNodes.length, 0, 'a closed block keeps nothing in its body (WebKit laid it out unpainted)');
     const gap = card.getBoundingClientRect().top - d.getBoundingClientRect().bottom;
     ok(gap < 24, 'the tool card follows the closed thinking directly, not after a blank gap: ' + Math.round(gap) + 'px');
-    ok(d.offsetHeight <= $('summary', d).offsetHeight + 2, 'the closed block is its summary: ' + d.offsetHeight);
+    ok(d.offsetHeight <= $('.summary', d).offsetHeight + 2, 'the closed block is its summary: ' + d.offsetHeight);
     // Opened again by hand, the reasoning is all there.
-    $('summary', d).click(); await sleep(120);
+    $('.summary', d).click(); await sleep(120);
     ok($('.thinking-body', d).textContent.includes('NewSessionTicket'), 'reopened, it shows the reasoning');
+    T.status('', false); await sleep(120);
+  });
+
+  test('thinking then text in the same message: the closed block is its pill, and it is not a <details>', async () => {
+    T.reset([U('q')], { agent: true });
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    const thought = Array.from({ length: 110 }, (_, i) => 'word' + i).join(' ') + '\n\n';
+    T.delta(a.id, 0, 'thinking', thought); await sleep(150);
+    const d = $('#m-' + a.id + ' .thinking');
+    ok(d.open && $('.thinking-body', d).offsetHeight > 60, 'open and tall while it streams');
+    // The reply's text begins in the same message: the thinking closes.
+    T.delta(a.id, 1, 'text', 'I over-complicated that — let me simplify:'); await sleep(150);
+    ok(!d.open, 'closed once the text begins');
+    eq(d.tagName, 'DIV', 'a plain element: WebKit kept a closed <details> at its open size');
+    const text = $('#m-' + a.id + ' .md:not(.thinking-body)');
+    const gap = text.getBoundingClientRect().top - d.getBoundingClientRect().bottom;
+    ok(gap < 24, 'the text follows the pill, no blank gap: ' + Math.round(gap) + 'px');
+    // Keyboard and click still open it.
+    const s = $('.summary', d);
+    s.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true })); await sleep(80);
+    ok(d.open && d.hasAttribute('open') && s.getAttribute('aria-expanded') === 'true' && $('.thinking-body', d).textContent.includes('word1'), 'Return opens it, with its text');
+    s.click(); await sleep(80);
+    ok(!d.open && $('.thinking-body', d).offsetHeight === 0, 'a click closes it');
     T.status('', false); await sleep(120);
   });
 
@@ -810,7 +834,7 @@
     const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
     T.status('Thinking…', true); T.upsert(a);
     T.delta(a.id, 0, 'thinking', '**Plan** the work.\n\n```python\nprint(1)\n```'); await sleep(150);
-    const d = $('#m-' + a.id + ' details.thinking');
+    const d = $('#m-' + a.id + ' .thinking');
     ok(d && $('.thinking-body strong', d) && $('.thinking-body pre.thinking-code', d), 'formatted while it streams, fences as plain code');
     // A long thought streams by segments: what's already finished keeps its nodes from frame to frame.
     const long = Array.from({ length: 40 }, (_, i) => 'Step ' + i + ': **check** the window function against the RFC.').join('\n\n');
@@ -1382,7 +1406,7 @@
     const thought = 'I will draw it.\n\n```visual\n<!-- title: Draft; height: 360 -->\n<canvas id="c"></canvas><script>c.getContext("2d")</script>\n```\n\n```mermaid\nflowchart TD\n  A --> B\n```\nThen the quiz:\n```problem\n{"q":"x?","solution":"y"}\n```';
     const a = A([{ kind: 'thinking', text: thought }, { kind: 'text', text: 'Answer.' }]);
     T.reset([U('q'), a], { showThinking: true });
-    const d = $('#m-' + a.id + ' details.thinking'); d.open = true; await sleep(80);
+    const d = $('#m-' + a.id + ' .thinking'); d.open = true; await sleep(80);
     const body = $('.thinking-body', d);
     ok(!$('iframe, .visual, .mermaid-block, .problem, .comp', body), 'no live components in thinking');
     ok(body.innerText.includes('getContext') && body.innerText.includes('flowchart TD') && body.innerText.includes('I will draw it'), 'the drafts read as text');
@@ -1409,7 +1433,7 @@
   test('thinking cut off inside a code block renders as code, not broken math', async () => {
     const a = A([{ kind: 'thinking', text: 'Plan:\n```python\nPATTERN = re.compile(r"^\\s*v?(?P<release>\\d+(?:\\.\\d+)*)\\(x\\)' }, { kind: 'text', text: 'ok' }]);
     T.reset([U('q'), a], { showThinking: true });
-    const d = $('#m-' + a.id + ' details.thinking'); ok(d, 'thinking shown'); d.open = true; await sleep(50);
+    const d = $('#m-' + a.id + ' .thinking'); ok(d, 'thinking shown'); d.open = true; await sleep(50);
     noErrors($('#m-' + a.id), 'thinking'); ok($('#m-' + a.id + ' .thinking-body pre'), 'rendered as a code block');
   });
 
@@ -1739,7 +1763,7 @@
   test('thinking hidden when the learner turns it off', () => {
     const a = A([{ kind: 'thinking', text: 'private reasoning' }, { kind: 'text', text: 'Answer' }]);
     T.reset([U('q'), a], { showThinking: false });
-    ok(!$('#m-' + a.id + ' details.thinking'), 'no thinking block');
+    ok(!$('#m-' + a.id + ' .thinking'), 'no thinking block');
   });
 
   test('visual tool card renders a saved visual', async () => {

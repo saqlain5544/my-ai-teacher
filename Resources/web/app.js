@@ -1021,20 +1021,39 @@
   /** Thinking streams the way the reply does: markdown rendered by segments (finished ones cached, so a frame costs only
    *  the tail), fences as plain code. It reads the same while it streams and after; it stays pinned to its newest line
    *  unless the learner scrolls up in it. */
+  /** Not a <details>: WebKit lays a closed <details>' content out with `content-visibility: hidden`, which can keep the
+   *  size it last had open. A thinking block that streamed open and closed when its reply's text began left that size
+   *  behind as a blank gap of the reasoning's full height, between the "Thought process" pill and the text (a live code
+   *  session, twice; emptying the body didn't help). A plain element whose body is `display: none` when closed has
+   *  nothing to keep. It behaves the same: `open` (property and attribute), a summary that toggles on click, Return or
+   *  Space. */
+  function makeThinking(node) {
+    node.innerHTML = '<div class="thinking"><div class="summary" role="button" tabindex="0" aria-expanded="false">' + R.icon('sparkles') +
+      '<span class="t-label"></span>' + R.icon('chevron-right', 'chev') + '</div><div class="thinking-body md"></div></div>';
+    const d = node.querySelector('.thinking'), summary = d.querySelector('.summary');
+    let open = false;
+    Object.defineProperty(d, 'open', {
+      get: () => open,
+      set: v => {
+        v = !!v;
+        if (v === open) return;
+        open = v;
+        d.toggleAttribute('open', v);
+        summary.setAttribute('aria-expanded', String(v));
+        if (d._prog) return;            // the renderer's own open or close: it fills or empties the body itself
+        d._user = true;                 // the learner's: it stays as they left it
+        if (open && d._b) fillThinking(d); else if (!open) emptyThinking(d);
+      },
+    });
+    summary.addEventListener('click', () => { d.open = !d.open; });
+    summary.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); d.open = !d.open; } });
+    return d;
+  }
+
   function renderThinking(node, b, live) {
     node.className = '';
-    let d = node.querySelector('details');
-    if (!d) {
-      node.innerHTML = '<details class="thinking"><summary>' + R.icon('sparkles') + '<span class="t-label"></span>' + R.icon('chevron-right', 'chev') + '</summary><div class="thinking-body md"></div></details>';
-      d = node.querySelector('details');
-      d.addEventListener('toggle', () => {
-        if (d._prog) { d._prog = false; return; }
-        d._user = true;
-        if (d.open && d._b) fillThinking(d);
-        else if (!d.open) emptyThinking(d);
-      });
-    }
-    const setOpen = v => { if (d.open !== v) { d._prog = true; d.open = v; } };
+    const d = node.querySelector(':scope > .thinking') || makeThinking(node);
+    const setOpen = v => { if (d.open !== v) { d._prog = true; d.open = v; d._prog = false; } };
     d._b = b;
     d._live = live;
     d.classList.toggle('live', live);
@@ -1045,9 +1064,7 @@
     if (d.open) fillThinking(d); else emptyThinking(d);
   }
 
-  /** A closed block keeps nothing in its body. WebKit can keep a closed <details>' content laid out but unpainted (the
-   *  `:not([open])` rule isn't always applied to it in time): the reasoning left a blank, full-height gap before the next
-   *  tool card. Empty, the body has no height to keep. Opening it renders the text again. */
+  /** A closed block keeps nothing in its body (it renders again when opened): cheap, and nothing to lay out. */
   function emptyThinking(d) {
     const body = d.querySelector('.thinking-body');
     if (!body.firstChild) return;
