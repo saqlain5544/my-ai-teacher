@@ -176,6 +176,17 @@ final class ChatSession: ObservableObject, Identifiable {
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // `/goal`: show, clear or resume it here; a new objective is set and then sent (or queued) like any message.
         if conversation.mode.isAgent, attachments.isEmpty, let arg = ProjectCommands.goalArgument(trimmed), !goalCommand(arg) { return }
+        // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
+        if !conversation.mode.isAgent, !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
+            switch cmd {
+            case .prompt(let p): send(p, attachments: attachments)
+            case .mode(let m, let then):
+                setMode(m)
+                sink?.notice("Switched to \(m.title) mode.")
+                if !then.isEmpty || !attachments.isEmpty { send(then, attachments: attachments) }
+            }
+            return
+        }
         if isRunning {
             guard conversation.mode.isAgent else { return }
             if ProjectCommands.compactFocus(trimmed) != nil { sink?.notice("/compact runs once the agent has finished this turn."); return }

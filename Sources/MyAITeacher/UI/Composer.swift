@@ -13,6 +13,10 @@ struct Composer: View {
     /// The learner's saved words with their kana (kanji candidates on the keyboard), for the lesson's target language.
     @State private var kanaWords: [(term: String, kana: String)] = []
     @State private var kanaWordsLang: String?
+    /// The `/` menu: every command (read when a `/` is typed), the highlighted row, and whether Esc closed it.
+    @State private var slashAll: [ProjectCommands.Suggestion] = []
+    @State private var slashIndex = 0
+    @State private var slashDismissed = false
 
     var body: some View {
         VStack(spacing: 6) {
@@ -38,6 +42,7 @@ struct Composer: View {
                 .onAppear { loadKanaWords(layout.code) }
             }
             VStack(alignment: .leading, spacing: 6) {
+                if !slashItems.isEmpty { slashMenu(slashItems) }
                 if session.conversation.mode.isAgent, let g = session.conversation.goal { goalStrip(g) }
                 if !session.isRunning {
                     // Background work the agent launched: when it ends, its report wakes the agent (checked every 2 s).
@@ -106,7 +111,8 @@ struct Composer: View {
                                     sessionID: session.id,
                                     // Learning a language: the spell-checker would underline the target language as misspelt English
                                     // (and the learner's own mistakes are theirs to find).
-                                    spellCheck: session.conversation.mode != .language && session.language?.target == nil)
+                                    spellCheck: session.conversation.mode != .language && session.language?.target == nil,
+                                    onMenuKey: slashKey)
                         .frame(height: min(max(height, 24), 220))
                     if let layout = KeyboardLayouts.layout(for: session.keyboardLanguage) {
                         // Labelled with the language, so it's found: a bare keyboard icon went unnoticed. The first click works
@@ -194,6 +200,12 @@ struct Composer: View {
         .frame(maxWidth: 860)
         .frame(maxWidth: .infinity)
         .onReceive(NotificationCenter.default.publisher(for: .focusComposer)) { _ in focusTick += 1 }
+        .onChange(of: session.draft) { old, new in
+            // A `/` starts a command: read the commands then (the project's may have changed), and open the menu again.
+            if new.hasPrefix("/") && !old.hasPrefix("/") { slashAll = loadSlashCommands(); slashDismissed = false }
+            if !new.hasPrefix("/") { slashDismissed = false }
+            slashIndex = 0
+        }
         .onAppear { focusTick += 1 }
     }
 
@@ -209,6 +221,67 @@ struct Composer: View {
                : session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
             : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
     }
+    // MARK: `/` commands
+
+    /// The commands matching what's typed after `/`: a code session's, or a lesson's follow-ups and modes.
+    private var slashItems: [ProjectCommands.Suggestion] {
+        guard !slashDismissed, let m = ProjectCommands.matches(session.draft, in: slashAll) else { return [] }
+        return m
+    }
+
+    /// Every command this lesson has (read when a `/` is typed).
+    private func loadSlashCommands() -> [ProjectCommands.Suggestion] {
+        session.conversation.mode.isAgent ? ProjectCommands.suggestions(session.services.workspace.url)
+            : ProjectCommands.lessonSuggestions(current: session.conversation.mode)
+    }
+
+    /// ↑ ↓ move, Tab completes, Return completes (or sends a command already complete), Esc closes.
+    private func slashKey(_ key: ComposerTextView.MenuKey) -> Bool {
+        let items = slashItems
+        guard !items.isEmpty else { return false }
+        let i = min(slashIndex, items.count - 1)
+        switch key {
+        case .up: slashIndex = (i - 1 + items.count) % items.count
+        case .down: slashIndex = (i + 1) % items.count
+        case .complete: complete(items[i])
+        case .submit:
+            if session.draft == "/" + items[i].name { return false }   // already typed in full: Return sends it
+            complete(items[i])
+        case .dismiss: slashDismissed = true
+        }
+        return true
+    }
+
+    private func complete(_ s: ProjectCommands.Suggestion) {
+        session.draft = "/" + s.name + " "
+        focusTick += 1
+    }
+
+    private func slashMenu(_ items: [ProjectCommands.Suggestion]) -> some View {
+        let selected = min(slashIndex, items.count - 1)
+        return VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(items.prefix(8).enumerated()), id: \.element.name) { i, s in
+                Button { complete(s) } label: {
+                    HStack(spacing: 10) {
+                        Text("/" + s.name).font(.callout.monospaced().weight(.medium)).foregroundStyle(i == selected ? Color.accentColor : .primary)
+                        Text(s.detail).font(.caption).foregroundStyle(.secondary).lineLimit(1).truncationMode(.tail)
+                        Spacer(minLength: 8)
+                        Text(s.source).font(.caption2).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 8).padding(.vertical, 5)
+                    .background(RoundedRectangle(cornerRadius: 7).fill(i == selected ? Color.accentColor.opacity(0.13) : Color.clear))
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("/\(s.name): \(s.detail)")
+            }
+            Text("↑↓ to choose · Tab or Return to complete · Esc to close").font(.caption2).foregroundStyle(.tertiary).padding(.horizontal, 8).padding(.top, 2)
+        }
+        .padding(4)
+        .background(RoundedRectangle(cornerRadius: 10).fill(Color.primary.opacity(0.04)))
+        .accessibilityElement(children: .contain).accessibilityLabel("Commands")
+    }
+
     /// The code session's `/goal`: what it is, how far along, and resume or clear.
     private func goalStrip(_ g: SessionGoal) -> some View {
         HStack(spacing: 6) {
@@ -431,6 +504,7 @@ struct GrowingTextView: NSViewRepresentable {
     var focusTick: Int
     var sessionID = ""
     var spellCheck = true
+    var onMenuKey: ((ComposerTextView.MenuKey) -> Bool)? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
@@ -482,6 +556,7 @@ struct GrowingTextView: NSViewRepresentable {
         context.coordinator.parent = self
         guard let tv = scroll.documentView as? ComposerTextView else { return }
         tv.onSubmit = onSubmit
+        tv.onMenuKey = onMenuKey
         tv.onPasteFiles = onPasteFiles
         tv.onPasteImage = onPasteImage
         tv.sessionID = sessionID
@@ -535,8 +610,24 @@ final class ComposerTextView: NSTextView {
     /// The lesson allows the spell-checker (not while a language is being learned).
     var spellCheck = true
 
+    /// Keys a menu over the text (the `/` commands) takes first while it is open.
+    enum MenuKey { case up, down, complete, submit, dismiss }
+    /// Returns true when the menu used the key.
+    var onMenuKey: ((MenuKey) -> Bool)?
+
     override func keyDown(with event: NSEvent) {
         let isReturn = event.keyCode == 36 || event.keyCode == 76
+        if let onMenuKey, !hasMarkedText(), event.modifierFlags.intersection([.command, .control, .option, .shift]).isEmpty {
+            let key: MenuKey? = switch event.keyCode {
+            case 126: .up
+            case 125: .down
+            case 48: .complete
+            case 36, 76: .submit
+            case 53: .dismiss
+            default: nil
+            }
+            if let key, onMenuKey(key) { return }
+        }
         if isReturn && !hasMarkedText() && !event.modifierFlags.contains(.shift) && !event.modifierFlags.contains(.option) {
             onSubmit?(); return
         }

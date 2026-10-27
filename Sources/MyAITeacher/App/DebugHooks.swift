@@ -138,6 +138,8 @@ enum DebugHooks {
             case "tasks": app.selection = .tasks
             default: if let id = cmd["id"]?.string ?? app.conversations.first?.id { app.selection = .lesson(id) }
             }
+        case "draft":   // {"action":"draft","text":"/re"}: what's typed in the composer (its `/` menu follows)
+            session?.draft = cmd["text"]?.string ?? ""
         case "quick": app.quickQuestion()
         case "stop": session?.stop(); AppLog.write("stopped")
         case "quit": NSApp.terminate(nil)   // a real quit (willTerminate runs), for this test instance only

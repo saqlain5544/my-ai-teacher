@@ -589,14 +589,7 @@ struct TranscriptView: NSViewRepresentable {
                 let note = "A ```\(kind) block in your last reply (“\(j["title"]?.string ?? kind)”) failed to render for the learner: \(msg). Include a corrected, working version in your next reply."
                 if !s.studyNotes.contains(note) { s.studyNotes.append(String(note.prefix(500))) }
             case "quick":
-                let prompts = [
-                    "simpler": "Can you explain that again more simply, with an everyday analogy?",
-                    "deeper": "Let's go deeper — what's the more rigorous or advanced version of this?",
-                    "example": "Give me another worked example, then a similar one for me to try.",
-                    "quiz": "Quiz me on what we just covered with a short graded quiz.",
-                    "flashcards": "Turn the key ideas from your last answer into flashcards for spaced repetition.",
-                ]
-                if let q = j["q"]?.string, let p = prompts[q] { session?.send(p) }
+                if let q = j["q"]?.string, let p = ProjectCommands.quickPrompts.first(where: { $0.name == q })?.prompt { session?.send(p) }
             case "run":
                 guard let key = j["key"]?.string, let code = j["code"]?.string else { return }
                 let lang = j["lang"]?.string ?? "python"

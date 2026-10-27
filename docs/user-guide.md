@@ -109,6 +109,13 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   * **Copy**, **Read aloud** and **Regenerate**;
   * quick follow-ups: **Explain simpler**, **Go deeper**, **Another example**, **Quiz me** and **Make flashcards**.
 * **Edit** any of your messages to redo the lesson from there. Later replies are replaced.
+* **Type `/`** for commands, listed as you type with what each does:
+  * Keys: ↑↓ to choose, Tab or Return to complete, Esc to close.
+  * In a lesson:
+    * the follow-ups: `/simpler`, `/deeper`, `/example`, `/quiz` and `/flashcards`;
+    * switching mode: `/socratic`, `/explain`, `/exam`, `/eli5`, `/research`, `/language`, `/code` or `/tutor`. Text after
+      a mode command is sent in the new mode.
+  * In a code session: `/goal`, `/review`, `/compact`, `/init`, and the project's and your own commands.
 * **Code blocks** have a **Run** button. Python, JavaScript, TypeScript, Swift, C, C++, Go, Rust, Ruby, Java, Zig and
   Bash run on your Mac when the toolchain is installed.
 * **The on-screen keyboard** for the language you're learning appears only in Language mentor lessons.

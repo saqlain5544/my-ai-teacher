@@ -315,6 +315,34 @@ final class ClaudeCodeParityTests: XCTestCase {
         XCTAssertFalse(again.text.contains("no default exports"), "once")
     }
 
+    /// Typing `/` lists every command with what it does; typing on narrows it; a space (arguments) closes it.
+    func testTheSlashMenuListsAndNarrowsCommands() throws {
+        let home = dir.appendingPathComponent("home")
+        let cmds = dir.appendingPathComponent(".claude/commands")
+        try FileManager.default.createDirectory(at: cmds.appendingPathComponent("frontend"), withIntermediateDirectories: true)
+        try "---\ndescription: Ship a release with notes\n---\nTag and push $ARGUMENTS".write(to: cmds.appendingPathComponent("release.md"), atomically: true, encoding: .utf8)
+        try "Run the UI tests for $1".write(to: cmds.appendingPathComponent("frontend/test.md"), atomically: true, encoding: .utf8)
+        let all = ProjectCommands.suggestions(dir, home: home)
+        XCTAssertEqual(Array(all.prefix(4).map(\.name)), ["goal", "review", "compact", "init"], "the built-ins first")
+        XCTAssertEqual(all.first { $0.name == "release" }?.detail, "Ship a release with notes")
+        XCTAssertEqual(all.first { $0.name == "frontend:test" }?.detail, "Run the UI tests for $1")
+        XCTAssertEqual(all.first { $0.name == "release" }?.source, "this project")
+        XCTAssertEqual(ProjectCommands.matches("/", in: all)?.count, all.count, "a bare / shows them all")
+        XCTAssertEqual(ProjectCommands.matches("/re", in: all)?.map(\.name), ["review", "release"])
+        XCTAssertEqual(ProjectCommands.matches("/test", in: all)?.map(\.name), ["frontend:test"], "a name inside counts too")
+        XCTAssertNil(ProjectCommands.matches("/review src/app.py", in: all), "arguments being typed: no menu")
+        XCTAssertNil(ProjectCommands.matches("hello /re", in: all))
+
+        // A teaching lesson: the follow-ups and the other modes.
+        let lesson = ProjectCommands.lessonSuggestions(current: .tutor)
+        XCTAssertEqual(Array(lesson.prefix(5).map(\.name)), ["simpler", "deeper", "example", "quiz", "flashcards"])
+        XCTAssertTrue(lesson.contains { $0.name == "socratic" } && !lesson.contains { $0.name == "tutor" }, "the other modes, not the current one")
+        XCTAssertEqual(ProjectCommands.lessonCommand("/simpler"), .prompt("Can you explain that again more simply, with an everyday analogy?"))
+        XCTAssertEqual(ProjectCommands.lessonCommand("/socratic why is the sky blue?"), .mode(.socratic, then: "why is the sky blue?"))
+        XCTAssertNil(ProjectCommands.lessonCommand("/nothing"))
+        XCTAssertNil(ProjectCommands.lessonCommand("the /socratic method"))
+    }
+
     func testCommandsFromClaudeFoldersAndBuiltIns() throws {
         let home = dir.appendingPathComponent("home")
         try write(".claude/commands/fix-issue.md", "---\ndescription: Fix an issue\nargument-hint: [number] [priority]\n---\nFix issue #$1 at priority $2. All: $ARGUMENTS", in: dir)
