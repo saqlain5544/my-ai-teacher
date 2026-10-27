@@ -125,6 +125,29 @@ final class ClaudeCodeParityTests: XCTestCase {
         XCTAssertEqual(BashTool.seconds([:]), 120)
     }
 
+    /// A test run's or a check's own command can be always allowed in the folder, like bash's.
+    @MainActor func testTestCommandsCanBeAlwaysAllowed() throws {
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        let gate = PermissionExtension(app: AppModel.shared)
+        AppModel.shared.setAccess(.write, for: services.workspace)
+        defer { AppModel.shared.settings.value.commandRules[dir.path] = nil }
+        let tests = try XCTUnwrap(ToolRegistry.byName["run_tests"])
+        let call = Block.toolUse(id: "t1", name: "run_tests", input: ["command": "python3 test_stats.py"])
+        guard case .ask(let req, let resolve) = gate.shouldRun(call, tool: tests, session: session) else { return XCTFail("asked") }
+        XCTAssertEqual(req.options.map(\.id), ["once", "rule", "lesson", "grant_full", "deny"])
+        guard case .allow = resolve("rule") else { return XCTFail("allowed") }
+        XCTAssertEqual(AppModel.shared.settings.value.commandRules[dir.path], ["python3 test_stats.py"])
+        guard case .allow = gate.shouldRun(call, tool: tests, session: session) else { return XCTFail("the rule covers the test run") }
+        let bash = try XCTUnwrap(ToolRegistry.byName["bash"])
+        guard case .allow = gate.shouldRun(Block.toolUse(id: "b1", name: "bash", input: ["command": "python3 test_stats.py -v"]), tool: bash, session: session)
+        else { return XCTFail("and the same command through bash") }
+        let check = try XCTUnwrap(ToolRegistry.byName["diagnostics"])
+        guard case .ask(let chained, _) = gate.shouldRun(Block.toolUse(id: "d1", name: "diagnostics", input: ["what": "command", "command": "make && ./run"]), tool: check, session: session)
+        else { return XCTFail("a chained check is asked") }
+        XCTAssertFalse(chained.options.map(\.id).contains("rule"), "no rule for a chained command")
+    }
+
     // MARK: Plan mode
 
     func testPlanModeOnlyLooks() {

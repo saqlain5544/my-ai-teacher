@@ -116,10 +116,13 @@ final class PermissionExtension: AgentExtension {
             let impliedByBash = grant == "tests" || grant == "run_code"
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
                 || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
-            let command = tool.name == "bash" ? input["command"]?.string ?? "" : ""
+            // The shell command this call runs: bash's, an explicit diagnostics or test command, or the project's test command.
+            let command = tool.name == "bash" ? input["command"]?.string ?? ""
+                : tool.name == "diagnostics" || grant == "tests"
+                    ? input["command"]?.string ?? (grant == "tests" ? ProjectStore.load(ws)?.testCommand : nil) ?? "" : ""
             // Looking around needs no approval (`git status`, `ls`, `rg`…: the strict read-only list, run hardened by
             // `bash`), and nor does a command the user always allows in this folder.
-            if !command.isEmpty, input["background"]?.bool != true, ReadOnlyShell.allows(command) { return .allow }
+            if tool.name == "bash", !command.isEmpty, input["background"]?.bool != true, ReadOnlyShell.allows(command) { return .allow }
             if !command.isEmpty, CommandRules.matches(command, app.settings.value.commandRules[ws.url.path] ?? []) { return .allow }
             let rule = command.isEmpty ? nil : CommandRules.prefix(command)
             var detail = tool.name == "bash" ? command : (input["code"]?.string ?? tool.summary(input))

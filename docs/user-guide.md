@@ -335,7 +335,8 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   * Commands that only look (`ls`, `cat`, `rg`, `git status`, `git diff`, `git log`…) never ask. They run without a
     shell, and git runs with hooks, fsmonitor and diff drivers off, so a cloned repository's config can't start a program.
   * **Always allow “npm test …” in this folder** on an approval makes a rule like Claude Code's `Bash(npm test:*)`:
-    that command, with any arguments, runs without asking again in that folder. A rule only matches one plain command
+    that command, with any arguments, runs without asking again in that folder, whether through the shell, the test
+    runner or a check (the same choice appears when those ask with a plain command). A rule only matches one plain command
     (no `;`, `&&`, pipes, redirections or `$(…)`). Rules are listed in **Settings › Tools**, where you can remove them.
     git commands other than the looking ones ask each time.
   * Installing packages (`pip install`, `brew install`…) asks every time; in lessons it stays off.
@@ -343,7 +344,7 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   a plan: the changes file by file, the order, how it will verify them. Nothing in the folder changes until you click
   **Approve and start**; **Keep planning** lets you say what to change first. (A background sub-agent already running
   when you turn plan mode on carries on; stop it from the Agents panel if needed.)
-* **Message it while it works.** Press Return while the agent is busy: the message waits above the box and joins the
+* **Message it while it works.** Press Return (or the send arrow beside Stop) while the agent is busy: the message waits above the box and joins the
   conversation at the agent's next step, so you can steer without stopping it. Take one back with its ×; if you stop
   the agent, waiting messages return to the box.
 * **It never overwrites what it hasn't seen.** `write` refuses to replace a file the agent hasn't read, or one that

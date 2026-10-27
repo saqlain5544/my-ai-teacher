@@ -126,6 +126,13 @@ struct Composer: View {
                         .buttonStyle(.borderless).accessibilityLabel("Dictate").help("Dictate").padding(.bottom, 4)
                     }
                     if session.isRunning {
+                        // A code agent takes messages while it works: with a draft, a queue button sits beside Stop.
+                        if session.conversation.mode.isAgent && canSend {
+                            Button(action: send) {
+                                Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)).foregroundStyle(Color.accentColor)
+                            }
+                            .buttonStyle(.borderless).accessibilityLabel("Queue for the agent's next step").help("Queue for the agent's next step (Return)")
+                        }
                         Button { session.stop() } label: {
                             Image(systemName: "stop.circle.fill").font(.system(size: 22))
                         }
