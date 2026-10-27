@@ -777,6 +777,34 @@
     T.status('', false); await sleep(120);
   });
 
+  test('thinking then a tool call in the same message: no blank gap once the thinking closes', async () => {
+    T.reset([U('q')], { agent: true });
+    const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.status('Thinking…', true); T.upsert(a);
+    const thought = 'Cloudflare\'s example.com doesn\'t send NewSessionTicket. So I need another server that does. Let me try:\n' +
+      '- www.google.com\n- api.anthropic.com (real API — needs a key, but the handshake is enough)\n- api.openai.com\n- www.cloudflare.com\n- wikipedia.org\n\n' +
+      'and count the tickets each one sends after the handshake, with a short timeout.';
+    for (const w of thought.split(' ')) { T.delta(a.id, 0, 'thinking', w + ' '); await sleep(4); }
+    await sleep(120);
+    ok($('#m-' + a.id + ' details.thinking').open, 'open while it streams');
+    // The tool call arrives in the same message, runs, and the next step starts in a new message.
+    T.upsert({ id: a.id, role: 'assistant', blocks: [{ kind: 'thinking', text: thought }, { kind: 'toolUse', id: 'gap1', name: 'bash', input: { command: 'for host in a b; do echo $host; done' } }] });
+    await sleep(120);
+    T.upsert({ id: 'r' + (++seq), role: 'user', blocks: [{ kind: 'toolResult', id: 'gap1', name: 'bash', text: 'ok' }] });
+    const b = { id: 'a' + (++seq), role: 'assistant', blocks: [] };
+    T.upsert(b); T.delta(b.id, 0, 'thinking', 'Next.'); await sleep(200);
+    const d = $('#m-' + a.id + ' details.thinking'), card = $('[data-tool-id="gap1"]');
+    ok(!d.open, 'closed once the next step streams');
+    eq($('.thinking-body', d).childNodes.length, 0, 'a closed block keeps nothing in its body (WebKit laid it out unpainted)');
+    const gap = card.getBoundingClientRect().top - d.getBoundingClientRect().bottom;
+    ok(gap < 24, 'the tool card follows the closed thinking directly, not after a blank gap: ' + Math.round(gap) + 'px');
+    ok(d.offsetHeight <= $('summary', d).offsetHeight + 2, 'the closed block is its summary: ' + d.offsetHeight);
+    // Opened again by hand, the reasoning is all there.
+    $('summary', d).click(); await sleep(120);
+    ok($('.thinking-body', d).textContent.includes('NewSessionTicket'), 'reopened, it shows the reasoning');
+    T.status('', false); await sleep(120);
+  });
+
   test('thinking streams as markdown, the same way the reply does', async () => {
     T.reset([U('q')], {});
     const a = { id: 'a' + (++seq), role: 'assistant', blocks: [] };

@@ -1030,7 +1030,8 @@
       d.addEventListener('toggle', () => {
         if (d._prog) { d._prog = false; return; }
         d._user = true;
-        if (d.open && d._b && !d._live) renderThinkingMarkdown(d, d._b);
+        if (d.open && d._b) fillThinking(d);
+        else if (!d.open) emptyThinking(d);
       });
     }
     const setOpen = v => { if (d.open !== v) { d._prog = true; d.open = v; } };
@@ -1040,19 +1041,29 @@
     if (!d._user) setOpen(live);
     const words = (b.text || '').trim().split(/\s+/).length;
     d.querySelector('.t-label').textContent = live ? 'Thinking…' : 'Thought process · ' + words + ' words';
-    const body = d.querySelector('.thinking-body');
     if (!live) d.classList.remove('raw');
-    if (!d.open) return;
-    if (live) {
-      const t = (b.text || '').replace(/\s+$/, '');   // trailing blank lines would scroll the text out of view
-      if (body._live !== t) {
-        const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
-        morph(body, markdownLive(t, true));
-        body._live = t; body._src = null; body._plain = null;
-        if (pinned) body.scrollTop = body.scrollHeight;
-      }
-    } else {
-      renderThinkingMarkdown(d, b);
+    if (d.open) fillThinking(d); else emptyThinking(d);
+  }
+
+  /** A closed block keeps nothing in its body. WebKit can keep a closed <details>' content laid out but unpainted (the
+   *  `:not([open])` rule isn't always applied to it in time): the reasoning left a blank, full-height gap before the next
+   *  tool card. Empty, the body has no height to keep. Opening it renders the text again. */
+  function emptyThinking(d) {
+    const body = d.querySelector('.thinking-body');
+    if (!body.firstChild) return;
+    body.textContent = '';
+    body._live = null; body._src = null; body._plain = null;
+  }
+
+  function fillThinking(d) {
+    const body = d.querySelector('.thinking-body'), b = d._b || {};
+    if (!d._live) { renderThinkingMarkdown(d, b); return; }
+    const t = (b.text || '').replace(/\s+$/, '');   // trailing blank lines would scroll the text out of view
+    if (body._live !== t) {
+      const pinned = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+      morph(body, markdownLive(t, true));
+      body._live = t; body._src = null; body._plain = null;
+      if (pinned) body.scrollTop = body.scrollHeight;
     }
   }
 
