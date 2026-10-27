@@ -13,6 +13,34 @@
     const m = /\.([a-z0-9+#]+)$/.exec(base);
     return m ? m[1] : '';
   };
+  /** A command's output, apart from the notes the app adds for the agent: the "[It now runs in the background…]" kind of
+   *  bracketed note at the end and the "Background jobs: …" summary. Those are for the model; the person sees them small. */
+  function splitNotes(text) {
+    let body = String(text || '').replace(/\s+$/, '');
+    const notes = [];
+    for (let guard = 0; guard < 4; guard++) {
+      const jobs = body.search(/(^|\n)Background jobs: /);
+      if (jobs >= 0) { notes.unshift(body.slice(jobs).trim()); body = body.slice(0, jobs).replace(/\s+$/, ''); continue; }
+      if (body.endsWith(']')) {
+        const open = body.lastIndexOf('\n[');
+        const start = open >= 0 ? open + 1 : (body.startsWith('[') ? 0 : -1);
+        if (start >= 0 && body.length - start > 40) { notes.unshift(body.slice(start).trim()); body = body.slice(0, start).replace(/\s+$/, ''); continue; }
+      }
+      break;
+    }
+    return { body, notes };
+  }
+  /** A command's output as a console block under its own label (with the exit code), the agent's notes as footnotes. */
+  function shellOutput(n, ctx) {
+    const text = n.props.output;
+    if (!text) return '';
+    const m = (n.props.result && n.props.result.meta) || {};
+    const exit = typeof m.exit === 'number' ? '<span class="exit ' + (m.exit === 0 ? 'ok' : 'bad') + '">exit ' + m.exit + '</span>' : '';
+    const { body, notes } = splitNotes(text);
+    return '<div class="label">Output' + exit + '</div>' +
+      (body ? '<pre class="console">' + ctx.esc(body.length > 20000 ? body.slice(0, 20000) + '\n…' : body) + '</pre>' : '<div class="console-empty">No output</div>') +
+      notes.map(t => '<div class="tool-note">' + ctx.esc(t) + '</div>').join('');
+  }
   /** Code in the file's colours (plain when the language is unknown). */
   const hl = (ctx, code, l) => '<pre class="hl"><code class="hljs">' + ctx.highlight(code, l) + '</code></pre>';
   /** `read`'s numbered lines (cat -n): the numbers in a gutter, the code highlighted beside them; any note after, plain. */
@@ -40,7 +68,8 @@
       return '<span class="tool-acts"><span class="agent-handle">' + ctx.esc(m.background) + ' · background' + (m.url ? ' · ' + ctx.esc(m.url) : '') + '</span>' +
         '<button class="btn mini danger" data-act="job-stop" data-job="' + ctx.esc(m.background) + '">Stop</button></span>';
     },
-    body: (n, ctx) => '<div class="label">Command</div>' + hl(ctx, input(n).command || '', 'bash') + output(n, ctx, 'Output') });
+    body: (n, ctx) => '<div class="label">Command</div><pre class="hl command"><code class="hljs">' + ctx.highlight(input(n).command || '', 'bash') + '</code></pre>' +
+      shellOutput(n, ctx) });
   R.defineTool({ name: 'read', icon: 'file-text', tone: 'blue', title: 'Read', summary: path,
     body: (n, ctx) => n.props.output ? (n.props.result && n.props.result.isError ? ctx.pre(n.props.output) : numbered(ctx, n.props.output, lang(path(n)))) : '' });
   R.defineTool({ name: 'write', icon: 'file-plus', tone: 'blue', title: 'Write', summary: path,

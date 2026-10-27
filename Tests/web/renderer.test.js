@@ -1037,7 +1037,8 @@
       { kind: 'toolUse', id: 'hl3', name: 'bash', input: { command: 'python3 -m pytest -q && echo "ok"' } },
       { kind: 'toolUse', id: 'hl4', name: 'read', input: { path: 'notes' } }]),
       R('hl1', 'edit', 'Edited src/calc.py'), R('hl2', 'read', '     1\tdef add(a, b):\n     2\t    return a + b\n[2 lines]'),
-      R('hl3', 'bash', '1 passed'), R('hl4', 'read', 'File does not exist: notes', { isError: true })];
+      R('hl3', 'bash', '1 passed\n[The command finished but left a process running, which now runs in the background as B4. Carry on.]\nBackground jobs: B1 `sleep 9` running 3 s.', { meta: { exit: 0 } }),
+      R('hl4', 'read', 'File does not exist: notes', { isError: true })];
     T.status('', false); T.reset(msgs, {});
     ['hl1', 'hl2', 'hl3', 'hl4'].forEach(id => $('[data-tool-id="' + id + '"] .head').click());   // bodies draw when opened
     const edit = $('[data-tool-id="hl1"]'), read = $('[data-tool-id="hl2"]'), bash = $('[data-tool-id="hl3"]');
@@ -1047,6 +1048,10 @@
     ok(!$('.code-file .hljs', read).textContent.includes('\t'), 'numbers are not part of the code');
     ok(read.textContent.includes('[2 lines]'), 'a note after the lines stays');
     ok($('pre.hl .hljs-built_in, pre.hl .hljs-string, pre.hl .hljs-keyword', bash), 'the command is coloured');
+    ok($('pre.hl.command', bash) && $('pre.console', bash), 'command and output are told apart: a highlighted command, a console beneath');
+    eq($('pre.console', bash).textContent, '1 passed', 'the output itself');
+    eq(bash.querySelectorAll('.tool-note').length, 2, 'the app\'s notes for the agent are footnotes, not output');
+    ok($('.label .exit.ok', bash) && $('.label .exit.ok', bash).textContent === 'exit 0', 'the exit code beside the label');
     ok(!$('[data-tool-id="hl4"] .code-file'), 'an error is shown as it is');
     noErrors(document.body, 'highlighted cards');
   });

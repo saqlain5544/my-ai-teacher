@@ -289,6 +289,18 @@ svg.plot { width: 100%; max-width: 640px; height: auto; font-family: -apple-syst
 .tool .body .tool-shot { display: block; max-width: 100%; max-height: 420px; margin: 0 0 8px; border-radius: 8px; border: 1px solid var(--border); }
 .tool .body .label { font-size: 0.74em; font-weight: 600; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 10px 0 4px; }
 .tool .body .label:first-child { margin-top: 0; }
+/* A command card: the command (highlighted, after a prompt) reads as the thing run; its output as a console beneath it,
+   quieter, with the exit code; the app's notes for the agent as small footnotes. */
+.tool .body pre.hl.command { padding-left: 26px; position: relative; }
+.tool .body pre.hl.command::before { content: "$"; position: absolute; left: 11px; top: 8px; color: var(--tone-green); font-weight: 600; }
+.tool .body pre.console { background: color-mix(in srgb, var(--code-bg) 55%, var(--bg)); border: 1px dashed var(--border); border-radius: 8px;
+  padding: 8px 11px; color: var(--muted); font-size: 0.82em; }
+.tool .body .console-empty { color: var(--faint); font-size: 0.82em; font-style: italic; }
+.tool .body .label .exit { margin-left: 8px; padding: 0 6px; border-radius: 6px; text-transform: none; letter-spacing: 0; font-family: var(--mono); font-weight: 500; }
+.tool .body .label .exit.ok { color: var(--good); background: var(--good-soft); }
+.tool .body .label .exit.bad { color: var(--bad); background: var(--bad-soft); }
+.tool .body .tool-note { margin-top: 6px; font-size: 0.74em; line-height: 1.45; color: var(--faint); white-space: pre-wrap; overflow-wrap: anywhere;
+  border-left: 2px solid var(--border); padding-left: 8px; max-height: 6.5em; overflow: auto; }
 .tool .body .label.path { text-transform: none; letter-spacing: 0; font-family: var(--mono); font-weight: 500; font-size: 0.8em; color: var(--muted); }
 /* Compact cards (memory, loading tools…) are a quiet line, not a box. */
 .tool.compact { background: transparent; border: 0; border-radius: 8px; }
