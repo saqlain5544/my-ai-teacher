@@ -62,8 +62,10 @@ enum CLI {
             return 0
         }
         if args.contains("--measure") {
-            // Approximate tokens as chars/4 (good enough to rank costs).
-            let sys = SystemPrompt.build(settings: AppSettings(), mode: .tutor, coreMemory: services.memory.coreBlock(), model: model)
+            // Approximate tokens as chars/4 (good enough to rank costs). `--mode code` measures that mode's agent.
+            let mode = opt("--mode").flatMap(TeachingMode.init(rawValue:)) ?? .tutor
+            let sys = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: services.memory.coreBlock(), model: model)
+            if args.contains("--print") { print(sys) }
             print("system prompt: \(sys.count) chars ≈ \(sys.count / 4) tokens")
             var total = 0
             for t in ToolRegistry.all {
@@ -71,7 +73,7 @@ enum CLI {
                 total += n
                 print(String(format: "  %-16@ %6d chars ≈ %5d tok", t.name as NSString, n, n / 4))
             }
-            let sent = ToolRegistry.active(AppSettings(), loaded: [], lessonID: "cli").reduce(0) { $0 + $1.description.count + $1.schema.compact.count + $1.name.count }
+            let sent = ToolRegistry.active(AppSettings(), loaded: [], lessonID: "cli", mode: mode).reduce(0) { $0 + $1.description.count + $1.schema.compact.count + $1.name.count }
             print("tools sent per request (core): \(sent) chars ≈ \(sent / 4) tokens; all registered: \(total / 4) tokens")
             print("fixed prefix per request ≈ \((sys.count + sent) / 4) tokens")
             return 0
@@ -80,7 +82,7 @@ enum CLI {
             print("Refusing a paid OpenRouter model (\(model)); pass a :free model or --allow-paid."); return 2
         }
         for (i, a) in args.enumerated() where a == "--exp" && i + 1 < args.count { BoardSystem.force(args[i + 1]) }
-        let valued: Set<String> = ["--lesson", "--spec", "--exp", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
+        let valued: Set<String> = ["--lesson", "--spec", "--exp", "--mode", "--provider", "--model", "--api", "--base-url", "--folder", "--tool", "--thinking", "--grep", "--input"]
         let prompt = args.indices.last { i in !args[i].hasPrefix("--") && (i == 0 || !valued.contains(args[i - 1])) }.map { args[$0] } ?? "Say hello."
         let settings = AppSettings()
         let system = SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: services.memory.coreBlock(), model: model, lessonID: "cli")

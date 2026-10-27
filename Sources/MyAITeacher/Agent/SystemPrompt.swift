@@ -59,7 +59,7 @@ enum SystemPrompt {
 
         # Environment
         - Today is \(today()). Model: \(model).
-        - The learner can attach images, PDFs and files; they review flashcards and see progress, boards and memory in the app.
+        - The learner can attach images, PDFs and files; they review flashcards and see progress\(BoardSystem.applies(to: mode) ? ", boards" : "") and memory in the app.
         """
         if !settings.learnerName.isEmpty || !settings.learnerLevel.isEmpty {
             s += "\n\n# Learner\n"

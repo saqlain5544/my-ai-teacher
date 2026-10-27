@@ -1513,6 +1513,77 @@
     eq($$('.ft-row', ft).length, 3); ok($$('.ft-row', ft)[1].style.paddingLeft === '20px' && ft.textContent.includes('entry point'), 'depth and notes: ' + $$('.ft-row', ft).map(r => r.getAttribute('data-d') + '|' + r.style.paddingLeft).join(' ') + ' ' + ft.textContent);
   });
 
+  test('trace: the stepper walks the steps, lights changes, badges shared objects and grows the output', async () => {
+    const v = x => ({ v: x, t: 'list', r: 1 });
+    const spec = { language: 'python', code: 'a = [1]\nb = a\nb.append(2)\nprint(a)', steps: [
+      { line: 1, vars: {} }, { line: 2, vars: { a: v('[1]') } }, { line: 3, vars: { a: v('[1]'), b: v('[1]') }, note: 'b is **another name** for the same list' },
+      { line: 4, vars: { a: v('[1, 2]'), b: v('[1, 2]') } }, { line: 4, vars: { a: v('[1, 2]'), b: v('[1, 2]') }, out: '[1, 2]\n' }] };
+    const el = show('```trace\n' + JSON.stringify(spec) + '\n```');
+    const tr = await until(() => $('.comp.trace', el), 'stepper'); noErrors(el, 'trace');
+    ok(/Step 1 of 5/.test($('.tr-pos', tr).textContent), $('.tr-pos', tr).textContent);
+    ok($('.cl-line[data-l="1"]', tr).classList.contains('cur') && $('[data-to="prev"]', tr).disabled, 'starts on line 1');
+    click($('[data-to="next"]', tr)); click($('[data-to="next"]', tr));
+    ok($('.cl-line[data-l="3"]', tr).classList.contains('cur') && $('.cl-line[data-l="2"]', tr).classList.contains('ran'), 'the next line and the one that just ran');
+    ok(!$('.tr-note', tr).hidden && $('.tr-note strong', tr), 'the step note, as markdown');
+    eq($$('.tr-frame tr.chg', tr).map(r => r.cells[0].textContent), ['b'], 'only the new name is lit');
+    eq($$('.tr-ref', tr).map(b => b.textContent), ['#1', '#1'], 'one object, one badge');
+    const range = $('.tr-range', tr); range.value = '4'; range.dispatchEvent(new Event('input', { bubbles: true }));
+    ok($('.tr-out pre', tr).textContent === '[1, 2]\n' && $('[data-to="next"]', tr).disabled, 'the slider jumps; output so far');
+    T.reset([U('question'), A('```trace\n' + JSON.stringify(spec) + '\n```')], {});
+    ok(/Step 5 of 5/.test($('.comp.trace .tr-pos').textContent), 'the step survives a re-render');
+  });
+
+  test('trace card: the tool\'s Python run is the same stepper, ending on the finished banner', async () => {
+    const fr = (l, x) => [{ fn: '<module>', f: 'main.py', l, v: x == null ? {} : { x: { v: String(x), t: 'int' } } }];
+    const meta = { files: { 'main.py': 'x = 1\nx += 1\n' }, output: '', error: null, truncated: false,
+      steps: [{ f: 'main.py', l: 1, e: 'line', s: fr(1), o: 0 }, { f: 'main.py', l: 2, e: 'line', s: fr(2, 1), o: 0 }, { f: 'main.py', l: 2, e: 'end', s: fr(2, 2), o: 0 }] };
+    const a = A([{ kind: 'toolUse', id: 'tc1', name: 'trace', input: { code: 'x = 1\nx += 1' } }]);
+    T.reset([U('q'), a, R('tc1', 'trace', 'Traced 3 steps', { meta })], {});
+    const card = $('[data-tool-id="tc1"]');
+    const tr = await until(() => $('.comp.trace', card), 'stepper in the card');
+    ok(/3 steps/.test(card.textContent) && /Step 1 of 3/.test(tr.textContent), 'summary and position');
+    click($('[data-to="last"]', tr));
+    ok($('.tr-banner', tr).textContent.includes('Program finished') && $('.tr-fn', tr).textContent.startsWith('Global'), $('.tr-banner', tr).textContent);
+    eq($$('.tr-frame tr.chg', tr).map(r => r.cells[1].textContent), ['2'], 'x changed by the last line');
+  });
+
+  test('annotate: numbered notes pin to their lines; picking one lights its lines', async () => {
+    const spec = { title: 'total', file: 'shop.py', language: 'python', code: 'def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s',
+      notes: [{ lines: '3-4', text: 'the loop **accumulates**' }, { line: 1, text: 'one parameter' }] };
+    const el = show('```annotate\n' + JSON.stringify(spec) + '\n```');
+    const an = await until(() => $('.comp.annotate', el), 'annotate'); noErrors(el, 'annotate');
+    eq($$('.an-mark', an).map(m => m.closest('.cl-line').getAttribute('data-l') + ':' + m.textContent), ['1:2', '3:1'], 'a marker on each note\'s first line');
+    click($('.an-notes li[data-n="0"]', an));
+    eq($$('.cl-line.hl', an).map(l => l.getAttribute('data-l')), ['3', '4']);
+    ok($('.an-notes li.sel strong', an) && /lines 3–4/.test(an.textContent), 'the note, its range, markdown');
+  });
+
+  test('predict: no Run button; a prediction is compared line by line and can ask why', async () => {
+    const spec = { code: "print(1 + 1)\nprint('a' * 2)", language: 'python', output: '2\naa\n', explain: '`*` repeats a string' };
+    const el = show('```predict\n' + JSON.stringify(spec) + '\n```');
+    const pd = await until(() => $('.comp.predict', el), 'predict'); noErrors(el, 'predict');
+    ok(!$('[data-act="run"]', pd) && $('[data-act="pd-check"]', pd).disabled && $('.pd-explain', pd).hidden, 'nothing to peek at');
+    const ta = $('.pd-text', pd); ta.value = '2\nab'; ta.dispatchEvent(new Event('input', { bubbles: true }));
+    click($('[data-act="pd-check"]', pd));
+    ok(/1 of 2 lines match/.test($('.pd-verdict', pd).textContent) && !$('.pd-explain', pd).hidden, $('.pd-result', pd).textContent);
+    ok(getComputedStyle($('[data-act="pd-check"]', pd)).display === 'none' && $('.pd-text', pd).readOnly, 'checked: no second try, the buttons gone from view');
+    eq($$('.pd-table tr.bad', pd).length, 1);
+    posts.length = 0; click($('[data-act="pd-why"]', pd));
+    const p = lastPost('suggest'); ok(p && p.text.includes('I predicted') && p.text.includes('aa') && p.text.includes("print('a' * 2)"), JSON.stringify(p));
+    ok($('[data-act="pd-why"]', pd).disabled, 'asked once');
+  });
+
+  test('bench card: timings chart per variant with the fitted growth; log scale toggles', async () => {
+    const meta = { sizes: [1000, 3000, 10000], series: [{ name: 'list', times: [0.001, 0.003, 0.01], fit: 'O(n)', slope: 1 }, { name: 'set', times: [1e-6, 1.1e-6, null], fit: 'O(1)', slope: 0 }] };
+    const a = A([{ kind: 'toolUse', id: 'bn1', name: 'bench', input: { language: 'python', code: '…' } }]);
+    T.reset([U('q'), a, R('bn1', 'bench', 'Timings…', { meta })], {});
+    const card = () => $('[data-tool-id="bn1"]');
+    ok(card().textContent.includes('list O(n)') && $$('.bench-svg path', card()).length === 2, 'summary and one curve each');
+    eq($$('.bench-svg circle', card()).length, 5, 'a skipped size draws no point');
+    click($('[data-act="bench-log"]', card()));
+    ok($('[data-act="bench-log"]', card()).textContent === 'Linear scale', 'log scale on');
+  });
+
   test('tests card: failures open with their output; Run again asks the app and updates in place', async () => {
     const meta = { passed: 1, total: 2, tests: [{ name: '01_push.sh', passed: true, seconds: 0.2, output: 'ok' }, { name: '02_pop.sh', passed: false, seconds: 0.3, output: 'expected 3, got 2', cases: { passed: 0, failed: 1 } }] };
     const a = A([{ kind: 'toolUse', id: 'rt1', name: 'run_tests', input: { filter: 'pop' } }]);

@@ -187,6 +187,16 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
   * It won't hide tests or solutions from you: the tests are in `.teacher/tests` and you can run them yourself.
 * **Mastery.** A clean test run after your own work is the checkpoint: the mentor records the concept with `mastery` and
   makes the next project harder.
+* **Seeing what code does.**
+  * **Step through.** For Python, the mentor runs the code under a tracer and you get a stepper: the line about to run,
+    every function's variables (what just changed is lit; names that share one object carry the same badge), and the
+    output so far. Use Back/Next, the slider, or ← → when the card has focus. It steps into your own files too, so the
+    mentor can walk you through your function with a real call. For other languages the mentor can write a stepper by hand.
+  * **Timings.** "Is a list slower than a set?" The mentor times both as the input grows and shows the curves with the
+    growth each one fits (O(1), O(n), O(n log n)…); switch to a log scale to compare slopes.
+  * **Annotated code.** A walk-through with numbered notes pinned to the lines; click a note to light its lines.
+  * **Predict the output.** Read the code, type what it prints, then **Check**: your lines are compared with what it
+    really printed (there's no Run button on these). **Why does it print that?** asks the mentor.
 
 ## Language mentor
 

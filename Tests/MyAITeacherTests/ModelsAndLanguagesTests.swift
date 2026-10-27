@@ -150,6 +150,8 @@ final class ZigRunTests: XCTestCase {
         XCTAssertFalse(py.failed, py.text); XCTAssertTrue(py.text.contains("total= 3 True"), py.text)
         let err = try await RunCodeTool.execute(language: "python", code: "x = 1\nraise ValueError('boom')\n", stdin: nil, timeout: 30, workingDirectory: lesson)
         XCTAssertTrue(err.failed && err.text.contains("raise ValueError('boom')"), "tracebacks still show the source line: \(err.text)")
+        XCTAssertFalse(err.text.contains("runpy") || err.text.contains("<string>") || err.text.contains("aiteacher-run"), "only the learner's frames: \(err.text)")
+        XCTAssertTrue(err.text.contains("File \"main.py\", line"), err.text)
     }
 }
 

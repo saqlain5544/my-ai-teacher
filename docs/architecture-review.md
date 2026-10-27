@@ -182,3 +182,32 @@ The code mentor's node now drops `lesson_plan` (`AgentNode.drops`: an inherited 
 `BoardSystem.applies(to:)` ties the rules, the state card, the summary's board state, the boards in the prompt, the
 strip above the composer and the welcome screen's Continue to the agent having the tool. The teaching modes keep the
 board; a lesson switched from Code mentor to a teaching mode has its board back.
+
+### Seeing what code does, and leaner instructions
+
+The live sessions showed the mentor explaining state changes and cost in prose. It now shows them:
+
+| Addition | What it is |
+|---|---|
+| `trace` tool | Runs Python under `sys.settrace` in the lesson's folder, stepping into the lesson's own modules (not libraries). The card is a stepper; the model gets one line per executed line with its source and what changed (`b.append(2) → a=[3, 1, 2], b=[3, 1, 2]`), not the trace |
+| `bench` tool | Times `run`/`run_<name>` variants over input sizes (`setup(n)` untimed) in Python or JavaScript. The growth fit is the simplest model within timing noise, over a hundredfold range by default, so a flat O(1) isn't read as O(log n). The card charts the curves |
+| ```trace, ```annotate, ```predict | A hand-written stepper for other languages, code with notes pinned to lines, and predict-the-output (no Run button; a wrong guess can ask the mentor why) |
+
+Both tools follow `run_code`'s rules: the Python setting for Python, one lesson grant for all three, no package installs.
+
+The code mentor's instructions lost what the teacher instructions and the tool descriptions already say: its system
+prompt went from 7,763 to 6,726 characters with the new tools and views included. The code mentor also drops the
+language-learning tools from its tool index, and the teacher guide no longer names `lesson_plan`. `run_code`'s Python
+tracebacks lost the seven lines of `runpy` frames before the learner's code.
+
+Headless runs on the free MiniMax model (one run each, so noisy):
+
+| Turn | Before | After |
+|---|---|---|
+| "`b = a` changed `a` too: why? Show me" | 45 s, 2 calls, 51k tokens; prose and a diagram | 30 s, 2 calls, 51k; a `trace` stepper and a ```predict |
+| "Is `x in list` slow next to a set? Show me" | 50 s, 2 calls, 70k; `run_code` timings in prose | 50–130 s, 9–15 calls, 83k–289k; `bench` charts, often a `trace` and a ```predict |
+
+The tools are picked up once the mode text names the moment ("state that changes → `trace`; speed → `bench`") and
+each description's first line answers the learner's question; a rule only in the tools guide was ignored. Two problems
+remain on this model: a first `bench` call sometimes builds the set inside the timed function (it then redoes it with
+`setup_set`), and the speed question still draws extra checking (docs, CPython source) that the answer doesn't need.

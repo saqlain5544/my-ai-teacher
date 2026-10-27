@@ -1178,6 +1178,7 @@
     progress: id => S.progress.get(id) || '',
     imageSrc: b => imageSrc(b || {}),
     code: (code, lang) => renderCode(String(code == null ? '' : code), lang || '', { streamingFence: true }),
+    highlight: (code, lang) => highlight(String(code == null ? '' : code), String(lang || '').toLowerCase()),
     md: (s) => markdown(String(s == null ? '' : s), false),
     // A button says what just happened ("Copied") for a moment, then shows its own icon and label again.
     flash(el, text) {

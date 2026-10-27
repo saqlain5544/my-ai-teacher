@@ -96,7 +96,7 @@ Run `scripts/e2e.sh` after every change, and the live suite before a release.
   Actions include `snapshot`, `send`, `answer`, `eval`, `newLesson`, `openFolder`, `select` and `stop`
   (see ARCHITECTURE.md › Testing).
 * `MyAITeacher --cli "prompt" --provider … --model …` calls a provider headless. `--cli --tool web_search '{"query":"…"}'`
-  runs any tool.
+  runs any tool. `--cli --measure [--mode code] [--print]` sizes a mode's system prompt and tools (and prints the prompt).
 * The log is at `~/Library/Logs/MyAITeacher.log`, or `$MYAITEACHER_HOME/MyAITeacher.log` for a test profile.
 
 ## Performance

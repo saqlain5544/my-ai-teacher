@@ -7,7 +7,8 @@ import Foundation
 ///     ├── teacher ── teaching: questions and quizzes, the course board, learner memory, math, code to show things
 ///     │   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (their instructions differ, not their tools)
 ///     │   ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones, reading, correction
-///     │   └── code-mentor ── projects: tests and reviews, code search, symbols, diagnostics, source; memory-layout and file-tree views;
+///     │   └── code-mentor ── projects: tests and reviews, traces and timings, code search, symbols, diagnostics, source;
+///     │                      stepper, annotated code, predict-the-output, memory-layout and file-tree views;
 ///     │                      no course board (the project keeps that state)
 ///     └── engineer ── the code agent: shell and jobs, code search, symbols, diagnostics, source, tests, project memory, browser and Mac control;
 ///                     the user's MCP servers' tools (deferred, `mcp__<server>__<tool>`)
@@ -51,10 +52,11 @@ enum AgentTree {
                   core: ["language", "vocab"],
                   components: ["listen", "gloss", "dialogue", "conjugation", "tones", "reading", "correction"]),
         AgentNode(id: "code-mentor", parent: "teacher",
-                  core: ["run_tests", "project_tests", "project_review", "symbols", "diagnostics", "source"],
-                  drops: ["lesson_plan"],   // the project is its long-term state: a board beside it was a second plan that drifted
+                  core: ["run_tests", "project_tests", "project_review", "trace", "bench", "symbols", "diagnostics", "source"],
+                  // The project is its long-term state (a board beside it was a second plan that drifted); no language lessons.
+                  drops: ["lesson_plan", "language", "vocab"],
                   deferred: ["glob", "grep"],
-                  components: ["layout", "tree"],
+                  components: ["layout", "tree", "trace", "annotate", "predict"],
                   guide: Guides.codeMentor),
         AgentNode(id: "engineer", parent: "root",
                   core: ["bash", "bash_jobs", "run_code", "glob", "grep", "symbols", "source", "diagnostics", "run_tests", "todo_write", "agents", "ask_learner", "project_memory",
@@ -111,14 +113,14 @@ enum Guides {
     static let teacher = """
     # Teaching tools
     - Fences: ```vocab [{"term","lang","reading","meaning","example"}]; ```practice [{"q","a","hint"}] (self-check cards); ```problem {"q","hints":[…],"solution","answer","concept","subject"} (attempt first: hints and solution hidden until they try; their attempt is their next message).
-    - `ask_learner`: questions that wait for the learner; `graded: true` = a quiz: each question gets `answer`, `concept`, `hints`, `misconceptions` for wrong options; no giveaways (the right option no longer or more precise than the others). `math`, `run_code`, `bash`. `memory`: durable facts (goals, level, preferences, recurring misconceptions), never one-off details. `lesson_plan`: the course board.
+    - `ask_learner`: questions that wait for the learner; `graded: true` = a quiz: each question gets `answer`, `concept`, `hints`, `misconceptions` for wrong options; no giveaways (the right option no longer or more precise than the others). `math`, `run_code`, `bash`. `memory`: durable facts (goals, level, preferences, recurring misconceptions), never one-off details.
     """
 
     static let codeMentor = """
     # Code mentor tools
-    - A project: starter + tests in `.teacher/tests`, then `project_tests` set with the test command (any runner; the app reads its exit code). Tests must fail on the starter and check every rule the starter states. Then the learner's files are theirs and the tests locked until it passes: the app refuses your edits to their files and tests (your commands too); only read-only sub-agents run. Files you create and `.teacher/mentor/` (your notes) stay writable. Tests are your draft until the learner changes a file (fix + set again); after that: `project_tests` unlock (the learner approves), edit, set again. Check new tests against a reference solution in a temp folder (`/tmp/…`, never this folder). They move on before a pass → `project_tests` park; next project in its own folder, tests in `.teacher/tests/<name>/`.
-    - `project_review` start (diff, fresh test run, open findings, self-review) → read → `project_review` findings: per finding a question at their line + a `hints` ladder (nudge → targeted hint → the concept or a step on another example, never their code), and `help` (what you gave since the last round). Verdict: green and nothing that must change → pass (`should`/`nit` stay as suggestions); anything that must change before it passes is a `must`. After a pass, an explain-back question, recorded with `project_review` explain. `run_tests` = a re-runnable pass/fail card; `symbols`, `grep`, `diagnostics` read their code precisely; `source` opens a library's installed source. The learner has a Project panel: Run tests, Request review, hints one rung at a time.
-    - Code fences: ```layout {"name","size","align","fields":[{"name","type","offset","size"}]} draws a type's memory layout (fields, padding, alignment); check the numbers with the real compiler first. ```tree ["src/", "  main.zig  # entry point", …] draws a file tree with notes.
+    - Tests check every rule the starter states; try them on a reference solution in `/tmp/…`, never here. Until a pass the app refuses your edits and commands on their files and tests; your own files and `.teacher/mentor/` stay writable. Their Project panel runs the tests, requests a `project_review`, shows hints one rung at a time.
+    - Their code: `symbols`, `grep`, `diagnostics`. `trace` (Python; steps into their modules) and `bench` (Python or JavaScript, `run_<name>` variants) give the learner a card: no need to repeat their numbers.
+    - Fences: ```predict {"code","language","output","explain"}: they write the output before seeing it (run it first for `output`); ```annotate {"code","language","file","start","notes":[{"lines":"3-5","text"}]}: a line-by-line walk-through; ```trace {"language","code","steps":[{"line","vars":{},"out","note"}]}: a hand-made stepper for other languages; ```layout {"name","size","align","fields":[{"name","type","offset","size"}]} (numbers from the compiler); ```tree ["src/", "  main.zig  # entry point"].
     """
 
     static let engineer = """
