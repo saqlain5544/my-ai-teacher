@@ -115,6 +115,8 @@ final class ShellJob: @unchecked Sendable {
     /// The shell's own exit status, once it has exited.
     var exitCode: Int32? { lock.lock(); defer { lock.unlock() }; return leaderExit }
     var seconds: Int { Int(Date().timeIntervalSince(started)) }
+    /// When its process ended (nil while it runs).
+    var endedAt: Date? { lock.lock(); defer { lock.unlock() }; return leaderExitedAt }
     fileprivate var timings: (leaderExitedAt: Date?, urlSeenAt: Date?, lastOutputAt: Date, eof: Bool) {
         lock.lock(); defer { lock.unlock() }; return (leaderExitedAt, urlSeenAt, lastOutputAt, eof)
     }
@@ -276,6 +278,11 @@ final class ShellJobs: @unchecked Sendable {
     func job(_ conv: String, _ handle: String) -> ShellJob? {
         lock.lock(); defer { lock.unlock() }
         return jobs[conv]?[handle.uppercased()]
+    }
+    /// Every lesson's jobs, for the Tasks panel.
+    func all() -> [ShellJob] {
+        lock.lock(); defer { lock.unlock() }
+        return jobs.values.flatMap(\.values).sorted { $0.started < $1.started }
     }
     func list(_ conv: String) -> [ShellJob] {
         lock.lock(); defer { lock.unlock() }

@@ -29,6 +29,7 @@ struct ContentView: View {
         case .progress: StudyProgressView()
         case .memory: MemoryView()
         case .insights: InsightsView()
+        case .tasks: TasksView()
         case nil: noLesson
         }
     }
@@ -69,6 +70,10 @@ struct Sidebar: View {
                     .badge(app.memoryCount)
                     .tag(SidebarItem.memory)
                 Label("Insights", systemImage: "gauge.with.dots.needle.33percent").tag(SidebarItem.insights)
+                Label("Tasks", systemImage: "list.bullet.rectangle.portrait")
+                    .badge(app.runningTasks)
+                    .tag(SidebarItem.tasks)
+                    .help("Everything running in the background: commands, servers, sub-agents, MCP servers, the app's jobs")
             }
             ForEach(groups, id: \.0) { title, items in
                 Section(title) {

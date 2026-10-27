@@ -851,6 +851,19 @@ The app's footprint must not grow with how much the learner has done: data lives
   visible; after 8 s without an answer it ends the web process, reloads, and the lesson renders again with visuals
   paused behind ▶ Run (a notice says why). `MyAITeacher --webtest --watchdog` checks this end to end.
 
+## Background tasks panel
+`BackgroundTasks.snapshot()` gathers every background task into one list each second for `TasksView` (the sidebar's
+Tasks page, and the side panel's Tasks tab, which shows the open lesson's tasks by default):
+* `ShellJobs.all()`: commands and servers, with start and end, exit code, PID and URL;
+* `SubAgentCenter.runs`: sub-agents, with type, model, steps, tokens and restarts;
+* `MCPHub.all`: MCP servers, with phase, start, PID, restarts and the last error;
+* `AppJobs`: the app's own `Runtime.job` and `Runtime.call` work. The wrappers record when a job was asked for, when it
+  started (so the time it waited) and how it ended; the last 40 finished are kept.
+
+Running tasks come first, oldest first; then the 50 most recent finished. `BackgroundTasks.stop` stops a command, a
+sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` drives the sidebar's badge, checked every
+2 s.
+
 ## Activity log and background wake-ups
 * **`ActivityLog`** writes one JSON object per line to `~/Library/Logs/MyAITeacher/activity-<day>.jsonl` (a test
   profile: `<home>/logs/`), off the caller's thread, a file per day kept 14 days. Events (`ev`):

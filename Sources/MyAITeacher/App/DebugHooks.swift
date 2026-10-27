@@ -135,6 +135,7 @@ enum DebugHooks {
             case "progress": app.selection = .progress
             case "flashcards": app.selection = .flashcards
             case "insights": app.selection = .insights
+            case "tasks": app.selection = .tasks
             default: if let id = cmd["id"]?.string ?? app.conversations.first?.id { app.selection = .lesson(id) }
             }
         case "quick": app.quickQuestion()

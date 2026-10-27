@@ -9,6 +9,7 @@ enum SidebarItem: Hashable {
     case progress
     case memory
     case insights
+    case tasks
 }
 
 @MainActor
@@ -49,6 +50,9 @@ final class AppModel: ObservableObject {
     @Published var revealRequest: URL?
     @Published var dueCount = 0
     @Published var memoryCount = 0
+    /// Background tasks running now (the sidebar's Tasks badge), checked every 2 s.
+    @Published private(set) var runningTasks = 0
+    private var tasksTimer: Timer?
     @Published var searchResults: [String]? = nil
 
     private var sessions: [String: ChatSession] = [:]
@@ -79,6 +83,13 @@ final class AppModel: ObservableObject {
         BoardSystem.loadForced()
         settings.$value.map(\.courseBoard).removeDuplicates().sink { BoardSystem.chosen = $0 }.store(in: &bag)
         settings.$value.map(\.activityLog).removeDuplicates().sink { ActivityLog.level = $0 }.store(in: &bag)
+        tasksTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                let n = BackgroundTasks.runningCount
+                if n != self.runningTasks { self.runningTasks = n }
+            }
+        }
         let info = Bundle.main.infoDictionary
         ActivityLog.record("app.launch", ["version": .string(info?["CFBundleShortVersionString"] as? String ?? "dev"),
                                           "build": .string(info?["CFBundleVersion"] as? String ?? "dev"),

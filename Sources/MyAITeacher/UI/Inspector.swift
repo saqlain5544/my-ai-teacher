@@ -6,13 +6,13 @@ import Combine
 /// Right-side panel: the lesson folder's files, the in-app browser (links from lessons open there too) and the lesson's sub-agents.
 /// Nothing here opens another app.
 enum InspectorTab: String, CaseIterable, Identifiable {
-    case files, plan, project, changes, browser, agents
+    case files, plan, project, changes, browser, agents, tasks
     var id: String { rawValue }
     var title: String {
-        switch self { case .files: "Files"; case .plan: "Plan"; case .project: "Project"; case .changes: "Changes"; case .browser: "Browser"; case .agents: "Agents" }
+        switch self { case .files: "Files"; case .plan: "Plan"; case .project: "Project"; case .changes: "Changes"; case .browser: "Browser"; case .agents: "Agents"; case .tasks: "Tasks" }
     }
     var symbol: String {
-        switch self { case .files: "folder"; case .plan: "rectangle.3.group"; case .project: "hammer"; case .changes: "plusminus"; case .browser: "globe"; case .agents: "person.2" }
+        switch self { case .files: "folder"; case .plan: "rectangle.3.group"; case .project: "hammer"; case .changes: "plusminus"; case .browser: "globe"; case .agents: "person.2"; case .tasks: "list.bullet.rectangle.portrait" }
     }
 }
 
@@ -46,6 +46,7 @@ struct InspectorPanel: View {
                 case .changes: ChangesPanel()
                 case .browser: BrowserPanel()
                 case .agents: SubAgentPanel(conversationID: session?.id)
+                case .tasks: TasksView(conversationID: session?.id, compact: true)
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

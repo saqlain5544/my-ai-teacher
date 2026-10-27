@@ -385,6 +385,14 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
   back when it ends, and if the agent's turn is over the report starts a new one: the agent picks up where it left off,
   as in Claude Code. Meanwhile a **Waiting for…** strip above the message box lists what's still running, and a `/goal`
   waits for it too.
+* **Tasks** (in the sidebar, with a count of what's running; also a tab of the right-hand panel, showing the open lesson's
+  tasks by default) lists everything running in the background, as Claude Code's tasks panel does:
+  * what it covers: the agents' commands and servers, sub-agents, MCP servers, and the app's own jobs (memory
+    consolidation, embedding warm-up, compaction);
+  * what each shows: its command, its lesson, when it was asked for and started (and how long it waited to start),
+    how long it has been running or took, when it ended, the exit code, the process ID, restarts, a server's address,
+    and the last error;
+  * **Stop** (or right-click for Stop, Copy Command, Copy URL, Open Lesson). Finished tasks stay listed for a while.
 * **Message it while it works.** Press Return (or the send arrow beside Stop) while the agent is busy: the message waits above the box and joins the
   conversation at the agent's next step, so you can steer without stopping it. Take one back with its ×; if you stop
   the agent, waiting messages return to the box.

@@ -157,6 +157,8 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
   the project, its parent folders and its subfolders (with `@file` imports);
 * `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
 * `/goal <objective>`: the agent works toward it turn after turn until it reports it met, with evidence;
+* background work: a build, test run or sub-agent reports back and wakes the agent when it ends, and the **Tasks**
+  page lists everything running (commands, servers, sub-agents, MCP servers, app jobs) with its times and a Stop button;
 * **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`
   (Claude Code's format), which runs nothing until you approve each server once. Their tools load when the agent needs
   them, every call asks unless you always allow that server in the folder, and plan mode runs only read-only ones;

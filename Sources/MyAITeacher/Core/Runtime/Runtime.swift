@@ -112,9 +112,17 @@ enum Runtime {
     static func job(_ name: String, restart: Restart = .transient, limit: Intensity = Intensity(maxRestarts: 2, period: 60),
                     watchdog: TimeInterval? = 300, _ work: @escaping @Sendable (Job) async throws -> Void) async -> Bool {
         guard let jobs = await supervisor("jobs") else { return false }
-        return await jobs.startChild(ChildSpec(id: name, restart: restart, intensity: limit, backoff: Backoff(initial: 1, max: 20), start: { attempt in
-            Proc.spawn(name, of: Never.self, watchdog: watchdog) { ctx in try await work(Job(attempt: attempt, beat: { ctx.heartbeat() })) }.proc
+        let tracked = "\(name)#\(PID.next().id)"
+        AppJobs.shared.queued(tracked, name: name)   // the Tasks panel: asked for, started, ended
+        let ok = await jobs.startChild(ChildSpec(id: name, restart: restart, intensity: limit, backoff: Backoff(initial: 1, max: 20), start: { attempt in
+            Proc.spawn(name, of: Never.self, watchdog: watchdog) { ctx in
+                AppJobs.shared.started(tracked, attempt: attempt)
+                do { try await work(Job(attempt: attempt, beat: { ctx.heartbeat() })); AppJobs.shared.ended(tracked, error: nil) }
+                catch { AppJobs.shared.ended(tracked, error: error.localizedDescription); throw error }
+            }.proc
         }))
+        if !ok { AppJobs.shared.ended(tracked, error: "already running") }
+        return ok
     }
 
     /// Runs `work` as a job and returns its result. A crash (a thrown error, the watchdog: no `beat` for `watchdog`
@@ -123,6 +131,7 @@ enum Runtime {
                                   _ work: @escaping @Sendable (_ beat: @escaping @Sendable () -> Void) async throws -> T) async throws -> T {
         guard let jobs = await supervisor("jobs") else { throw RuntimeError(message: "The runtime isn't available.") }
         let id = "\(name)#\(PID.next().id)"
+        AppJobs.shared.queued(id, name: name)
         let result = OneShot<T>()
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<T, Error>) in
@@ -132,15 +141,19 @@ enum Runtime {
                     let started = await jobs.startChild(ChildSpec(id: id, restart: .transient, intensity: limit, backoff: Backoff(initial: 1, max: 10), start: { _ in
                         Proc.spawn(id, of: Never.self, watchdog: watchdog) { ctx in
                             guard !result.isDone else { return }   // the caller gave up (cancelled) before this incarnation began
+                            AppJobs.shared.started(id, attempt: 1)
                             result.finish(.success(try await work({ ctx.heartbeat() })))
+                            AppJobs.shared.ended(id, error: nil)
                         }.proc
                     }, onExit: { reason in
+                        AppJobs.shared.ended(id, error: reason.isCrash ? "\(reason)" : nil)
                         result.finish(.failure(RuntimeError(message: "\(name) failed (\(reason)).")))
                     }))
-                    if !started { result.finish(.failure(RuntimeError(message: "\(name) couldn't start."))) }
+                    if !started { AppJobs.shared.ended(id, error: "couldn't start"); result.finish(.failure(RuntimeError(message: "\(name) couldn't start."))) }
                 }
             }
         } onCancel: {
+            AppJobs.shared.ended(id, error: "cancelled")
             result.finish(.failure(CancellationError()))
             Task { await jobs.terminate(id) }
         }
