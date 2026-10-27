@@ -1002,6 +1002,27 @@
     const other = $('.board-backlog .board-outline-wrap', body);
     ok(other && !other.open, 'other chapters are folded');
   });
+  test('the code agent cards highlight code: edits, reads with line numbers, commands', () => {
+    const msgs = [U('fix it'), A([
+      { kind: 'toolUse', id: 'hl1', name: 'edit', input: { path: 'src/calc.py', old_string: 'def add(a, b):\n    return a - b', new_string: 'def add(a, b):\n    return a + b' } },
+      { kind: 'toolUse', id: 'hl2', name: 'read', input: { path: 'src/calc.py' } },
+      { kind: 'toolUse', id: 'hl3', name: 'bash', input: { command: 'python3 -m pytest -q && echo "ok"' } },
+      { kind: 'toolUse', id: 'hl4', name: 'read', input: { path: 'notes' } }]),
+      R('hl1', 'edit', 'Edited src/calc.py'), R('hl2', 'read', '     1\tdef add(a, b):\n     2\t    return a + b\n[2 lines]'),
+      R('hl3', 'bash', '1 passed'), R('hl4', 'read', 'File does not exist: notes', { isError: true })];
+    T.status('', false); T.reset(msgs, {});
+    ['hl1', 'hl2', 'hl3', 'hl4'].forEach(id => $('[data-tool-id="' + id + '"] .head').click());   // bodies draw when opened
+    const edit = $('[data-tool-id="hl1"]'), read = $('[data-tool-id="hl2"]'), bash = $('[data-tool-id="hl3"]');
+    ok($('.diff .del .hljs-keyword', edit) && $('.diff .add .hljs-keyword', edit), 'both sides of an edit are coloured');
+    eq($('.code-file .gutter', read).textContent, '1\n2', 'line numbers in the gutter');
+    ok($('.code-file .hljs-keyword', read), 'the code beside them coloured');
+    ok(!$('.code-file .hljs', read).textContent.includes('\t'), 'numbers are not part of the code');
+    ok(read.textContent.includes('[2 lines]'), 'a note after the lines stays');
+    ok($('pre.hl .hljs-built_in, pre.hl .hljs-string, pre.hl .hljs-keyword', bash), 'the command is coloured');
+    ok(!$('[data-tool-id="hl4"] .code-file'), 'an error is shown as it is');
+    noErrors(document.body, 'highlighted cards');
+  });
+
   test('tool cards render for every built-in tool', () => {
     const calls = [
       ['bash', { command: 'ls -la' }, 'total 0'], ['read', { path: '/tmp/a.txt' }, '1\thello'], ['write', { path: 'a.py', content: 'print(1)' }, 'Wrote 1 line'],

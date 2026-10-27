@@ -172,6 +172,43 @@ button { font: inherit; color: inherit; }
 .code-head .run .i { fill: currentColor; width: 11px; height: 11px; }
 .code-block pre { margin: 0; padding: 13px 15px; overflow-x: auto; font-family: var(--mono); font-size: 0.83em; line-height: 1.6; }
 .code-block code.hljs { background: transparent; padding: 0; }
+
+/* Syntax colours: brighter than highlight.js's GitHub themes (One Light / One Dark), for every highlighted block —
+   replies' fences and the code agent's cards (reads, edits, writes, commands). `.hljs` scope outranks the vendor sheet. */
+:root {
+  --hl-keyword: #a626a4; --hl-type: #b07a00; --hl-string: #3f9142; --hl-number: #c65d09; --hl-function: #2f6fec;
+  --hl-comment: #8a8f98; --hl-attr: #d2413a; --hl-regexp: #0f86b5; --hl-meta: #2f6fec; --hl-tag: #d2413a;
+}
+@media (prefers-color-scheme: dark) {
+  :root {
+    --hl-keyword: #c678dd; --hl-type: #e5c07b; --hl-string: #98c379; --hl-number: #d19a66; --hl-function: #61afef;
+    --hl-comment: #7f848e; --hl-attr: #e06c75; --hl-regexp: #56b6c2; --hl-meta: #61afef; --hl-tag: #e06c75;
+  }
+}
+.hljs .hljs-keyword, .hljs .hljs-selector-tag, .hljs .hljs-doctag, .hljs .hljs-template-tag { color: var(--hl-keyword); }
+.hljs .hljs-built_in, .hljs .hljs-type, .hljs .hljs-title.class_, .hljs .hljs-class .hljs-title, .hljs .hljs-selector-class { color: var(--hl-type); }
+.hljs .hljs-string, .hljs .hljs-char, .hljs .hljs-addition, .hljs .hljs-template-variable { color: var(--hl-string); }
+.hljs .hljs-number, .hljs .hljs-literal, .hljs .hljs-symbol, .hljs .hljs-bullet { color: var(--hl-number); }
+.hljs .hljs-title, .hljs .hljs-title.function_, .hljs .hljs-section { color: var(--hl-function); }
+.hljs .hljs-comment, .hljs .hljs-quote { color: var(--hl-comment); font-style: italic; }
+.hljs .hljs-attr, .hljs .hljs-attribute, .hljs .hljs-property, .hljs .hljs-variable, .hljs .hljs-params .hljs-variable,
+.hljs .hljs-name, .hljs .hljs-tag, .hljs .hljs-selector-id, .hljs .hljs-deletion { color: var(--hl-attr); }
+.hljs .hljs-regexp, .hljs .hljs-link, .hljs .hljs-operator, .hljs .hljs-subst { color: var(--hl-regexp); }
+.hljs .hljs-meta, .hljs .hljs-meta .hljs-keyword { color: var(--hl-meta); }
+.hljs .hljs-meta .hljs-string { color: var(--hl-string); }
+.hljs .hljs-params { color: inherit; }
+.hljs .hljs-emphasis { font-style: italic; }
+.hljs .hljs-strong { font-weight: 600; }
+
+/* The code agent's cards: commands and code in the code background; a read with its line numbers in a gutter. */
+.tool .body code.hljs, .tool .body pre.diff.hljs { background: transparent; padding: 0; }
+.tool .body pre.hl { background: var(--code-bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 11px; }
+.tool .body .code-file { display: grid; grid-template-columns: auto 1fr; max-height: 360px; overflow: auto; background: var(--code-bg);
+  border: 1px solid var(--border); border-radius: 8px; }
+.tool .body .code-file pre { white-space: pre; word-break: normal; max-height: none; overflow: visible; border: 0; border-radius: 0; }
+.tool .body .code-file pre.hl { padding: 8px 12px 8px 10px; background: transparent; }
+.tool .body .code-file .gutter { position: sticky; left: 0; z-index: 1; padding: 8px 9px 8px 10px; text-align: right; color: var(--muted);
+  opacity: 0.7; background: var(--code-bg); border-right: 1px solid var(--border); user-select: none; }
 .code-output { border-top: 1px dashed var(--border); padding: 9px 14px; font-family: var(--mono); font-size: 0.8em; white-space: pre-wrap; max-height: 360px; overflow: auto; }
 .code-output.failed { color: var(--bad); }
 .code-output .label { font-family: var(--sans); font-size: 0.85em; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--faint); display: block; margin-bottom: 4px; }

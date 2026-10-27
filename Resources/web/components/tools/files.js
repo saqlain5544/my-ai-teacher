@@ -6,6 +6,29 @@
   const input = n => n.props.input || {};
   const path = n => input(n).path || input(n).file_path || '';   // models used to Claude Code's tools send file_path (the app maps it)
   const output = (n, ctx, label) => n.props.output ? (label ? '<div class="label">' + label + '</div>' : '') + ctx.pre(n.props.output) : '';
+  /** A file's language from its name (`App.tsx` → tsx, `Dockerfile` → dockerfile), for highlighting. */
+  const lang = p => {
+    const base = String(p || '').split('/').pop().toLowerCase();
+    if (base === 'dockerfile' || base === 'makefile') return base;
+    const m = /\.([a-z0-9+#]+)$/.exec(base);
+    return m ? m[1] : '';
+  };
+  /** Code in the file's colours (plain when the language is unknown). */
+  const hl = (ctx, code, l) => '<pre class="hl"><code class="hljs">' + ctx.highlight(code, l) + '</code></pre>';
+  /** `read`'s numbered lines (cat -n): the numbers in a gutter, the code highlighted beside them; any note after, plain. */
+  function numbered(ctx, text, l) {
+    const rows = String(text).split('\n'), nums = [], code = [];
+    let i = 0;
+    for (; i < rows.length; i++) {
+      const m = /^\s*(\d+)\t(.*)$/.exec(rows[i]);
+      if (!m) break;
+      nums.push(m[1]); code.push(m[2]);
+    }
+    if (!nums.length) return ctx.pre(text);
+    const rest = rows.slice(i).join('\n').trim();
+    return '<div class="code-file"><pre class="gutter" aria-hidden="true">' + nums.join('\n') + '</pre>' +
+      '<pre class="hl"><code class="hljs">' + ctx.highlight(code.join('\n'), l) + '</code></pre></div>' + (rest ? ctx.pre(rest) : '');
+  }
 
   R.defineTool({ name: 'bash', icon: 'terminal', tone: 'slate', title: 'Terminal', summary: n => input(n).command || '',
     // Running: the learner can send it to the background (the agent carries on). Backgrounded: its handle, and Stop.
@@ -17,8 +40,9 @@
       return '<span class="tool-acts"><span class="agent-handle">' + ctx.esc(m.background) + ' · background' + (m.url ? ' · ' + ctx.esc(m.url) : '') + '</span>' +
         '<button class="btn mini danger" data-act="job-stop" data-job="' + ctx.esc(m.background) + '">Stop</button></span>';
     },
-    body: (n, ctx) => '<div class="label">Command</div>' + ctx.pre(input(n).command || '') + output(n, ctx, 'Output') });
-  R.defineTool({ name: 'read', icon: 'file-text', tone: 'blue', title: 'Read', summary: path });
+    body: (n, ctx) => '<div class="label">Command</div>' + hl(ctx, input(n).command || '', 'bash') + output(n, ctx, 'Output') });
+  R.defineTool({ name: 'read', icon: 'file-text', tone: 'blue', title: 'Read', summary: path,
+    body: (n, ctx) => n.props.output ? (n.props.result && n.props.result.isError ? ctx.pre(n.props.output) : numbered(ctx, n.props.output, lang(path(n)))) : '' });
   R.defineTool({ name: 'write', icon: 'file-plus', tone: 'blue', title: 'Write', summary: path,
     body: (n, ctx) => ctx.code(input(n).content || '', path(n).split('.').pop()) + output(n, ctx) });
   R.defineTool({ name: 'edit', icon: 'pencil', tone: 'blue', title: 'Edit', summary: path,
@@ -26,7 +50,8 @@
       const i = input(n);
       const changes = (i.old_string != null ? [i] : []).concat(Array.isArray(i.edits) ? i.edits : []);
       return '<div class="label path">' + ctx.esc(path(n)) + (changes.length > 1 ? ' · ' + changes.length + ' changes' : '') + '</div>' +
-        changes.map(c => '<pre class="diff"><span class="del">' + ctx.esc(c.old_string || '') + '</span><span class="add">' + ctx.esc(c.new_string || '') + '</span></pre>').join('') +
+        changes.map(c => '<pre class="diff hljs"><span class="del">' + ctx.highlight(c.old_string || '', lang(path(n))) + '</span><span class="add">' +
+          ctx.highlight(c.new_string || '', lang(path(n))) + '</span></pre>').join('') +
         output(n, ctx, 'Result');
     } });
   R.defineTool({ name: 'ls', icon: 'folder', tone: 'blue', title: 'List', summary: path });
