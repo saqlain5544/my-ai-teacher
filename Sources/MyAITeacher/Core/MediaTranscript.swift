@@ -99,16 +99,17 @@ enum MediaTranscript {
         guard duration >= 0.5 else { throw Failure(errorDescription: "The recording is too short.") }
         let parts = chunks(s)
         guard !parts.isEmpty else { throw Failure(errorDescription: "No speech found in the recording.") }
-        let whisper = OpenSpeech.recognizer(for: lang)
+        // On this Mac first: Whisper, else LFM3-Omni; Apple's recogniser (online for some languages) otherwise.
+        let whisper = OpenSpeech.recognizer(for: lang), omni = !whisper && LiquidModels.recognizer(for: lang)
         var segs: [Segment] = []
-        var engine = whisper ? "Whisper large-v3-turbo, on this Mac" : ""
+        var engine = whisper ? "Whisper large-v3-turbo, on this Mac" : omni ? "LFM3-Omni, on this Mac" : ""
         for (n, (a, b)) in parts.enumerated() {
             try Task.checkCancellation()
             progress(n, parts.count)
             let piece = Array(s[Int(a * 16_000)..<min(s.count, Int(b * 16_000))])
             var text: String?
-            if whisper, let wav = Speech.writeWAV(piece, rate: 16_000) {
-                text = await OpenSpeech.transcribe(wav, lang: lang)
+            if whisper || omni, let wav = Speech.writeWAV(piece, rate: 16_000) {
+                text = await (whisper ? OpenSpeech.transcribe(wav, lang: lang) : LiquidModels.transcribe(wav, lang: lang))
                 try? FileManager.default.removeItem(at: wav)
             } else {
                 let r = await appleTranscribe(piece, lang: lang)
@@ -117,7 +118,7 @@ enum MediaTranscript {
             if let t = text?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty { segs += sentences(t, start: a, end: b, lang: lang) }
         }
         progress(parts.count, parts.count)
-        guard !segs.isEmpty else { throw Failure(errorDescription: "Nothing could be transcribed\(whisper ? "" : " (install Whisper in Settings › Voice to transcribe on this Mac)").") }
+        guard !segs.isEmpty else { throw Failure(errorDescription: "Nothing could be transcribed\(whisper || omni ? "" : " (install Whisper in Settings › Voice, or LFM3-Omni in Settings › On this Mac, to transcribe on this Mac)").") }
         return Transcript(segments: segs, duration: duration, engine: engine.isEmpty ? "Apple speech recognition" : engine, language: lang)
     }
 

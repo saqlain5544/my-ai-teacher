@@ -34,10 +34,15 @@ struct AppSettings: Codable, Sendable, Equatable {
     var voiceIdentifier: String?
     var speechRate: Double = 0.5
     /// Who speaks the target language: "auto" (the Mac's Enhanced/Premium voice, else the open-source voice when
-    /// installed, else the Mac's compact voice), "apple", or "open" (the open-source voice whenever it has the language).
+    /// installed, else the Mac's compact voice), "apple", "open" (the open-source voice whenever it has the language), or
+    /// "omni" (LFM3-Omni whenever it has the language).
     var speechOutput = "auto"
-    /// Who hears the learner: "auto" (Apple on device, else Whisper when installed, else Apple online), "whisper", "online".
+    /// Who hears the learner: "auto" (Apple on device, else Whisper, else LFM3-Omni when installed, else Apple online),
+    /// "whisper", "omni", "online".
     var speechInput = "auto"
+    /// d1 (when downloaded) makes quick decisions on this Mac: which requests get a planned answer, and whether a short
+    /// answer that misses the key is still right. Off, or not installed: the app's own rules decide, as before.
+    var localDecisions = true
     /// Context budget in tokens; 0 = automatic (half the model's window, up to 400k: `ContextPolicy.budget`).
     var compactAtTokens = 0
     var showThinking = true
@@ -98,6 +103,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         speechRate = (try? c.decode(Double.self, forKey: .speechRate)) ?? d.speechRate
         speechOutput = (try? c.decode(String.self, forKey: .speechOutput)) ?? d.speechOutput
         speechInput = (try? c.decode(String.self, forKey: .speechInput)) ?? d.speechInput
+        localDecisions = (try? c.decode(Bool.self, forKey: .localDecisions)) ?? d.localDecisions
         let savedBudget = (try? c.decode(Int.self, forKey: .compactAtTokens)) ?? d.compactAtTokens
         // The old fixed defaults (120k, then 48k) become automatic; anything else the learner chose stays, within the stepper's range.
         compactAtTokens = [0, 48_000, 120_000].contains(savedBudget) ? 0 : min(max(savedBudget, 20_000), 900_000)

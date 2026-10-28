@@ -64,6 +64,10 @@ enum ProviderCatalog {
                        envKeys: ["CEREBRAS_API_KEY"], defaultModel: "gpt-oss-120b", supportsVision: false),
         ProviderConfig(id: "fireworks", name: "Fireworks", api: .openai, baseURL: "https://api.fireworks.ai/inference/v1",
                        envKeys: ["FIREWORKS_API_KEY"], defaultModel: "accounts/fireworks/models/kimi-k2p5"),
+        // Downloaded and started by the app itself (Settings › On this Mac); listed once installed.
+        ProviderConfig(id: LiquidModels.providerID, name: "LFM3-Omni (on this Mac)", api: .openai, baseURL: "http://127.0.0.1/v1",
+                       envKeys: [], defaultModel: LiquidModels.omniModel, keyOptional: true, suggestedModels: [LiquidModels.omniModel],
+                       note: "Liquid AI's LFM3-Omni-2B, run by the app on this Mac: free, private and offline, but a small model."),
         ProviderConfig(id: "ollama", name: "Ollama (local)", api: .openai, baseURL: "http://localhost:11434/v1",
                        envKeys: [], defaultModel: "llama3.2", keyOptional: true),
         ProviderConfig(id: "lmstudio", name: "LM Studio (local)", api: .openai, baseURL: "http://localhost:1234/v1",
@@ -73,6 +77,13 @@ enum ProviderCatalog {
     /// Fetches the live model list with metadata. Parses the many provider shapes (OpenRouter, Anthropic, Gemini, Groq,
     /// Mistral, OpenAI-compatible) into `ModelInfo`.
     static func fetchModels(_ p: ProviderConfig, apiKey: String?) async throws -> [ModelInfo] {
+        // The app's own server runs only while a lesson uses it: what it serves is known without starting it.
+        if p.id == LiquidModels.providerID {
+            var m = ModelInfo(id: LiquidModels.omniModel)
+            m.contextWindow = LiquidModels.contextWindow; m.maxOutput = 8192
+            m.vision = true; m.tools = true; m.reasoning = false; m.free = true
+            return [m]
+        }
         var req: URLRequest
         switch p.api {
         case .gemini:

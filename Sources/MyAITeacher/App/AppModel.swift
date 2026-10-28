@@ -265,6 +265,7 @@ final class AppModel: ObservableObject {
         evictSessions(keeping: id)
         // Reports that finished while the lesson couldn't be loaded (its folder wasn't open) wake it now.
         for r in undelivered.removeValue(forKey: id) ?? [] { s.deliver(r) }
+        LocalDecision.warm()
         return s
     }
 
@@ -430,7 +431,11 @@ final class AppModel: ObservableObject {
     // MARK: Providers & models
 
     func requestKey(for p: ProviderConfig) { keyRequest = p }
-    func hasKey(_ p: ProviderConfig) -> Bool { p.keyOptional || KeyStore.shared.key(for: p) != nil }
+    /// Usable: a key, or none needed (the app's own LFM3-Omni once it is downloaded).
+    func hasKey(_ p: ProviderConfig) -> Bool {
+        if p.id == LiquidModels.providerID { return LiquidModels.ready(.omni) }
+        return p.keyOptional || KeyStore.shared.key(for: p) != nil
+    }
     var availableProviders: [ProviderConfig] { settings.providers.filter { hasKey($0) } }
 
     /// Loads a provider's model list: disk cache (24 h) first, network otherwise. One request per provider per day; a

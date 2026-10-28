@@ -29,11 +29,13 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         let text = Self.speakable(markdown)
         // One language (a word, a sentence, a passage in the target language): the open-source voice when it is the
         // better one for it (the Mac has only a compact voice), rendered on device and played; the Mac's voice otherwise.
-        if let lang = language.map({ String($0.prefix(2)).lowercased() }), SpeechEngines.useOpenVoice(lang, preference: AppModel.shared.settings.value.speechOutput) {
+        if let lang = language.map({ String($0.prefix(2)).lowercased() }),
+           let engine = SpeechEngines.localVoice(lang, preference: AppModel.shared.settings.value.speechOutput) {
             let ticket = UUID(); openTicket = ticket
             isSpeaking = true
             Task {
-                let wav = await OpenSpeech.synthesize(text, lang: lang, speed: rate / 0.5)
+                let wav = engine == .omni ? await LiquidModels.synthesize(text, lang: lang)
+                                          : await OpenSpeech.synthesize(text, lang: lang, speed: rate / 0.5)
                 await MainActor.run {
                     guard self.openTicket == ticket else { return }
                     if let wav, let p = try? AVAudioPlayer(contentsOf: wav) {
@@ -196,7 +198,10 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
     /// The Mac's recogniser locales never change while the app runs (the composer asks on every render).
     nonisolated static let supportedLocales = SFSpeechRecognizer.supportedLocales()
 
-    private enum Engine { case analyzer, whisper, sf(onDevice: Bool) }
+    private enum Engine {
+        case analyzer, whisper, omni, sf(onDevice: Bool)
+        var isOmni: Bool { if case .omni = self { return true }; return false }
+    }
     private var analyzerStream: AnyObject?
     /// The microphone's samples (mono) of the current take, for Whisper and the pitch comparison: at most a minute. Owned
     /// by the take (the tap writes it on the audio thread), so a late buffer never lands in the next take.
@@ -222,8 +227,10 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         let sfLocale = Self.recognizerLocale(language)
         let sfOnDevice = sfLocale.flatMap(SFSpeechRecognizer.init(locale:))?.supportsOnDeviceRecognition ?? false
         if pref == "whisper", OpenSpeech.recognizer(for: language) { return .whisper }
+        if pref == "omni", LiquidModels.recognizer(for: language) { return .omni }
         if pref != "online", let language, await SpeechEngines.appleModelStatus(language) == .installed { return .analyzer }
         if pref != "online", !sfOnDevice, OpenSpeech.recognizer(for: language) { return .whisper }
+        if pref != "online", !sfOnDevice, LiquidModels.recognizer(for: language) { return .omni }
         return .sf(onDevice: sfOnDevice)
     }
 
@@ -252,8 +259,8 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
                 } catch { currentEngine = .sf(onDevice: false) }
             } else { currentEngine = .sf(onDevice: false) }
             guard gen == generation else { return }
-        case .whisper:
-            engineName = "On this Mac (Whisper large-v3-turbo)"
+        case .whisper, .omni:
+            engineName = currentEngine.isOmni ? "On this Mac (LFM3-Omni)" : "On this Mac (Whisper large-v3-turbo)"
             onText("", false, ["engine": .string(engineName + " — transcribes when you stop")])
         case .sf: break
         }
@@ -335,15 +342,18 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
                 Task { let text = await s.finish(); await MainActor.run { if wasListening { done?(text.isEmpty ? partial : text) } } }
                 return
             }
-        case .whisper:
-            let all = samples.all, rate = samples.rate
+        case .whisper, .omni:
+            let all = samples.all, rate = samples.rate, omni = currentEngine.isOmni
             Task {
                 var heard = ""
                 // Whisper writes a stock phrase over near-silence ("おめでとうございます", "Thanks for watching"), which
                 // would be graded as what the learner said: no voice in the take, nothing heard.
                 let lv = Self.levels(all, rate: rate), voiced = lv.voiced
-                AppLog.write("whisper take: \(String(format: "%.1f", Double(all.count) / max(rate, 1))) s, voiced \(String(format: "%.2f", voiced)) s, floor \(String(format: "%.4f", lv.floor)), peak \(String(format: "%.4f", lv.peak))")
-                if voiced >= 0.15, let wav = Self.writeWAV(all, rate: rate) { heard = await OpenSpeech.transcribe(wav, lang: lang) ?? ""; try? FileManager.default.removeItem(at: wav) }
+                AppLog.write("\(omni ? "omni" : "whisper") take: \(String(format: "%.1f", Double(all.count) / max(rate, 1))) s, voiced \(String(format: "%.2f", voiced)) s, floor \(String(format: "%.4f", lv.floor)), peak \(String(format: "%.4f", lv.peak))")
+                if voiced >= 0.15, let wav = Self.writeWAV(all, rate: rate) {
+                    heard = await (omni ? LiquidModels.transcribe(wav, lang: lang) : OpenSpeech.transcribe(wav, lang: lang)) ?? ""
+                    try? FileManager.default.removeItem(at: wav)
+                }
                 await MainActor.run { if wasListening { done?(heard) } }
             }
             return

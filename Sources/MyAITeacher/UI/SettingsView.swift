@@ -14,6 +14,7 @@ struct SettingsView: View {
             InstructionsSettings().tabItem { Label("Instructions", systemImage: "text.alignleft") }
             MemorySettings().tabItem { Label("Memory", systemImage: "brain.head.profile") }
             VoiceSettings().tabItem { Label("Voice", systemImage: "speaker.wave.2") }
+            LocalModelsSettings().tabItem { Label("On this Mac", systemImage: "cpu") }
         }
         .frame(width: 660, height: 520)
     }
@@ -394,13 +395,19 @@ struct VoiceSettings: View {
             Section("Which engine") {
                 Picker("Speaking the language", selection: $settings.value.speechOutput) {
                     Text("Best available").tag("auto"); Text("The Mac's voices").tag("apple"); Text("Open-source voice when installed").tag("open")
+                    Text("LFM3-Omni when installed").tag("omni")
                 }
                 Picker("Hearing you", selection: $settings.value.speechInput) {
-                    Text("Best available (on device first)").tag("auto"); Text("Whisper when installed").tag("whisper"); Text("Apple speech recognition").tag("online")
+                    Text("Best available (on device first)").tag("auto"); Text("Whisper when installed").tag("whisper")
+                    Text("LFM3-Omni when installed").tag("omni"); Text("Apple speech recognition").tag("online")
                 }
+                Text("LFM3-Omni (Settings › On this Mac) hears and speaks \(LiquidModels.speechLanguages.count) languages, Chinese and Hebrew among them. Its voice takes a few seconds per sentence.")
+                    .font(.caption).foregroundStyle(.secondary)
             }
             Section {
-                ForEach(OpenSpeech.catalog) { c in componentRow(c) }
+                ForEach(OpenSpeech.catalog) { c in
+                    DownloadRow(c: c, state: open.states[c.id] ?? .absent, install: { open.install(c.id) }, cancel: { open.cancel(c.id) }, remove: { open.remove(c.id) })
+                }
             } header: { Text("Open-source engines (optional, on this Mac)") } footer: {
                 Text("Downloaded only when you ask, checked against published checksums, and run on this Mac — nothing you say or read leaves it. Stored in \(OpenSpeech.root.path). The Mac's own engines are used whenever these aren't installed or fail.")
             }
@@ -411,7 +418,9 @@ struct VoiceSettings: View {
 
     @ViewBuilder private func languageRow(_ lang: String) -> some View {
         let v = SpeechEngines.bestVoice(lang)
-        let openVoice = OpenSpeech.voice(for: lang), whisper = OpenSpeech.recognizer(for: lang)
+        let openVoice = OpenSpeech.voice(for: lang), omniVoice = LiquidModels.voice(for: lang)
+        // Who hears the learner on this Mac when Apple can't: Whisper first (as `Speech` chooses), else LFM3-Omni.
+        let local: String? = OpenSpeech.recognizer(for: lang) ? "Whisper" : LiquidModels.recognizer(for: lang) ? "LFM3-Omni" : nil
         let sfOnDevice = Speech.recognizerLocale(lang).flatMap(SFSpeechRecognizer.init(locale:))?.supportsOnDeviceRecognition ?? false
         VStack(alignment: .leading, spacing: 4) {
             HStack {
@@ -426,6 +435,7 @@ struct VoiceSettings: View {
                 Image(systemName: "speaker.wave.2").foregroundStyle(.secondary)
                 if let v { Text("\(v.name) — \(v.quality)").foregroundStyle(v.quality == "compact" ? .orange : .green) } else { Text("no Mac voice").foregroundStyle(.red) }
                 if openVoice { Text("· Supertonic installed").foregroundStyle(.green) }
+                if omniVoice { Text("· LFM3-Omni installed").foregroundStyle(.green) }
             }.font(.caption)
             HStack(spacing: 6) {
                 Image(systemName: "mic").foregroundStyle(.secondary)
@@ -434,17 +444,17 @@ struct VoiceSettings: View {
                 case .downloadable?, .downloading?:
                     if let p = modelProgress[lang] { ProgressView(value: p).frame(width: 120); Text("\(Int(p * 100))%") }
                     else {
-                        // With Whisper installed the learner is already heard on this Mac: Apple's model is an option, not a fix.
-                        if whisper { Text("on this Mac (Whisper); Apple's model is optional:").foregroundStyle(.green) }
+                        // With Whisper or LFM3-Omni installed the learner is already heard on this Mac: Apple's model is an option, not a fix.
+                        if let local { Text("on this Mac (\(local)); Apple's model is optional:").foregroundStyle(.green) }
                         else { Text(sfOnDevice ? "on device (older recogniser)" : "online (Apple servers) until you download:").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
                         Button("Download Apple model") { installModel(lang) }.controlSize(.small)
                     }
                 case .unsupported?:
-                    if whisper { Text("on this Mac (Whisper)").foregroundStyle(.green) }
+                    if let local { Text("on this Mac (\(local))").foregroundStyle(.green) }
                     else { Text(sfOnDevice ? "on device (older recogniser)" : "online only (Apple servers)").foregroundStyle(sfOnDevice ? Color.secondary : Color.orange) }
                 case nil: Text("checking…").foregroundStyle(.secondary)
                 }
-                if whisper, case .installed? = models[lang] { Text("· Whisper installed").foregroundStyle(.green) }
+                if let local, case .installed? = models[lang] { Text("· \(local) installed").foregroundStyle(.green) }
                 if let e = modelError[lang] { Text(e).foregroundStyle(.red) }
             }.font(.caption)
         }
@@ -460,38 +470,6 @@ struct VoiceSettings: View {
             } catch { modelProgress[lang] = nil; modelError[lang] = error.localizedDescription }
             models[lang] = await SpeechEngines.appleModelStatus(lang)
         }
-    }
-
-    @ViewBuilder private func componentRow(_ c: OpenSpeech.Component) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                Text(c.title).bold()
-                Text(ByteCountFormatter.string(fromByteCount: c.bytes, countStyle: .file)).foregroundStyle(.secondary)
-                Spacer()
-                switch open.states[c.id] ?? .absent {
-                case .absent: Button("Download") { open.install(c.id) }.controlSize(.small)
-                case .failed(let e):
-                    Text(e).font(.caption).foregroundStyle(.red).lineLimit(2)
-                    Button("Retry") { open.install(c.id) }.controlSize(.small)
-                case .downloading(let p, let note):
-                    VStack(alignment: .trailing) { ProgressView(value: p).frame(width: 160); Text(note).font(.caption2).foregroundStyle(.secondary).lineLimit(1) }
-                    Button("Cancel") { open.cancel(c.id) }.controlSize(.small)
-                case .installed:
-                    Label("Installed", systemImage: "checkmark.circle.fill").foregroundStyle(.green).font(.caption)
-                    Button("Remove") { open.remove(c.id) }.controlSize(.small)
-                }
-            }
-            // One height in every state: a progress bar appearing used to push the rows below it down, so a click aimed
-            // at the next Download button landed on nothing.
-            .frame(height: 34)
-            Text(c.detail).font(.caption).foregroundStyle(.secondary)
-            if !c.languages.isEmpty {
-                Text("Languages: " + c.languages.prefix(12).map(Languages.englishName).joined(separator: ", ") + (c.languages.count > 12 ? " and \(c.languages.count - 12) more" : ""))
-                    .font(.caption2).foregroundStyle(.secondary)
-            }
-            Text("Licence: \(c.license)" + (c.requires.isEmpty ? "" : " · needs the runtime")).font(.caption2).foregroundStyle(.tertiary)
-        }
-        .padding(.vertical, 2)
     }
 
     static let sample: [String: String] = [

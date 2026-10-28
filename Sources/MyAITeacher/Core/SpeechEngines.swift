@@ -63,10 +63,21 @@ enum SpeechEngines {
 
     /// The learner's choice of output engine for a language: Apple's voice when it is Enhanced or Premium (or the learner
     /// chose Apple), the open-source voice when installed and better, else Apple's compact voice.
-    static func useOpenVoice(_ lang: String?, preference: String) -> Bool {
-        guard let lang, preference != "apple", OpenSpeech.voice(for: lang) else { return false }
-        if preference == "open" { return true }
-        return bestVoice(lang).map { $0.quality == "compact" } ?? true
+    static func useOpenVoice(_ lang: String?, preference: String) -> Bool { localVoice(lang, preference: preference) == .supertonic }
+
+    enum LocalVoice: Equatable { case supertonic, omni }
+    /// The engine on this Mac that speaks `lang` instead of the Mac's own voice; nil: the Mac's voice. "auto" keeps an
+    /// Enhanced or Premium Mac voice and otherwise takes Supertonic, then LFM3-Omni (which also speaks Chinese and Hebrew).
+    static func localVoice(_ lang: String?, preference: String) -> LocalVoice? {
+        guard let lang, preference != "apple" else { return nil }
+        let supertonic = OpenSpeech.voice(for: lang), omni = LiquidModels.voice(for: lang)
+        switch preference {
+        case "open": return supertonic ? .supertonic : nil
+        case "omni": return omni ? .omni : nil
+        default:
+            guard bestVoice(lang).map({ $0.quality == "compact" }) ?? true else { return nil }
+            return supertonic ? .supertonic : omni ? .omni : nil
+        }
     }
 }
 

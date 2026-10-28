@@ -27,6 +27,16 @@ enum DeepWork {
         return words >= 4 && cue.firstMatch(in: t, range: NSRange(t.startIndex..., in: t)) != nil
     }
 
+    /// `isSubstantial`, with d1 deciding on this Mac when it is installed: a request to teach, derive, analyse, code or
+    /// research is planned and checked; thanks, "go on" and quick facts aren't, whatever their wording. Replies inside an
+    /// exchange and fixed protocols keep their rules, and when d1 can't answer within 1.5 s the rule decides.
+    static func needsDeepWork(_ text: String) async -> Bool {
+        let t = text.trimmingCharacters(in: .whitespacesAndNewlines), lower = t.lowercased()
+        if t.isEmpty || followsProtocol(t) || ["my attempt", "i've submitted", "practice:"].contains(where: { lower.hasPrefix($0) }) { return isSubstantial(t) }
+        if let k = await LocalDecision.requestKind(t) { return k.kind == "teach" }
+        return isSubstantial(t)
+    }
+
     static let planRequest = """
         Before you reply, plan it. Write the plan only (the learner never sees it, and don't call tools now), in this form:
         Learner needs: what they are really asking, their level, what would make this answer excellent for them.

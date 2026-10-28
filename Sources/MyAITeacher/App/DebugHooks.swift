@@ -1,4 +1,5 @@
 import AppKit
+import SwiftUI
 import WebKit
 
 /// Test automation, enabled only when launched with MYAITEACHER_DEBUG=1:
@@ -40,6 +41,19 @@ enum DebugHooks {
         }()
         switch cmd["action"]?.string {
         case "snapshot": snapshot(to: cmd["path"]?.string ?? "/tmp/myaiteacher.png")
+        case "snapshotSettings":   // a Settings tab in a window of its own: {"tab":"local"|"voice","path":…}
+            let tab = cmd["tab"]?.string == "voice" ? AnyView(VoiceSettings()) : AnyView(LocalModelsSettings())
+            let w = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 660, height: 720), styleMask: [.titled], backing: .buffered, defer: false)
+            w.isReleasedWhenClosed = false   // ARC owns it: AppKit releasing it too on close crashed the app
+            w.contentView = NSHostingView(rootView: tab.environmentObject(app.settings).environmentObject(app))
+            w.orderFront(nil)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+                if let v = w.contentView, let rep = v.bitmapImageRepForCachingDisplay(in: v.bounds) {
+                    v.cacheDisplay(in: v.bounds, to: rep)
+                    try? rep.representation(using: .png, properties: [:])?.write(to: URL(fileURLWithPath: cmd["path"]?.string ?? "/tmp/settings.png"))
+                }
+                w.close()
+            }
         case "eval":
             transcript?.evaluateJavaScript(cmd["js"]?.string ?? "") { r, e in
                 AppLog.write("eval → \(e.map { "error: \($0.localizedDescription)" } ?? String(describing: r ?? "nil").prefix(4000))")

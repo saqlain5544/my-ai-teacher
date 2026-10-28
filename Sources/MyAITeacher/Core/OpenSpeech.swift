@@ -19,7 +19,7 @@ final class OpenSpeech: ObservableObject {
         var name: String          // file name on disk (an archive is unpacked and removed)
         var bytes: Int64
         var hash: String          // "sha256:…" (GitHub release digest, Hugging Face LFS oid) or "gitsha1:…" (a git blob)
-        var archive: Bool { name.hasSuffix(".tar.bz2") }
+        var archive: Bool { name.hasSuffix(".tar.bz2") || name.hasSuffix(".tar.gz") }
     }
     struct Component: Identifiable, Sendable {
         var id: String
@@ -118,8 +118,9 @@ final class OpenSpeech: ObservableObject {
     struct Failure: LocalizedError { var errorDescription: String? }
 
     /// Downloads every file of a component into a staging folder, checks each against its pinned hash, unpacks archives
-    /// (with /usr/bin/tar, which keeps the runtime's dylib links), and only then moves the folder into place.
-    nonisolated static func download(_ c: Component, progress: @escaping @Sendable (Double, String) -> Void) async throws {
+    /// (with /usr/bin/tar, which keeps the runtime's dylib links), and only then moves the folder into place under `root`
+    /// (the speech engines' folder, or another store's: `LiquidModels`).
+    nonisolated static func download(_ c: Component, into root: URL = OpenSpeech.root, progress: @escaping @Sendable (Double, String) -> Void) async throws {
         let fm = FileManager.default
         let staging = root.appendingPathComponent(".staging-\(c.id)", isDirectory: true)
         try? fm.removeItem(at: staging)
@@ -140,14 +141,14 @@ final class OpenSpeech: ObservableObject {
             done += f.bytes
             if f.archive {
                 progress(Double(done) / Double(total), "Unpacking \(f.name)…")
-                let r = await ProcessRunner.run("/usr/bin/tar", ["-xjf", dest.path, "-C", staging.path], timeout: 600)
+                let r = await ProcessRunner.run("/usr/bin/tar", ["-xf", dest.path, "-C", staging.path], timeout: 600)
                 guard r.exitCode == 0 else { throw Failure(errorDescription: "Couldn't unpack \(f.name): \(r.stderr.prefix(200))") }
                 try fm.removeItem(at: dest)
             }
         }
         try Data("\(c.id) \(Date())\n".utf8).write(to: staging.appendingPathComponent(".installed"))
         try Task.checkCancellation()   // removed or cancelled while unpacking: nothing moves into place
-        let target = folder(c.id)
+        let target = root.appendingPathComponent(c.id, isDirectory: true)
         try? fm.removeItem(at: target)
         try fm.moveItem(at: staging, to: target)
     }

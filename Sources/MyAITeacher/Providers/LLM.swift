@@ -109,6 +109,7 @@ struct ProviderConfig: Codable, Sendable, Identifiable, Hashable {
     /// The provider's client behind the stream guard (text-embedded tool calls, reasoning tags, end tokens, duplicates).
     func client(apiKey: String?) -> LLMClient {
         if apiBases != nil { return GuardedClient(inner: RoutedClient(config: self, apiKey: apiKey)) }
+        if id == LiquidModels.providerID { return GuardedClient(inner: LocalModelClient(config: self)) }
         return switch api {
         case .anthropic: GuardedClient(inner: AnthropicClient(config: self, apiKey: apiKey))
         case .openai: GuardedClient(inner: OpenAIClient(config: self, apiKey: apiKey))

@@ -28,6 +28,8 @@ cold launch. It runs at roughly 70 MB plus one WebKit process (about 90 MB), a f
    * [OpenRouter](https://openrouter.ai) `:free` models, with a daily request limit;
    * [OpenCode Go](https://opencode.ai/docs/go/)'s `-free` models;
    * [NVIDIA NIM](https://build.nvidia.com)'s free tier;
+   * Liquid AI's [LFM3-Omni-2B](https://huggingface.co/LiquidAI/LFM3-Omni-2B), which the app downloads and runs on
+     your Mac (**Settings › On this Mac**);
    * a local model through [Ollama](https://ollama.com) or [LM Studio](https://lmstudio.ai).
 2. **Start a lesson** with ⌘N and say what you want to learn: "Teach me the chain rule", "Quiz me on the French
    Revolution", "I have an exam on organic chemistry in two weeks". Pick a teaching mode from the toolbar.
@@ -179,6 +181,19 @@ OpenAI-, Anthropic- or Gemini-compatible endpoint can be added as a custom provi
   DeepSeek models.
 * Thinking effort can be set per lesson.
 * Prompts are cache-friendly, and each reply shows its model, time, tokens and speed.
+
+### Liquid AI's LFM3 models, on your Mac
+Two open models, downloaded only when you ask (**Settings › On this Mac**, about 3.8 GB with the llama.cpp runtime),
+checked against published checksums and run by the app itself. Nothing leaves your Mac.
+* **LFM3-Omni-2B** is a lesson provider, "LFM3-Omni (on this Mac)": free, private and offline, and it reads pictures.
+  It is small, so it often writes a quiz out as text instead of opening the quiz. In Settings › Voice it can also
+  hear you and read aloud in 18 languages, Chinese and Hebrew among them.
+* **d1-Omni-2B** is a decision model. It answers fixed questions with calibrated probabilities in about 50 ms. The app
+  uses it to decide which requests get a planned and checked answer, and whether a short quiz answer in other words
+  ("CO2" for "carbon dioxide") is right. Language answers stay with the teacher, which sees d1's confidence and can
+  overrule it. Turned off, or not installed, the app's own rules decide.
+
+Each model starts when it is first needed, stops after 10 minutes unused, and always ends with the app.
 
 ## Screenshots
 

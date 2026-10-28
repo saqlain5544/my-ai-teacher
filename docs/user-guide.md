@@ -45,6 +45,7 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | OpenCode Zen, OpenCode Go | `OPENCODE_API_KEY` (one key for both) |
 | Ollama Cloud | `OLLAMA_API_KEY` |
 | Ollama (local), LM Studio (local) | no key |
+| LFM3-Omni (on this Mac) | no key: download it in **Settings › On this Mac** and it is listed |
 
 * **Where keys come from.** A key exported in your login shell (`~/.zshrc`, `~/.zprofile`) is read at launch, even when you open
   the app from Finder. A key pasted into Settings is stored on this Mac, readable only by your user account, and takes
@@ -54,6 +55,9 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   * OpenCode Go's models ending in `-free`. Availability varies, and some are limited by region.
   * NVIDIA NIM's free tier.
   * Local models through Ollama or LM Studio.
+  * Liquid AI's LFM3-Omni-2B, which the app downloads and runs itself (**Settings › On this Mac**). It is quick
+    (about 80 tokens a second on Apple Silicon) and sees pictures, but it is a 2B model: it often writes a quiz out as
+    text instead of opening the quiz, and it is weaker at long, multi-step work than the hosted models.
 * **OpenCode Go** is OpenCode's subscription for open models: DeepSeek V4, GLM, Kimi, Qwen, MiniMax, MiMo and more.
   * It uses the same key as OpenCode Zen.
   * The app sends each model to the API that serves it (OpenAI-compatible, Anthropic or Gemini), going by
@@ -291,7 +295,7 @@ and which words are due.
   select a word (or a short phrase) and click **Look up**.
 * **Real audio.** Attach an audio or video file (or paste a direct link to an audio file, then **🎧 Listen with a
   transcript**). The app transcribes it with times — with Whisper on your Mac if you installed it in Settings › Voice,
-  otherwise with Apple's recognizer — and gives you a player: each sentence on its own, **Loop**, slower speeds that
+  else with LFM3-Omni if you installed it in Settings › On this Mac, otherwise with Apple's recognizer — and gives you a player: each sentence on its own, **Loop**, slower speeds that
   keep the pitch, the text hidden or shown, and **Write what you hear**, checked word by word. Use recordings you're
   allowed to use (podcasts with an open licence, your own).
 * **Talk.** **Talk** in the message box starts a spoken conversation in the language: you speak, the mentor answers
@@ -492,7 +496,8 @@ Stop the agent any time with ⌘. or Esc twice.
 | Hooks | Your own hooks for every agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor) and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
-| Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |
+| Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens (LFM3-Omni among them, once installed in On this Mac); optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |
+| On this Mac | Liquid AI's LFM3 models, downloaded only on request and run by the app: the llama.cpp runtime (16 MB), **LFM3-Omni-2B** (1.6 GB) — a lesson provider, "LFM3-Omni (on this Mac)", and a voice that hears and speaks 18 languages — and **d1-Omni-2B** (2.2 GB), which decides which requests get a planned, checked answer and whether a short quiz answer in other words is right (content questions only; the teacher sees its confidence). Whether each model is running, and **Let d1 make quick decisions** (on by default; off, or not installed, the app's own rules decide). A model starts when first needed, stops after 10 minutes unused and ends with the app. |
 
 ## Your data
 

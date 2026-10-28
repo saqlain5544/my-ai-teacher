@@ -167,6 +167,7 @@ enum Questions {
         var correct: Bool?        // nil = needs the teacher's judgement
         var score: Double?        // 0…1 partial credit
         var expected: String?
+        var judgedBy: String?     // a judgement not made by the key itself (d1 on this Mac), for the teacher to overrule
     }
 
     /// The misconception a wrong answer reveals, when the question tagged that answer in `misconceptions`
@@ -326,6 +327,13 @@ enum Questions {
             if alts.contains(norm(g, strict: strict, pinyin: pinyin)) { return Grade(correct: true, score: 1, expected: describe(ans!)) }
             // Right but for the accents: a mistake in a language test, not a judgement call.
             if strict, alts.map({ norm($0, pinyin: pinyin) }).contains(norm(g, pinyin: pinyin)) { return Grade(correct: false, score: 0, expected: describe(ans!)) }
+            // A content answer in other words ("CO2" for "carbon dioxide"): d1 decides when it is sure. A language answer
+            // stays with the teacher — d1 lets a wrong gender or ending through ("la chat").
+            if lang == nil, let p = await LocalDecision.answerIsRight(question: q["prompt"]?.string ?? "", accepted: ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? [], given: g) {
+                let by = "judged on this Mac by d1 (\(Int((p * 100).rounded()))% sure it is right)"
+                if p >= 0.88 { return Grade(correct: true, score: 1, expected: describe(ans!), judgedBy: by) }
+                if p <= 0.2 { return Grade(correct: false, score: 0, expected: describe(ans!), judgedBy: by) }
+            }
             return Grade(correct: nil, expected: describe(ans!))
         case "fill_blanks":
             let blanks = ans?.array ?? []
@@ -678,6 +686,7 @@ enum GradedQuiz {
             if let mis { notes.append("misconception: \(mis)") }
             if let certainty { notes.append(certainty.title.lowercased()) }
             if hints > 0 { notes.append("after \(hints) hint\(hints == 1 ? "" : "s")") }
+            if let by = g.judgedBy { notes.append(by + "; say so if you disagree") }
             lines.append("Q\(i + 1) [\(q["type"]?.string ?? "")\(concept.map { ", concept: \($0)" } ?? "")]: \(q["prompt"]?.string ?? "")\n   Learner: \(Questions.describeAnswer(q, a))\n   Expected: \(g.expected ?? "—")\n   → \(verdict)\(g.score.map { $0 > 0 && $0 < 1 ? String(format: " (partial %.0f%%)", $0 * 100) : "" } ?? "")\(notes.isEmpty ? "" : " · " + notes.joined(separator: " · "))")
             graded.append(["correct": g.correct.map { .bool($0) } ?? .null, "score": g.score.map { .number($0) } ?? .null,
                            "explanation": q["explanation"] ?? .null, "expected": g.expected.map { .string($0) } ?? .null,

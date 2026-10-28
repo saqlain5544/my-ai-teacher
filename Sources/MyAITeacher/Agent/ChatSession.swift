@@ -405,7 +405,7 @@ final class ChatSession: ObservableObject, Identifiable {
         // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
         let asked = messages.lastIndex { $0.role == .user && !$0.isToolResultOnly }
         let askedText = asked.map { i in messages[i].blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") } ?? ""
-        let deep = settings.deepWork && DeepWork.isSubstantial(askedText)
+        let deep = settings.deepWork ? await DeepWork.needsDeepWork(askedText) : false
         let modelInfo = app.modelInfo(conversation.providerID, conversation.model)
         let lightThinking = ([.off, .low, .medium].contains(settings.thinking) ? settings.thinking : .medium).supported(by: modelInfo)
         var plan: String?

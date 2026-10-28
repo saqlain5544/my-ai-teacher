@@ -19,11 +19,14 @@ ap.add_argument("--only", default=None)
 ap.add_argument("--keep", action="store_true", help="leave the app running afterwards")
 ap.add_argument("--home", default=os.environ.get("E2E_HOME", "/tmp/myaiteacher-e2e"))
 ap.add_argument("--compact", type=int, default=48000)
+ap.add_argument("--liquid", default=None, help="a folder with the llama.cpp runtime (llama-b*/) and the LFM3 .gguf files: "
+                "installed into the profile as if downloaded (LFM3-Omni as --provider liquid, d1 for decisions)")
 args = ap.parse_args()
 # Free models only: OpenRouter's :free models, or NVIDIA NIM's free tier (when OpenRouter's daily free quota is used up).
-# MiniMax: the learner's prepaid token plan (allowed for testing; thinking is off so replies end fast).
+# MiniMax: the learner's prepaid token plan (allowed for testing; thinking is off so replies end fast). Liquid: on this Mac.
 assert (args.provider == "openrouter" and args.model.endswith(":free")) or (args.provider == "opencode-go" and args.model.endswith("-free")) \
-    or args.provider in ("nvidia", "minimax"), "free / prepaid models only"
+    or args.provider in ("nvidia", "minimax", "liquid"), "free / prepaid models only"
+assert args.provider != "liquid" or args.liquid, "--provider liquid needs --liquid"
 HOME = pathlib.Path(args.home)
 LOG = HOME / "MyAITeacher.log"
 REPORT = HOME / "report.json"
@@ -226,6 +229,7 @@ def fresh_profile():
     (HOME / "support/settings.json").write_text(json.dumps({
         "providerID": args.provider, "model": args.model, "thinking": "off", "autoMemory": True,
         "python": "allow", "compactAtTokens": args.compact, "showThinking": True}))
+    if args.liquid: install_liquid(pathlib.Path(args.liquid))
     LAB.mkdir()
     (LAB / "notes.md").write_text("# Photosynthesis\n\nPlants turn light, water and CO2 into glucose and oxygen.\n\nChlorophyll absorbs red and blue light.\n")
     (LAB / "buggy.py").write_text("total = 0\nfor i in range(1, 10):\n    total += i\nprint(total)\n")
@@ -233,6 +237,18 @@ def fresh_profile():
     # A git repository, so the Changes panel shows what the agent edits.
     for cmd in (["init", "-q"], ["add", "-A"], ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "start"]):
         subprocess.run(["git", "-C", str(LAB)] + cmd, check=True)
+
+def install_liquid(src):
+    """The LFM3 models as the app installs them (support/liquid/<component>/ with .installed): the runtime copied (its
+    dylibs sit next to the binaries), the weights linked (gigabytes)."""
+    root = HOME / "support/liquid"
+    rt = next(src.glob("**/llama-server")).parent
+    shutil.copytree(rt, root / "runtime" / rt.name, symlinks=True)
+    for comp, names in {"omni": ["LFM3-Omni-2B-Q4_K_M.gguf", "mmproj-LFM3-Omni-2B-Q8_0.gguf"],
+                        "d1": ["d1-Omni-2B-Q8_0.gguf", "mmproj-d1-Omni-2B-Q8_0.gguf"]}.items():
+        (root / comp).mkdir(parents=True)
+        for n in names: (root / comp / n).symlink_to(next(src.glob("**/" + n)))
+    for comp in ("runtime", "omni", "d1"): (root / comp / ".installed").write_text("e2e\n")
 
 APP = ROOT / "build/My AI Teacher.app"
 SITE = HOME / "site"
@@ -287,7 +303,7 @@ def launch():
     time.sleep(2)
     return proc
 
-SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "opencode-go": "beam-free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash"}[args.provider]
+SUB_MODEL = {"openrouter": "nvidia/nemotron-3.5-lightning:free", "opencode-go": "beam-free", "nvidia": "nvidia/nemotron-3.5-lightning-30b-a3b", "minimax": "MiniMax-M3.1-Flash", "liquid": "LFM3-Omni-2B"}[args.provider]
 
 # ───────────── Sub-agent checks (the report's "agents": this lesson's runs) ─────────────
 # Problems are the app's (a run that failed, a write that happened); notes are the model's (it didn't do as asked).
