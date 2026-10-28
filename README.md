@@ -14,9 +14,8 @@ cold launch. It runs at roughly 70 MB plus one WebKit process (about 90 MB), a f
 
 1. Download **My-AI-Teacher-<version>.dmg** from [Releases](../../releases/latest). It needs macOS 14 or later on Apple Silicon.
 2. Open the DMG and drag **My AI Teacher** into **Applications**.
-3. The first time, right-click the app and choose **Open**, then **Open** again. The app is signed but not notarised by
-   Apple, so macOS asks once. If macOS says it can't verify the app, go to **System Settings › Privacy & Security** and
-   click **Open Anyway**, or run:
+3. The app is signed but not notarised by Apple, so macOS blocks its first launch. Go to **System Settings › Privacy &
+   Security** and click **Open Anyway** (you need to do this once), or run:
 
    ```bash
    xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
