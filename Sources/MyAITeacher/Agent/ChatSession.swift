@@ -142,13 +142,6 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    /// Code agent: plan first, change nothing until the plan is approved. The agent hears of it with the next message.
-    func setPlanMode(_ on: Bool) {
-        guard conversation.mode.isAgent, (conversation.planMode == true) != on else { return }
-        conversation.planMode = on ? true : nil
-        save()
-    }
-
     /// Redraws the welcome of a lesson with no messages yet (it shows the folder and its access).
     func refreshWelcome() { if messages.isEmpty { sink?.reset(messages, conversation: conversation) } }
 
@@ -160,24 +153,11 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    /// What the user sent to the code agent while it worked: each joins the conversation at the agent's next step (after
-    /// the tools it is running), as Claude Code's queued messages do, so the user steers without stopping it.
-    @Published private(set) var queued: [ChatMessage] = []
-    static let queuedNote = "<context>\nThe user sent this while you were working: take it into account from your next step.\n</context>"
-
-    /// Takes a queued message back (its text returns to the composer).
-    func unqueue(_ id: String) -> ChatMessage? {
-        guard let i = queued.firstIndex(where: { $0.id == id }) else { return nil }
-        return queued.remove(at: i)
-    }
-
     func send(_ text: String, attachments: [Block] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
-        // `/goal`: show, clear or resume it here; a new objective is set and then sent (or queued) like any message.
-        if conversation.mode.isAgent, attachments.isEmpty, let arg = ProjectCommands.goalArgument(trimmed), !goalCommand(arg) { return }
         // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
-        if !conversation.mode.isAgent, !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
+        if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
             switch cmd {
             case .prompt(let p): send(p, attachments: attachments)
             case .mode(let m, let then):
@@ -187,27 +167,12 @@ final class ChatSession: ObservableObject, Identifiable {
             }
             return
         }
-        if isRunning {
-            guard conversation.mode.isAgent else { return }
-            if ProjectCommands.compactFocus(trimmed) != nil { sink?.notice("/compact runs once the agent has finished this turn."); return }
-            var blocks = attachments
-            if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
-            if let expanded = ProjectCommands.expand(trimmed, folder: services.workspace.url) {
-                blocks.append(Block(kind: .text, text: "<context>\n\(expanded)\n</context>", meta: ["hidden": true]))
-            }
-            queued.append(ChatMessage(role: .user, blocks: blocks))
-            return
-        }
-        if conversation.mode.isAgent, attachments.isEmpty, let focus = ProjectCommands.compactFocus(trimmed) { compactNow(focus: focus); return }
+        if isRunning { return }
         trimWindow()
         var blocks: [Block] = []
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
-        // A project command (/name args): the user's own prompt from .teacher/commands/name.md rides along, hidden.
-        if conversation.mode.isAgent, let expanded = ProjectCommands.expand(trimmed, folder: services.workspace.url) {
-            blocks.append(Block(kind: .text, text: "<context>\n\(expanded)\n</context>", meta: ["hidden": true]))
-        }
         var msg = ChatMessage(role: .user, blocks: blocks)
         host.willSend(&msg, self)
         if conversation.title == "New lesson" {
@@ -314,7 +279,7 @@ final class ChatSession: ObservableObject, Identifiable {
     private var inbox: [ChatMessage] = []
 
     /// Background work that will wake this lesson's agent when it ends: background sub-agents and shell jobs (not servers
-    /// or watchers, which run until stopped). The composer shows it while the agent waits; a goal waits for it too.
+    /// or watchers, which run until stopped). The composer shows it while the agent waits.
     var awaitedWork: [String] {
         let agents = SubAgentCenter.shared.runs(in: id).filter { $0.background && $0.parent == nil && $0.state == .running }
             .map { "\($0.handle) \($0.title)" }
@@ -335,17 +300,11 @@ final class ChatSession: ObservableObject, Identifiable {
         start()
     }
 
-    /// Background reports, then what the user queued, join the conversation (at a step boundary of a running turn).
+    /// Background reports join the conversation (at a step boundary of a running turn).
     private func drainInbox() {
-        guard !inbox.isEmpty || !queued.isEmpty else { return }
+        guard !inbox.isEmpty else { return }
         for m in inbox { append(m) }
         inbox.removeAll()
-        for var m in queued {
-            m.blocks.insert(Block(kind: .text, text: Self.queuedNote, meta: ["hidden": true, "ephemeral": true]), at: 0)
-            host.willSend(&m, self)
-            append(m)
-        }
-        queued.removeAll()
         save()
     }
 
@@ -422,94 +381,6 @@ final class ChatSession: ObservableObject, Identifiable {
                                                   "changed_files": .number(Double(turn.changedFiles?.count ?? 0))])
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
         if !detached { app.sessionDidFinishTurn(self) }
-        flushQueued(stopped: turn.cancelled)
-        advanceGoal()
-    }
-
-    // MARK: Goal
-
-    /// `/goal [objective | clear | resume]`. True when an objective was set and the message should go to the agent.
-    func goalCommand(_ arg: String) -> Bool {
-        switch arg.lowercased() {
-        case "":
-            if let g = conversation.goal {
-                let state = g.state == .met ? "met" : g.state == .paused ? "paused" : "active"
-                sink?.notice("Goal (\(state), \(g.turns) of \(SessionGoal.maxTurns) turns): \(g.text)" + (g.note.map { "\n\($0)" } ?? ""))
-            } else {
-                sink?.notice("No goal set. /goal <objective> sets one: the agent works on it turn after turn until it's met.")
-            }
-            return false
-        case "clear", "off", "stop", "cancel":
-            updateGoal(nil, notice: conversation.goal == nil ? "No goal to clear." : "Goal cleared.")
-            return false
-        case "resume", "continue":
-            guard var g = conversation.goal, g.state != .met else { sink?.notice("No paused goal to resume."); return false }
-            if g.turns >= SessionGoal.maxTurns { g.turns = 0 }   // resuming after the cap grants a fresh run of turns
-            g.state = .active; g.note = nil
-            updateGoal(g, notice: "Goal resumed.")
-            if !isRunning { continueGoal() }
-            return false
-        default:
-            updateGoal(SessionGoal(text: arg), notice: nil)
-            return true
-        }
-    }
-
-    /// Sets or clears the goal (the composer shows it) and tells the user.
-    func updateGoal(_ g: SessionGoal?, notice: String?) {
-        ActivityLog.record("goal", conv: id, ["state": .string(g?.state.rawValue ?? "cleared"), "turns": .number(Double(g?.turns ?? 0)),
-                                              "text": ActivityLog.text(g?.text), "note": ActivityLog.text(g?.note)])
-        conversation.goal = g
-        save()
-        if let notice { sink?.notice(notice) }
-    }
-
-    /// After a turn: count it toward the goal, then start the next one by itself while the goal is open.
-    private func advanceGoal() {
-        guard conversation.mode.isAgent, let open = conversation.goal, open.state == .active, !discarded else { return }
-        let g = Self.afterTurn(open, cancelled: turn.cancelled, error: errorMessage)
-        guard g.state == .active else {
-            updateGoal(g, notice: "Goal paused: \(g.note ?? ""). /goal resume carries on; /goal clear drops it.")
-            return
-        }
-        updateGoal(g, notice: nil)
-        // A queued message of the user's already started the next turn; background work the agent launched wakes it with
-        // its report when it ends, so the goal waits for that rather than nudging it on in the meantime.
-        if !isRunning, awaitedWork.isEmpty { continueGoal() }
-    }
-
-    /// An open goal after one more turn: still active (the next turn starts), or paused by a stop, a failure or the cap.
-    nonisolated static func afterTurn(_ goal: SessionGoal, cancelled: Bool, error: String?) -> SessionGoal {
-        var g = goal
-        g.turns += 1
-        if cancelled { g.state = .paused; g.note = "You stopped it." }
-        else if let error { g.state = .paused; g.note = "A turn failed: \(error)" }
-        else if g.turns >= SessionGoal.maxTurns { g.state = .paused; g.note = "It took \(SessionGoal.maxTurns) turns without being met." }
-        return g
-    }
-
-    /// The next turn toward the goal: a hidden nudge (the goal itself rides along, from `GoalExtension`).
-    private func continueGoal() {
-        var m = ChatMessage(role: .user, blocks: [Block(kind: .text, text: GoalExtension.continueNote, meta: ["hidden": true])])
-        host.willSend(&m, self)
-        append(m)
-        save()
-        start()
-    }
-
-    /// Messages queued during work that ended without reading them (a turn's error or step limit, a /compact): they start
-    /// the next turn, as if sent now; after a stop, their text goes back to the composer instead.
-    private func flushQueued(stopped: Bool) {
-        guard !queued.isEmpty, !discarded else { return }
-        if stopped {
-            let back = queued.flatMap(\.blocks)
-            queued.removeAll()
-            let text = back.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
-            draft = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
-            return
-        }
-        drainInbox()
-        start(prompted: true)
     }
 
     /// How many times one turn may be sent back to work by `willEndTurn` (a Stop hook that always objects can't loop forever).
@@ -534,7 +405,7 @@ final class ChatSession: ObservableObject, Identifiable {
         // Plan → research → verify for a substantial request (DeepWork): a hidden plan now, a review of the reply at the end.
         let asked = messages.lastIndex { $0.role == .user && !$0.isToolResultOnly }
         let askedText = asked.map { i in messages[i].blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n") } ?? ""
-        let deep = settings.deepWork && !conversation.mode.isAgent && DeepWork.isSubstantial(askedText)
+        let deep = settings.deepWork && DeepWork.isSubstantial(askedText)
         let modelInfo = app.modelInfo(conversation.providerID, conversation.model)
         let lightThinking = ([.off, .low, .medium].contains(settings.thinking) ? settings.thinking : .medium).supported(by: modelInfo)
         var plan: String?
@@ -702,8 +573,8 @@ final class ChatSession: ObservableObject, Identifiable {
                 continue
             }
             if calls.isEmpty {
-                // A background report or a message from the user arrived during this step: read it before ending the turn.
-                if !Task.isCancelled, !inbox.isEmpty || !queued.isEmpty { drainInbox(); continue }
+                // A background report arrived during this step: read it before ending the turn.
+                if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
                 // An extension may send the agent back to work (a user's Stop hook: "the tests fail"), a few times at most.
                 if !Task.isCancelled, !wrapping, sentBack < Self.sendBackLimit, let why = await host.willEndTurn(self, continued: sentBack), !Task.isCancelled {
                     sentBack += 1
@@ -944,7 +815,7 @@ final class ChatSession: ObservableObject, Identifiable {
         ctx.vision = app.modelInfo(conversation.providerID, conversation.model)?.vision ?? app.settings.provider(conversation.providerID)?.supportsVision ?? true
         ctx.quizzes = Testing.on(settings, conversation.mode)
         ctx.agentNode = node
-        ctx.codeAgent = conversation.mode.isAgent || conversation.mode == .code
+        ctx.codeAgent = conversation.mode == .code
         ctx.checkpointTurn = app.extensions.get(CodeAgentExtension.self)?.currentTurnKey(self)
         let t0 = Date()
         var result: Block
@@ -992,18 +863,13 @@ final class ChatSession: ObservableObject, Identifiable {
     // MARK: Context
 
     private func buildSystemPrompt(model: String) async -> String {
-        if conversation.mode.isAgent {
-            let profile = await ProjectProfile.detect(services.workspace.url)
-            let mcp = await MCPHub.shared.promptSection(services.workspace.url, settings)
-            return SystemPrompt.buildAgent(settings: settings, folder: services.workspace.url, model: model,
-                                           projectMemory: ProjectMemory.contextBlock(services.workspace.url), project: profile.section(), mcp: mcp,
-                                           languages: profile.languages.map(\.0))
-        }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
                                    folder: services.workspace.url)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }
         // A code mentor builds in the learner's folder: how it builds and tests is part of the lesson's ground.
         if conversation.mode == .code, let project = await ProjectProfile.detect(services.workspace.url).section() { s += "\n\n" + project }
+        // The user's MCP servers, by name: their tools load on demand (`mcp__<server>`).
+        if let mcp = await MCPHub.shared.promptSection(services.workspace.url, settings) { s += "\n\n" + mcp }
         return s
     }
 
@@ -1061,7 +927,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let state = host.summaryContext(self).joined(separator: "\n\n")
         let throughID = messages[range.upperBound - 1].id
         let result = await Compaction.summarise(Array(messages[range]), previous: conversation.compactSummary, state: state,
-                                                client: client, model: conversation.model, sessionID: conversation.id, coding: conversation.mode.isAgent)
+                                                client: client, model: conversation.model, sessionID: conversation.id)
         result.usage.forEach(recordAuxiliary)
         if result.cancelled { return prepared }   // stopped mid-summary: the lesson stays as it was
         conversation.compactSummary = result.text
@@ -1070,36 +936,6 @@ final class ChatSession: ObservableObject, Identifiable {
         sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
         save()
         return requestMessages()
-    }
-
-    /// `/compact [focus]` in a code session: everything so far becomes the summary now (Claude Code's /compact), so the
-    /// next request starts small. No model turn follows.
-    private func compactNow(focus: String) {
-        guard let provider = app.settings.provider(conversation.providerID) else { errorMessage = "Unknown provider \(conversation.providerID)."; return }
-        let start = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }.map { $0 + 1 } ?? 0
-        guard messages.count - start >= 2, let last = messages.last else { sink?.notice("Nothing to compact yet."); return }
-        let client = provider.client(apiKey: KeyStore.shared.key(for: provider))
-        isRunning = true
-        beginActivity()
-        setStatus("Summarising the session…")
-        runTask = Task { [weak self] in
-            guard let self else { return }
-            let result = await Compaction.summarise(Array(self.messages[start...]), previous: self.conversation.compactSummary,
-                                                    state: self.host.summaryContext(self).joined(separator: "\n\n"), client: client,
-                                                    model: self.conversation.model, sessionID: self.conversation.id, coding: true, focus: focus)
-            result.usage.forEach(self.recordAuxiliary)
-            if !result.cancelled, !result.text.isEmpty {
-                self.conversation.compactSummary = result.text
-                self.conversation.compactedThrough = last.id
-                self.conversation.usage?.input = 0
-                self.sink?.notice("The session so far was summarised" + (focus.isEmpty ? "" : " (keeping: \(focus))") + ". The next request starts from the summary.")
-            }
-            self.isRunning = false
-            self.endActivity()
-            self.setStatus(nil)
-            self.save()
-            self.flushQueued(stopped: result.cancelled)
-        }
     }
 
     // MARK: Persistence helpers

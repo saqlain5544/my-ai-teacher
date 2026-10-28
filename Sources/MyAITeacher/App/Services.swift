@@ -50,14 +50,14 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Commands approved with "Always allow in this folder" (folder path → command prefixes like `npm test`), as Claude
     /// Code's `Bash(npm test:*)` rules. Stored in the app, never in the folder (a cloned repo can't pre-approve itself).
     var commandRules: [String: [String]] = [:]
-    /// The user's own MCP servers (Settings → MCP), for the code agent in every folder.
+    /// The user's own MCP servers (Settings → MCP), for the agents in every folder.
     var mcpServers: [MCPServerConfig] = []
     /// A folder's `.mcp.json` servers the user approved or declined (folder path → server name → the config they saw).
     /// Stored in the app, never in the folder: a cloned repo can't approve its own servers.
     var mcpProjectDecisions: [String: [String: MCPDecision]] = [:]
     /// MCP servers whose tools run without asking, per folder (folder path → server names).
     var mcpAlwaysAllow: [String: [String]] = [:]
-    /// The user's own hooks for the code agent: Claude Code's `hooks` JSON (event → matchers → shell commands), as typed
+    /// The user's own hooks for the agents: Claude Code's `hooks` JSON (event → matchers → shell commands), as typed
     /// in Settings › Hooks (`HooksExtension`).
     var hooks = ""
     /// Folders whose own hooks (`.claude/settings.json`) the user approved: folder path → the approved configuration's

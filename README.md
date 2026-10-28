@@ -1,7 +1,8 @@
 # My AI Teacher
 
-A native macOS tutor that makes you do the thinking, plus a coding agent for your projects. It works with almost
-any AI provider, free ones included, and keeps everything it learns about you on your Mac.
+A native macOS tutor that makes you do the thinking. It works with almost any AI provider, free ones included, and
+keeps everything it learns about you on your Mac. The coding agent that used to be part of the app is now a separate
+project at `~/coding-agent`, a Rust command-line tool.
 
 ![A problem card: the tutor holds back the answer until you try](docs/images/attempt-first.jpg)
 
@@ -32,7 +33,6 @@ cold launch. It runs at roughly 70 MB plus one WebKit process (about 90 MB), a f
 2. **Start a lesson** with ⌘N and say what you want to learn: "Teach me the chain rule", "Quiz me on the French
    Revolution", "I have an exam on organic chemistry in two weeks". Pick a teaching mode from the toolbar.
 3. **Ask a quick question** with ⇧⌘N. It isn't tied to a folder.
-4. **Work on code** with ⇧⌘K. This opens a code session in a folder you choose.
 
 The [user guide](docs/user-guide.md) covers everything in detail.
 
@@ -106,8 +106,11 @@ first program to research-level work — by understanding it and building with i
   file and line, `must` / `should` / `nit`, fixed ones struck through, the verdict. Like a demanding senior engineer:
   correctness and the failing tests first, then design, naming, edge cases, complexity, the tests you should add, with
   questions and hints rather than code. A pass with green tests records the project's concept as mastered.
-* **The engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files and the project
-  profile, like the code agent, so it reads your code precisely and builds its examples against your real toolchain.
+* **An engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files, the project
+  profile (how your project builds, checks and tests) and an index of the project (definitions, uses and callers,
+  imports, search by meaning), so it reads your code precisely and builds its examples against your real toolchain.
+  It never overwrites a file it hasn't read, or one you changed since it looked, and **Undo this turn's changes**
+  under a reply puts back every file it touched, with or without git.
 * **Languages and libraries from their source.** Ask to master Zig's standard library, Rust's `core`, Go's `net/http`,
   Python's `asyncio`, a package in your project, or any other language's installed sources, and the mentor teaches from the source installed on your Mac: it
   finds it by name (`source`), outlines it, reads the real implementation and cites file and line. The projects then
@@ -146,49 +149,26 @@ ahead of you, more output than input, immediate correction, and spaced retrieval
 * **Language tools, offline.** Transliteration between scripts, word segmentation with parts of speech (Japanese and
   Chinese included), and Wiktionary definitions, so the mentor checks readings and forms before teaching them.
 
-### A coding agent too
-**Code sessions** work in a folder, much like Claude Code:
+### Tools for every agent
+Every lesson, in any mode, works in the open folder with the same tools and safeguards:
 * read, edit and search files, and run commands, with your approval. Read-only commands (`git status`, `rg`, `ls`…)
   never ask, and "Always allow `npm test …` in this folder" makes a rule;
-* **plan mode** (⇧⌘P): the agent researches and presents a plan, and nothing changes until you approve it;
-* message the agent while it works: it reads your message at its next step;
-* it never overwrites a file it hasn't read, or one you changed since it looked;
-* a plan checklist, and project memory kept in `.teacher/code-memory.md`, plus the `CLAUDE.md` / `AGENTS.md` files of
-  the project, its parent folders and its subfolders (with `@file` imports);
-* `/init`, `/review`, `/compact`, and your own commands from `.teacher/commands` or `.claude/commands`;
-* `/goal <objective>`: the agent works toward it turn after turn until it reports it met, with evidence;
-* code research through an index of the project (definitions, uses and callers, imports, a usage graph, search by
-  meaning), not just grep;
-* it learns from its own fixes: lessons it carries to every project, a history of each project's changes, and a
-  reminder to re-run the check behind an earlier fix when it edits that code again;
 * background work: a build, test run or sub-agent reports back and wakes the agent when it ends, and the **Tasks**
   page lists everything running (commands, servers, sub-agents, MCP servers, app jobs) with its times and a Stop button;
 * **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`
   (Claude Code's format), which runs nothing until you approve each server once. Their tools load when the agent needs
-  them, every call asks unless you always allow that server in the folder, and plan mode runs only read-only ones;
+  them, and every call asks unless you always allow that server in the folder;
+* **hooks** in Claude Code's format (Settings → Hooks, or the project's `.claude/settings.json` once you approve it);
 * a git diff panel with checkpoints.
 
 **Skills for every agent**, in Claude Code's `SKILL.md` format: base skills every agent shares, each agent's own (the
-code agent's git workflow and debugging, the code mentor's coaching, the language mentor's conversation practice),
-then yours from `~/.claude/skills` or `~/.teacher/skills` and the folder's own. Agents see one line per skill and tool,
-and load the instructions or the tool's definition only when a task needs it.
+code mentor's coaching, the language mentor's conversation practice), then yours from `~/.claude/skills` or
+`~/.teacher/skills` and the folder's own. Agents see one line per skill and tool, and load the instructions or the
+tool's definition only when a task needs it.
 
-The agent can also:
-* **Know the project before touching it.** Its prompt carries a profile read from the manifests: build system, how to
-  build, check, test and lint it (`swift build`, `tsc --noEmit`, `cargo check`, `go vet`, `pytest`, make targets…),
-  languages, git state. A `symbols` tool gives a file's outline or where a name is defined, so it reads the right
-  twenty lines instead of the file.
-* **Verify as it goes.** Every file it writes or edits is syntax-checked on the spot and the verdict rides on the tool
-  result. `diagnostics` runs the project's check, tests or lint and returns the problems parsed (`file:line:col`),
-  grouped and counted, instead of a build log. Long builds and test suites run in the background and report back.
-* **Undo in one click.** Before the agent's first change to a file in a turn, the file is checkpointed; under the reply,
-  **Undo this turn's changes** puts every file back, with or without git. Edits that differ only in indentation are
-  matched and re-indented instead of failing.
-* **Your own commands.** `.teacher/commands/review.md` becomes `/review`, with `$ARGUMENTS` filled in, like Claude
-  Code's slash commands.
-* **Delegate to sub-agents** (explore, coder, reviewer, tester, or your own definitions in `.teacher/agents/`). Each can
-  have its own model, effort level and token or time budget. They run in the background, you can steer them, and they
-  can work in git worktrees.
+Every agent can also:
+* **Delegate to sub-agents** (explore, general, coder, reviewer, tester, or your own definitions in `.teacher/agents/`).
+  Each can have its own model, effort level and token or time budget. They run in the background and you can steer them.
 * **Drive an in-app browser**, to read pages, fill in forms and take screenshots.
 * **Use Mac apps**, through the Accessibility tree and screenshots, with a permission gate for each app.
 
@@ -215,7 +195,6 @@ OpenAI-, Anthropic- or Gemini-compatible endpoint can be added as a custom provi
 |---|---|
 | ⌘N | New lesson |
 | ⇧⌘N | Quick question (no folder) |
-| ⇧⌘K | New code session |
 | ⌘O | Open a folder |
 | ⌥⌘1 / ⌥⌘2 / ⌥⌘3 | Flashcards / Progress / Memory |
 | ⌘. | Stop the reply (Esc twice also stops an agent) |

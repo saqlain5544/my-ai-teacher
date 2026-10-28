@@ -1368,7 +1368,6 @@
   window.T = {
     reset(messages, opts) {
       if (R.pauseVisuals) R.pauseVisuals(opts && opts.pauseVisuals);
-      document.body.classList.toggle('agent-mode', !!(opts && opts.agent));   // a coding session: no teaching chips
       S.messages = []; S.byId.clear(); S.results.clear(); S.dirty.clear(); S.progress.clear(); S.cards.clear();
       S.streamingId = null; S.welcome = (opts && opts.welcome) || null;
       S.showThinking = !opts || opts.showThinking !== false;

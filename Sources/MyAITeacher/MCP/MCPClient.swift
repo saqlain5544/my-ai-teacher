@@ -27,7 +27,7 @@ struct MCPToolInfo: Sendable, Equatable {
     let name: String
     let description: String
     let inputSchema: JSON
-    /// The server says it only reads (`annotations.readOnlyHint`): plan mode lets it run.
+    /// The server says it only reads (`annotations.readOnlyHint`); the prompt marks the tool read-only.
     let readOnly: Bool
 
     init(name: String, description: String, inputSchema: JSON, readOnly: Bool) {

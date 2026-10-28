@@ -1,7 +1,7 @@
 import Foundation
 
 /// Code research over the folder's index (`CodeIndex`): search by meaning, definitions, uses and callers, what a function
-/// calls, a file's imports and neighbours, a map of the repository, and a file's history. `grep` stays for exact text.
+/// calls, a file's imports and neighbours, and a map of the repository. `grep` stays for exact text.
 struct CodeTool: Tool {
     var subAgentVariant: Tool? { self }
     let name = "code"
@@ -11,17 +11,16 @@ struct CodeTool: Tool {
     backed off", "parse config"), ranked; def — where `name` is defined; refs — every use of `name`, grouped by the \
     function it's in; callers — the functions that use `name`; callees — what function `name` calls or builds on; \
     outline — `path`'s definitions with their lines; related — the files `path` uses and that use it; map — the \
-    repository's most central files and their main definitions (start here in an unfamiliar codebase); history — past \
-    changes to `path` (or the project) and the checks that verified them. Use `grep` only for exact text (strings, \
-    error messages, config keys).
+    repository's most central files and their main definitions (start here in an unfamiliar codebase). Use `grep` only \
+    for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "history"]),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map"]),
             "query": Schema.string("find: what you're looking for, in words or names."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
-            "path": Schema.string("outline, related, history: a file (relative to the folder)."),
+            "path": Schema.string("outline, related: a file (relative to the folder)."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
@@ -100,15 +99,8 @@ struct CodeTool: Tool {
             return ToolOutput(text: note + "\(st.files) files, \(st.symbols) definitions. Most central (used by the most others):\n" + m.map { e in
                 "\(e.path)\n" + e.symbols.map { "    \($0.line)  \($0.text)" }.joined(separator: "\n")
             }.joined(separator: "\n"))
-        case "history":
-            if let p = input["path"]?.string, !p.isEmpty {
-                let r = ProjectHistory.touching(Self.relative(p, root: ctx.workspace), folder: ctx.workspace)
-                return ToolOutput(text: r.isEmpty ? "No recorded changes to \(p)." : r.prefix(20).map(ProjectHistory.line).joined(separator: "\n"))
-            }
-            let all = ProjectHistory.all(ctx.workspace)
-            return ToolOutput(text: all.isEmpty ? "No changes recorded in this project yet." : all.suffix(30).reversed().map(ProjectHistory.line).joined(separator: "\n"))
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map, history.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map.")
         }
     }
 
@@ -143,57 +135,5 @@ struct CodeTool: Tool {
             out.append(Use(path: path, line: n, text: parts[2].trimmingCharacters(in: .whitespaces), within: await index.enclosing(path, line: n)))
         }
         return out
-    }
-}
-
-/// The code agent's lessons across projects (`CodeLessons`): record one, confirm one that helped, retire one that's wrong,
-/// search them.
-struct LessonsTool: Tool {
-    let name = "lessons"
-    let description = """
-    Your lessons from past projects (global, every project). add — after you fixed a failure caused by a mistake that \
-    could recur elsewhere (a language pitfall, an API misuse, a habit): `language`, the `mistake`, the `rule` that avoids \
-    it, `evidence` (what failed and what fixed it). Not for this project's specifics (those go in project_memory). \
-    confirm `id` — a lesson applied again; retire `id` with `reason` — it proved wrong; search `query` (and `language`).
-    """
-    let risk = ToolRisk.readOnly
-    var schema: JSON {
-        Schema.object([
-            "action": Schema.string("add, confirm, retire, search.", enum: ["add", "confirm", "retire", "search"]),
-            "language": Schema.string("add, search: the language (or `general`)."),
-            "mistake": Schema.string("add: what went wrong, in one sentence."),
-            "rule": Schema.string("add: what to do instead, as a rule you can follow next time."),
-            "evidence": Schema.string("add, confirm: what failed and what fixed it (the check and its error)."),
-            "id": Schema.string("confirm, retire: the lesson (L12)."),
-            "reason": Schema.string("retire: why it's wrong."),
-            "query": Schema.string("search: words."),
-        ], required: ["action"])
-    }
-    func summary(_ input: JSON) -> String { [input["action"]?.string, input["id"]?.string ?? input["language"]?.string].compactMap { $0 }.joined(separator: " ") }
-
-    func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let store = CodeLessons.shared
-        let project = ctx.workspace.lastPathComponent
-        switch try input.req("action") {
-        case "add":
-            let mistake = try input.req("mistake"), rule = try input.req("rule")
-            let evidence = input["evidence"]?.string ?? ""
-            guard evidence.trimmingCharacters(in: .whitespaces).count >= 10 else { return .error("Give the evidence: what failed and what fixed it.") }
-            let r = store.add(language: input["language"]?.string ?? "general", mistake: mistake, rule: rule,
-                              evidence: .init(project: project, date: Date(), note: String(evidence.prefix(300))))
-            return ToolOutput(text: r.merged ? "That's \(r.lesson.id), already known: confirmed (seen \(r.lesson.hits)×)." : "Recorded \(r.lesson.id): \(CodeLessons.line(r.lesson))",
-                              meta: ["lesson": .string(r.lesson.id)])
-        case "confirm":
-            guard let l = store.confirm(try input.req("id"), evidence: .init(project: project, date: Date(), note: String((input["evidence"]?.string ?? "applied again").prefix(300)))) else { return .error("No lesson with that id.") }
-            return ToolOutput(text: "Confirmed \(l.id) (seen \(l.hits)×).", meta: ["lesson": .string(l.id)])
-        case "retire":
-            guard let l = store.retire(try input.req("id"), why: input["reason"]?.string ?? "proved wrong") else { return .error("No lesson with that id.") }
-            return ToolOutput(text: "Retired \(l.id): it stays on record, out of your prompts.")
-        case "search":
-            let r = store.search(input["query"]?.string ?? "", language: input["language"]?.string)
-            return ToolOutput(text: r.isEmpty ? "No lessons match." : r.prefix(20).map(CodeLessons.line).joined(separator: "\n"))
-        default:
-            return .error("action is add, confirm, retire or search.")
-        }
     }
 }

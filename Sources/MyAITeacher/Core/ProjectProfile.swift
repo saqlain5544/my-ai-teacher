@@ -20,7 +20,6 @@ struct ProjectProfile: Sendable, Equatable {
     var files = 0
     var git: (branch: String, dirty: Int)?
     var notes: [String] = []                 // CI, Dockerfile, monorepo hints
-    var commandsDir: [String] = []           // .teacher/commands/*.md
     var toolchains: [String] = []            // installed on this Mac: "Node 22.3.0", …
 
     static func == (a: ProjectProfile, b: ProjectProfile) -> Bool { a.section() == b.section() }
@@ -143,7 +142,6 @@ struct ProjectProfile: Sendable, Equatable {
         if has(".github/workflows") { p.notes.append("GitHub Actions workflows in .github/workflows (what CI runs)") }
         if has(".pre-commit-config.yaml") { p.notes.append("pre-commit hooks configured") }
         if has(".editorconfig") { p.notes.append(".editorconfig sets indentation") }
-        p.commandsDir = ProjectCommands.names(folder, home: nil)   // the project's own; the user knows their personal ones
 
         // Languages by file count, bounded.
         walks += 1
@@ -232,7 +230,7 @@ struct ProjectProfile: Sendable, Equatable {
     nonisolated(unsafe) private static var cache: [String: Entry] = [:]
     private static let fingerprintFiles = ["Package.swift", "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "bun.lockb", "bun.lock", "tsconfig.json",
         "Cargo.toml", "Cargo.lock", "go.mod", "pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "uv.lock", "build.zig", "Makefile", "makefile", "CMakeLists.txt",
-        "build.gradle", "build.gradle.kts", "pom.xml", "Gemfile", "mix.exs", "gleam.toml", "deno.json", "deno.jsonc", ".teacher/commands"]
+        "build.gradle", "build.gradle.kts", "pom.xml", "Gemfile", "mix.exs", "gleam.toml", "deno.json", "deno.jsonc"]
 
     private static func fingerprint(_ folder: URL) -> [String] {
         let fm = FileManager.default
@@ -284,7 +282,6 @@ struct ProjectProfile: Sendable, Equatable {
         if let g = git { s += "- Git: branch `\(g.branch)`, \(g.dirty == 0 ? "clean" : "\(g.dirty) changed file\(g.dirty == 1 ? "" : "s") uncommitted")\n" }
         for n in notes { s += "- \(n)\n" }
         if !toolchains.isEmpty { s += "- Installed: " + toolchains.joined(separator: ", ") + "\n" }
-        if !commandsDir.isEmpty { s += "- The user's commands, run as /name (from .teacher/commands or .claude/commands): " + commandsDir.joined(separator: ", ") + "\n" }
         return s.trimmingCharacters(in: .newlines)
     }
 }

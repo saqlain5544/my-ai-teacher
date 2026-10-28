@@ -365,13 +365,11 @@ final class BoardTests: XCTestCase {
     }
 
     func testEveryMentorIsToldToVisualise() {
-        for mode in TeachingMode.allCases where !mode.isAgent {
+        for mode in TeachingMode.allCases {
             let p = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: "", model: "m")
             XCTAssertTrue(p.contains("```mermaid") && p.contains("```visual") && p.contains("3D") && p.contains("Draw what has structure"), "\(mode)")
             XCTAssertFalse(p.contains("lightest form"), "nothing discourages visuals")
         }
-        let agent = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "")
-        XCTAssertTrue(agent.contains("```mermaid") && agent.contains("```visual") && agent.contains("three"), "the code agent can draw too")
     }
 
     func testInstructionsAreLeanAndEditable() {
@@ -387,8 +385,6 @@ final class BoardTests: XCTestCase {
         XCTAssertTrue(Instructions.isEdited(.teacher, settings))
         settings.instructions[Instructions.Key.mode(.code).raw] = "Mentor in Zig only."
         XCTAssertTrue(SystemPrompt.build(settings: settings, mode: .code, coreMemory: "", model: "m").contains("Mentor in Zig only."))
-        settings.instructions[Instructions.Key.codeAgent.raw] = "Ship it carefully."
-        XCTAssertTrue(SystemPrompt.buildAgent(settings: settings, folder: dir, model: "m", projectMemory: "").hasPrefix("Ship it carefully."))
         settings.instructions[Instructions.Key.teacher.raw] = "   "
         XCTAssertFalse(Instructions.isEdited(.teacher, settings), "a blank edit is no edit")
         XCTAssertTrue(SystemPrompt.build(settings: settings, mode: .tutor, coreMemory: "", model: "m").hasPrefix("You are Teacher"))
@@ -399,13 +395,12 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(Instructions.all.count, Set(Instructions.all.map(\.raw)).count, "every agent once")
         // Settings round-trip.
         let back = try! JSONDecoder().decode(AppSettings.self, from: JSONEncoder().encode(settings))
-        XCTAssertEqual(back.instructions[Instructions.Key.codeAgent.raw], "Ship it carefully.")
+        XCTAssertEqual(back.instructions[Instructions.Key.mode(.code).raw], "Mentor in Zig only.")
     }
 
     @MainActor func testTheCodeMentorWorksWithoutABoard() throws {
         XCTAssertTrue(BoardSystem.applies(to: .tutor) && BoardSystem.applies(to: .exam) && BoardSystem.applies(to: .language))
         XCTAssertFalse(BoardSystem.applies(to: .code), "its project keeps that state")
-        XCTAssertFalse(BoardSystem.applies(to: .agent))
         XCTAssertFalse(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).contains { $0.name == "lesson_plan" })
         XCTAssertFalse(SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m").contains("# Course board"))
         // A code lesson linked to a board sends none of it: no state card, nothing for the summary, no boards in the prompt.
@@ -432,6 +427,5 @@ final class BoardTests: XCTestCase {
         XCTAssertEqual(p.components(separatedBy: "# Course board").count, 2)
         XCTAssertTrue(p.contains("<lesson_state>") && p.contains("complete a card only with evidence") && p.contains("not a script"))
         XCTAssertTrue(SystemPrompt.split(p)[0].contains("# Course board"), "the rules sit in the cached, lesson-independent part")
-        XCTAssertFalse(SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "").contains("lesson_state"))
     }
 }

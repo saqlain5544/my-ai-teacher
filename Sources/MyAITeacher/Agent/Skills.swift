@@ -12,7 +12,7 @@ import Foundation
 ///                                           ~/.agents/skills
 ///     the open folder's                     .teacher/skills  .claude/skills  .opencode/skills (or skill)  .agents/skills
 ///
-/// A user's or folder's skill can name the agents it is for (`agents: [code-agent, code-mentor]`); without that it is for
+/// A user's or folder's skill can name the agents it is for (`agents: [code-mentor, language-mentor]`); without that it is for
 /// every agent. `disable-model-invocation: true` keeps a skill out of the list (Claude Code's user-only skills).
 struct Skill: Equatable, Sendable {
     enum Source: Equatable, Sendable {
@@ -48,8 +48,8 @@ enum Skills {
 
     /// Friendly names a skill may use for agents, as the app names them.
     static let aliases: [String: String] = [
-        "code-agent": "engineer", "agent": "engineer", "engineer": "engineer",
         "code-mentor": "code-mentor", "code": "code-mentor", "mentor": "code-mentor",
+        "code-agent": "code-mentor", "engineer": "code-mentor",   // a skill written for the code agent, which has left the app
         "language-mentor": "language", "language": "language",
         "teacher": "teacher", "tutor": "tutor", "all": "root", "root": "root",
     ]

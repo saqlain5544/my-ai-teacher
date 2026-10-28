@@ -1,8 +1,8 @@
 import XCTest
 @testable import MyAITeacher
 
-/// The code agent's engineering loop: the project profile in its prompt, parsed diagnostics and syntax checks after
-/// edits, per-turn checkpoints with undo, definitions by name, tolerant edits, project commands.
+/// The coding tools' engineering loop (the code mentor's): the project profile in its prompt, parsed diagnostics and
+/// syntax checks after edits, per-turn checkpoints with undo, definitions by name, tolerant edits.
 final class CodeAgentTests: XCTestCase {
     var dir: URL!
     var services: Services!
@@ -36,7 +36,6 @@ final class CodeAgentTests: XCTestCase {
         try write("Cargo.toml", "[package]"); try write("go.mod", "module x"); try write("build.zig", "")
         try write("Makefile", "build:\n\tswift build\ntest: build\n\tswift test\n.PHONY: build\nCC := clang\n")
         try write("src/a.swift", "let a = 1"); try write("src/b.ts", "export const b = 1"); try write("src/c.ts", ""); try write("src/d.ts", "")
-        try write(".teacher/commands/review.md", "Review the diff.")
         let p = await ProjectProfile.detect(dir)
         XCTAssertTrue(p.kinds.contains("Swift package") && p.kinds.contains("npm package (pnpm)") && p.kinds.contains("TypeScript") && p.kinds.contains("Cargo (no lockfile yet)") && p.kinds.contains("Go module") && p.kinds.contains("Zig") && p.kinds.contains("Makefile"), "\(p.kinds)")
         XCTAssertEqual(p.commands.check.first, "swift build")
@@ -44,12 +43,10 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertTrue(p.commands.test.contains("pnpm run test") && p.commands.test.contains("swift test") && p.commands.test.contains("zig build test"), "\(p.commands.test)")
         XCTAssertEqual(p.commands.lint, ["pnpm run lint", "cargo clippy"])
         XCTAssertEqual(p.makeTargets, ["build", "test"], "targets, not variables or .PHONY")
-        XCTAssertEqual(p.languages.first?.0, "TypeScript"); XCTAssertEqual(p.commandsDir, ["review"])
+        XCTAssertEqual(p.languages.first?.0, "TypeScript")
         XCTAssertTrue(p.notes.contains { $0.contains("monorepo") })
         let s = p.section()!
-        XCTAssertTrue(s.hasPrefix("# Project") && s.contains("`swift build`") && s.contains("/name") && s.contains("review"), s)
-        let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "", project: s)
-        XCTAssertTrue(prompt.contains("# Project\n") && prompt.contains("`diagnostics`"), "the agent's prompt carries the profile and the verify loop")
+        XCTAssertTrue(s.hasPrefix("# Project") && s.contains("`swift build`"), s)
         let empty = await ProjectProfile.detect(FileManager.default.temporaryDirectory.appendingPathComponent("nothing-here-\(UUID().uuidString.prefix(4))"))
         // An empty folder still says what it can be built with: the toolchains on this Mac, with their versions.
         XCTAssertEqual(empty.section(), empty.toolchains.isEmpty ? nil : "# Project\n- Installed: " + empty.toolchains.joined(separator: ", "))
@@ -148,7 +145,7 @@ final class CodeAgentTests: XCTestCase {
     @MainActor func testTheExtensionCheckpointsAgentWritesAndRecordsThemOnTheTurn() throws {
         let app = AppModel.shared
         var conv = Conversation(providerID: "x", model: "m")
-        conv.mode = .agent
+        conv.mode = .code
         let session = ChatSession(conversation: conv, app: app, services: services)
         let ext = CodeAgentExtension(app: app)
         try write("f.swift", "let x = 1\n")
@@ -220,19 +217,10 @@ final class CodeAgentTests: XCTestCase {
         XCTAssertTrue(ambiguous.isError, "two lines match loosely: no guess")
     }
 
-    func testProjectCommandsExpandWithArguments() throws {
-        try write(".teacher/commands/review.md", "---\ndescription: Review\n---\nReview $ARGUMENTS for bugs.")
-        XCTAssertEqual(ProjectCommands.names(dir), ["review"])
-        let e = ProjectCommands.expand("/review src/main.swift please", folder: dir)
-        XCTAssertEqual(e, "The user ran the project command /review src/main.swift please (from .teacher/commands/review.md):\nReview src/main.swift please for bugs.")
-        XCTAssertNil(ProjectCommands.expand("/nothing", folder: dir)); XCTAssertNil(ProjectCommands.expand("hello /review", folder: dir))
-        XCTAssertNil(ProjectCommands.expand("/../etc", folder: dir))
-    }
-
-    @MainActor func testTheAgentToolset() async throws {
+    @MainActor func testTheCodeMentorsToolset() async throws {
         // Always sent, or loaded on demand (one line each in the prompt; a direct call loads one).
-        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.name) + AgentTree.deferred("engineer"))
-        for t in ["diagnostics", "symbols", "source", "bash", "bash_jobs", "edit"] { XCTAssertTrue(names.contains(t), t) }
+        let names = Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .code).map(\.name) + AgentTree.deferred("code-mentor"))
+        for t in ["diagnostics", "symbols", "source", "bash", "bash_jobs", "edit", "code", "browser"] { XCTAssertTrue(names.contains(t), t) }
         XCTAssertFalse(Set(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name)).contains("diagnostics"))
         // Background commands are ShellJobs (handles, servers, the report when one ends): ShellJobsTests.
     }

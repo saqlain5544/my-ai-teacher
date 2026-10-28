@@ -455,11 +455,13 @@ final class ComputerUseTests: XCTestCase {
         XCTAssertNil(AnthropicClient(config: compatible, apiKey: nil).buildBody(req)["context_management"], "only Anthropic's API has it")
     }
 
-    func testCodeAgentToolsAndPrompt() {
-        let names = ToolRegistry.loadable("engineer").map(\.name)
-        for t in ["browser", "computer", "mac"] { XCTAssertTrue(names.contains(t), "\(t) loads on demand") }
-        XCTAssertFalse(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name).contains("computer"), "tutor lessons don't control the Mac")
-        let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: URL(fileURLWithPath: "/tmp"), model: "m", projectMemory: "")
+    func testEveryAgentLoadsTheBrowserAndMacControlOnDemand() {
+        for node in ["tutor", "language", "code-mentor"] {
+            let names = ToolRegistry.loadable(node).map(\.name)
+            for t in ["browser", "computer", "mac"] { XCTAssertTrue(names.contains(t), "\(node): \(t) loads on demand") }
+        }
+        XCTAssertFalse(ToolRegistry.active(AppSettings(), loaded: [], mode: .tutor).map(\.name).contains("computer"), "not sent until loaded")
+        let prompt = SystemPrompt.build(settings: AppSettings(), mode: .tutor, coreMemory: "", model: "m", lessonID: "L", folder: URL(fileURLWithPath: "/tmp"))
         XCTAssertTrue(prompt.contains("ax_tree") && prompt.contains("snapshot") && prompt.contains("untrusted"))
         XCTAssertEqual(ComputerTool().risk, .control)
     }

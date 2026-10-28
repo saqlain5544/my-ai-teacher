@@ -53,7 +53,6 @@ struct ChatView: View {
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .stopGenerating)) { _ in session.stop() }
-        .onReceive(NotificationCenter.default.publisher(for: .togglePlanMode)) { _ in session.setPlanMode(session.conversation.planMode != true) }
     }
 }
 
@@ -80,20 +79,18 @@ struct QuizToggle: View {
     @ObservedObject var session: ChatSession
     var body: some View {
         let mode = session.conversation.mode
-        if !mode.isAgent {
-            let forced = mode == .quiz || mode == .exam
-            let on = forced || settings.value.quizzes
-            Button { settings.value.quizzes.toggle() } label: {
-                // Tinted when on: the two checklist glyphs alone were hard to tell apart (the state was only in the tooltip).
-                Label("Quizzes: \(on ? "On" : "Off")", systemImage: on ? "checklist.checked" : "checklist.unchecked")
-                    .foregroundStyle(on ? Color.accentColor : Color.secondary)
-            }
-            .disabled(forced)
-            .help(forced ? "\(mode.title) mode always tests you."
-                  : on ? "Quizzes on: the teacher checks your understanding with questions. Click to turn them off from your next message."
-                       : "Quizzes off: the teacher teaches without testing you until you turn them back on.")
-            .accessibilityIdentifier("quiz-toggle")
+        let forced = mode == .quiz || mode == .exam
+        let on = forced || settings.value.quizzes
+        Button { settings.value.quizzes.toggle() } label: {
+            // Tinted when on: the two checklist glyphs alone were hard to tell apart (the state was only in the tooltip).
+            Label("Quizzes: \(on ? "On" : "Off")", systemImage: on ? "checklist.checked" : "checklist.unchecked")
+                .foregroundStyle(on ? Color.accentColor : Color.secondary)
         }
+        .disabled(forced)
+        .help(forced ? "\(mode.title) mode always tests you."
+              : on ? "Quizzes on: the teacher checks your understanding with questions. Click to turn them off from your next message."
+                   : "Quizzes off: the teacher teaches without testing you until you turn them back on.")
+        .accessibilityIdentifier("quiz-toggle")
     }
 }
 

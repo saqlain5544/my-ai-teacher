@@ -10,7 +10,7 @@ Sources/MyAITeacher/
   Agent/       ChatSession (the agent loop), Hooks (extensions + EventBus), Metrics, SystemPrompt, ToolRegistry
   Extensions/  Features built on hooks: permissions, memory, language, activity, teaching context
   Tools/       Tool protocol + tools (files, shell, code, web, math, questions, study, memory)
-  Browser/     The code agent's in-app browser (tabs, injected helper, `browser` tool)
+  Browser/     The agents' in-app browser (tabs, injected helper, `browser` tool)
   ComputerUse/ Native Mac control: capture/input/AX backends, tiers and grants, `computer` + `mac` tools, approvals
   Memory/      Learner model: MemoryStore (indexed memories), ConceptGraph (subjects/concepts/prereqs + BKT mastery),
                MemoryHub (core block, lean recall), Reflection (mem0-style ops + consolidation) — see docs/memory-design.md
@@ -183,7 +183,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 * The teacher chooses per call; defaults and limits come from **Settings → Agents** (`AppSettings.agents`):
   * `type`: built-in `explore` (default; read-only research), `general`, `coder`, `reviewer` (read-only), `tester`
     (no edits); app-level types from Settings; project types from `<folder>/.teacher/agents/*.md` (frontmatter: name,
-    description, tools, deny, read_only, provider, model, effort, max_steps/max_seconds/max_tokens, isolation; the body
+    description, tools, deny, read_only, provider, model, effort, max_steps/max_seconds/max_tokens; the body
     is the system prompt — user-authored project files, the app never writes them). Built-in names can't be redefined.
   * `provider`/`model`: the lesson provider's fetched list, or any other provider with a key (Settings can limit that,
     and paid models there are off by default). A free lesson only ever delegates to models known to be free (metadata, or
@@ -200,13 +200,9 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
     type's). `unbounded` needs the setting, always runs in the background, stays stoppable.
   * `tools` / `deny_tools` narrow the type's tools; `output_schema` (JSON Schema, `JSONSchemaCheck`) is checked after
     the report with one repair turn; the teacher gets the JSON (and `meta.structured`).
-  * `isolation: "worktree"` (coder types, code mode, a git repo, write access): it works on a `git worktree` in the
-    app's support folder (made with hooks and fsmonitor off), removed if nothing changed, otherwise reported with its
-    path, branch and diff stat; kept ones go with their `teacher/…` branch after 14 days, at a later launch. Its shell and
-    code start in the worktree.
 * Permissions are a ceiling, never a prompt (`SubAgentPolicy`): a sub-agent may do what the lesson may do without
   asking (folder access, approvals the learner gave in this lesson, the Python setting, disabled tools) and nothing more;
-  writes must land inside its folder (or worktree), never `.teacher/` — checked on the real path (the deepest existing
+  writes must land inside its folder, never `.teacher/` — checked on the real path (the deepest existing
   ancestor through realpath, so symlinked folders and dangling links are followed) and case-insensitively, as APFS is;
   the lesson's own `Workspace.contains`/`isStatePath` use the same check. Installs are refused (pip/uv/poetry/conda/gem/
   cargo/go/brew, global npm/pnpm/yarn/bun). Read-only types never get write tools, and their `bash` never reaches a shell:
@@ -220,7 +216,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   connections) crashes it, the supervisor restarts it after 1 s → 2 s → 4 s, and the new incarnation resumes from the
   transcript (the failed reply is dropped, unfinished tool calls are answered as interrupted); after 3 restarts in 60 s it
   reports from what it has. A watchdog ends a run that goes 300 s without a stream event or a tool finishing (a provider
-  that only sends keep-alives); the incarnation it ends writes nothing more (no "stopped" report, no worktree cleanup)
+  that only sends keep-alives); the incarnation it ends writes nothing more (no "stopped" report)
   and the restart carries on, so Stop still reaches the live one. Stop goes through the supervisor, so a stopped run is
   never restarted. Writes from a replaced incarnation are dropped (`RunWriter`); notes it never read pass to the next
   incarnation (`Mailbox.remaining`).
@@ -252,44 +248,42 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
 * Thinking off is real: NIM gets the family's `chat_template_kwargs`; MiniMax gets `thinking: disabled` (or adaptive at
   low effort for models that require it, learned from the 400); OpenRouter gets `reasoning: {enabled: false}`.
 
-## Code agent
-* Mode `agent` ("Code agent", ⇧⌘K): a software-engineer prompt, the whole coding toolset up front, and project memory
-  in `.teacher/code-memory.md` (plus CLAUDE.md / AGENTS.md) instead of the learner model; `project_memory` tool.
+## Coding tools, approvals, hooks and MCP
+The autonomous Code agent mode left the app (it is now a separate Rust CLI, `~/coding-agent`); a saved session of it
+opens as Code mentor (`TeachingMode` decodes an unknown mode as `.code`). The coding tools below serve the code mentor;
+approvals, hooks and MCP cover every agent.
 * **Project profile** (`ProjectProfile.detect`, once per session when the prompt is built): the manifests at the top of
   the folder (Package.swift, package.json scripts and lockfile, tsconfig, Cargo, go.mod, pyproject, build.zig,
   Makefile targets, CMake, Gradle, Maven, Gemfile, mix, deno) → build / check / test / lint / format commands, languages
-  by file count (code only; a bounded walk), git branch and dirty count, `.teacher/commands`. It is the `# Project`
-  section of the agent's prompt and the default commands of `diagnostics`.
-* **Verification loop.** `WriteTool`/`EditTool` in agent mode (`ToolContext.codeAgent`) run `Diagnostics.quickCheck`
-  on the file (py_compile, node --check, ruby -c, zig ast-check, swiftc -parse, gofmt -e, zsh -n, JSON; ≤ 10 s) and
-  append the verdict to the result (`meta.syntaxErrors` marks the card). `diagnostics` runs the project's check, test
-  or lint command (or one given) and parses clang/swift/zig/go, tsc, rustc, python and eslint output into
-  `file:line:col severity message`, grouped by file and capped (`Diagnostics.parse` / `summary`). `bash` with
-  `background: true` runs detached (≤ 30 min) and delivers a `<background-task>` message through `ChatSession.deliver`,
-  like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the foreground. `ShellState` keeps
-  the lesson's running background tasks by handle: Stop cancels them (the processes end, nothing is delivered), and a
-  foreground `bash` result names the ones still running. A coder sub-agent working in the lesson's folder (no
-  worktree) backs files up under the turn's checkpoint too (`ToolContext.checkpointTurn`), so Undo covers its edits.
-  `ProjectProfile.detect` caches per folder behind a fingerprint of the manifests' dates and sizes (ten minutes; the
-  git part refreshed after a minute), so neither the prompt nor `diagnostics` re-walks the folder.
-* **Checkpoints and undo** (`Checkpoints`, `CodeAgentExtension`): registered before `PermissionExtension`, its
-  `shouldRun` copies a file to `.teacher/checkpoints/<turn>/` before the agent's first write or edit to it in the turn
-  (a created file is recorded as absent). `didFinishTurn` keeps only files whose content differs from the backup and
-  stores `checkpoint` and `changedFiles` on the turn's metrics (optional fields, so older messages decode); the page's
-  footer offers **Undo this turn's changes** (`revert` message → `Checkpoints.restore`), the agent hears about an undo
-  with the next message, and the newest 40 checkpoints are kept. No git needed; the Changes panel's git checkpoints
-  are the user's own.
+  by file count (code only; a bounded walk), git branch and dirty count. It is the `# Project` section of the code
+  mentor's prompt and the default commands of `diagnostics`.
+* **Verification loop.** `WriteTool`/`EditTool` in Code mentor mode (`ToolContext.codeAgent`) run
+  `Diagnostics.quickCheck` on the file (py_compile, node --check, ruby -c, zig ast-check, swiftc -parse, gofmt -e,
+  zsh -n, JSON; ≤ 10 s) and append the verdict to the result (`meta.syntaxErrors` marks the card). `diagnostics` runs
+  the project's check, test or lint command (or one given) and parses clang/swift/zig/go, tsc, rustc, python and eslint
+  output into `file:line:col severity message`, grouped by file and capped (`Diagnostics.parse` / `summary`). `bash`
+  with `background: true` runs detached (≤ 30 min) and delivers a `<background-task>` message through
+  `ChatSession.deliver`, like a sub-agent's report (the page renders it as one); sub-agents' shells stay in the
+  foreground. `ShellState` keeps the lesson's running background tasks by handle: Stop cancels them (the processes end,
+  nothing is delivered), and a foreground `bash` result names the ones still running. A coder sub-agent working in the
+  lesson's folder backs files up under the turn's checkpoint too (`ToolContext.checkpointTurn`), so Undo covers its
+  edits. `ProjectProfile.detect` caches per folder behind a fingerprint of the manifests' dates and sizes (ten minutes;
+  the git part refreshed after a minute), so neither the prompt nor `diagnostics` re-walks the folder.
+* **Checkpoints and undo** (`Checkpoints`, `CodeAgentExtension`, Code mentor mode): registered before
+  `PermissionExtension`, its `shouldRun` copies a file to `.teacher/checkpoints/<turn>/` before the agent's first write
+  or edit to it in the turn (a created file is recorded as absent). `didFinishTurn` keeps only files whose content
+  differs from the backup and stores `checkpoint` and `changedFiles` on the turn's metrics (optional fields, so older
+  messages decode); the page's footer offers **Undo this turn's changes** (`revert` message → `Checkpoints.restore`),
+  the agent hears about an undo with the next message, and the newest 40 checkpoints are kept. No git needed; the
+  Changes panel's git checkpoints are the user's own.
 * `symbols`: a file's outline or the definitions of a name across the folder, by per-language regular expressions
   (ripgrep for the search) — definitions, not mentions. `edit` matches a block whose lines differ only in indentation
-  or trailing whitespace when that match is unique, and re-indents the replacement. `ProjectCommands`:
-  `<name>.md` in `.teacher/commands`, `.claude/commands`, `~/.teacher/commands` or `~/.claude/commands` (first found;
-  `ns/name.md` is `/ns:name`) typed as `/name args` in a code session goes to the agent as hidden context with
-  `$ARGUMENTS` and `$1`…`$9` filled in; `/init` and `/review` are built in unless a file replaces them, and `/compact
-  [focus]` makes `ChatSession.compactNow` summarise everything so far (`Compaction.codingPrompt`) with no model turn.
+  or trailing whitespace when that match is unique, and re-indents the replacement. `ProjectCommands` holds a lesson's
+  own `/` commands only: the follow-ups (`/simpler`, `/quiz`…) and the mode switches (`/socratic`…).
 * **Writes never erase unseen work** (`FileViews`, per agent: `shellID ?? conversationID`, so each sub-agent has its
   own): `read`, `write` and `edit` record a file's modification date and size; `write` refuses an existing file the
   agent hasn't read or whose stamp changed since (the user saved it, a command rewrote it); `edit` applies (exact
-  match) and notes the change. Code agent and code mentor only (`ToolContext.codeAgent`, which sub-agents inherit).
+  match) and notes the change. Code mentor only (`ToolContext.codeAgent`, which sub-agents inherit).
 * **Approvals** (`PermissionExtension`, execute risk): a command `ReadOnlyShell.allows` (the reviewer's strict
   allowlist) never asks, and `bash` runs exactly those through `ReadOnlyShell.run` (no shell, git hardened), so the
   same strictness that lets it skip approval decides how it runs. `CommandRules`: "Always allow “npm test …” in this
@@ -297,17 +291,11 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   itself); a rule matches one simple command (no `; & | < > ( ) { } $` backquotes, backslashes or newlines outside
   single quotes; one leading `cd dir &&` allowed). git and hg never get rules: a repository's config can make them run
   programs, and a rule would let variants of their looking commands run outside `ReadOnlyShell`'s hardening. Package
-  installs ask in agent mode, stay refused in lessons.
+  installs are refused.
 * **Arguments.** `ToolArgs.canonical` renames other agents' argument names (`file_path`, `run_in_background`,
   camelCase) to the tool's own in `ChatSession.execute` and the sub-agent loop, before any gate reads them.
-* **Plan mode** (`PlanModeExtension`, before the permission gate; `Conversation.planMode`, ⇧⌘P or the composer): a
-  hidden note on each message while it is on (and once after it goes off); `refusal` lets through only what looks —
-  read-only risks, `ReadOnlyShell` commands, new `explore`/`reviewer` sub-agents (no resume or steering),
-  `todo_write`, `project_memory`, `ask_learner`, the browser's reading actions. `exit_plan_mode` shows the plan
-  (rendered Markdown on its card) under Approve / Keep planning; approval (`meta.planApproved`) turns plan mode off in
-  `didRun`. It gates new calls only: a background coder started before plan mode went on keeps working.
-* **Hooks** (`HooksExtension`, registered after `PlanModeExtension` and before `PermissionExtension`: a call plan mode
-  refuses runs no hook, and a call a hook blocks is never put to the user). `HookSet` parses Claude Code's `hooks`
+* **Hooks** (`HooksExtension`, every lesson, registered before `PermissionExtension`: a call a hook blocks is never
+  put to the user). `HookSet` parses Claude Code's `hooks`
   JSON from `AppSettings.hooks` (Settings › Hooks) and the folder's `.claude/settings.json` + `settings.local.json`;
   matchers follow Claude Code's rules over both its tool names (`HookSet.claudeNames`) and the app's. `HookRunner` runs
   `/bin/sh -c` in the folder through `ProcessRunner` (off the main actor; `$CLAUDE_PROJECT_DIR`; the event as JSON on
@@ -317,17 +305,13 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   the user). The extension points: PreToolUse is `shouldRun` returning `ToolDecision.pending` (awaited by
   `ChatSession.execute`, chained like an approval by `ExtensionHost.chain`); PostToolUse is `afterRun` (successful calls;
   output and a "the hook rewrote the file" note appended to the result); UserPromptSubmit is `willStartTurn`
-  (`ChatSession.admitPrompt` for turns `send`, `edit` or queued messages start: hidden context, or the message is
+  (`ChatSession.admitPrompt` for turns `send` or `edit` start: hidden context, or the message is
   removed and its text returned to the draft); Stop is `willEndTurn` (a hidden note and another step, at most
-  `ChatSession.sendBackLimit` times per turn). Code agent only; sub-agents' calls don't pass through the extension
+  `ChatSession.sendBackLimit` times per turn). Sub-agents' calls don't pass through the extension
   host. A folder's hooks run only when `AppSettings.approvedHooks[folder]` equals the configuration's `fingerprint`
   (SHA-256 of every event, matcher, timeout and command), so a cloned repo never runs anything and any change asks
   again; the question is an `.ask` on the lesson's first tool call (cards render on tool calls), listing every command,
   and a decline holds for the lesson.
-* **Queued messages.** `send` while a code agent runs appends to `ChatSession.queued` (shown above the composer, each
-  can be taken back); `drainInbox` adds them, with a hidden note and the usual `willSend` context, at the next step
-  boundary, and a reply with no tool calls continues instead of ending the turn. A turn that ends without reading
-  them (an error, the step limit) starts the next one with them; a stopped turn hands their text back to the draft.
 * **MCP client** (`MCP/`): stdio servers (newline-delimited JSON-RPC 2.0 on a child's stdin/stdout, `MCPStdioTransport`:
   `posix_spawn` in its own process group with only fds 0–2, stdin `F_SETNOSIGPIPE`, stderr into a 64 kB `MCPLog`) and
   streamable HTTP (`MCPHTTPTransport`: a POST per message, the reply as JSON or as an event stream that may carry
@@ -349,23 +333,21 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
     afresh. Stop (Settings, a config change) terminates the child; `applicationWillTerminate` → `MCPHub.shutdownNow`
     SIGTERMs every group and SIGKILLs what's left within 200 ms, marked so the exit isn't restarted.
   * **Tools** (`MCPTool`, `ToolRegistry.named` / `active(folder:)`): `mcp__<server>__<tool>` (unsafe characters as
-    `_`, 64 at most with a hash suffix), the server's input schema (`$schema` dropped), `execute` risk. Only nodes with
-    `AgentNode.mcp` (the engineer) get them, always deferred: `MCPHub.promptSection` writes a `# MCP servers` section
-    after `# Environment` with one line per tool (first sentence, "(read-only)"), the servers' `instructions`, and a
-    line per project server awaiting approval. Tool lists are remembered by fingerprint in `mcp-tools.json`, so a
-    lesson's prompt starts no server it has listed before. `load_tools` takes tool names or a whole server
-    (`mcp__<server>`); for an unapproved project server it asks the user first (a `permission` card showing the
-    command) and stores the answer. A direct call to a known MCP tool loads it like any deferred tool.
+    `_`, 64 at most with a hash suffix), the server's input schema (`$schema` dropped), `execute` risk. The `root` node
+    has `AgentNode.mcp`, so every agent gets them, always deferred: `MCPHub.promptSection` writes a `# MCP servers`
+    section after `# Environment` in every lesson's prompt with one line per tool (first sentence, "(read-only)"), the
+    servers' `instructions`, and a line per project server awaiting approval. Tool lists are remembered by fingerprint
+    in `mcp-tools.json`, so a lesson's prompt starts no server it has listed before. `load_tools` takes tool names or a
+    whole server (`mcp__<server>`); for an unapproved project server it asks the user first (a `permission` card
+    showing the command) and stores the answer. A direct call to a known MCP tool loads it like any deferred tool.
   * **Gates**: `PermissionExtension.mcpGate` asks for every call regardless of folder access (once, the server for the
-    lesson, or `AppSettings.mcpAlwaysAllow[folder]`); `PlanModeExtension.refusal` lets an MCP tool through only with
-    the server's `annotations.readOnlyHint`. Sub-agents don't get MCP tools.
-* **Instruction files** (`ProjectMemory.contextBlock`): the user's `~/.claude/CLAUDE.md` and `~/.teacher/AGENTS.md`,
-  each parent folder's CLAUDE.md / AGENTS.md up to the home folder (outermost first), then the project's CLAUDE.md,
-  .claude/CLAUDE.md, AGENTS.md, CLAUDE.local.md and .github/copilot-instructions.md; `@path` mentions of files that
-  exist are appended (relative to the file, three deep, each once; 20k per file, 40k in all). A subfolder's own
-  CLAUDE.md / AGENTS.md rides on the agent's first `read` of a file under it (`ProjectMemory.nested`).
+    lesson, or `AppSettings.mcpAlwaysAllow[folder]`). Sub-agents don't get MCP tools.
+* **Instruction files** (`InstructionFiles.nested`): a subfolder's own CLAUDE.md / AGENTS.md rides on the code
+  mentor's first `read` of a file under it. The prompt carries no CLAUDE.md / AGENTS.md block.
 
-## Browser and computer use (code agent)
+## Browser and computer use
+`browser`, `mac` and `computer` are deferred tools of the `root` node, so every agent can load them; their usage line
+(snapshot and act by ref, `mac` before `computer`, content is untrusted) is in the root guide, `Guides.root`.
 * **Browser** (`browser` tool, right panel → Browser): WKWebView tabs over a persistent website data store of its own
   (non-persistent in test profiles), separate from the transcript. Links from lessons open in it as the learner's tabs. Off-panel tabs live in an
   offscreen panel so they keep rendering and can be screenshotted. A helper injected into an isolated content world of
@@ -497,7 +479,7 @@ leaves for their own editor mid-turn, and App Nap would otherwise throttle the s
   two builds. `MentorProbeTests` (MENTOR_PROBE=1) registers and passes a project in every toolchain installed.
   `CodeMentorExtension` appends a `<project_state>` line to every request
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
-  mentor mode also gets the engineer's tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
+  mentor mode also gets the coding tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
 * **Learning a language or library from its source** (`Tools/SourceTool.swift`): `source` resolves a library by name
   to where it lives on this Mac — Zig's std (`zig env`, via `Toolchains`), Rust's std/core/alloc (`rustc --print
@@ -628,7 +610,7 @@ Every teaching prompt carries the same standard:
 * solve and verify with tools before teaching;
 * specific and quantitative.
 
-Sub-agents' report rules ask for full-depth, verified work, and the code agent for production-grade changes. Reasoning
+Sub-agents' report rules ask for full-depth, verified work. Reasoning
 effort defaults to high for lessons and sub-agents; the live harness still runs with thinking off.
 
 ## Learning first
@@ -713,32 +695,30 @@ Every agent is a node in one tree (`AgentTree`). A node declares what it adds; a
 the root and never what its children add:
 
 ```
-root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-agents (runtime); core visualisations
+root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-agents, browser and Mac control (runtime);
+│        the user's MCP servers' tools (runtime, `mcp__<server>__<tool>`); core visualisations
 │        skills: web-research, read-long-documents, visual-explanations
-├── teacher ── ask_learner, math, run_code, memory, lesson_plan; bash, mastery, flashcards… (runtime); vocab, practice, problem
-│   │          skills: lesson-design, quiz-writing, feedback-on-answers
-│   ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
-│   ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
-│   │               skills: conversation-practice, grammar-drills, pronunciation-coaching
-│   └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, source, glob, grep (runtime)
-│                      skills: debugging-coaching, code-review-feedback, project-scaffolding
-└── engineer ── the code agent: shell, search, run_tests, todo, task; jobs, browser and Mac control, project memory… (runtime)
-                 skills: git-workflow, systematic-debugging, writing-tests, code-review
+└── teacher ── ask_learner, math, run_code, memory, lesson_plan; bash, mastery, flashcards… (runtime); vocab, practice, problem
+    │          skills: lesson-design, quiz-writing, feedback-on-answers
+    ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
+    ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
+    │               skills: conversation-practice, grammar-drills, pronunciation-coaching
+    └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, source, glob, grep, code (runtime)
+                       skills: debugging-coaching, code-review-feedback, project-scaffolding
 ```
 
 * **Three sets per node.** `core` tools go with every request; `deferred` ones load at runtime (one short line each in
   the prompt: the full description and typed schema arrive only once a tool is loaded, by `load_tools` or by calling it
   by name, which loads and runs it); `components` are the fences the agent may write. `ToolRegistry.active`,
   `load_tools` and a direct call to a tool all resolve against the agent's path, so a tutor can't load the code mentor's
-  `run_tests` and the code mentor can't reach the code agent's browser. Core is what an agent uses in most turns;
-  everything else is deferred (the code agent's per-request prefix went from ~9.5k to ~5.7k tokens).
+  `run_tests`. Core is what an agent uses in most turns; everything else is deferred.
 * **Skills follow the tree** (`Skills`, `SkillTool`), in Claude Code's and OpenCode's format: a folder with a `SKILL.md`
   (front matter `name`, `description`, optional `agents`, `disable-model-invocation`). The app's own live in
   `Resources/skills/<node>/` and an agent gets those on its path; then the user's (`~/.teacher/skills`,
   `~/.claude/skills`, `~/.config/opencode/skill(s)`, `~/.agents/skills`, for every agent unless `agents` names some);
   then the open folder's (`.teacher/skills`, `.claude/skills`, `.opencode/skill(s)`, `.agents/skills`), later winning
-  on a name. The prompt's `# Skills` section names each in one line (at most 40; `skill` with `query` searches the
-  rest); `skill` returns a body only when the agent loads it. Settings › Agents lists each agent's skills.
+  on a name. A skill tagged for the old code agent (`agents: [code-agent]`) goes to the code mentor. The prompt's
+  `# Skills` section names each in one line (at most 40; `skill` with `query` searches the rest); `skill` returns a body only when the agent loads it. Settings › Agents lists each agent's skills.
 * **Components follow the same tree.** The page gets the agent's component list with each `T.reset`; a fence outside it
   renders as its source, never a widget. Changing the set clears the markdown caches.
 * **Guides follow it too.** Each node has a guide (`Guides`, editable in Settings › Instructions as "App guide" and
@@ -748,8 +728,8 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
   `mastery`, so switching quizzes off removed the board too).
 
 ## Instructions and limits
-* Every agent's standing instructions live in `Instructions` (teacher, each mode, board, app guide, code agent,
-  built-in sub-agents), short by default and editable in Settings → Instructions (stored in `AppSettings.instructions`;
+* Every agent's standing instructions live in `Instructions` (teacher, each mode, board, app guide, tools
+  guides, built-in sub-agents), short by default and editable in Settings → Instructions (stored in `AppSettings.instructions`;
   a lesson keeps the prompt it started with, so its cached prefix stays valid — until its teaching mode or model
   changes: then the prompt is rebuilt for the new branch of the agent tree). The defaults say what the app needs —
   the standard of work, learner-first rules, how tools and rendering work — and leave teaching craft to the model.
@@ -763,7 +743,7 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
   after using tools, or a todo list still open) is sent back with a hidden note, at most twice a turn.
 * A running `bash` card has **Background**: the learner sends the command to the background (a job, B1…) and the agent
   carries on; a backgrounded job's card shows its handle and URL and a Stop.
-* Code lessons and the code agent get the installed toolchains (`Toolchains`: versions and standard-library paths,
+* Code lessons get the installed toolchains (`Toolchains`: versions and standard-library paths,
   detected once in the background) so they teach the version the learner has. `write` and `run_code` drop a stray
   trailing `EOF` line (heredoc syntax models type into content).
 
@@ -851,7 +831,7 @@ The app's footprint must not grow with how much the learner has done: data lives
   visible; after 8 s without an answer it ends the web process, reloads, and the lesson renders again with visuals
   paused behind ▶ Run (a notice says why). `MyAITeacher --webtest --watchdog` checks this end to end.
 
-## Code research and learning (the code agent)
+## Code research (the code mentor)
 
 ### Research: an index and a graph, not just grep
 
@@ -881,8 +861,7 @@ date changed. The index is saved in the app's support folder, never in the proje
 cold in about 3 s.
 
 **The `code` tool** gives `find`, `def`, `refs`/`callers` (exact, through `rg -w -F`, each use with its enclosing
-definition), `callees`, `outline`, `related`, `map` and `history`. It is the code agent's core research tool; `symbols`
-loads on demand.
+definition), `callees`, `outline`, `related` and `map`. It is a deferred tool of the code mentor; `symbols` is core.
 
 **Why not embeddings.** The only local model is Apple's sentence `NLEmbedding`: ~25 ms a chunk (minutes for a large
 repository) and trained on prose, not code. BM25 over split identifiers with synonyms and the graph found the right
@@ -890,40 +869,7 @@ definition for the test questions, such as "ask the user to approve running a sh
 `PermissionExtension.shouldRun`, at the line where the approval is built.
 
 **Why grep stays.** Exact text (error messages, strings, config keys) is what an index can't rank, and models are
-trained to reach for it. `grep` stays as that, and the code agent's instructions put `code` first.
-
-### Learning: lessons across projects, history within one
-
-**Worth building? Yes, narrowly.**
-* The case for it: the agent repeats the same language pitfalls from project to project, and a fix verified in one
-  project is evidence of a lesson.
-* The risks:
-  * noise (wrong generalisations);
-  * prompt bloat;
-  * poisoning: a repository whose content leads the agent to record a "lesson" that then reaches every project;
-  * stale rules.
-
-The design answers each risk:
-* **Evidence only.** `CodeLearningExtension` watches each turn's checks: diagnostics, `run_tests`, and bash commands
-  that run a test or build runner, keyed by the runner segment without pipes or redirections. A check fails on a
-  non-zero exit or when its output says so (a failing run piped into `tail` exits 0).
-* **One question per fix.** When a check failed and then passed after the agent's edits, `willEndTurn` asks once
-  whether the cause could recur elsewhere; the agent then records it with `lessons` add, with evidence required.
-* **Merged, not duplicated.** The same language and mostly the same words (Jaccard ≥ 0.45) strengthen one lesson
-  instead of adding another.
-* **Small in the prompt.** Only the 8 strongest lessons for the project's languages are included, scored by hits with a
-  180-day decay. A retired lesson stays on record but leaves the prompt.
-* **Hints, not instructions.** The prompt says the project's own conventions win.
-* **Reviewable.** Settings › Agents lists every lesson, with Remove. Lessons are stored in `code-lessons.json` in the
-  app's support folder.
-
-**Project history and regressions.**
-* `ProjectHistory` (`<folder>/.teacher/history.jsonl`) records each turn that changed files: the request, files,
-  checks, whether it fixed a failure, commits (`git rev-parse` after a successful `git commit`), the pull request URL
-  (from `gh pr create`'s output) and the lessons drawn.
-* The prompt carries the latest 4 records, and `code` history shows a file's past.
-* An edit to a file an earlier fix touched comes back with that fix and its verifying check, and the agent is asked to
-  run that check again.
+trained to reach for it. `grep` stays as that.
 
 ## Background tasks panel
 `BackgroundTasks.snapshot()` gathers every background task into one list each second for `TasksView` (the sidebar's
@@ -948,7 +894,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
   * `tool` for every call (time, ok, waited on approval, summary, result size; the whole input and result at `full`,
     and calls to tools the agent doesn't have);
   * `approval`, `memory`, `notice`, `folder`, `project` (from `EventBus`); `subagent.start` and `subagent.end`;
-    `background.report` (and whether it woke the agent); `goal`; `log` (every `AppLog` line).
+    `background.report` (and whether it woke the agent); `log` (every `AppLog` line).
 
   The level (`AppSettings.activityLog`: off, standard, full) is in Settings › General. `--log-summary [day]` totals a
   day per model and per tool.
@@ -958,7 +904,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
     keeps it in `undelivered` until it is opened.
   * The root guide tells every agent not to poll: carry on, or end the turn saying what it is waiting for.
   * `ChatSession.awaitedWork` (background sub-agents, and shell jobs that aren't servers) drives the composer's
-    "Waiting for…" strip, and keeps `/goal` from nudging the agent on while its own work runs.
+    "Waiting for…" strip.
 
 ## Testing
 * `scripts/e2e.sh [--live]` — the whole loop: build, unit tests, renderer suite (light + dark), and with `--live`
@@ -1037,24 +983,22 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | Edit | `edit` | exact unique match or `replace_all`, helpful errors; notes a file changed since it was read |
 | Glob | `glob` | `**` globs, newest first; `rg --files` (honours .gitignore), the folder walk when that finds nothing |
 | Grep | `grep` | ripgrep when installed (fallback `grep`), files (by match count)/content (grouped by file)/count modes, paths relative to the folder searched, `-A`/`-B`/`-C`, `-i`, glob and `type` filters, `multiline`, `offset` + `head_limit` paging |
-| ExitPlanMode / plan mode | `exit_plan_mode` | ⇧⌘P; only looking tools run until the plan is approved |
-| Queued messages | `ChatSession.queued` | sent while the agent works, read at its next step |
 | Bash permission rules | `CommandRules` | "Always allow “npm test …” in this folder"; read-only commands never ask |
-| Hooks | `HooksExtension` | PreToolUse (matcher; exit 2 or `decision: block` blocks, the reason goes to the model), PostToolUse (output reaches the model), UserPromptSubmit (context, or holds the message back), Stop (sends the agent back); Settings › Hooks and the project's `.claude/settings.json` in Claude Code's format, a project's only once approved for that folder and configuration; command hooks only, `allow` decisions ignored, the main agent's calls only |
-| CLAUDE.md | `ProjectMemory.contextBlock` | user, parent folders, project, CLAUDE.local.md, `@imports`, subfolders on first read |
+| Hooks | `HooksExtension` | PreToolUse (matcher; exit 2 or `decision: block` blocks, the reason goes to the model), PostToolUse (output reaches the model), UserPromptSubmit (context, or holds the message back), Stop (sends the agent back); Settings › Hooks and the project's `.claude/settings.json` in Claude Code's format, a project's only once approved for that folder and configuration; every lesson; command hooks only, `allow` decisions ignored, the main agent's calls only |
+| CLAUDE.md | `InstructionFiles.nested` | only a subfolder's CLAUDE.md / AGENTS.md, on the code mentor's first read there; no prompt block |
 | LS | `ls` | sizes, hidden-noise filtering |
 | WebSearch | `web_search` | free & keyless: DuckDuckGo + Bing (+ Brave fallback), ranked by reciprocal-rank fusion × query-word coverage, two per site first, tracking parameters stripped; a slow engine gets 1.5 s once the other has answered; 10-min cache; news mode (falls back to the web); papers mode (OpenAlex: relevance overall and among works cited 25+ times, fused, a log-citation boost); `read` adds the top pages' best passages |
 | WebFetch | `web_fetch` | HTML→Markdown (article extraction, MathML→TeX), PDF→text, images, 15-min cache; `query` returns the BM25-best passages (`Passages`), pages of 12k characters list their later sections' offsets, same-site link addresses left out; `urls` reads up to 4 more pages in parallel in a shared budget (local addresses skipped) |
 | TodoWrite | `todo_write` | rendered as a live checklist |
-| Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app, `.teacher/agents/*.md` and `.claude/agents/*.md` with Claude Code's tool names), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, worktree isolation, supervised restarts; never above the lesson's grants |
+| Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app, `.teacher/agents/*.md` and `.claude/agents/*.md` with Claude Code's tool names), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
-| /command | `.teacher/commands`, `.claude/commands` (project and user) | slash commands with `$ARGUMENTS`, `$1`…`$9`, namespaces; built-in `/init`, `/review`, `/compact`, `/goal` (`GoalExtension`: `Conversation.goal` rides along hidden on every message; `ChatSession.advanceGoal` starts the next turn by itself until the agent calls `goal` met (with evidence) or blocked, the user stops, a turn fails, or 25 turns) |
-| MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every call asked (per-server "always allow" per folder), plan mode only `readOnlyHint` tools; supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
+| /command | `ProjectCommands` | a lesson's own commands only: the follow-ups (`/simpler`, `/quiz`…) and mode switches (`/socratic`…); no project or user command files |
+| MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every agent; every call asked (per-server "always allow" per folder); supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |

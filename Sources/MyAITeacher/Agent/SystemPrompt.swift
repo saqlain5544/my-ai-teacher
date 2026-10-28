@@ -19,29 +19,6 @@ enum SystemPrompt {
         return df.string(from: Date())
     }
 
-    /// The code agent's prompt: an autonomous software engineer in the open folder, with the project's own memory.
-    static func buildAgent(settings: AppSettings, folder: URL, model: String, projectMemory: String, project: String? = nil, mcp: String? = nil,
-                           languages: [String] = []) -> String {
-        var s = Instructions.text(.codeAgent, settings)
-        s += "\n\n" + guides("engineer", settings)
-        s += """
-
-
-        # Environment
-        - Today is \(today()). Model: \(model). Folder: \(folder.path). Relative paths are inside it.
-        - Shell: zsh on macOS; `bash` runs commands in this folder (persistent cwd). The user can stop you at any time.
-        """
-        if let project { s += "\n\n" + project }
-        if let t = Toolchains.section(Toolchains.shared.entries) { s += "\n\n" + t }
-        if let mcp { s += "\n\n" + mcp }
-        if let skills = Skills.promptSection(node: "engineer", folder: folder) { s += "\n\n" + skills }
-        // What it learned in earlier projects (for this project's languages), and this project's own past.
-        if let habits = CodeLessons.shared.promptSection(languages: languages) { s += "\n\n" + habits }
-        if let history = ProjectHistory.promptSection(folder) { s += "\n\n" + history }
-        if !projectMemory.isEmpty { s += "\n\n# Project memory\n" + projectMemory }
-        return s
-    }
-
     /// The guides on an agent's path through `AgentTree`, root first (each the learner's edited text, else the default).
     static func guides(_ node: String, _ settings: AppSettings) -> String {
         AgentTree.path(node).filter { !$0.guide.isEmpty }.map { n in

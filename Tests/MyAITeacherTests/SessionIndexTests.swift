@@ -23,12 +23,12 @@ final class SessionIndexTests: XCTestCase {
 
     func testListsTheLessonsOfEveryFolderNewestFirst() throws {
         let a = try folder("course", lessons: [("Derivatives", .tutor, 300), ("Limits", .tutor, 3_000)])
-        let b = try folder("project", lessons: [("Fix the build", .agent, 60)])
+        let b = try folder("project", lessons: [("Fix the build", .code, 60)])
         let list = SessionIndex.scan([a.path, b.path, a.path])
         XCTAssertEqual(list.map(\.conversation.title), ["Fix the build", "Derivatives", "Limits"], "newest first, a folder listed twice read once")
         XCTAssertEqual(list[0].folder, b.path)
         XCTAssertEqual(list[0].folderName, "project")
-        XCTAssertEqual(list[0].conversation.mode, .agent, "each lesson keeps its own mode (the agent it runs)")
+        XCTAssertEqual(list[0].conversation.mode, .code, "each lesson keeps its own mode (the agent it runs)")
     }
 
     func testAFolderSpelledTwoWaysIsReadOnce() throws {
@@ -45,5 +45,15 @@ final class SessionIndexTests: XCTestCase {
         XCTAssertTrue(SessionIndex.scan([gone.path, plain.path]).isEmpty)
         XCTAssertFalse(FileManager.default.fileExists(atPath: plain.appendingPathComponent(Workspace.stateDirName).path), "listing is read-only")
         XCTAssertFalse(FileManager.default.fileExists(atPath: gone.path))
+    }
+
+    /// A session saved by the code agent (which has left the app) opens as a code mentor lesson, not as nothing.
+    func testACodeAgentSessionOpensAsTheCodeMentor() throws {
+        let saved = try JSONEncoder().encode(Conversation(providerID: "x", model: "m"))
+        var json = try XCTUnwrap(JSONSerialization.jsonObject(with: saved) as? [String: Any])
+        json["mode"] = "agent"; json["planMode"] = true
+        let back = try JSONDecoder().decode(Conversation.self, from: JSONSerialization.data(withJSONObject: json))
+        XCTAssertEqual(back.mode, .code)
+        XCTAssertEqual(try JSONDecoder().decode(TeachingMode.self, from: Data("\"socratic\"".utf8)), .socratic)
     }
 }

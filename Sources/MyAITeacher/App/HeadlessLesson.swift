@@ -6,11 +6,9 @@ import Foundation
 ///   MYAITEACHER_HOME=/tmp/x MyAITeacher --lesson spec.json --provider minimax --model MiniMax-M3.1-Flash
 /// spec: {"mode": "code", "folder": "/path", "seed": {"rel/path": "text"}, "budget": 300,
 ///        "mcpServers": {"name": {"command": "…", "args": […]}},
-///        "turns": [{"text": "…", "files": {"rel/path": "text"}, "plan": true, "steer": {"after": 20, "text": "…"}}]}
+///        "turns": [{"text": "…", "files": {"rel/path": "text"}}]}
 /// `mcpServers` are app-level MCP servers (Settings → MCP); a seeded `.mcp.json` gives project servers, approved like
 /// any approval.
-/// `plan` turns the code agent's plan mode on before the turn (its plan is approved like any approval); `steer` sends a
-/// message while the turn runs, `after` seconds in (the agent reads it at its next step).
 @MainActor
 enum HeadlessLesson {
     static func run(specPath: String, provider: String, model: String, thinking: String?) async -> Int32 {
@@ -47,19 +45,13 @@ enum HeadlessLesson {
             let start = s.messages.count, t0 = Date()
             var firstReply: Double?
             let replied = { s.messages[min(start, s.messages.count)...].contains { $0.role == .assistant && $0.blocks.contains { $0.kind == .text && ($0.text?.count ?? 0) > 300 } } }
-            if let plan = turn["plan"]?.bool { s.setPlanMode(plan) }
-            var steer = turn["steer"]
             s.send(turn["text"]?.string ?? "")
             try? await Task.sleep(for: .milliseconds(300))
-            // Background work the agent launched wakes it when it ends: the turn lasts until that has happened too (and a
+            // Background work the teacher launched wakes it when it ends: the turn lasts until that has happened too (and a
             // few seconds of quiet for its report to arrive).
             var busyAt = Date()
             while s.isRunning || !s.awaitedWork.isEmpty || Date().timeIntervalSince(busyAt) < 3, Date().timeIntervalSince(t0) < budget {
                 if s.isRunning || !s.awaitedWork.isEmpty { busyAt = Date() }
-                if let st = steer, Date().timeIntervalSince(t0) >= Double(st["after"]?.int ?? 10) {
-                    s.send(st["text"]?.string ?? "")
-                    steer = nil
-                }
                 for p in app.interactions.pending.values where p.conversationID == id {
                     if p.kind == "permission" {
                         let first = p.payload["options"]?.array?.compactMap { $0["id"]?.string }.first { $0 != "deny" } ?? "once"
@@ -90,7 +82,7 @@ enum HeadlessLesson {
                                        "tools": .array(tools), "calls": .array(calls), "tool_result_chars": .number(Double(resultChars)),
                                        "prompt_tokens": .number(Double(promptTokens)), "tool_errors": .array(errors), "chars": .number(Double(reply.count)),
                                        "reply": .string(String(reply.prefix(20_000)))]
-            if s.conversation.mode.isAgent {
+            do {
                 let mcp = MCPHub.shared.all.filter { $0.folder.standardizedFileURL.path == s.services.workspace.url.standardizedFileURL.path }
                 if !mcp.isEmpty {
                     out["mcp"] = .array(mcp.map { i in
@@ -99,14 +91,9 @@ enum HeadlessLesson {
                                 "restarts": .number(Double(st.restarts))]
                     })
                 }
-                out["plan_mode"] = .bool(s.conversation.planMode == true)
-                out["steered"] = .number(Double(msgs.filter { $0.blocks.contains { $0.text == ChatSession.queuedNote } }.count))
-                // Reports of background work that came back (each wakes the agent if its turn had ended).
+                // Reports of background work that came back (each wakes the teacher if its turn had ended).
                 out["reports"] = .number(Double(msgs.filter { $0.blocks.contains { $0.meta?["backgroundTask"] != nil || $0.meta?["agentReport"] != nil } }.count))
                 out["compacted"] = .bool(s.conversation.compactSummary != nil)
-                if let g = s.conversation.goal {
-                    out["goal"] = ["state": .string(g.state.rawValue), "turns": .number(Double(g.turns)), "note": g.note.map { .string($0) } ?? .null]
-                }
             }
             if let p = ProjectStore.load(s.services.workspace) {
                 out["project"] = ["registered": .bool(p.snapshotAt != nil), "command": p.testCommand.map { .string($0) } ?? .null,

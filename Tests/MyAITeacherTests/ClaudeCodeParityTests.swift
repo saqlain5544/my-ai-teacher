@@ -1,10 +1,9 @@
 import XCTest
 @testable import MyAITeacher
 
-/// What brings the code agent to Claude Code's level: writes that never erase unseen work, read-only commands without
-/// approval (run hardened), "always allow" command rules, plan mode, Claude Code's argument names, gitignore-aware
-/// search, instruction files from parents, imports and subfolders, `.claude/` commands and agents, `/init`, `/review`
-/// and `/compact`.
+/// The coding tools at Claude Code's level: writes that never erase unseen work, read-only commands without approval
+/// (run hardened), "always allow" command rules, Claude Code's argument names, gitignore-aware search, a subfolder's
+/// instruction files, `.claude/` agents, and a lesson's `/` commands.
 final class ClaudeCodeParityTests: XCTestCase {
     var dir: URL!
     var services: Services!
@@ -127,7 +126,7 @@ final class ClaudeCodeParityTests: XCTestCase {
 
     /// A test run's or a check's own command can be always allowed in the folder, like bash's.
     @MainActor func testTestCommandsCanBeAlwaysAllowed() throws {
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         let gate = PermissionExtension(app: AppModel.shared)
         AppModel.shared.setAccess(.write, for: services.workspace)
@@ -146,109 +145,6 @@ final class ClaudeCodeParityTests: XCTestCase {
         guard case .ask(let chained, _) = gate.shouldRun(Block.toolUse(id: "d1", name: "diagnostics", input: ["what": "command", "command": "make && ./run"]), tool: check, session: session)
         else { return XCTFail("a chained check is asked") }
         XCTAssertFalse(chained.options.map(\.id).contains("rule"), "no rule for a chained command")
-    }
-
-    // MARK: Goal
-
-    @MainActor func testGoalIsSetShownResumedAndCleared() async throws {
-        XCTAssertEqual(ProjectCommands.goalArgument("/goal  make the tests pass "), "make the tests pass")
-        XCTAssertEqual(ProjectCommands.goalArgument("/goal"), "")
-        XCTAssertNil(ProjectCommands.goalArgument("/goals"))
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
-        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
-        XCTAssertFalse(session.goalCommand(""), "showing it sends nothing")
-        XCTAssertTrue(session.goalCommand("Make every test pass"), "a new goal goes to the agent")
-        XCTAssertEqual(session.conversation.goal?.text, "Make every test pass")
-        XCTAssertEqual(session.conversation.goal?.state, .active)
-
-        // Every message carries it while it's open.
-        var m = ChatMessage(role: .user, blocks: [.text("hi")])
-        GoalExtension().willSend(&m, session: session)
-        XCTAssertTrue(m.blocks.first?.text?.contains("Make every test pass") == true && m.blocks.first?.meta?["hidden"]?.bool == true)
-
-        // The agent reports it blocked: paused, with what it needs; met ends it.
-        let ext = GoalExtension()
-        let blocked = try await GoalTool().run(["status": "blocked", "evidence": "Which database?"], ctx())
-        var result = Block.toolResult(id: "g1", name: "goal", content: blocked.text, isError: false); result.meta = blocked.meta
-        ext.didRun(Block.toolUse(id: "g1", name: "goal", input: [:]), result: &result, session: session)
-        XCTAssertEqual(session.conversation.goal?.state, .paused); XCTAssertEqual(session.conversation.goal?.note, "Which database?")
-        var quiet = ChatMessage(role: .user, blocks: [.text("hi")]); ext.willSend(&quiet, session: session)
-        XCTAssertEqual(quiet.blocks.count, 1, "a paused goal isn't pressed on the agent")
-        guard case .deny = ext.shouldRun(Block.toolUse(id: "g2", name: "goal", input: [:]), tool: GoalTool(), session: session) else { return XCTFail("nothing to report while paused") }
-        let met = try await GoalTool().run(["status": "met", "evidence": "pytest: 12 passed"], ctx())
-        XCTAssertEqual(met.meta?["goalStatus"]?.string, "met")
-        let bare = try await GoalTool().run(["status": "met", "evidence": " "], ctx())
-        XCTAssertTrue(bare.isError, "met needs evidence")
-
-        // After each turn: on to the next while open; a stop, a failure or the cap pauses it.
-        let open = SessionGoal(text: "x")
-        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: nil).state, .active)
-        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: nil).turns, 1)
-        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: true, error: nil).state, .paused)
-        XCTAssertEqual(ChatSession.afterTurn(open, cancelled: false, error: "HTTP 500").note, "A turn failed: HTTP 500")
-        var late = open; late.turns = SessionGoal.maxTurns - 1
-        XCTAssertEqual(ChatSession.afterTurn(late, cancelled: false, error: nil).state, .paused, "the cap")
-
-        XCTAssertFalse(session.goalCommand("clear"))
-        XCTAssertNil(session.conversation.goal)
-        XCTAssertTrue(AgentTree.deferred("engineer").contains("goal") && !AgentTree.deferred("tutor").contains("goal"), "a code agent's tool")
-    }
-
-    // MARK: Plan mode
-
-    func testPlanModeOnlyLooks() {
-        let refuse = { (t: Tool, i: JSON) in PlanModeExtension.refusal(t, i) != nil }
-        XCTAssertTrue(refuse(WriteTool(), ["path": "a", "content": "b"]))
-        XCTAssertTrue(refuse(EditTool(), ["path": "a"]))
-        XCTAssertTrue(refuse(BashTool(), ["command": "npm test"]))
-        XCTAssertTrue(refuse(BashTool(), ["command": "git status", "background": true]))
-        XCTAssertFalse(refuse(BashTool(), ["command": "git log --oneline -5"]))
-        XCTAssertTrue(refuse(RunTestsTool(), [:]))
-        XCTAssertTrue(refuse(RunCodeTool(), ["language": "python", "code": "1"]))
-        XCTAssertFalse(refuse(TaskTool(), ["prompt": "find x"]), "explore by default")
-        XCTAssertFalse(refuse(TaskTool(), ["prompt": "x", "type": "reviewer"]))
-        XCTAssertTrue(refuse(TaskTool(), ["prompt": "x", "type": "coder"]))
-        for t: Tool in [ReadTool(), GrepTool(), GlobTool(), ExitPlanModeTool(), TodoWriteTool(), WebSearchTool()] { XCTAssertFalse(refuse(t, [:]), t.name) }
-        XCTAssertTrue(refuse(TaskTool(), ["prompt": "go on", "resume": "A1"]), "a resumed sub-agent may be a coder")
-        XCTAssertTrue(refuse(AgentsTool(), ["action": "resume", "id": "A1", "message": "go on"]))
-        XCTAssertFalse(refuse(AgentsTool(), ["action": "list"]))
-        if let browser = ToolRegistry.byName["browser"] {
-            XCTAssertFalse(refuse(browser, ["action": "snapshot"]))
-            XCTAssertTrue(refuse(browser, ["action": "click", "ref": "e3"]), "clicking can change a site")
-            XCTAssertTrue(refuse(browser, ["action": "fill", "ref": "e3", "text": "x"]))
-        }
-        XCTAssertTrue(AgentTree.core("engineer").contains("exit_plan_mode"))
-    }
-
-    @MainActor func testPlanModeIsAnnouncedAndEndsOnApproval() async throws {
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
-        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
-        let ext = PlanModeExtension()
-        func note(_ m: ChatMessage) -> String { m.blocks.filter { $0.meta?["hidden"]?.bool == true }.compactMap(\.text).joined() }
-        session.setPlanMode(true)
-        var m = ChatMessage(role: .user, blocks: [.text("add caching")])
-        ext.willSend(&m, session: session)
-        XCTAssertTrue(note(m).contains("Plan mode is on"))
-        let write = Block.toolUse(id: "w", name: "write", input: ["path": "a", "content": "b"])
-        guard case .deny = ext.shouldRun(write, tool: WriteTool(), session: session) else { return XCTFail("a write in plan mode") }
-        var result = Block.toolResult(id: "p", name: "exit_plan_mode", content: "approved", meta: ["planApproved": true])
-        ext.didRun(.toolUse(id: "p", name: "exit_plan_mode", input: ["plan": "x"]), result: &result, session: session)
-        XCTAssertNil(session.conversation.planMode, "approval ends plan mode")
-        guard case .allow = ext.shouldRun(write, tool: WriteTool(), session: session) else { return XCTFail("writes run again") }
-        guard case .deny = ext.shouldRun(.toolUse(id: "q", name: "exit_plan_mode", input: [:]), tool: ExitPlanModeTool(), session: session) else {
-            return XCTFail("nothing to approve outside plan mode")
-        }
-        // Turned off by the user instead: the agent hears it once.
-        session.setPlanMode(true)
-        var a = ChatMessage(role: .user, blocks: [.text("go")]); ext.willSend(&a, session: session)
-        session.setPlanMode(false)
-        var b = ChatMessage(role: .user, blocks: [.text("go")]); ext.willSend(&b, session: session)
-        var c = ChatMessage(role: .user, blocks: [.text("go")]); ext.willSend(&c, session: session)
-        XCTAssertTrue(note(b).contains("Plan mode is off")); XCTAssertEqual(note(c), "")
-        var lesson = Conversation(providerID: "x", model: "m"); lesson.mode = .tutor
-        let tutor = ChatSession(conversation: lesson, app: AppModel.shared, services: services)
-        tutor.setPlanMode(true)
-        XCTAssertNil(tutor.conversation.planMode, "plan mode is the code agent's")
     }
 
     // MARK: Arguments, search
@@ -287,24 +183,12 @@ final class ClaudeCodeParityTests: XCTestCase {
 
     // MARK: Instructions, commands, agents
 
-    @MainActor func testInstructionFilesFromParentsImportsAndSubfolders() async throws {
-        let home = dir.appendingPathComponent("home"), repo = home.appendingPathComponent("code/mono"), pkg = repo.appendingPathComponent("packages/web")
-        try write(".claude/CLAUDE.md", "Prefer pnpm.", in: home)
-        try write("AGENTS.md", "Monorepo: run tasks with turbo.\nSee @docs/style.md and @MainActor isolation; mail a@b.io.", in: repo)
-        try write("docs/style.md", "Two-space indent. @deep.md", in: repo)
-        try write("docs/deep.md", "Deep rule.", in: repo)
+    @MainActor func testASubfoldersInstructionsComeWithTheFirstReadThere() async throws {
+        let pkg = dir.appendingPathComponent("packages/web")
         try write("CLAUDE.md", "Web package: Next.js.", in: pkg)
-        try write("CLAUDE.local.md", "My local note.", in: pkg)
         try write("src/ui/AGENTS.md", "UI components: no default exports.", in: pkg)
         try write("src/ui/Button.tsx", "export const Button = 1\n", in: pkg)
-        let block = ProjectMemory.contextBlock(pkg, home: home)
-        let order = ["Prefer pnpm.", "Monorepo: run tasks with turbo.", "Two-space indent.", "Deep rule.", "Web package: Next.js.", "My local note."]
-        let at = order.map { block.range(of: $0)?.lowerBound }
-        XCTAssertFalse(at.contains(nil), block)
-        XCTAssertEqual(at.compactMap { $0 }, at.compactMap { $0 }.sorted(), "user, then parents outermost first, imports after their file, then the project")
-        XCTAssertFalse(block.contains("Imported from @MainActor") || block.contains("Imported from @b.io"), "only files that exist are imported")
-        XCTAssertFalse(block.contains("no default exports"), "a subfolder's file comes with the first read there")
-        XCTAssertEqual(ProjectMemory.nested(for: pkg.appendingPathComponent("src/ui/Button.tsx"), workspace: pkg).map(\.lastPathComponent), ["AGENTS.md"])
+        XCTAssertEqual(InstructionFiles.nested(for: pkg.appendingPathComponent("src/ui/Button.tsx"), workspace: pkg).map(\.lastPathComponent), ["AGENTS.md"])
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
         var c = ToolContext(conversationID: "N-\(UUID().uuidString.prefix(4))", workspace: pkg, services: services, interactions: InteractionCenter(),
                             toolCallID: "c", client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
@@ -315,56 +199,20 @@ final class ClaudeCodeParityTests: XCTestCase {
         XCTAssertFalse(again.text.contains("no default exports"), "once")
     }
 
-    /// Typing `/` lists every command with what it does; typing on narrows it; a space (arguments) closes it.
+    /// Typing `/` lists a lesson's commands; typing on narrows it; a space (arguments) closes it.
     func testTheSlashMenuListsAndNarrowsCommands() throws {
-        let home = dir.appendingPathComponent("home")
-        let cmds = dir.appendingPathComponent(".claude/commands")
-        try FileManager.default.createDirectory(at: cmds.appendingPathComponent("frontend"), withIntermediateDirectories: true)
-        try "---\ndescription: Ship a release with notes\n---\nTag and push $ARGUMENTS".write(to: cmds.appendingPathComponent("release.md"), atomically: true, encoding: .utf8)
-        try "Run the UI tests for $1".write(to: cmds.appendingPathComponent("frontend/test.md"), atomically: true, encoding: .utf8)
-        let all = ProjectCommands.suggestions(dir, home: home)
-        XCTAssertEqual(Array(all.prefix(4).map(\.name)), ["goal", "review", "compact", "init"], "the built-ins first")
-        XCTAssertEqual(all.first { $0.name == "release" }?.detail, "Ship a release with notes")
-        XCTAssertEqual(all.first { $0.name == "frontend:test" }?.detail, "Run the UI tests for $1")
-        XCTAssertEqual(all.first { $0.name == "release" }?.source, "this project")
-        XCTAssertEqual(ProjectCommands.matches("/", in: all)?.count, all.count, "a bare / shows them all")
-        XCTAssertEqual(ProjectCommands.matches("/re", in: all)?.map(\.name), ["review", "release"])
-        XCTAssertEqual(ProjectCommands.matches("/test", in: all)?.map(\.name), ["frontend:test"], "a name inside counts too")
-        XCTAssertNil(ProjectCommands.matches("/review src/app.py", in: all), "arguments being typed: no menu")
-        XCTAssertNil(ProjectCommands.matches("hello /re", in: all))
-
-        // A teaching lesson: the follow-ups and the other modes.
         let lesson = ProjectCommands.lessonSuggestions(current: .tutor)
+        XCTAssertEqual(ProjectCommands.matches("/", in: lesson)?.count, lesson.count, "a bare / shows them all")
+        XCTAssertEqual(ProjectCommands.matches("/so", in: lesson)?.map(\.name), ["socratic"])
+        XCTAssertEqual(ProjectCommands.matches("/mpl", in: lesson)?.map(\.name), ["simpler", "example"], "a name inside counts too")
+        XCTAssertNil(ProjectCommands.matches("/simpler please", in: lesson), "arguments being typed: no menu")
+        XCTAssertNil(ProjectCommands.matches("hello /so", in: lesson))
         XCTAssertEqual(Array(lesson.prefix(5).map(\.name)), ["simpler", "deeper", "example", "quiz", "flashcards"])
         XCTAssertTrue(lesson.contains { $0.name == "socratic" } && !lesson.contains { $0.name == "tutor" }, "the other modes, not the current one")
         XCTAssertEqual(ProjectCommands.lessonCommand("/simpler"), .prompt("Can you explain that again more simply, with an everyday analogy?"))
         XCTAssertEqual(ProjectCommands.lessonCommand("/socratic why is the sky blue?"), .mode(.socratic, then: "why is the sky blue?"))
         XCTAssertNil(ProjectCommands.lessonCommand("/nothing"))
         XCTAssertNil(ProjectCommands.lessonCommand("the /socratic method"))
-    }
-
-    func testCommandsFromClaudeFoldersAndBuiltIns() throws {
-        let home = dir.appendingPathComponent("home")
-        try write(".claude/commands/fix-issue.md", "---\ndescription: Fix an issue\nargument-hint: [number] [priority]\n---\nFix issue #$1 at priority $2. All: $ARGUMENTS", in: dir)
-        try write(".claude/commands/frontend/test.md", "Run the frontend tests.", in: dir)
-        try write(".teacher/commands/fix-issue.md", "Teacher's own fix-issue: $1", in: dir)
-        try write(".claude/commands/standup.md", "Write my standup.", in: home)
-        XCTAssertEqual(ProjectCommands.expand("/fix-issue 42 high", folder: dir, home: home)?.contains("Teacher's own fix-issue: 42"), true, ".teacher wins")
-        try FileManager.default.removeItem(at: dir.appendingPathComponent(".teacher/commands/fix-issue.md"))
-        let e = ProjectCommands.expand("/fix-issue 42 high", folder: dir, home: home) ?? ""
-        XCTAssertTrue(e.contains("Fix issue #42 at priority high. All: 42 high") && e.contains(".claude/commands/fix-issue.md") && !e.contains("argument-hint"), e)
-        XCTAssertTrue(ProjectCommands.expand("/frontend:test", folder: dir, home: home)?.contains("Run the frontend tests.") == true)
-        XCTAssertTrue(ProjectCommands.expand("/standup", folder: dir, home: home)?.contains("Write my standup.") == true)
-        XCTAssertEqual(ProjectCommands.names(dir, home: home), ["fix-issue", "frontend:test", "standup"])
-        XCTAssertEqual(ProjectCommands.names(dir, home: nil), ["fix-issue", "frontend:test"])
-        XCTAssertTrue(ProjectCommands.expand("/init", folder: dir, home: home)?.contains("AGENTS.md") == true)
-        XCTAssertTrue(ProjectCommands.expand("/review the auth module", folder: dir, home: home)?.contains("the auth module") == true)
-        XCTAssertNil(ProjectCommands.expand("/nope", folder: dir, home: home))
-        XCTAssertNil(ProjectCommands.expand("/../../etc/passwd", folder: dir, home: home))
-        XCTAssertEqual(ProjectCommands.compactFocus("/compact"), "")
-        XCTAssertEqual(ProjectCommands.compactFocus("/compact keep the API decisions"), "keep the API decisions")
-        XCTAssertNil(ProjectCommands.compactFocus("/compactor"))
-        XCTAssertNil(ProjectCommands.compactFocus("compact it"))
     }
 
     func testClaudeCodeAgentDefinitions() throws {
@@ -380,11 +228,5 @@ final class ClaudeCodeParityTests: XCTestCase {
         let reader = try XCTUnwrap(AgentCatalog.project(dir).first { $0.name == "db-reader" })
         XCTAssertEqual(reader.tools, ["read", "grep", "glob", "bash", "web_fetch"])
         XCTAssertNil(reader.model, "Claude Code's model aliases mean the lesson's model")
-    }
-
-    func testCodingSummaryPrompt() {
-        let p = Compaction.codingPrompt([ChatMessage(role: .user, blocks: [.text("fix the parser")])], previous: nil, focus: "the API decisions")
-        XCTAssertTrue(p.contains("Files read and changed") && p.contains("Current work") && p.contains("the API decisions"), p)
-        XCTAssertFalse(p.contains("misconceptions") || p.contains("tutoring"), "an engineering summary, not a lesson's")
     }
 }

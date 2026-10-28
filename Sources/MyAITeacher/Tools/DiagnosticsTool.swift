@@ -169,7 +169,7 @@ struct DiagnosticsTool: Tool {
             default: profile.checkCommand
             }
             guard command != nil else {
-                return .error("No \(what) command is known for this project (nothing detected from its manifests). Pass `command`, and save it with `project_memory` once it works.")
+                return .error("No \(what) command is known for this project (nothing detected from its manifests). Pass `command`.")
             }
         }
         let cmd = command!

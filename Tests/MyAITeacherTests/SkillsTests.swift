@@ -25,16 +25,13 @@ final class SkillsTests: XCTestCase {
 
     func testTheAppsSkillsFollowTheAgentTree() {
         let real = AppPaths.skillResources
-        let agent = Set(Skills.available(node: "engineer", folder: nil, home: nil, builtIn: real).map(\.name))
         let tutor = Set(Skills.available(node: "tutor", folder: nil, home: nil, builtIn: real).map(\.name))
         let language = Set(Skills.available(node: "language", folder: nil, home: nil, builtIn: real).map(\.name))
         let mentor = Set(Skills.available(node: "code-mentor", folder: nil, home: nil, builtIn: real).map(\.name))
         let base = Set(Skills.scan(real.appendingPathComponent("root"), source: .app("root")).map(\.name))
         XCTAssertTrue(base.contains("web-research"))
-        for s in [agent, tutor, language, mentor] { XCTAssertTrue(base.isSubset(of: s), "every agent has the base skills") }
-        XCTAssertTrue(agent.contains("git-workflow") && !tutor.contains("git-workflow"), "the code agent's skills are its own")
+        for s in [tutor, language, mentor] { XCTAssertTrue(base.isSubset(of: s), "every agent has the base skills") }
         XCTAssertTrue(tutor.contains("lesson-design") && language.contains("lesson-design") && mentor.contains("lesson-design"), "every teacher's")
-        XCTAssertFalse(agent.contains("lesson-design"), "the code agent isn't a teacher")
         XCTAssertTrue(language.contains("conversation-practice") && !mentor.contains("conversation-practice"))
         XCTAssertTrue(mentor.contains("debugging-coaching") && !language.contains("debugging-coaching"))
         // Every built-in skill parses, named as its folder, with a description to choose it by.
@@ -61,16 +58,16 @@ final class SkillsTests: XCTestCase {
         try skill(proj, ".claude/skills/notes", "---\nname: notes\ndescription: This repo's.\n---\nProject")
         try skill(proj, ".opencode/skill/style", "---\nname: style\ndescription: House style.\n---\nStyle")
 
-        let agent = Skills.available(node: "engineer", folder: proj, home: home, builtIn: builtIn)
-        XCTAssertEqual(agent.map(\.name), ["deploy", "hidden", "notes", "style"])
-        XCTAssertEqual(agent.first { $0.name == "notes" }?.body, "Project", "the folder's wins")
-        XCTAssertEqual(agent.first { $0.name == "deploy" }?.body, "Teacher", ".teacher before .claude")
-        XCTAssertEqual(names("tutor"), ["flash", "hidden", "notes"], "deploy is the code agent's; flash is every teacher's")
+        let mentor = Skills.available(node: "code-mentor", folder: proj, home: home, builtIn: builtIn)
+        XCTAssertEqual(mentor.map(\.name), ["deploy", "flash", "hidden", "notes", "style"], "a skill for the code agent goes to the code mentor")
+        XCTAssertEqual(mentor.first { $0.name == "notes" }?.body, "Project", "the folder's wins")
+        XCTAssertEqual(mentor.first { $0.name == "deploy" }?.body, "Teacher", ".teacher before .claude")
+        XCTAssertEqual(names("tutor"), ["flash", "hidden", "notes"], "deploy is the code mentor's; flash is every teacher's")
         XCTAssertEqual(Skills.available(node: "tutor", folder: nil, home: home, builtIn: builtIn).first { $0.name == "flash" }?.description, "Quoted, for teachers.")
         XCTAssertTrue(names("language").contains("flash"))
-        XCTAssertEqual(Skills.available(node: "engineer", folder: nil, home: home, builtIn: builtIn).first { $0.name == "notes" }?.body, "User", "yours over the app's")
+        XCTAssertEqual(Skills.available(node: "code-mentor", folder: nil, home: home, builtIn: builtIn).first { $0.name == "notes" }?.body, "User", "yours over the app's")
 
-        let prompt = try XCTUnwrap(Skills.promptSection(node: "engineer", folder: proj, home: home, builtIn: builtIn))
+        let prompt = try XCTUnwrap(Skills.promptSection(node: "code-mentor", folder: proj, home: home, builtIn: builtIn))
         XCTAssertTrue(prompt.contains("- deploy: Ours first.") && prompt.contains("- style: House style."))
         XCTAssertFalse(prompt.contains("hidden"), "a user-only skill isn't offered to the model")
         XCTAssertFalse(prompt.contains("Deploy"), "bodies stay out of the prompt")
@@ -91,39 +88,37 @@ final class SkillsTests: XCTestCase {
         var ctx = ToolContext(conversationID: "S", workspace: dir.appendingPathComponent("proj"), services: services, interactions: InteractionCenter(), toolCallID: "c",
                               client: ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m").client(apiKey: nil),
                               model: "m", progress: { _ in })
-        ctx.agentNode = "engineer"
+        ctx.agentNode = "code-mentor"
         let out = try await SkillTool().run(["name": "release"], ctx)
         XCTAssertTrue(out.text.contains("Run the release script.") && out.text.contains("release.sh") && out.text.contains("this folder's"), out.text)
         let found = try await SkillTool().run(["query": "release notes"], ctx)
         XCTAssertTrue(found.text.contains("- release: Cut a release"), found.text)
-        let builtIn = try await SkillTool().run(["name": "git-workflow"], ctx)
-        XCTAssertTrue(builtIn.text.contains("git status"), "the code agent's own")
+        let builtIn = try await SkillTool().run(["name": "debugging-coaching"], ctx)
+        XCTAssertTrue(builtIn.text.contains("Reproduce together"), "the code mentor's own")
         ctx.agentNode = "tutor"
-        let notMine = try await SkillTool().run(["name": "git-workflow"], ctx)
-        XCTAssertTrue(notMine.isError, "a tutor doesn't have the code agent's skills")
+        let notMine = try await SkillTool().run(["name": "debugging-coaching"], ctx)
+        XCTAssertTrue(notMine.isError, "a tutor doesn't have the code mentor's skills")
         let near = try await SkillTool().run(["name": "relase"], ctx)
         XCTAssertTrue(near.isError)
-        XCTAssertEqual(PlanModeExtension.refusal(SkillTool(), ["name": "x"]), nil, "loading a skill only reads")
     }
 
     func testToolsAreListedLeanAndLoadOnDemand() {
-        XCTAssertTrue(AgentTree.core("tutor").contains("skill") && AgentTree.core("engineer").contains("skill"))
-        let agentCore = Set(AgentTree.core("engineer"))
-        for t in ["browser", "mac", "computer", "ask_learner"] { XCTAssertFalse(agentCore.contains(t), t); XCTAssertTrue(AgentTree.deferred("engineer").contains(t), t) }
-        XCTAssertTrue(agentCore.contains("task"), "the code agent delegates often")
+        XCTAssertTrue(AgentTree.core("tutor").contains("skill") && AgentTree.core("code-mentor").contains("skill"))
+        let mentorCore = Set(AgentTree.core("code-mentor"))
+        for t in ["browser", "mac", "computer"] { XCTAssertFalse(mentorCore.contains(t), t); XCTAssertTrue(AgentTree.deferred("code-mentor").contains(t), t) }
         XCTAssertFalse(AgentTree.core("tutor").contains("task")); XCTAssertTrue(AgentTree.deferred("tutor").contains("task"))
-        for line in ToolRegistry.deferredIndex("engineer").split(separator: "\n") { XCTAssertLessThan(line.count, 110, String(line)) }
-        let prompt = SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "")
-        XCTAssertTrue(prompt.contains("# Skills") && prompt.contains("- git-workflow:"), "the app's skills are listed")
-        XCTAssertFalse(prompt.contains("`gh pr create"), "their bodies are not")
+        for line in ToolRegistry.deferredIndex("code-mentor").split(separator: "\n") { XCTAssertLessThan(line.count, 110, String(line)) }
+        let prompt = SystemPrompt.build(settings: AppSettings(), mode: .code, coreMemory: "", model: "m", folder: dir)
+        XCTAssertTrue(prompt.contains("# Skills") && prompt.contains("- debugging-coaching:"), "the app's skills are listed")
+        XCTAssertFalse(prompt.contains("Reproduce together"), "their bodies are not")
     }
 
     @MainActor func testTheKeyboardIsTheLanguageMentors() throws {
         let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: dir))
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         session.language = LanguageState(target: "ja", native: "en")
-        XCTAssertNil(session.keyboardLanguage, "no keyboard under a code agent")
+        XCTAssertNil(session.keyboardLanguage, "no keyboard under the code mentor")
         session.setMode(.tutor); XCTAssertNil(session.keyboardLanguage)
         session.setMode(.language); XCTAssertEqual(session.keyboardLanguage, "ja")
     }

@@ -21,7 +21,7 @@ final class HooksTests: XCTestCase {
     }
     func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: dir.appendingPathComponent(name).path) }
 
-    @MainActor func session(_ mode: TeachingMode = .agent) -> ChatSession {
+    @MainActor func session(_ mode: TeachingMode = .code) -> ChatSession {
         var conv = Conversation(providerID: "x", model: "m"); conv.mode = mode
         return ChatSession(conversation: conv, app: AppModel.shared, services: services)
     }
@@ -126,8 +126,9 @@ final class HooksTests: XCTestCase {
         XCTAssertEqual(seen["session_id"]?.string, s.id); XCTAssertEqual(seen["cwd"]?.string, dir.path)
         // A tool the matcher doesn't pick runs no hook at all (not even a pending gate).
         XCTAssertTrue(isAllow(ext.shouldRun(.toolUse(id: "r", name: "read", input: ["path": "a"]), tool: ReadTool(), session: s)))
-        // Only the code agent runs hooks.
-        XCTAssertTrue(isAllow(ext.shouldRun(bash, tool: BashTool(), session: session(.tutor))))
+        // Every lesson runs them, a tutor's too.
+        let tutor = await settle(ext.shouldRun(bash, tool: BashTool(), session: session(.tutor)))
+        XCTAssertEqual(reason(tutor), "A PreToolUse hook blocked this call: Use rg, not grep -r.")
     }
 
     @MainActor func testAHooksAnswerJoinsTheGateChainAndRunsOffTheMainActor() async {

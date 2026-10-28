@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// Hooks, as in Claude Code: shell commands the user sets to run at points of the code agent's work. PreToolUse runs
+/// Hooks, as in Claude Code: shell commands the user sets to run at points of an agent's work. PreToolUse runs
 /// before a tool call and can block it; PostToolUse runs after one (a formatter after an edit); UserPromptSubmit runs when
 /// the user's message starts a turn; Stop runs when the agent would end its turn, and can send it back to work.
 enum HookEvent: String, CaseIterable, Sendable {
@@ -88,7 +88,7 @@ struct HookSet: Equatable, Sendable {
     static let claudeNames: [String: [String]] = [
         "bash": ["Bash"], "read": ["Read"], "write": ["Write"], "edit": ["Edit", "MultiEdit"], "glob": ["Glob"], "grep": ["Grep"], "ls": ["LS"],
         "web_fetch": ["WebFetch"], "web_search": ["WebSearch"], "todo_write": ["TodoWrite"], "task": ["Task", "Agent"],
-        "bash_jobs": ["BashOutput", "KillShell"], "exit_plan_mode": ["ExitPlanMode"],
+        "bash_jobs": ["BashOutput", "KillShell"],
     ]
 
     /// Claude Code's matcher rules: empty or `*` picks every tool; tool names joined by `|` pick those exactly (case
@@ -204,11 +204,10 @@ enum HookRunner {
     }
 }
 
-/// Runs the user's hooks in the code agent: theirs from Settings, and the folder's own (`.claude/settings.json`) once they
+/// Runs the user's hooks in the agents: theirs from Settings, and the folder's own (`.claude/settings.json`) once they
 /// approve them. A folder's hooks are asked about at the agent's first tool call in a lesson there (a card shows every
 /// command), bound to their exact configuration: a cloned repo never runs a command by itself, and a changed one asks
-/// again. Registered after plan mode (a call it refuses runs no hook) and before permissions (a call a hook blocks is
-/// never put to the user).
+/// again. Registered before permissions: a call a hook blocks is never put to the user.
 @MainActor
 final class HooksExtension: AgentExtension {
     let id = "hooks"
@@ -232,7 +231,7 @@ final class HooksExtension: AgentExtension {
     private var asking: Set<String> = []
     private var parsed: (text: String, set: HookSet)?
 
-    static func covers(_ session: ChatSession) -> Bool { session.conversation.mode.isAgent }
+    static func covers(_ session: ChatSession) -> Bool { true }
 
     enum Trust: Equatable { case approved, declined, unasked }
     /// The approval rule: a folder's hooks run only when exactly this configuration was approved for this folder.
@@ -382,7 +381,7 @@ final class HooksExtension: AgentExtension {
     private func payload(_ event: HookEvent, session: ChatSession, _ fields: [String: JSON]) -> JSON {
         var o: [String: JSON] = ["hook_event_name": .string(event.rawValue), "session_id": .string(session.id),
                                  "cwd": .string(session.services.workspace.url.path),
-                                 "permission_mode": .string(PlanModeExtension.isOn(session) ? "plan" : "default")]
+                                 "permission_mode": .string("default")]
         for (k, v) in fields { o[k] = v }
         return .object(o)
     }

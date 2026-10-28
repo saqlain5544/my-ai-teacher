@@ -2,7 +2,7 @@ import Foundation
 
 /// The app's detailed activity log: one JSON object per line, everything that happens — each lesson message, turn, model
 /// call (tokens in, out, cached, reasoning; latency; retries), tool call (input, duration, result size, errors), approval,
-/// background report, sub-agent, goal, memory change, notice, and every line of the plain log (`AppLog`).
+/// background report, sub-agent, memory change, notice, and every line of the plain log (`AppLog`).
 ///
 ///     ~/Library/Logs/MyAITeacher/activity-2026-10-27.jsonl      (a test profile: <MYAITEACHER_HOME>/logs/)
 ///     {"t":"2026-10-27T14:03:11.204Z","ev":"tool","conv":"8F2…","tool":"bash","ms":412,"ok":true,"input":"npm test",…}

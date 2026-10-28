@@ -283,14 +283,14 @@ struct ToolsSettings: View {
     }
 }
 
-/// What the code agent may use beyond the folder: macOS permissions (checked, never requested from here without a
+/// What the agents may use beyond the folder: macOS permissions (checked, never requested from here without a
 /// click), and the sites and apps approved with "Always" (stored here, never in a project folder).
 struct ComputerUseSettings: View {
     @EnvironmentObject var settings: SettingsStore
     @State private var status = ComputerPermissions.status()
 
     var body: some View {
-        Section("Browser and Mac apps (code agent)") {
+        Section("Browser and Mac apps") {
             permission("Screen Recording", on: status.screen, url: ComputerPermissions.screenSettings)
             permission("Accessibility", on: status.accessibility, url: ComputerPermissions.accessibilitySettings)
             if !status.screen || !status.accessibility {

@@ -3,7 +3,7 @@ import Foundation
 /// What makes the code agent an engineer rather than a chat with tools, done by the app so it happens every time:
 /// a file is backed up before the agent's first change to it in a turn (undo under the reply), every file written or
 /// edited is syntax-checked at once and the result rides on the tool result, and the turn's changed files are kept with
-/// its metrics. For Code agent mode and the code mentor's own scaffolding; other lessons are untouched.
+/// its metrics. For the code mentor's own scaffolding; other lessons are untouched.
 @MainActor
 final class CodeAgentExtension: AgentExtension {
     let id = "code-agent"
@@ -22,8 +22,8 @@ final class CodeAgentExtension: AgentExtension {
     }
 
     func currentTurnKey(_ session: ChatSession) -> String? { Self.covers(session) ? key(for: session) : nil }
-    /// The code agent, and the code mentor scaffolding a project in the learner's folder.
-    static func covers(_ session: ChatSession) -> Bool { session.conversation.mode.isAgent || session.conversation.mode == .code }
+    /// The code mentor scaffolding a project in the learner's folder.
+    static func covers(_ session: ChatSession) -> Bool { session.conversation.mode == .code }
 
     func shouldRun(_ call: Block, tool: Tool, session: ChatSession) -> ToolDecision {
         guard Self.covers(session), Self.writers.contains(tool.name), let p = call.input?["path"]?.string else { return .allow }

@@ -63,7 +63,7 @@ final class TestingExtension: AgentExtension {
     let id = "testing"
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        guard !session.conversation.mode.isAgent, !Testing.on(session.settings, session.conversation.mode),
+        guard !Testing.on(session.settings, session.conversation.mode),
               let i = request.messages.indices.last, request.messages[i].role == .user else { return }
         request.messages[i].blocks.removeAll { $0.meta?["testingOff"]?.bool == true }
         request.messages[i].blocks.append(Block(kind: .text, text: Testing.offNote, meta: ["testingOff": true]))

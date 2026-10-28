@@ -43,9 +43,8 @@ struct Composer: View {
             }
             VStack(alignment: .leading, spacing: 6) {
                 if !slashItems.isEmpty { slashMenu(slashItems) }
-                if session.conversation.mode.isAgent, let g = session.conversation.goal { goalStrip(g) }
                 if !session.isRunning {
-                    // Background work the agent launched: when it ends, its report wakes the agent (checked every 2 s).
+                    // Background work the teacher launched: when it ends, its report wakes the teacher (checked every 2 s).
                     TimelineView(.periodic(from: .now, by: 2)) { _ in
                         let work = session.awaitedWork
                         if !work.isEmpty {
@@ -53,31 +52,13 @@ struct Composer: View {
                                 ProgressView().controlSize(.small)
                                 Text("Waiting for \(work.joined(separator: " · "))").font(.caption).lineLimit(1).truncationMode(.tail)
                                 Spacer()
-                                Text("the agent carries on when \(work.count == 1 ? "it finishes" : "each finishes")").font(.caption2).foregroundStyle(.tertiary)
+                                Text("the teacher carries on when \(work.count == 1 ? "it finishes" : "each finishes")").font(.caption2).foregroundStyle(.tertiary)
                             }
                             .padding(.horizontal, 8).padding(.vertical, 4)
                             .background(RoundedRectangle(cornerRadius: 8).fill(Color.primary.opacity(0.05)))
                             .accessibilityElement(children: .combine)
                         }
                     }
-                }
-                ForEach(session.queued, id: \.id) { m in
-                    HStack(spacing: 6) {
-                        Image(systemName: "text.bubble").foregroundStyle(Color.accentColor)
-                        Text(m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: " "))
-                            .font(.caption).lineLimit(2).truncationMode(.tail)
-                        Spacer()
-                        Text("next step").font(.caption2).foregroundStyle(.tertiary)
-                        Button {
-                            if let back = session.unqueue(m.id) {
-                                let text = back.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n")
-                                session.draft = [text, session.draft].filter { !$0.isEmpty }.joined(separator: "\n")
-                            }
-                        } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                        .buttonStyle(.borderless).accessibilityLabel("Take this message back").help("Take it back into the message box")
-                    }
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
                 }
                 ForEach(session.pendingMedia.keys.sorted(), id: \.self) { name in
                     HStack(spacing: 6) {
@@ -150,13 +131,6 @@ struct Composer: View {
                         .buttonStyle(.borderless).accessibilityLabel("Dictate").help("Dictate").padding(.bottom, 4)
                     }
                     if session.isRunning {
-                        // A code agent takes messages while it works: with a draft, a queue button sits beside Stop.
-                        if session.conversation.mode.isAgent && canSend {
-                            Button(action: send) {
-                                Image(systemName: "arrow.up.circle.fill").font(.system(size: 22)).foregroundStyle(Color.accentColor)
-                            }
-                            .buttonStyle(.borderless).accessibilityLabel("Queue for the agent's next step").help("Queue for the agent's next step (Return)")
-                        }
                         Button { session.stop() } label: {
                             Image(systemName: "stop.circle.fill").font(.system(size: 22))
                         }
@@ -175,18 +149,6 @@ struct Composer: View {
                 .shadow(color: .black.opacity(0.07), radius: 10, y: 3))
             .overlay(RoundedRectangle(cornerRadius: 18, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
             HStack(spacing: 10) {
-                if session.conversation.mode.isAgent {
-                    let planning = session.conversation.planMode == true
-                    Button { session.setPlanMode(!planning) } label: {
-                        Label(planning ? "Plan mode on" : "Plan mode", systemImage: planning ? "checklist.checked" : "checklist")
-                            .padding(.horizontal, 6).padding(.vertical, 1)
-                            .background(Capsule().fill(planning ? Color.accentColor.opacity(0.15) : Color.clear))
-                            .foregroundStyle(planning ? Color.accentColor : Color.secondary)
-                    }
-                    .buttonStyle(.plain).accessibilityLabel(planning ? "Plan mode is on" : "Turn plan mode on")
-                    .help(planning ? "The agent researches and presents a plan; nothing changes until you approve it (⇧⌘P turns it off)"
-                                   : "Plan first: the agent researches and presents a plan for your approval before changing anything (⇧⌘P)")
-                }
                 if let u = session.conversation.usage, u.input > 0 {
                     Text("Context \(Self.short(u.input)) tokens · \(Self.short(u.output)) generated")
                 }
@@ -216,14 +178,11 @@ struct Composer: View {
     }
 
     private var placeholder: String {
-        session.conversation.mode.isAgent
-            ? (session.isRunning ? "Message the agent while it works: it reads it at its next step…"
-               : session.isEmpty ? "Describe the task: fix, build, refactor, explain… (attach files or screenshots)" : "Tell the agent what to do next…")
-            : (session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…")
+        session.isEmpty ? "Ask your teacher anything… (attach a photo of your homework, a PDF, or code)" : "Reply to your teacher…"
     }
     // MARK: `/` commands
 
-    /// The commands matching what's typed after `/`: a code session's, or a lesson's follow-ups and modes.
+    /// The commands matching what's typed after `/`: the lesson's follow-ups and modes.
     private var slashItems: [ProjectCommands.Suggestion] {
         guard !slashDismissed, let m = ProjectCommands.matches(session.draft, in: slashAll) else { return [] }
         return m
@@ -231,8 +190,7 @@ struct Composer: View {
 
     /// Every command this lesson has (read when a `/` is typed).
     private func loadSlashCommands() -> [ProjectCommands.Suggestion] {
-        session.conversation.mode.isAgent ? ProjectCommands.suggestions(session.services.workspace.url)
-            : ProjectCommands.lessonSuggestions(current: session.conversation.mode)
+        ProjectCommands.lessonSuggestions(current: session.conversation.mode)
     }
 
     /// ↑ ↓ move, Tab completes, Return completes (or sends a command already complete), Esc closes.
@@ -282,25 +240,6 @@ struct Composer: View {
         .accessibilityElement(children: .contain).accessibilityLabel("Commands")
     }
 
-    /// The code session's `/goal`: what it is, how far along, and resume or clear.
-    private func goalStrip(_ g: SessionGoal) -> some View {
-        HStack(spacing: 6) {
-            Image(systemName: g.state == .met ? "checkmark.seal.fill" : "scope").foregroundStyle(g.state == .met ? Color.green : Color.accentColor)
-            Text(g.text).font(.caption.bold()).lineLimit(1).truncationMode(.tail).help(g.text + (g.note.map { "\n\n" + $0 } ?? ""))
-            Spacer()
-            Text(g.state == .met ? "met" : g.state == .paused ? "paused · turn \(g.turns) of \(SessionGoal.maxTurns)" : "turn \(g.turns + 1) of \(SessionGoal.maxTurns)")
-                .font(.caption2).foregroundStyle(.tertiary)
-            if g.state == .paused {
-                Button("Resume") { _ = session.goalCommand("resume") }.buttonStyle(.borderless).font(.caption).help("Carry on toward the goal")
-            }
-            Button { _ = session.goalCommand("clear") } label: { Image(systemName: "xmark.circle.fill").foregroundStyle(.secondary) }
-                .buttonStyle(.borderless).accessibilityLabel("Clear the goal").help("Clear the goal (/goal clear)")
-        }
-        .padding(.horizontal, 8).padding(.vertical, 4)
-        .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.08)))
-        .accessibilityElement(children: .contain).accessibilityLabel("Goal: \(g.text)")
-    }
-
     private var canSend: Bool {
         session.pendingMedia.isEmpty && (!session.draft.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || !session.attachments.isEmpty)
     }
@@ -310,8 +249,7 @@ struct Composer: View {
     }
 
     private func send() {
-        // While a code agent works, a message is queued for its next step (lessons wait for the reply).
-        guard canSend, !session.isRunning || session.conversation.mode.isAgent else { return }
+        guard canSend, !session.isRunning else { return }
         if speech.isListening { speech.stopListening() }
         let text = session.draft
         let blocks = session.attachments.map(\.block)

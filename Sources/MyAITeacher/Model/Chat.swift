@@ -103,10 +103,13 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
 }
 
 enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
-    case tutor, socratic, explain, quiz, exam, code, language, eli5, research, agent
+    case tutor, socratic, explain, quiz, exam, code, language, eli5, research
     var id: String { rawValue }
-    /// A coding agent (not a tutor): its own prompt, the full coding toolset, project memory instead of the learner's.
-    var isAgent: Bool { self == .agent }
+    /// A mode this version doesn't have (the code agent, now the separate `coding-agent`) opens as the code mentor.
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = TeachingMode(rawValue: raw) ?? .code
+    }
     var title: String {
         switch self {
         case .tutor: "Tutor"
@@ -118,7 +121,6 @@ enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .language: "Language mentor"
         case .eli5: "ELI5"
         case .research: "Research"
-        case .agent: "Code agent"
         }
     }
     var symbol: String {
@@ -132,7 +134,6 @@ enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {
         case .language: "character.book.closed"
         case .eli5: "face.smiling"
         case .research: "globe"
-        case .agent: "hammer"
         }
     }
 }
@@ -161,22 +162,4 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var trimmedThrough: String?
     /// The model refused a request over an attached image (a text-only model): from then on images travel as a note.
     var imagesUnsupported: Bool?
-    /// Code agent: research and present a plan, change nothing until the user approves it (`PlanModeExtension`).
-    var planMode: Bool?
-    /// Code agent: a standing objective it works toward turn after turn until it is met (`/goal`, `GoalExtension`).
-    var goal: SessionGoal?
-}
-
-/// A code session's `/goal`: the agent keeps taking turns toward it until it reports it met (with evidence) or blocked,
-/// the user clears or stops it, or the turn cap is reached.
-struct SessionGoal: Codable, Hashable, Sendable {
-    enum State: String, Codable, Hashable, Sendable { case active, paused, met }
-    var text: String
-    var set = Date()
-    /// Turns taken toward it so far (the user's first one included).
-    var turns = 0
-    var state = State.active
-    /// What the agent last reported: the evidence it's met, or why it's blocked or paused.
-    var note: String?
-    static let maxTurns = 25
 }

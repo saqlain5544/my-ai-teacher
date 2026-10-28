@@ -17,17 +17,7 @@ final class PermissionExtension: AgentExtension {
         let input = call.input ?? .object([:])
         let conv = session.id
         if let installing = Self.packageInstall(tool: tool, input: input) {
-            // An engineer installs a project's dependencies as part of the work, with the user's say-so; a lesson doesn't.
-            guard session.conversation.mode.isAgent else {
-                return .deny("Installing packages isn't allowed (\(installing)). Use the standard library or what's already installed.")
-            }
-            return .ask(ApprovalRequest(
-                title: "Allow the agent to install packages?",
-                detail: String((input["command"]?.string ?? input["code"]?.string ?? installing).prefix(4000)),
-                options: [ApprovalOption(id: "once", label: "Allow this install", style: .primary),
-                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { choice in
-                choice == "once" ? .allow : .deny("The user declined the install. Work with what is installed, or ask them to install it.")
-            }
+            return .deny("Installing packages isn't allowed (\(installing)). Use the standard library or what's already installed.")
         }
         // Python follows the learner's Python setting, independent of folder access.
         if Self.isPython(tool, input) {

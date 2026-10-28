@@ -51,8 +51,8 @@ final class HotPathBenchmarks: XCTestCase {
 
     func testToolSpecsPerStep() {
         var specs = 0
-        time("tool specs for 20 steps (engineer)") {
-            for _ in 0..<20 { specs += ToolRegistry.active(AppSettings(), loaded: [], mode: .agent).map(\.spec).count }
+        time("tool specs for 20 steps (code mentor)") {
+            for _ in 0..<20 { specs += ToolRegistry.active(AppSettings(), loaded: [], mode: .code).map(\.spec).count }
         }
         XCTAssertGreaterThan(specs, 200)
     }

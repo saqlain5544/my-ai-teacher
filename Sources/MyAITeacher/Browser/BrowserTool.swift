@@ -1,7 +1,7 @@
 import AppKit
 import WebKit
 
-/// The code agent's browser tool: one tool, one action per call, refs from `snapshot` instead of pixels.
+/// An agent's browser tool: one tool, one action per call, refs from `snapshot` instead of pixels.
 struct BrowserTool: Tool {
     let name = "browser"
     let description = """

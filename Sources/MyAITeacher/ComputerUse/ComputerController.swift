@@ -39,7 +39,7 @@ struct EscapeDetector {
     }
 }
 
-/// Drives native Mac apps for the code agent: screenshots (only granted apps visible), CGEvent input (the frontmost app,
+/// Drives native Mac apps for the agents: screenshots (only granted apps visible), CGEvent input (the frontmost app,
 /// the app receiving keys and the window under the pointer checked against grants and tiers before every event), the
 /// accessibility tree, and the "Agent is controlling your Mac" indicator with Stop / Esc-Esc. One lesson controls the Mac
 /// at a time. Whatever it presses is released on Stop, errors, timeouts and at the end of the turn. Backends are

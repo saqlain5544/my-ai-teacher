@@ -9,7 +9,7 @@ explains the design. This page covers the day-to-day work.
 Sources/MyAITeacher/
   Agent/        the agent loop, system prompts, context policy, sub-agents, extensions (hooks)
   App/          app model, menus, debug hooks, CLI
-  Browser/      the code agent's in-app browser
+  Browser/      the agents' in-app browser
   ComputerUse/  Mac app control (Accessibility tree, screenshots, safety gate)
   Core/         SQLite, blob store, memory governor, supervised runtime, SSE, speech, fuzzy search
   Extensions/   memory, permissions, teaching context, languages

@@ -1,8 +1,8 @@
 import Foundation
 
-/// A server's tool as the code agent sees it: `mcp__<server>__<tool>` with the server's own schema. Every call runs
+/// A server's tool as an agent sees it: `mcp__<server>__<tool>` with the server's own schema. Every call runs
 /// programs or reaches services the app doesn't know, so it is `execute` risk: the permission gate asks (unless the
-/// user always allows that server in the folder), and plan mode refuses it unless the server marks it read-only.
+/// user always allows that server in the folder).
 struct MCPTool: Tool {
     let name: String
     let description: String
@@ -223,7 +223,7 @@ final class MCPInstance: @unchecked Sendable {
     }
 }
 
-/// The app's MCP servers: an instance per folder and server, the tools the code agent can load from them, the tool
+/// The app's MCP servers: an instance per folder and server, the tools agents can load from them, the tool
 /// lists remembered between launches (so a lesson's prompt lists them without starting anything), and project servers'
 /// approvals.
 final class MCPHub: @unchecked Sendable {
@@ -277,9 +277,9 @@ final class MCPHub: @unchecked Sendable {
         existing(config.name, folder: folder)?.status.server?.instructions ?? cache.get()[config.fingerprint]?["instructions"]?.string
     }
 
-    // MARK: Tools for the code agent
+    // MARK: Tools for the agents
 
-    /// The tools the code agent may load in `folder`: every usable server's (app-level, or approved in this folder).
+    /// The tools an agent may load in `folder`: every usable server's (app-level, or approved in this folder).
     func tools(_ folder: URL, _ settings: AppSettings) -> [MCPTool] {
         MCPConfig.entries(folder, settings).filter { $0.standing == .usable }.flatMap { e in
             (knownTools(e.config, folder: folder) ?? []).map { MCPTool(config: e.config, info: $0) }
@@ -290,7 +290,7 @@ final class MCPHub: @unchecked Sendable {
         return tools(folder, settings).first { $0.name == name }
     }
 
-    /// The code agent's prompt section: one line per tool of each usable server (a server that never ran with this
+    /// An agent's prompt section: one line per tool of each usable server (a server that never ran with this
     /// config is started now to list them), and one per project server awaiting the user's approval. nil: no servers.
     func promptSection(_ folder: URL, _ settings: AppSettings) async -> String? {
         let entries = MCPConfig.entries(folder, settings).filter { $0.standing != .disabled }

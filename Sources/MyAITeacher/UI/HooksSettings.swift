@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings → Hooks: the user's own hooks for the code agent (Claude Code's JSON), and the folders whose own hooks
+/// Settings → Hooks: the user's own hooks for every lesson (Claude Code's JSON), and the folders whose own hooks
 /// (`.claude/settings.json`) they approved.
 struct HooksSettings: View {
     @EnvironmentObject var settings: SettingsStore
@@ -9,7 +9,7 @@ struct HooksSettings: View {
 
     var body: some View {
         Form {
-            Section("Your hooks (code agent)") {
+            Section("Your hooks") {
                 Text("Shell commands run at steps of the agent's work, in Claude Code's format. PreToolUse runs before a tool call (exit 2 blocks it, stderr tells the agent why); PostToolUse after one (a formatter after an edit; its output reaches the agent); UserPromptSubmit when you send a message (its output becomes context; exit 2 holds the message back); Stop when the agent would finish (exit 2 sends it back to work). Each gets the event as JSON on stdin, in the folder, with a timeout (60 s unless set).")
                     .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
                 TextEditor(text: $text)

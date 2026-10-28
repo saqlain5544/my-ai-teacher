@@ -127,7 +127,7 @@ enum MCPConfig {
     }
     private static let cache = Locked<[String: (mtime: Date, parsed: (servers: [MCPServerConfig], error: String?))]>([:])
 
-    /// The servers the code agent has in `folder`: the user's app-level ones, then the folder's, which win a name clash
+    /// The servers an agent has in `folder`: the user's app-level ones, then the folder's, which win a name clash
     /// (as in Claude Code, project scope over user scope).
     static func entries(_ folder: URL?, _ settings: AppSettings) -> [Entry] {
         var out: [String: Entry] = [:]

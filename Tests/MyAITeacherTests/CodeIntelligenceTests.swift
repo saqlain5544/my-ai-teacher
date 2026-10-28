@@ -1,7 +1,7 @@
 import XCTest
 @testable import MyAITeacher
 
-/// The code agent's research index, its global lessons and the project history that guards against regressions.
+/// The code research index (`code`): search by meaning, definitions, uses, callers and the import graph.
 final class CodeIntelligenceTests: XCTestCase {
     var dir: URL!
     var services: Services!
@@ -111,73 +111,6 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertTrue(related.text.contains("Uses: src/net/retry.py"), related.text)
         let map = try await tool.run(["action": "map"], c)
         XCTAssertTrue(map.text.contains("4 files") && map.text.contains("backoff_delay"), map.text)
-        XCTAssertTrue(AgentTree.core("engineer").contains("code") && AgentTree.deferred("engineer").contains("symbols"), "code leads; symbols loads on demand")
-    }
-
-    func testLessonsMergeRankAndRetire() {
-        let store = CodeLessons(url: dir.appendingPathComponent("lessons.json"))
-        let ev = CodeLesson.Evidence(project: "p1", date: Date(), note: "zig build test: use of invalidated slice")
-        let a = store.add(language: "Zig", mistake: "Kept a slice of an ArrayList's items across an append", rule: "Re-take list.items after any append: the buffer may move", evidence: ev)
-        XCTAssertFalse(a.merged); XCTAssertEqual(a.lesson.language, "zig")
-        let b = store.add(language: "zig", mistake: "Held an ArrayList items slice across append", rule: "Re-take list.items after append; the buffer may move", evidence: ev)
-        XCTAssertTrue(b.merged, "the same lesson seen again strengthens it"); XCTAssertEqual(b.lesson.hits, 2)
-        _ = store.add(language: "py", mistake: "Mutable default argument shared between calls", rule: "Default to None and create the list inside", evidence: ev)
-        XCTAssertEqual(store.relevant(languages: ["Python"]).map(\.language), ["python"], "only the project's languages")
-        XCTAssertTrue(store.promptSection(languages: ["Zig"])?.contains("(seen 2×)") == true)
-        XCTAssertNotNil(store.retire(a.lesson.id, why: "wrong for 0.14"))
-        XCTAssertTrue(store.relevant(languages: ["Zig"]).isEmpty, "a retired lesson leaves the prompt")
-        XCTAssertEqual(CodeLessons(url: dir.appendingPathComponent("lessons.json")).all.count, 2, "kept on disk")
-    }
-
-    @MainActor func testAFixedFailureAsksForALessonAndTheHistoryGuardsTheFile() async throws {
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
-        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
-        let ext = CodeLearningExtension()
-        var m = ChatMessage(role: .user, blocks: [.text("fix the retry")]); ext.willSend(&m, session: session)
-        func run(_ name: String, _ input: JSON, _ text: String, error: Bool = false, exit: Int = 0) {
-            var r = Block.toolResult(id: UUID().uuidString, name: name, content: text, isError: error); r.meta = ["exit": .number(Double(exit))]
-            ext.didRun(Block.toolUse(id: "x", name: name, input: input), result: &r, session: session)
-        }
-        run("bash", ["command": "python3 -m pytest -q"], "FAILED test_retry.py::test_delay - AssertionError: 0.5 != 1.0", exit: 1)
-        run("edit", ["path": "src/net/retry.py"], "Edited")
-        run("bash", ["command": "python3 -m pytest -q"], "3 passed")
-        let fix = try XCTUnwrap(ext.fixedFailure(session))
-        XCTAssertTrue(fix.detail.contains("AssertionError"), fix.detail)
-        let ask = await ext.willEndTurn(session, continued: 0)
-        XCTAssertTrue(ask?.contains("`lessons` action=add") == true)
-        let again = await ext.willEndTurn(session, continued: 1)
-        XCTAssertNil(again, "asked once a turn")
-
-        // The person's request, not the app's hidden note that asked for the lesson.
-        XCTAssertEqual(CodeLearningExtension.request([ChatMessage(role: .user, blocks: [.text("fix the retry\nplease")]),
-                                                      ChatMessage(role: .user, blocks: [Block(kind: .text, text: "<context>\nYou fixed…\n</context>", meta: ["hidden": true])])]),
-                       "fix the retry")
-        var metrics = TurnMetrics(); metrics.changedFiles = [dir.appendingPathComponent("src/net/retry.py").path]
-        ext.didFinishTurn(&metrics, session: session)
-        let rec = try XCTUnwrap(ProjectHistory.all(dir).last)
-        XCTAssertEqual(rec.files, ["src/net/retry.py"]); XCTAssertTrue(rec.fixed)
-        XCTAssertEqual(rec.checks, ["python3 -m pytest -q: passed"])
-        XCTAssertTrue(ProjectHistory.promptSection(dir)?.contains("1 of them fixes") == true)
-
-        // The next request edits the same file: the result names the fix and the check that verified it.
-        var next = ChatMessage(role: .user, blocks: [.text("tweak it")]); ext.willSend(&next, session: session)
-        var edit = Block.toolResult(id: "e2", name: "edit", content: "Edited src/net/retry.py", isError: false)
-        ext.didRun(Block.toolUse(id: "e2", name: "edit", input: ["path": "src/net/retry.py"]), result: &edit, session: session)
-        XCTAssertTrue(edit.text?.contains("verified by `python3 -m pytest -q`") == true, edit.text ?? "")
-        XCTAssertTrue(CodeLearningExtension.prURL("Created https://github.com/a/b/pull/12 ok") == "https://github.com/a/b/pull/12")
-    }
-
-    /// From a live session: a failing run piped through `tail` exits 0, and `find … tests` isn't a check.
-    @MainActor func testChecksAreTheRunnersAndFailuresAreReadFromTheOutput() {
-        XCTAssertEqual(CodeLearningExtension.checkKey("ls -la; python3 -m unittest -q 2>&1 | tail -40"), "python3 -m unittest -q")
-        XCTAssertEqual(CodeLearningExtension.checkKey("cd /p && cargo test --lib 2>&1 | head"), "cargo test --lib")
-        XCTAssertEqual(CodeLearningExtension.checkKey("npm run test"), "npm run test")
-        XCTAssertNil(CodeLearningExtension.checkKey("find cart tests -type f | head; cat tests/*.py"))
-        XCTAssertNil(CodeLearningExtension.checkKey("git log -5"))
-        XCTAssertTrue(CodeLearningExtension.saysFailed("FAIL: test_new_carts_are_empty\n----\nFAILED (failures=1)"))
-        XCTAssertTrue(CodeLearningExtension.saysFailed("=== 2 failed, 10 passed in 0.3s ==="))
-        XCTAssertTrue(CodeLearningExtension.saysFailed("src/main.zig:4:5: error: use of undeclared identifier"))
-        XCTAssertFalse(CodeLearningExtension.saysFailed("Ran 1 test in 0.000s\n\nOK"))
-        XCTAssertFalse(CodeLearningExtension.saysFailed("=== 12 passed in 0.4s ==="))
+        XCTAssertTrue(AgentTree.deferred("code-mentor").contains("code"), "the code mentor loads it on demand")
     }
 }

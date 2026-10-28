@@ -1,7 +1,7 @@
 import Foundation
 import CryptoKit
 
-/// A folder's code, indexed and graphed for the code agent's research (`CodeTool`): what grep can't tell it.
+/// A folder's code, indexed and graphed for an agent's research (`CodeTool`): what grep can't tell it.
 ///
 /// Per file: its definitions (with the lines they span), what it imports, and the identifiers it uses. From those, for
 /// the whole folder: where each name is defined, which files use which (a file uses another when it names something

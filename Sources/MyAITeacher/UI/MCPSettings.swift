@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings → MCP: the user's own servers (for the code agent in every folder), the open folder's `.mcp.json` servers
+/// Settings → MCP: the user's own servers (for every agent, in every folder), the open folder's `.mcp.json` servers
 /// (approved or declined here, or when the agent first loads one), and each server's state for this folder: running or
 /// not, its pid, restarts, tools, and the last of what it wrote to stderr.
 struct MCPSettings: View {
@@ -20,7 +20,7 @@ struct MCPSettings: View {
         let project = MCPConfig.project(folder)
         Form {
             Section {
-                Text("MCP servers give the code agent more tools: `mcp__<server>__<tool>`, loaded when it needs them. Every call is asked unless you always allow that server in the folder. Servers start on first use and end with the app.")
+                Text("MCP servers give the teacher more tools: `mcp__<server>__<tool>`, loaded when it needs them. Every call is asked unless you always allow that server in the folder. Servers start on first use and end with the app.")
                     .font(.caption).foregroundStyle(.secondary)
             }
             Section("Your servers (every folder)") {

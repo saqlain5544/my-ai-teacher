@@ -1,6 +1,6 @@
 import Foundation
 
-/// The learner's grants for the code agent's browser and Mac control, and the approval cards built on them:
+/// The learner's grants for an agent's browser and Mac control, and the approval cards built on them:
 /// - browser: each site once per task, per lesson or always (localhost, the local network, files and data: pages never
 ///   "always"); a frame of another origin is a site of its own; every download; JavaScript on its own card;
 /// - Mac apps: `request_access`, `open_app` and `focus_app` name the apps, approved with their tiers (per lesson or

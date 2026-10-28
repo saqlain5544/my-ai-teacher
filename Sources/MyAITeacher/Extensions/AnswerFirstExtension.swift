@@ -6,7 +6,7 @@ import Foundation
 /// minutes. After `limit` tool calls with no reply the learner can read, each result carries a note to answer now with
 /// what it has, say what it couldn't verify, and offer to go further. Some models ignore notes in tool results (one
 /// built the OCaml compiler from source through seven of them), so at `cutoff` calls the next request offers no tools
-/// and the model has to write the answer. Teaching modes only; the code agent works on.
+/// and the model has to write the answer. Every teaching mode.
 @MainActor
 final class AnswerFirstExtension: AgentExtension {
     let id = "answer-first"
@@ -18,7 +18,7 @@ final class AnswerFirstExtension: AgentExtension {
     /// only on sending, a regenerated turn inherited the last turn's count and lost its tools on its first request.
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
         if turnStart[session.id] == nil { turnStart[session.id] = max(0, session.messages.count - 1); calls[session.id] = 0 }
-        guard !session.conversation.mode.isAgent, (calls[session.id] ?? 0) >= Self.cutoff, !answered(session) else { return }
+        guard (calls[session.id] ?? 0) >= Self.cutoff, !answered(session) else { return }
         request.toolsOff = true
     }
 
@@ -32,7 +32,6 @@ final class AnswerFirstExtension: AgentExtension {
     }
 
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {
-        guard !session.conversation.mode.isAgent else { return }
         let n = (calls[session.id] ?? 0) + 1
         calls[session.id] = n
         guard n >= Self.limit, (n - Self.limit) % Self.every == 0, !answered(session) else { return }

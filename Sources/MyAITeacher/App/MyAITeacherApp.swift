@@ -39,7 +39,6 @@ struct MyAITeacherApp: App {
             CommandGroup(replacing: .newItem) {
                 Button("New Lesson") { app.newLesson() }.keyboardShortcut("n")
                 Button("Quick Question") { app.quickQuestion() }.keyboardShortcut("n", modifiers: [.command, .shift])
-                Button("New Code Session") { app.newLesson(mode: .agent) }.keyboardShortcut("k", modifiers: [.command, .shift])
                 Button("Open Folder…") { app.openFolderPanel() }.keyboardShortcut("o")
                 Button("All Sessions") { app.selection = .sessions }.keyboardShortcut("l", modifiers: [.command, .shift])
                 Menu("New Lesson in Mode") {
@@ -52,7 +51,6 @@ struct MyAITeacherApp: App {
                 Button("Memory") { app.selection = .memory }.keyboardShortcut("3", modifiers: [.command, .option])
                 Divider()
                 Button("Stop Generating") { NotificationCenter.default.post(name: .stopGenerating, object: nil) }.keyboardShortcut(".")
-                Button("Plan Mode (Code Sessions)") { NotificationCenter.default.post(name: .togglePlanMode, object: nil) }.keyboardShortcut("p", modifiers: [.command, .shift])
                 Button("Stop Speaking") { app.speech.stop() }
             }
             CommandGroup(after: .textFormatting) {
@@ -72,6 +70,5 @@ struct MyAITeacherApp: App {
 
 extension Notification.Name {
     static let stopGenerating = Notification.Name("stopGenerating")
-    static let togglePlanMode = Notification.Name("togglePlanMode")
     static let focusComposer = Notification.Name("focusComposer")
 }

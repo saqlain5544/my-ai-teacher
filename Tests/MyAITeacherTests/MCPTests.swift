@@ -120,12 +120,12 @@ final class MCPTests: XCTestCase {
 
     var fake: MCPServerConfig { MCPServerConfig(name: "fake", command: "python3", args: ["-u", dir.appendingPathComponent("fake_mcp.py").path]) }
 
-    @MainActor func ctx(node: String = "engineer", interactions: InteractionCenter? = nil) -> ToolContext {
+    @MainActor func ctx(node: String = "code-mentor", interactions: InteractionCenter? = nil) -> ToolContext {
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
         var c = ToolContext(conversationID: "L-\(UUID().uuidString.prefix(4))", workspace: dir, services: services, interactions: interactions ?? InteractionCenter(),
                             toolCallID: "c\(UUID().uuidString.prefix(4))", client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
         c.agentNode = node
-        c.codeAgent = node == "engineer"
+        c.codeAgent = node == "code-mentor"
         return c
     }
 
@@ -360,27 +360,27 @@ final class MCPTests: XCTestCase {
         XCTAssertTrue(section.contains("- `mcp__fake__peek`: Looks at nothing (read-only)"))
         XCTAssertTrue(section.contains("Fake server for tests."), "the server's instructions")
 
-        let before = ToolRegistry.active(settings, loaded: [], mode: .agent, folder: dir).map(\.name)
+        let before = ToolRegistry.active(settings, loaded: [], mode: .code, folder: dir).map(\.name)
         XCTAssertFalse(before.contains { $0.hasPrefix("mcp__") }, "deferred: nothing sent until loaded")
         let loaded = try await LoadToolsTool().run(["names": ["mcp__fake"]], ctx())
         XCTAssertFalse(loaded.isError, loaded.text)
         let names = loaded.meta?["loaded"]?.array?.compactMap(\.string) ?? []
         XCTAssertEqual(names.count, 9, "a whole server by its name")
-        let active = ToolRegistry.active(settings, loaded: ["mcp__fake__echo", "mcp__fake__add"], mode: .agent, folder: dir)
+        let active = ToolRegistry.active(settings, loaded: ["mcp__fake__echo", "mcp__fake__add"], mode: .code, folder: dir)
         XCTAssertEqual(active.suffix(2).map(\.name), ["mcp__fake__echo", "mcp__fake__add"])
         let add = try XCTUnwrap(active.last as? MCPTool)
         XCTAssertEqual(add.risk, .execute)
         XCTAssertNil(add.schema["$schema"], "providers refuse the meta-schema key")
         XCTAssertEqual(add.schema["properties"]?["a"]?["type"]?.string, "number")
-        XCTAssertEqual(ToolRegistry.active(settings, loaded: ["mcp__fake__echo"], mode: .tutor, folder: dir).filter { $0.name.hasPrefix("mcp__") }.count, 0,
-                       "only the code agent has MCP tools")
+        XCTAssertEqual(ToolRegistry.active(settings, loaded: ["mcp__fake__echo"], mode: .tutor, folder: dir).filter { $0.name.hasPrefix("mcp__") }.count, 1,
+                       "every agent has MCP tools")
 
         let one = try await LoadToolsTool().run(["names": ["mcp__fake__echo", "mcp__fake__nope", "mcp__other"]], ctx())
         XCTAssertEqual(one.meta?["loaded"]?.array?.compactMap(\.string), ["mcp__fake__echo"])
         XCTAssertTrue(one.text.contains("has no such tool"), one.text)
         XCTAssertTrue(one.text.contains("no MCP server by that name"), one.text)
         let tutor = try await LoadToolsTool().run(["names": ["mcp__fake"]], ctx(node: "tutor"))
-        XCTAssertTrue(tutor.isError, "a teacher can't load them")
+        XCTAssertFalse(tutor.isError, "a tutor loads them too: \(tutor.text)")
 
         let out = try await add.run(["a": 1, "b": 41], ctx())
         XCTAssertTrue(out.text.contains("42"))
@@ -456,7 +456,7 @@ final class MCPTests: XCTestCase {
     // MARK: Gates
 
     @MainActor func testEveryCallIsAskedUnlessTheServerIsAlwaysAllowedHere() throws {
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .agent
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .tutor
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         let gate = PermissionExtension(app: AppModel.shared)
         AppModel.shared.setAccess(.full, for: services.workspace)
@@ -476,10 +476,7 @@ final class MCPTests: XCTestCase {
         guard case .allow = gate.shouldRun(call, tool: tool, session: session) else { return XCTFail("allowed for the lesson") }
     }
 
-    func testPlanModeRunsOnlyToolsTheServerMarksReadOnly() {
-        let info = { (ro: Bool) in MCPToolInfo(name: "t", description: "", inputSchema: ["type": "object"], readOnly: ro) }
-        XCTAssertNil(PlanModeExtension.refusal(MCPTool(config: fake, info: info(true)), [:]))
-        XCTAssertTrue(PlanModeExtension.refusal(MCPTool(config: fake, info: info(false)), [:])?.contains("read-only") == true)
+    func testReadOnlyHintMarksAToolReadOnly() {
         XCTAssertEqual(MCPToolInfo(json: ["name": "x", "annotations": ["readOnlyHint": true]])?.readOnly, true)
         XCTAssertEqual(MCPToolInfo(json: ["name": "x", "annotations": ["destructiveHint": false]])?.readOnly, false, "only readOnlyHint counts")
     }

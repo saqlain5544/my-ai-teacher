@@ -9,7 +9,7 @@ final class MemoryExtension: AgentExtension {
     init(app: AppModel) { self.app = app }
 
     func willSend(_ message: inout ChatMessage, session: ChatSession) {
-        guard app.settings.value.autoMemory, !session.conversation.mode.isAgent else { return }   // code agents use project memory
+        guard app.settings.value.autoMemory else { return }
         let text = message.plainText
         guard text.count > 3 else { return }
         // Lean, selective recall: 0–2 items above a calibrated relevance bar, never what the core block already holds.
@@ -42,7 +42,7 @@ final class MemoryExtension: AgentExtension {
         let s = app.settings.value
         // One reflection per lesson at a time (the runtime keeps one job per name).
         let job = "memory.reflect:\(session.id)"
-        guard s.autoMemory, !session.conversation.mode.isAgent, Runtime.registry.whereis(job) == nil, !session.isRunning else { return }
+        guard s.autoMemory, Runtime.registry.whereis(job) == nil, !session.isRunning else { return }
         let done = session.conversation.reflectedCount ?? 0   // absolute message count already reflected on
         let messages = session.messages, base = session.base
         guard session.totalCount - done >= minNew else { return }
@@ -176,7 +176,6 @@ final class TeachingContextExtension: AgentExtension {
     }
 
     func systemPromptSections(_ session: ChatSession) -> [String] {
-        guard !session.conversation.mode.isAgent else { return [] }
         let s = session.services
         var out: [String] = []
         // Concept mastery is part of the learner model's "Learning map" in the core memory block.

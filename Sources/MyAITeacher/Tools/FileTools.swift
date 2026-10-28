@@ -140,7 +140,7 @@ struct ReadTool: Tool {
         FileViews.shared.saw(url, agent: FileViews.agent(ctx))
         // A subfolder's own CLAUDE.md / AGENTS.md, the first time the agent works there.
         if ctx.codeAgent {
-            for f in ProjectMemory.nested(for: url, workspace: ctx.workspace) where f != url && FileViews.shared.firstMention(f, agent: FileViews.agent(ctx)) {
+            for f in InstructionFiles.nested(for: url, workspace: ctx.workspace) where f != url && FileViews.shared.firstMention(f, agent: FileViews.agent(ctx)) {
                 guard let t = try? String(contentsOf: f, encoding: .utf8), !t.isEmpty else { continue }
                 let dir = relative(f.deletingLastPathComponent().path, to: ctx.workspace.path)
                 out += "\n\n[Project instructions from \(relative(f.path, to: ctx.workspace.path)), for work under \(dir)/:]\n" + String(t.prefix(8000))

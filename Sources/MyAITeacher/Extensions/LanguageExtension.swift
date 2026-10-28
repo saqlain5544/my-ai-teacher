@@ -55,7 +55,6 @@ final class LanguageExtension: AgentExtension {
     """
 
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
-        guard !session.conversation.mode.isAgent else { return }
         let st = state(for: session, push: true)
         // Outside Language mentor mode the line needs the learner's word for it (or a profile): tagged words quoted in a
         // history lesson are not a language the learner is learning. The keyboard still follows what the page shows.

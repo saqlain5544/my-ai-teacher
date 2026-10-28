@@ -7,7 +7,7 @@
 5. [Practice tools](#practice-tools)
 6. [Memory: the teacher's model of you](#memory)
 7. [Progress](#progress)
-8. [Code sessions](#code-sessions)
+8. [Agent tools](#agent-tools)
 9. [Settings](#settings)
 10. [Your data](#your-data)
 11. [Troubleshooting](#troubleshooting)
@@ -84,7 +84,6 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
 | **New lesson** (⌘N) | A lesson in the open folder. |
 | **Quick question** (⇧⌘N) | A lesson tied to no folder. |
 | **Open folder** (⌘O) | Work in any folder. Its lessons live in `<folder>/.teacher/`. |
-| **New code session** (⇧⌘K) | The coding agent in the open folder (see [Code sessions](#code-sessions)). |
 
 **Teaching modes**, chosen in the toolbar. You can switch mid-lesson:
 
@@ -115,7 +114,6 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
     * the follow-ups: `/simpler`, `/deeper`, `/example`, `/quiz` and `/flashcards`;
     * switching mode: `/socratic`, `/explain`, `/exam`, `/eli5`, `/research`, `/language`, `/code` or `/tutor`. Text after
       a mode command is sent in the new mode.
-  * In a code session: `/goal`, `/review`, `/compact`, `/init`, and the project's and your own commands.
 * **Code blocks** have a **Run** button. Python, JavaScript, TypeScript, Swift, C, C++, Go, Rust, Ruby, Java, Zig and
   Bash run on your Mac when the toolchain is installed.
 * **The on-screen keyboard** for the language you're learning appears only in Language mentor lessons.
@@ -131,7 +129,6 @@ shows when it does), so its instructions stay short. They come in a tree, like t
 | Every teaching mode | lesson-design, quiz-writing, feedback-on-answers |
 | Language mentor | conversation-practice, grammar-drills, pronunciation-coaching |
 | Code mentor | debugging-coaching, code-review-feedback, project-scaffolding |
-| Code agent | git-workflow, systematic-debugging, writing-tests, code-review |
 
 **Add your own** in the same format as Claude Code and OpenCode: a folder with a `SKILL.md`, whose front matter has a
 `name` and a `description` (what it's for: the agent chooses by it), then the instructions in Markdown, beside any
@@ -141,7 +138,7 @@ scripts or references it uses.
 ---
 name: release-notes
 description: Write release notes from the commits since the last tag.
-agents: [code-agent]        # optional: code-agent, code-mentor, language-mentor, teacher; default every agent
+agents: [code-mentor]       # optional: code-mentor, language-mentor, teacher; default every agent
 ---
 1. `git describe --tags --abbrev=0` for the last tag …
 ```
@@ -150,6 +147,7 @@ agents: [code-agent]        # optional: code-agent, code-mentor, language-mentor
   `~/.config/opencode/skills/` or `~/.agents/skills/`.
 * **A folder's own:** `.teacher/skills/`, `.claude/skills/`, `.opencode/skills/` or `.agents/skills/` in it; a folder's
   skill replaces one of yours or the app's with the same name.
+* A skill written for a coding agent (`agents: [code-agent]`) goes to the code mentor.
 * `disable-model-invocation: true` keeps a skill out of the agent's list.
 * **Settings › Agents › Skills** lists every agent's skills and where each comes from, and opens your skills folder.
 
@@ -367,9 +365,11 @@ merges duplicates. Turn it off in **Settings › Memory**, where you can also ch
 * **Coming back to**: the re-checks and transfer checks that are scheduled;
 * course boards, recent quizzes and model usage.
 
-## Code sessions
+## Agent tools
 
-A code session (⇧⌘K) is an autonomous software engineer working in the open folder.
+Every agent works in the open folder with the same safeguards: the teacher in any mode, the code mentor and the
+language mentor. The code mentor also has the coding tools below. (The autonomous coding agent that used to be part of
+the app is now a separate project, a Rust command-line tool at `~/coding-agent`.)
 
 * **Folder access.** The agent can read anywhere. Each folder starts **read-only**, and you grant *Read & write* or
   *Full access* per folder; grants live in **Settings › Tools**. Writes and commands outside what you granted ask
@@ -383,15 +383,10 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     runner or a check (the same choice appears when those ask with a plain command). A rule only matches one plain command
     (no `;`, `&&`, pipes, redirections or `$(…)`). Rules are listed in **Settings › Tools**, where you can remove them.
     git commands other than the looking ones ask each time.
-  * Installing packages (`pip install`, `brew install`…) asks every time; in lessons it stays off.
-* **Plan mode** (⇧⌘P, or **Plan mode** under the message box). The agent researches with read-only tools and presents
-  a plan: the changes file by file, the order, how it will verify them. Nothing in the folder changes until you click
-  **Approve and start**; **Keep planning** lets you say what to change first. (A background sub-agent already running
-  when you turn plan mode on carries on; stop it from the Agents panel if needed.)
+  * Installing packages (`pip install`, `brew install`…) is refused: lessons use what's already installed.
 * **Background work wakes it.** A long build or test run (`bash` in the background) or a background sub-agent reports
   back when it ends, and if the agent's turn is over the report starts a new one: the agent picks up where it left off,
-  as in Claude Code. Meanwhile a **Waiting for…** strip above the message box lists what's still running, and a `/goal`
-  waits for it too.
+  as in Claude Code. Meanwhile a **Waiting for…** strip above the message box lists what's still running.
 * **Tasks** (in the sidebar, with a count of what's running; also a tab of the right-hand panel, showing the open lesson's
   tasks by default) lists everything running in the background, as Claude Code's tasks panel does:
   * what it covers: the agents' commands and servers, sub-agents, MCP servers, and the app's own jobs (memory
@@ -400,45 +395,33 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     how long it has been running or took, when it ended, the exit code, the process ID, restarts, a server's address,
     and the last error;
   * **Stop** (or right-click for Stop, Copy Command, Copy URL, Open Lesson). Finished tasks stay listed for a while.
-* **Message it while it works.** Press Return (or the send arrow beside Stop) while the agent is busy: the message waits above the box and joins the
-  conversation at the agent's next step, so you can steer without stopping it. Take one back with its ×; if you stop
-  the agent, waiting messages return to the box.
-* **It never overwrites what it hasn't seen.** `write` refuses to replace a file the agent hasn't read, or one that
-  changed since it last looked (you saved it in your editor, a formatter ran), as Claude Code does. `edit` still
-  applies (it matches exact text) and tells the agent the file had changed.
-* **Tools.**
+* **The code mentor's tools.**
   * Files and search: read, write, edit, ls, glob, grep (ripgrep when installed: both honour `.gitignore`; grep takes
     `-A`/`-B`/`-C`, `type`, `multiline` and `offset`), and `symbols` (a file's outline, or where a name is defined).
     Models used to Claude Code's tools may call them by its argument names (`file_path`, `run_in_background`).
   * Commands: bash (with `background: true` for long builds and test suites, whose output arrives as a message), and
     run_code in 12 languages.
   * `diagnostics`: the project's build check, tests or lint, with the problems parsed into file, line and message.
-  * Planning: a todo checklist.
-* **Code research by index, not just grep.** The agent's `code` tool keeps an index of the folder: every definition,
-  what each file imports and uses, and a graph of which files depend on which. It updates as files change, and is saved
-  outside your project. With it the agent can:
+  * **It never overwrites what it hasn't seen.** `write` refuses to replace a file the mentor hasn't read, or one that
+    changed since it last looked (you saved it in your editor, a formatter ran), as Claude Code does. `edit` still
+    applies (it matches exact text) and tells the mentor the file had changed.
+  * **It knows your project.** Its instructions carry a profile read from your manifests: the build system, how to
+    build, check, test and lint, the languages, the git state. Every file it writes or edits is syntax-checked on the
+    spot. A subfolder's own `CLAUDE.md` or `AGENTS.md` reaches it the first time it reads a file there.
+  * **Undo.** Under each reply that changed files: **Undo this turn's changes** puts every file back as it was before
+    that turn (the app keeps a checkpoint per turn in `.teacher/checkpoints`, no git needed). The mentor is told you did.
+* **Code research by index, not just grep.** The code mentor's `code` tool keeps an index of the folder: every
+  definition, what each file imports and uses, and a graph of which files depend on which. It updates as files change,
+  and is saved outside your project. With it the mentor can:
   * search by meaning ("where are retries backed off" finds the function, even when it isn't called that);
   * find a name's definition, every use grouped by the function it's in, its callers, and what a function calls;
-  * see the files a file uses and those that use it, and a map of the most central files;
-  * read a file's history.
+  * see the files a file uses and those that use it, and a map of the most central files.
 
   `grep` stays for exact text: error messages, strings, config keys. Indexing this app's ~480 source files takes about
   3 seconds the first time; after that only changed files are read again.
-* **It learns from its own fixes.**
-  * **Lessons:** when a check fails and then passes after the agent's edits, it's asked whether the cause is a mistake
-    that could happen in other projects too (a language pitfall, an API misuse). If so, it records the mistake and the
-    rule that avoids it. Lessons are kept for every project: the few that fit a project's languages are in the agent's
-    instructions, and a lesson seen again ranks higher. One that proves wrong is retired, and one unused for months
-    fades. Review or remove them in **Settings › Agents › Code agent's lessons**. They're hints: a project's own
-    conventions win.
-  * **Project history:** every turn that changes files is recorded in `.teacher/history.jsonl`: what you asked, the
-    files, the checks and how they ended, whether it fixed a failure, commits and pull requests. The agent sees the
-    latest few.
-  * **Against regressions:** when it edits a file an earlier fix touched, it's told about that fix and the check that
-    verified it, and asked to run that check again.
-* **MCP servers.** Tools from Model Context Protocol servers, as in Claude Code: a program the app starts and talks to
-  over its input and output (`npx -y @modelcontextprotocol/server-memory`, `uvx mcp-server-git`…), or a URL speaking
-  streamable HTTP. (The old HTTP+SSE transport isn't supported.)
+* **MCP servers.** Tools from Model Context Protocol servers, as in Claude Code, for every agent: a program the app
+  starts and talks to over its input and output (`npx -y @modelcontextprotocol/server-memory`, `uvx mcp-server-git`…),
+  or a URL speaking streamable HTTP. (The old HTTP+SSE transport isn't supported.)
   * **Your servers**, for every folder: **Settings › MCP › Add server**, or **Add from JSON…** with the snippet from a
     server's README (`{"mcpServers": {…}}`). `${VAR}` and `${VAR:-default}` in a command, argument, variable, URL or
     header read your shell environment, so a token can stay out of the settings.
@@ -449,31 +432,13 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     environment, you're asked again. A project server wins over one of yours with the same name.
   * The agent sees each tool as `mcp__<server>__<tool>`, one line each in its instructions, and loads the ones it needs.
     **Every call asks**, whatever the folder's access: allow once, the server for the lesson, or **Always allow
-    “server” in this folder**. In plan mode only the tools a server marks read-only run.
-  * Servers start the first time a code session needs them, restart by themselves after a crash (three times a minute
+    “server” in this folder**.
+  * Servers start the first time a lesson needs them, restart by themselves after a crash (three times a minute
     at most), and end when you quit the app. **Settings › MCP** shows each one's state for the open folder (running,
     pid, tools, restarts, the last error) and what it wrote to its error output, with Start, Stop and Restart.
-* **It knows your project.** The agent's instructions carry a profile read from your manifests: the build system, how
-  to build, check, test and lint, the languages, the git state. Every file it writes or edits is syntax-checked on the
-  spot, and it is told to run the project's check and tests before it reports.
-* **Undo.** Under each reply that changed files: **Undo this turn's changes** puts every file back as it was before that
-  turn (the app keeps a checkpoint per turn in `.teacher/checkpoints`, no git needed). The agent is told you did.
-* **Commands.** Built in: `/init` writes an `AGENTS.md` for the project (or improves the one there), `/review [what]`
-  reviews your uncommitted changes (or what you name) without changing files, and `/compact [what to keep]` summarises
-  the session so far so the next request starts small.
-  * **`/goal <objective>`** gives the session a standing goal ("make the whole test suite pass", "port the CLI to
-    the new API"). The agent works toward it turn after turn without you saying "continue", and a strip above the
-    message box shows the goal and its turn count. It stops when the agent reports the goal met (with the evidence:
-    what it ran and saw), when it needs something from you, when you press Stop, after a failed turn, or after 25
-    turns. Then **Resume** (or `/goal resume`) carries on. `/goal` alone shows the goal, and `/goal clear` (or the ×)
-    drops it.
-  * Your own: `review.md` in the project's `.teacher/commands/` or `.claude/commands/`, or in `~/.teacher/commands/` or
-    `~/.claude/commands/` for every project, becomes `/review`; a subfolder makes a namespace (`frontend/test.md` is
-    `/frontend:test`). Type `/review src/app.py` and the file's text, with `$ARGUMENTS` (and `$1`, `$2`…) filled in,
-    goes to the agent with your message. A file named like a built-in replaces it.
-* **Hooks.** Shell commands that run at steps of the agent's work, in Claude Code's format, so its hooks work as they
-  are. Put your own in **Settings › Hooks**; a project's go in its `.claude/settings.json` (or `settings.local.json`)
-  under `hooks`.
+* **Hooks.** Shell commands that run at steps of the agent's work, in every lesson, in Claude Code's format, so its
+  hooks work as they are. Put your own in **Settings › Hooks**; a project's go in its `.claude/settings.json` (or
+  `settings.local.json`) under `hooks`.
   * **PreToolUse** runs before a tool call its `matcher` picks (`Edit|Write`, `Bash`, a regular expression like
     `Web.*`, or `*` for all; this app's names such as `edit` work too). Exit code 2 blocks the call, and what the hook
     printed to stderr tells the agent why (so does `{"decision": "block", "reason": "…"}` on stdout). A hook can't
@@ -492,25 +457,19 @@ A code session (⇧⌘K) is an autonomous software engineer working in the open 
     that exact configuration: if the hooks change (a pull, or the agent editing the file), you're asked again.
     **Settings › Hooks** lists approved folders, with **Revoke**.
   * Hooks run for the agent's own tool calls, not its sub-agents'.
-* **Project instructions.** `project_memory` keeps build commands, conventions and gotchas in
-  `.teacher/code-memory.md`. The agent also follows the instruction files Claude Code and other agents use: your own
-  `~/.claude/CLAUDE.md` or `~/.teacher/AGENTS.md`; `CLAUDE.md` or `AGENTS.md` in each folder above the project (a
-  package in a monorepo gets the repository's); the project's `CLAUDE.md`, `.claude/CLAUDE.md`, `AGENTS.md`,
-  `CLAUDE.local.md` and `.github/copilot-instructions.md`. `@docs/style.md` in one of them pulls that file in. A
-  subfolder's own `CLAUDE.md` or `AGENTS.md` reaches the agent the first time it reads a file there.
 * **Changes panel.** A git diff of what changed, with checkpoints.
-* **Sub-agents.** The agent can delegate to `explore`, `coder`, `reviewer` (read-only) and `tester` agents, or to your
-  own types: add them in **Settings › Agents**, or as Markdown files in `.teacher/agents/` or Claude Code's
+* **Sub-agents.** The agent can delegate to `explore`, `general`, `coder`, `reviewer` (read-only) and `tester` agents,
+  or to your own types: add them in **Settings › Agents**, or as Markdown files in `.teacher/agents/` or Claude Code's
   `.claude/agents/` (its tool names, like `Read, Grep, Bash`, are understood; `model: sonnet` means the lesson's model).
   * Each run can have its own provider, model, reasoning effort, and budget (model calls, tokens, time).
-  * Runs can go in the background and work in a git worktree.
+  * Runs can go in the background.
   * You can steer a running sub-agent from the Agents panel. They recover from crashes and stop cleanly.
   * **Settings › Agents** sets the defaults, the hard limits (including whether unbounded background runs are allowed),
     how many run at once, nesting depth, and whether other providers or paid models may be used.
-* **Browser.** The agent drives an in-app browser that you watch in the right panel: it reads pages, fills in forms,
-  clicks and takes screenshots. A new site needs your approval (once, for the lesson, or always). Cookies stay in the
-  agent's own browser profile, which you can clear in Settings.
-* **Mac apps.** The agent can operate native apps through the Accessibility tree, falling back to screenshots and
+* **Browser.** Every agent can drive an in-app browser that you watch in the right panel: it reads pages, fills in
+  forms, clicks and takes screenshots. A new site needs your approval (once, for the lesson, or always). Cookies stay in
+  the agent's own browser profile, which you can clear in Settings.
+* **Mac apps.** Every agent can operate native apps through the Accessibility tree, falling back to screenshots and
   clicks. This needs **Screen Recording** and **Accessibility** permission for My AI Teacher; **Settings › Tools** shows
   their state and links to System Settings. Each app needs your approval. Browsers can only be viewed, terminals and
   IDEs only clicked.
@@ -529,9 +488,9 @@ Stop the agent any time with ⌘. or Esc twice.
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
 | Agents | Sub-agent defaults, limits and custom agent types; each agent's skills and where they come from |
-| MCP | Your MCP servers for code sessions (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
-| Hooks | Your own hooks for the code agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
-| Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor, code agent), the code agent and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
+| MCP | Your MCP servers for every agent (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
+| Hooks | Your own hooks for every agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
+| Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor) and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
 | Voice | Read-aloud voice and speed; for each language you're learning, the Mac's best voice and its quality (compact voices are robotic — **Get better Mac voices…** opens Spoken Content to download Enhanced or Premium ones) and how you're heard (Apple's on-device model, downloadable here, or Apple's servers); which engine speaks and listens; optional open-source engines — Supertonic 3 voices (129 MB) and Whisper large-v3-turbo recognition (1 GB), with the sherpa-onnx runtime (20 MB) — downloaded only on request, checked against published checksums, run on your Mac |
 
@@ -552,7 +511,7 @@ Stop the agent any time with ⌘. or Esc twice.
   * every turn, with its time, steps, tokens and errors;
   * every model call, with tokens in, out, cached and reasoning, time to first token, latency and retries;
   * every tool call, with its input, time, result size and whether it failed, for sub-agents too;
-  * approvals, background reports (and whether they woke the agent), sub-agents, goals, memory changes, notices, and
+  * approvals, background reports (and whether they woke the agent), sub-agents, memory changes, notices, and
     everything in the plain log.
 
   In **Settings › General › Activity log** choose Off, Standard (summaries; texts cut to 300 characters) or Full

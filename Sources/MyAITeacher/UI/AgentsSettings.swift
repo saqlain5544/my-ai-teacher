@@ -45,7 +45,6 @@ struct AgentsSettings: View {
                     Text("Teacher (every teaching mode)").tag("tutor")
                     Text("Language mentor").tag("language")
                     Text("Code mentor").tag("code-mentor")
-                    Text("Code agent").tag("engineer")
                 }
                 let skills = Skills.available(node: skillsFor, folder: AppModel.shared.workspace.url)
                 ForEach(skills, id: \.name) { s in
@@ -56,31 +55,9 @@ struct AgentsSettings: View {
                         Text(s.source.label).font(.caption2).foregroundStyle(.tertiary)
                     }
                 }
-                Text("Each agent names its skills in one line and loads one (`skill`) when a task needs it. Every agent has the base skills; each adds its own. Yours, for every agent: ~/.teacher/skills, ~/.claude/skills, ~/.config/opencode/skills, ~/.agents/skills. A folder's own: .teacher/skills, .claude/skills, .opencode/skills, .agents/skills (it wins on a name clash). A skill is a folder with a SKILL.md: front matter `name`, `description` and optionally `agents: [code-agent, code-mentor, language-mentor, teacher]`, then its instructions.")
+                Text("Each agent names its skills in one line and loads one (`skill`) when a task needs it. Every agent has the base skills; each adds its own. Yours, for every agent: ~/.teacher/skills, ~/.claude/skills, ~/.config/opencode/skills, ~/.agents/skills. A folder's own: .teacher/skills, .claude/skills, .opencode/skills, .agents/skills (it wins on a name clash). A skill is a folder with a SKILL.md: front matter `name`, `description` and optionally `agents: [code-mentor, language-mentor, teacher]`, then its instructions.")
                     .font(.caption).foregroundStyle(.secondary)
                 Button { NSWorkspace.shared.open(Self.userSkills()) } label: { Label("Open your skills folder", systemImage: "folder") }
-            }
-            Section("Code agent's lessons") {
-                let lessons = CodeLessons.shared.all.sorted { $0.lastSeen > $1.lastSeen }
-                if lessons.isEmpty {
-                    Text("None yet. When the code agent fixes a failure it caused (a check failed, then passed after its edits), it may record the mistake and the rule that avoids it. Lessons are kept for every project and the relevant ones reach its prompt.")
-                        .font(.caption).foregroundStyle(.secondary)
-                }
-                ForEach(lessons) { l in
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack {
-                            Text(l.id).font(.caption.monospaced()).foregroundStyle(.secondary)
-                            Text(l.language).font(.caption.bold())
-                            Text(l.rule).font(.callout).lineLimit(2)
-                            Spacer()
-                            Text(l.retired != nil ? "retired" : "seen \(l.hits)×").font(.caption2).foregroundStyle(.tertiary)
-                            Button("Remove") { CodeLessons.shared.delete(l.id); lessonsTick += 1 }.controlSize(.small)
-                        }
-                        Text("Mistake: \(l.mistake)" + (l.evidence.last.map { " · \($0.project): \($0.note)" } ?? "")).font(.caption).foregroundStyle(.secondary).lineLimit(2)
-                    }
-                    .help(l.retired.map { "Retired: \($0)" } ?? l.evidence.map { "\($0.project), \($0.date.formatted(date: .abbreviated, time: .omitted)): \($0.note)" }.joined(separator: "\n"))
-                }
-                .id(lessonsTick)
             }
         }
         .formStyle(.grouped)
@@ -93,8 +70,7 @@ struct AgentsSettings: View {
     }
 
     private var a: SubAgentSettings { settings.value.agents }
-    @State private var skillsFor = "engineer"
-    @State private var lessonsTick = 0
+    @State private var skillsFor = "code-mentor"
 
     /// ~/.teacher/skills, made on first use so the button always opens something.
     private static func userSkills() -> URL {

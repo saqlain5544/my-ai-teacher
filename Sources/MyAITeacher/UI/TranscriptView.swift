@@ -161,7 +161,6 @@ struct TranscriptView: NSViewRepresentable {
             var opts: [String: JSON] = ["showThinking": .bool(AppModel.shared.settings.value.showThinking), "lesson": .string(conversation.id)]
             if page.isEmpty && earlier == 0 && newer == 0 { opts["welcome"] = AppModel.shared.welcomePayload(mode: conversation.mode) }
             if pausedVisuals.contains(conversation.id) { opts["pauseVisuals"] = true }
-            if conversation.mode.isAgent { opts["agent"] = true }
             opts["components"] = .array(AgentTree.components(AgentTree.node(for: conversation.mode)).map { .string($0) })
             if earlier > 0 { opts["earlier"] = .number(Double(earlier)) }
             if newer > 0 { opts["newer"] = .number(Double(newer)) }
@@ -553,7 +552,7 @@ struct TranscriptView: NSViewRepresentable {
                 // "Continue: <course>" on the welcome screen links the board before the first message, like Progress does.
                 if let b = j["board"]?.string, let s = session, let board = s.services.study.board(b) {
                     s.services.study.link(board: b, lesson: s.id)
-                    if s.messages.isEmpty, let m = board.mode.flatMap(TeachingMode.init(rawValue:)), !m.isAgent { s.setMode(m) }
+                    if s.messages.isEmpty, let m = board.mode.flatMap(TeachingMode.init(rawValue:)) { s.setMode(m) }
                 }
                 if let t = j["text"]?.string { session?.send(t) }
             case "study":

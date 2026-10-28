@@ -7,8 +7,8 @@ enum ToolRegistry {
         ReadTool(), WriteTool(), EditTool(), LsTool(), GlobTool(), GrepTool(), BashTool(), BashJobsTool(), RunCodeTool(), RunTestsTool(),
         WebSearchTool(), WebFetchTool(), TaskTool(), AgentsTool(), LoadToolsTool(), VisualTool(), TodoWriteTool(),
         AskLearnerTool(), MathTool(), MemoryTool(), MasteryTool(), FlashcardsTool(),
-        ProjectMemoryTool(), LanguageTool(), VocabTool(), SourceTool(), SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool(),
-        TraceTool(), BenchTool(), ExitPlanModeTool(), SkillTool(), GoalTool(), CodeTool(), LessonsTool(),
+        LanguageTool(), VocabTool(), SourceTool(), SymbolsTool(), DiagnosticsTool(), ProjectTestsTool(), ProjectReviewTool(),
+        TraceTool(), BenchTool(), SkillTool(), CodeTool(),
     ] + Features.tools   // optional features' tools (computer use: browser, mac, computer; the course board: lesson_plan)
     static let byName: [String: Tool] = Dictionary(uniqueKeysWithValues: all.map { ($0.name, $0) })
 
@@ -99,7 +99,7 @@ struct TaskTool: Tool {
             "tools": Schema.array(Schema.string("Tool name"), "Only these of the type's tools."),
             "deny_tools": Schema.array(Schema.string("Tool name"), "Not these tools."),
             "output_schema": ["type": "object", "description": "JSON Schema the final report must match; you get the JSON back."],
-            "isolation": Schema.string("worktree: a coder works on a git worktree of the folder (code agent, git repo); its changes stay there.", enum: ["none", "worktree"]),
+            "isolation": Schema.string("worktree: a coder works on a git worktree of the folder (git repo); its changes stay there.", enum: ["none", "worktree"]),
         ], required: ["description", "prompt"])
     }
     func summary(_ input: JSON) -> String { input["description"]?.string ?? "sub-agent" }

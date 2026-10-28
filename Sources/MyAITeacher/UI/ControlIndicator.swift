@@ -1,7 +1,7 @@
 import AppKit
 import SwiftUI
 
-/// "Agent is controlling your Mac" with a Stop button: a small floating panel on every Space while the code agent uses
+/// "Agent is controlling your Mac" with a Stop button: a small floating panel on every Space while an agent uses
 /// native apps. It never takes focus (the agent's typing must reach the app in front), and it belongs to this app, so the
 /// agent can't click it (its own windows are refused) and screenshots don't show it.
 @MainActor

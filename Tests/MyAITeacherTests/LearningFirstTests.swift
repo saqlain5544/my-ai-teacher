@@ -263,11 +263,10 @@ final class LearningFirstTests: XCTestCase {
     }
 
     func testEveryTeachingModeIsAttemptFirst() {
-        for mode in TeachingMode.allCases where !mode.isAgent {
+        for mode in TeachingMode.allCases {
             let p = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: "", model: "m")
             XCTAssertTrue(p.contains("Attempt first: a problem → their attempt first") && p.contains("```problem {"), "\(mode)")
             XCTAssertTrue(p.contains("Mastery = unaided success"), "\(mode)")
         }
-        XCTAssertFalse(SystemPrompt.buildAgent(settings: AppSettings(), folder: dir, model: "m", projectMemory: "").contains("```problem"))
     }
 }
