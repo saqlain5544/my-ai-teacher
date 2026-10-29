@@ -200,7 +200,8 @@ final class ProcControl: @unchecked Sendable {
         guard let tasks else { return }
         tasks.forEach { $0?.cancel() }
         wake { _ in }   // ended before it started: nobody waits forever
-        onEnd?(r)
+        // Let go of it (only the first end gets here): it holds the process and its mailbox, which hold this control.
+        let f = onEnd; onEnd = nil; f?(r)
     }
 }
 

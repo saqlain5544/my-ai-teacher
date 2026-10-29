@@ -84,7 +84,12 @@ extension BrowserTab {
         }
         let info = index.flatMap { frame($0) }
         if index != nil && info == nil { throw ToolError("That frame is gone: take a new snapshot.") }
-        let body = "if (!window.__ta) return '{\"error\":\"nohelper\"}'; return JSON.stringify(await window.__ta[fn](args));"
+        // A frame keeps its id when it navigates to another site, but its site (what approvals were checked against) is
+        // the one it had when it registered: the call names that site, and a frame showing another refuses it.
+        if let o = info?.securityOrigin, ["http", "https"].contains(o.protocol), !o.host.isEmpty {
+            a["frameScheme"] = .string(o.protocol); a["frameHost"] = .string(o.host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+        }
+        let body = #"if (!window.__ta) return '{"error":"nohelper"}'; if (args.frameHost != null && (location.protocol !== args.frameScheme + ':' || location.hostname.replace(/^\[|\]$/g, '') !== args.frameHost)) return '{"error":"moved"}'; return JSON.stringify(await window.__ta[fn](args));"#
         let world = browser.world
         func once() async throws -> JSON {
             let r = try await web.callAsyncJavaScript(body, arguments: ["fn": fn, "args": JSON.object(a).any], in: info, contentWorld: world)
@@ -102,6 +107,10 @@ extension BrowserTab {
             throw ToolError("The page didn't answer (\(error.localizedDescription)). It may still be loading: wait, then snapshot again.")
         }
         if j["error"]?.string == "stale" { throw ToolError(Self.staleRef) }
+        if j["error"]?.string == "moved" {
+            if let index { dropFrame(index) }
+            throw ToolError("That frame has gone to another site: take a new snapshot.")
+        }
         if let tok = j["token"]?.string { record(j, token: tok, frame: index ?? 0) }
         return j
     }
@@ -156,6 +165,10 @@ extension AgentBrowser {
         if action == "steps" { return try await steps(input["steps"]?.array ?? [], conv: conv, vision: vision, downloads: downloads) }
         if learnerControl && action != "tabs" {
             return .error("The learner has taken over the browser. Wait until they hand it back (ask them with ask_learner), or carry on without it.")
+        }
+        // One lesson at a time: another's action (waiting on a page to settle) would be judged by this lesson's approvals.
+        if acting, let d = driver, d != conv {
+            return .error("Another lesson's agent is using the browser right now: try again when it has finished.")
         }
         activity = [action.replacingOccurrences(of: "_", with: " "), input["ref"]?.string ?? input["url"]?.string ?? ""].joined(separator: " ")
         beginAction(conv, popups: ["click", "key", "type"].contains(action) ? 1 : 0)
@@ -272,6 +285,7 @@ extension AgentBrowser {
             return await result(t, done.joined(separator: "\n") + (input["snapshot"]?.bool == true ? await controls(t) : ""))
         case "select":
             let values = input["values"]?.array?.compactMap(\.string) ?? [input["value"]?.string ?? input["text"]?.string ?? ""]
+            for v in values { try await refuseSensitive(t, text: v, args: args, frame: frame) }   // as fill: a card's expiry month is a select
             args["values"] = .array(values.map { .string($0) })
             return try await act(t, action, args, frame: frame, snapshot: input["snapshot"]?.bool == true)
         case "check":
@@ -312,7 +326,8 @@ extension AgentBrowser {
             let s = (r as? String) ?? "null"
             return ToolOutput(text: Untrusted.wrap(s.count > 20000 ? String(s.prefix(20000)) + "…" : s, source: t.url?.absoluteString ?? ""), isError: s.hasPrefix("Error: "))
         case "download":
-            guard let url = Self.parseURL(input["url"]?.string) ?? t.blockedDownload?.url else { return .error("`url` is required.") }
+            // Named by the call, not taken from the tab: the page can swap its offered file while the learner reads the card.
+            guard let url = Self.parseURL(input["url"]?.string) else { return .error("`url` is required: the notice about the file names it.") }
             switch await t.download(url, into: downloads) {
             case .success(let file):
                 let size = (try? file.resourceValues(forKeys: [.fileSizeKey]).fileSize).map { Int64($0) }
@@ -431,6 +446,11 @@ extension AgentBrowser {
     private func steps(_ list: [JSON], conv: String, vision: Bool, downloads: URL) async throws -> ToolOutput {
         guard !list.isEmpty else { return .error("`steps` is a list of actions, e.g. [{\"action\": \"click\", \"ref\": \"ref_3\"}].") }
         guard list.count <= 20 else { return .error("At most 20 steps in one call.") }
+        // The approval gate sees the call, not its steps: the site checks repeat in each step, but evaluate's and
+        // download's own cards would never be shown.
+        if let i = list.firstIndex(where: { ["evaluate", "download"].contains($0["action"]?.string ?? "") }) {
+            return .error("Step \(i + 1): evaluate and download each ask the learner, so they run as calls of their own, not inside steps.")
+        }
         var parts: [String] = [], images: [Block] = [], meta: JSON?
         for (i, step) in list.enumerated() {
             if Task.isCancelled { throw CancellationError() }

@@ -201,15 +201,18 @@ enum ProcessRunner {
                 }
                 // Cancelled before the launch (Stop right after a background start): the handler had nothing to end.
                 if Task.isCancelled { endTree(p) }
-                // A program that exits without reading its input (a hook running a formatter) closes the pipe: writing
-                // then fails instead of raising SIGPIPE, which would end the app.
-                if let stdin {
-                    _ = fcntl(inPipe.fileHandleForWriting.fileDescriptor, F_SETNOSIGPIPE, 1)
-                    try? inPipe.fileHandleForWriting.write(contentsOf: Data(stdin.utf8))
-                }
-                try? inPipe.fileHandleForWriting.close()
                 DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
                     if p.isRunning { timedOut.value = true; p.interrupt(); endTree(p) }
+                }
+                // A program that exits without reading its input (a hook running a formatter) closes the pipe: writing
+                // then fails instead of raising SIGPIPE, which would end the app. The write is off this thread: input
+                // larger than the pipe's buffer, to a program that never reads it, blocks until the timeout ends it.
+                let writer = inPipe.fileHandleForWriting
+                if let stdin {
+                    _ = fcntl(writer.fileDescriptor, F_SETNOSIGPIPE, 1)
+                    DispatchQueue.global().async { try? writer.write(contentsOf: Data(stdin.utf8)); try? writer.close() }
+                } else {
+                    try? writer.close()
                 }
             }
         } onCancel: {

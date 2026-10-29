@@ -146,7 +146,9 @@ final class GlobalStore: @unchecked Sendable {
     func migrateLegacyConversations(into ws: Workspace) {
         guard let rows = try? db.query("SELECT id, data, updated_at FROM conversations"), !rows.isEmpty else { return }
         let msgs = (try? db.query("SELECT * FROM messages")) ?? []
-        try? ws.db.transaction {
+        // Deleted from here only once copied: a copy that failed (the folder's database busy or the disk full) rolled
+        // back, and deleting anyway lost every lesson.
+        do { try ws.db.transaction {
             for r in rows {
                 try ws.db.execute("INSERT OR IGNORE INTO conversations(id, data, updated_at) VALUES(?,?,?)", r.string("id"), r.string("data"), r.double("updated_at"))
             }
@@ -154,9 +156,14 @@ final class GlobalStore: @unchecked Sendable {
                 try ws.db.execute("INSERT OR IGNORE INTO messages(id, conversation_id, seq, data, text, created_at) VALUES(?,?,?,?,?,?)",
                                   m.string("id"), m.string("conversation_id"), m.int("seq"), m.string("data"), m.string("text"), m.double("created_at"))
             }
+        } } catch {
+            Log.db.error("legacy lessons not moved: \(error.localizedDescription, privacy: .public)")
+            return
         }
-        db.run("DELETE FROM messages")
-        db.run("DELETE FROM conversations")
+        db.write("legacy lessons moved") {
+            try db.execute("DELETE FROM messages")
+            try db.execute("DELETE FROM conversations")
+        }
     }
 }
 

@@ -101,7 +101,9 @@ final class OpenSpeech: ObservableObject {
                 AppLog.write("open speech: installed \(id)")
             } catch {
                 // Only the staging folder goes (download's own cleanup): a working install stays if a re-download fails.
-                let msg = (error as? CancellationError) != nil ? "Cancelled" : error.localizedDescription
+                // A cancelled download throws URLError.cancelled, not CancellationError: Cancel isn't a failure.
+                let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+                let msg = cancelled ? "Cancelled" : error.localizedDescription
                 await MainActor.run { self?.states[id] = msg == "Cancelled" ? .absent : .failed(msg); self?.tasks[id] = nil }
                 AppLog.write("open speech: \(id) failed: \(msg)")
             }
@@ -109,8 +111,7 @@ final class OpenSpeech: ObservableObject {
     }
     func cancel(_ id: String) { tasks[id]?.cancel() }
     func remove(_ id: String) {
-        cancel(id)
-        tasks[id] = nil
+        cancel(id)   // the cancelled task clears its own entry: an Install before then would share its staging folder
         try? FileManager.default.removeItem(at: Self.folder(id))
         states[id] = .absent
     }

@@ -455,7 +455,8 @@ struct WebFetchTool: Tool {
     /// The URL to fetch ("example.com/x" is https).
     static func url(_ input: JSON) -> URL? {
         guard var raw = input["url"]?.string?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
-        if !raw.hasPrefix("http") { raw = "https://" + raw }
+        // A prefix check on "http" alone would leave "httpbin.org/get" without a scheme.
+        if !raw.lowercased().hasPrefix("http://") && !raw.lowercased().hasPrefix("https://") { raw = "https://" + raw }
         guard let url = URL(string: raw), let scheme = url.scheme, ["http", "https"].contains(scheme) else { return nil }
         return url
     }
@@ -581,8 +582,13 @@ private final class LocalRedirectGuard: NSObject, URLSessionTaskDelegate {
     init(fromLocal: Bool) { self.fromLocal = fromLocal }
     func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
-        if !fromLocal, let host = request.url?.host, LocalNetwork.isLocal(host) { blocked.mutate { $0 = host }; completionHandler(nil) }
-        else { completionHandler(request) }
+        guard !fromLocal, let host = request.url?.host else { return completionHandler(request) }
+        if LocalNetwork.isLocal(host) { blocked.mutate { $0 = host }; return completionHandler(nil) }
+        // A public name that resolves to a local address (127.0.0.1.nip.io) is a local fetch too, as for the first URL.
+        let blocked = blocked
+        Task {
+            if await LocalNetwork.resolvesLocal(host) { blocked.mutate { $0 = host }; completionHandler(nil) } else { completionHandler(request) }
+        }
     }
 }
 

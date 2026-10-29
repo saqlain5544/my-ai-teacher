@@ -401,7 +401,7 @@ final class MemoryStore: @unchecked Sendable {
             db.run("""
                 UPDATE memories SET content=?, importance=?, updated_at=?, evidence=evidence+1, concept_id=COALESCE(?, concept_id),
                 subject=COALESCE(subject, ?), norm=?, vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
-                """, newContent, max(importance, old.importance), now, conceptID, subject, MemoryText.norm(newContent), blob, blob, old.rowid)
+                """, newContent, max(min(1, max(0, importance)), old.importance), now, conceptID, subject, MemoryText.norm(newContent), blob, blob, old.rowid)
             refresh(old.rowid)
             return WriteOutcome(rowid: old.rowid, status: .merged, reason: nil, similar: [])
         }
@@ -790,10 +790,15 @@ final class MemoryStore: @unchecked Sendable {
     func maintenance(now: Date = Date()) -> MaintenanceReport {
         var rep = MaintenanceReport()
         let t = now.timeIntervalSince1970
-        rep.decayed = (db.run("""
-            UPDATE memories SET importance = MAX(0.05, importance * 0.9) WHERE archived=0 AND origin != 'explicit'
-            AND kind IN ('fact','knowledge','misconception','episode') AND COALESCE(last_used_at, updated_at) < ?
-            """, t - 90 * 86400)) ?? 0
+        // Once a week at most: maintenance runs after every reflection, and a decay per run faded a daily learner's
+        // items within days while a light user kept theirs for months.
+        if t - (Double(MemorySchema.meta(db, "decay_at") ?? "") ?? 0) >= 7 * 86400 {
+            rep.decayed = (db.run("""
+                UPDATE memories SET importance = MAX(0.05, importance * 0.9) WHERE archived=0 AND origin != 'explicit'
+                AND kind IN ('fact','knowledge','misconception','episode') AND COALESCE(last_used_at, updated_at) < ?
+                """, t - 90 * 86400)) ?? 0
+            MemorySchema.setMeta(db, "decay_at", String(t))
+        }
         let faded = ((try? db.query("SELECT id FROM memories WHERE archived=0 AND origin != 'explicit' AND importance < 0.15 AND COALESCE(last_used_at, updated_at) < ?", t - 180 * 86400)) ?? []).compactMap { $0.int("id") }
         for id in faded { archive(Int64(id), status: "faded") }
         rep.archived += faded.count
@@ -852,6 +857,7 @@ final class MemoryStore: @unchecked Sendable {
                 let newer = x.updatedAt > k.updatedAt ? x : k, older = newer.rowid == x.rowid ? k : x
                 let keepNew = MemoryText.isUpdate(newer.content, of: older.content) ? newer.rowid == drop : x.content.count > k.content.count
                 if keepNew {
+                    recordHistory(keep, content: k.content, change: "merged", source: "sweep")   // superseded text stays in history
                     db.run("""
                         UPDATE memories SET content=?, norm=?, vec=(SELECT vec FROM memories WHERE id=?), embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?
                         """, x.content, MemoryText.norm(x.content), drop, drop, keep)

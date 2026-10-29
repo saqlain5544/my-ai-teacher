@@ -18,12 +18,14 @@ enum ProjectTestRunner {
     static func filtered(_ command: String, test: String) -> String? {
         let name = shortName(test)
         guard !name.isEmpty else { return nil }
-        let q = "'" + name.replacingOccurrences(of: "'", with: "'\\''") + "'"
+        let quote = { (s: String) in "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
+        let q = quote(name)
         let c = command.trimmingCharacters(in: .whitespaces)
         if c.contains("pytest") { return c + " -k " + q }
         if c.contains("jest") || c.contains("vitest") { return c + " -t " + q }
         if c.hasPrefix("npm test") || c.hasPrefix("npm run test") || c.hasPrefix("pnpm test") || c.hasPrefix("yarn test") { return c + " -- -t " + q }
-        if c.contains("go test") { return c + " -run '^" + NSRegularExpression.escapedPattern(for: name) + "$'" }
+        // The test name is the model's: `escapedPattern` leaves quotes and `;` alone, so it is shell-quoted as well.
+        if c.contains("go test") { return c + " -run " + quote("^" + NSRegularExpression.escapedPattern(for: name) + "$") }
         if c.contains("cargo test") { return c.contains(" -- ") ? nil : c + " " + q }
         if c.contains("swift test") { return c + " --filter " + q }
         if c.range(of: #"(^|\s|/)zig test\b"#, options: .regularExpression) != nil { return c + " --test-filter " + q }
@@ -276,7 +278,10 @@ struct ProjectReviewTool: Tool {
             var next = p.nextFindingID
             var findings: [MentorProject.Finding] = []
             for f in input["findings"]?.array ?? [] {
-                guard let file = f["file"]?.string, let text = f["text"]?.string, !text.isEmpty else { continue }
+                guard let named = f["file"]?.string, let text = f["text"]?.string, !text.isEmpty else { continue }
+                // As the changes name it (relative to the folder): a `must` filed as "./src/x.py" or by its absolute path
+                // would otherwise never count as changed, and stay open for good.
+                let file = MentorGuard.relative(resolvePath(named, workspace: ws.url), ws)
                 let sev = ["must", "should", "nit"].contains(f["severity"]?.string ?? "") ? f["severity"]!.string! : "should"
                 let hints = (f["hints"]?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }.prefix(3)
                 findings.append(MentorProject.Finding(id: next, file: file, line: f["line"]?.int, severity: sev, text: text, concept: f["concept"]?.string,

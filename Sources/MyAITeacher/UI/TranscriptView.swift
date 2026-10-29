@@ -335,7 +335,9 @@ struct TranscriptView: NSViewRepresentable {
         }
 
         func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let body = message.body as? [String: Any] else { return }
+            // The page only: WebKit gives every frame the handler, sandboxed visuals included (a model-written visual
+            // could otherwise run code or send messages); their own messages reach the page with postMessage.
+            guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }
             let j = JSON(any: body)
             MainActor.assumeIsolated { self.handle(j) }
         }
@@ -399,10 +401,14 @@ struct TranscriptView: NSViewRepresentable {
                         do {
                             let dir = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-audio-\(UUID().uuidString.prefix(8))", isDirectory: true)
                             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-                            let dest = dir.appendingPathComponent(url.lastPathComponent.isEmpty ? "audio.mp3" : url.lastPathComponent)
+                            // The name is decoded from the URL ("..%2F..%2F.zshrc" is "../../.zshrc"), and the download
+                            // replaces whatever is at `dest`: only a plain name inside `dir`.
+                            let name = url.lastPathComponent.components(separatedBy: "/").last ?? ""
+                            let dest = dir.appendingPathComponent(name.isEmpty || name.hasPrefix(".") ? "audio.mp3" : name)
+                            guard dest.standardizedFileURL.deletingLastPathComponent().path == dir.standardizedFileURL.path else { return }
                             try await Downloader.fetch(url, to: dest) { _ in }
                             let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
-                            guard size < 500_000_000 else { self.run("T.notice('That audio is over 500 MB.')"); return }
+                            guard size < 500_000_000 else { try? FileManager.default.removeItem(at: dir); self.run("T.notice('That audio is over 500 MB.')"); return }
                             Composer.attachMedia(dest, to: s)
                             try? FileManager.default.removeItem(at: dir)
                             self.run("T.notice(\(JSON.string("Transcribing \(url.lastPathComponent)… it will be attached to your next message.").compact))")

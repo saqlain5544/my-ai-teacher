@@ -207,7 +207,13 @@ final class StudyStore: @unchecked Sendable {
     }
 
     /// Its reviews stay: they are the learner's study history (Insights counts them by day).
-    func deleteCard(_ id: Int64) { db.run("DELETE FROM cards WHERE id=?", id) }
+    /// A vocabulary word keeps no link to the deleted card (adding the word again then makes a new one).
+    func deleteCard(_ id: Int64) {
+        db.write("card delete") {
+            try db.execute("DELETE FROM cards WHERE id=?", id)
+            try db.execute("UPDATE vocab SET card_id=NULL WHERE card_id=?", id)
+        }
+    }
 
     // MARK: Mastery
     /// One answer on a concept. A wrong answer always counts; a right one raises mastery only without help (with help it is
@@ -236,11 +242,15 @@ final class StudyStore: @unchecked Sendable {
             scheduleFollowUp(subject: s, concept: c, kind: .transfer,
                              note: "just reached mastery: ask one question that applies it in a new context, not a repeat", after: 3, now: now)
         }
-        return mastery(subject: s, concept: c)!
+        // The write may have failed (logged): what it would have stored, rather than a crash.
+        return mastery(subject: s, concept: c) ?? MasteryItem(subject: s, concept: c, pKnown: p, attempts: (cur?.attempts ?? 0) + 1,
+                                                              correct: (cur?.correct ?? 0) + (earned ? 1 : 0), streak: streak, notes: note ?? cur?.notes, updatedAt: now)
     }
 
-    func setMastery(subject: String, concept: String, level: Double, note: String?) {
-        let s = subject.lowercased()
+    func setMastery(subject: String, concept raw: String, level: Double, note: String?) {
+        let s = subject.trimmingCharacters(in: .whitespaces).lowercased()
+        // The stored spelling, as recordAttempt does: the key is case-sensitive, and "Chain Rule" would start a second row.
+        let concept = mastery(subject: s, concept: raw.trimmingCharacters(in: .whitespaces))?.concept ?? raw.trimmingCharacters(in: .whitespaces)
         db.run("""
             INSERT INTO mastery(subject, concept, p_known, notes, updated_at) VALUES(?,?,?,?,?)
             ON CONFLICT(subject, concept) DO UPDATE SET p_known=excluded.p_known, notes=COALESCE(excluded.notes, mastery.notes), updated_at=excluded.updated_at
@@ -305,7 +315,9 @@ final class StudyStore: @unchecked Sendable {
                           conversationID: String? = nil, now: Date = Date()) {
         let due = now.addingTimeInterval(days * 86400)
         if let id = open([kind], concept: concept).first?.id {
-            db.run("UPDATE followups SET due=MIN(due, ?), note=COALESCE(?, note) WHERE id=?", due, note, id)
+            // A forgotten card's note expires a week after it was made: a refresh (forgotten again) starts that week again.
+            db.run("UPDATE followups SET due=MIN(due, ?), note=COALESCE(?, note), created_at=CASE WHEN kind='missed' THEN ? ELSE created_at END WHERE id=?",
+                   due, note, now, id)
         } else {
             db.run("INSERT INTO followups(subject, concept, kind, note, due, created_at, conversation_id) VALUES(?,?,?,?,?,?,?)",
                             subject.lowercased(), concept, kind.rawValue, note, due, now, conversationID)
@@ -403,14 +415,15 @@ final class StudyStore: @unchecked Sendable {
         return out
     }
 
-    func streakDays() -> Int {
-        let log = activity(days: 400)
-        var streak = 0
-        var day = Date()
-        if log[Self.dayFormatter.string(from: day)] == nil { day = day.addingTimeInterval(-86400) }
-        while let a = log[Self.dayFormatter.string(from: day)], a.messages + a.reviews > 0 {
-            streak += 1; day = day.addingTimeInterval(-86400)
-        }
+    /// Days in a row with study, ending today (or yesterday, before today's first). Calendar days, not 24-hour steps
+    /// (which skip or repeat a day at a DST change); a day whose row has only time logged (a turn that finished after
+    /// midnight) doesn't count, and doesn't break yesterday's streak either.
+    func streakDays(now: Date = Date()) -> Int {
+        let log = activity(days: 400), cal = Calendar.current
+        func active(_ d: Date) -> Bool { log[Self.dayFormatter.string(from: d)].map { $0.messages + $0.reviews > 0 } ?? false }
+        var day = cal.startOfDay(for: now), streak = 0
+        if !active(day) { day = cal.date(byAdding: .day, value: -1, to: day) ?? day }
+        while active(day), let prev = cal.date(byAdding: .day, value: -1, to: day) { streak += 1; day = prev }
         return streak
     }
 }

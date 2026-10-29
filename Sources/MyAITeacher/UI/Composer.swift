@@ -544,7 +544,15 @@ final class ComposerTextView: NSTextView {
     var onPasteFiles: (([URL]) -> Void)?
     var onPasteImage: ((NSImage) -> Void)?
     var placeholder = ""
-    var sessionID = ""
+    /// Another lesson: plain typing again. The closing keyboard's reset carries the old lesson's id, which this view no
+    /// longer answers to, so romaji (or "Mac keys" Cyrillic) went on in a lesson with no keyboard to turn it off.
+    var sessionID = "" {
+        didSet {
+            guard oldValue != sessionID else { return }
+            mode = ""; katakana = false; layout = nil
+            if spellCheck, !isContinuousSpellCheckingEnabled { isContinuousSpellCheckingEnabled = true }
+        }
+    }
     /// The lesson allows the spell-checker (not while a language is being learned).
     var spellCheck = true
 

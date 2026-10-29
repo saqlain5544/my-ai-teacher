@@ -68,7 +68,8 @@ final class ShellEnvironment: @unchecked Sendable {
         DispatchQueue.global(qos: .userInitiated).async { [self] in
             let shellEnv = Self.readLoginShellEnv()
             lock.lock()
-            for (k, v) in shellEnv where env[k] == nil || env[k]!.isEmpty { env[k] = v }
+            // PATH too: launchd always gives an app opened from Finder its own minimal one, so "missing" never applies to it.
+            for (k, v) in shellEnv where k == "PATH" && !v.isEmpty || env[k] == nil || env[k]!.isEmpty { env[k] = v }
             loaded = true
             let w = waiters; waiters = []
             lock.unlock()
@@ -182,7 +183,8 @@ enum AppLog {
                 try? fm.moveItem(at: url, to: url.appendingPathExtension("1"))
             }
             let data = Data("\(stamp) \(line)\n".utf8)
-            if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
+            // Throwing calls: the old ones raise an exception on a full disk, which ends the app.
+            if let h = try? FileHandle(forWritingTo: url) { _ = try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close() }
             else { try? data.write(to: url) }
         }
     }

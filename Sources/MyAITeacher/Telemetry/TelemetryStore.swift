@@ -120,7 +120,7 @@ final class TelemetryStore: @unchecked Sendable {
     }
 
     func clear() {
-        try? db.transaction {
+        db.write("telemetry clear") {   // a failure is logged, not silently kept
             for t in ["tm_events", "tm_llm_daily", "tm_tool_daily", "tm_count_daily", "tm_hist_daily", "tm_meta"] { try db.execute("DELETE FROM \(t)") }
         }
     }

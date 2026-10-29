@@ -43,11 +43,11 @@ final class ConversationController: ObservableObject {
     var quiet = false
 
     func listen() {
-        guard let s = session, phase != .off || turns == 0 else { return }
+        guard session != nil, phase != .off || turns == 0 else { return }
         if quiet { phase = .paused; return }
         heard = ""; phase = .listening
         speech.dictate(language: language, stopAfterSilence: 1.4) { [weak self] text, final, info in
-            guard let self, self.phase == .listening else { return }
+            guard let self, self.phase == .listening, let s = self.session else { return }   // the session isn't kept alive by the mic
             self.heard = text
             if let e = info?["engine"]?.string { self.engine = e } else if !self.speech.engineName.isEmpty { self.engine = self.speech.engineName }
             guard final else { return }
@@ -77,6 +77,14 @@ final class ConversationController: ObservableObject {
             guard let self, self.phase == .speaking else { return }
             self.listen()
         }
+    }
+
+    /// The lesson was left or deleted: the conversation stops without a word (a reply would otherwise be spoken, and what
+    /// is heard next sent to a lesson no longer on screen).
+    func hangUp() {
+        guard phase != .off else { return }
+        phase = .off; running = nil
+        speech.stopListening(); speech.stop()
     }
 
     func end() {

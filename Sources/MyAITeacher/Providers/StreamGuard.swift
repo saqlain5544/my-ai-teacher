@@ -44,7 +44,8 @@ struct GuardedClient: LLMClient {
                         case .toolCall(let b): call(b, structured: true)
                         case .usage, .stop:
                             if !flushed { flushed = true; route(parser.flush()) }
-                            if case .stop(let r) = ev { cont.yield(.stop(parsedCall && r != "tool_use" ? "tool_use" : r)) } else { cont.yield(ev) }
+                            // A call parsed from text makes the stop a tool use, except at the output limit (the call may be cut off).
+                            if case .stop(let r) = ev { cont.yield(.stop(parsedCall && r != "tool_use" && r != "max_tokens" ? "tool_use" : r)) } else { cont.yield(ev) }
                         default: cont.yield(ev)
                         }
                     }
@@ -395,6 +396,15 @@ struct TextProtocolParser {
 /// Tool arguments as the schema says, whatever shape the model sent (models send "[…]" strings for arrays, "3" for
 /// numbers, "true" for booleans).
 enum ToolArgs {
+    /// A reply cut off at the output limit was writing its last tool call: the arguments are incomplete (the JSON repair
+    /// closed them), and running it would write half a file or a truncated command. Marked for the executors to refuse.
+    static func markCutOff(_ m: inout ChatMessage, finish: String) {
+        guard finish == "max_tokens", let k = m.blocks.lastIndex(where: { $0.kind == .toolUse }), var o = m.blocks[k].input?.object else { return }
+        o["_cutOff"] = true
+        m.blocks[k].input = .object(o)
+    }
+    static let cutOffResult = "Not run: this call was cut off at the output limit, so its arguments were incomplete. Do it in smaller calls (a large file in several parts, a long command split up)."
+
     static func value(_ v: String, as kind: String?) -> JSON {
         let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
         switch kind {

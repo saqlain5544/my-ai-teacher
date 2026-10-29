@@ -36,7 +36,7 @@ struct CardFaceView: NSViewRepresentable {
             if ready { web?.evaluateJavaScript(js) } else { pending = js }
         }
         func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
-            guard let body = m.body as? [String: Any], let type = body["type"] as? String else { return }
+            guard m.frameInfo.isMainFrame, let body = m.body as? [String: Any], let type = body["type"] as? String else { return }   // not a visual's frame
             if type == "ready" { ready = true; if let p = pending { web?.evaluateJavaScript(p); pending = nil } }
             if type == "open", let s = body["url"] as? String, let u = URL(string: s) { AppModel.shared.openLink(u) }
         }

@@ -24,8 +24,8 @@ struct ProjectProfile: Sendable, Equatable {
 
     static func == (a: ProjectProfile, b: ProjectProfile) -> Bool { a.section() == b.section() }
 
-    /// The project's first check command (fast), else its build.
-    var checkCommand: String? { commands.check.first ?? commands.build.first }
+    /// The project's first check command (fast), else its build (one that runs as written: not a `<scheme>` template).
+    var checkCommand: String? { commands.check.first ?? commands.build.first { !$0.contains("<") } }
     var testCommand: String? { commands.test.first }
 
     static let skip: Set<String> = [".git", "node_modules", ".build", "build", "dist", "target", "DerivedData", ".venv", "venv", "__pycache__", "Pods",
@@ -52,7 +52,8 @@ struct ProjectProfile: Sendable, Equatable {
         }
         if let proj = top.first(where: { $0.hasSuffix(".xcworkspace") }) ?? top.first(where: { $0.hasSuffix(".xcodeproj") }) {
             p.kinds.append("Xcode (\(proj))")
-            p.commands.build.append("xcodebuild -\(proj.hasSuffix(".xcworkspace") ? "workspace" : "project") \(proj) -scheme <scheme> build")
+            // The name is the folder's (quoted: it can hold `;` or spaces); <scheme> is for the model to fill in.
+            p.commands.build.append("xcodebuild -\(proj.hasSuffix(".xcworkspace") ? "workspace" : "project") \(proj.shellQuoted) -scheme <scheme> build")
             p.notes.append("`xcodebuild -list` shows the schemes")
         }
         if let pkg = read("package.json"), let j = JSON.parse(pkg) {

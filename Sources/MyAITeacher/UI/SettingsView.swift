@@ -128,6 +128,8 @@ struct ProvidersSettings: View {
             if let p = settings.provider(selected ?? "") { detail(p).id(p.id) } else { Text("Select a provider").frame(maxWidth: .infinity) }
         }
         .sheet(isPresented: $showAdd) { AddProviderSheet().environmentObject(settings) }
+        // A key pasted for one provider is never saved under the next one picked.
+        .onChange(of: selected) { _, _ in keyDraft = ""; testResult = nil }
     }
 
     private func detail(_ p: ProviderConfig) -> some View {
@@ -157,7 +159,8 @@ struct ProvidersSettings: View {
                     settings.value.providerID = p.id; settings.value.model = p.defaultModel
                 }
                 if p.isCustom {
-                    Button("Delete this provider", role: .destructive) { settings.value.customProviders.removeAll { $0.id == p.id }; selected = nil }
+                    // Its key goes too: a provider added later under the same name (the same id) would send it elsewhere.
+                    Button("Delete this provider", role: .destructive) { settings.value.customProviders.removeAll { $0.id == p.id }; keys.set(nil, for: p.id); selected = nil }
                 }
             }
         }
@@ -172,9 +175,9 @@ struct ProvidersSettings: View {
                 let list = try await ProviderCatalog.fetchModels(p, apiKey: KeyStore.shared.key(for: p))
                 if !list.isEmpty { ModelCache.save(p.id, list) }
                 app.apply(p, list)
-                testResult = "✓ Connected — \(list.count) models"
+                if selected == p.id { testResult = "✓ Connected — \(list.count) models" }   // not under another provider picked since
             } catch {
-                testResult = "✗ \(error.localizedDescription)"
+                if selected == p.id { testResult = "✗ \(error.localizedDescription)" }
             }
             testing = false
         }
@@ -208,7 +211,9 @@ struct AddProviderSheet: View {
                                                                          envKeys: envKey.isEmpty ? [] : [envKey], defaultModel: model,
                                                                          keyOptional: local, isCustom: true))
                     dismiss()
-                }.disabled(name.isEmpty || model.isEmpty || !baseURL.hasPrefix("http")).keyboardShortcut(.defaultAction)
+                }.disabled(name.isEmpty || model.isEmpty || !baseURL.hasPrefix("http")
+                           || settings.provider("custom-" + name.lowercased().replacingOccurrences(of: " ", with: "-")) != nil)   // ids are by name
+                .keyboardShortcut(.defaultAction)
             }
         }
         .formStyle(.grouped).frame(width: 460).padding()
@@ -229,8 +234,10 @@ struct ToolsSettings: View {
                         Text((path as NSString).lastPathComponent).lineLimit(1)
                         Text(path).font(.caption).foregroundStyle(.tertiary).lineLimit(1).truncationMode(.middle)
                         Spacer()
-                        Picker("", selection: Binding(get: { settings.value.folderAccess[path] ?? .read },
-                                                      set: { v in if v == .read { settings.value.folderAccess.removeValue(forKey: path) } else { settings.value.folderAccess[path] = v } })) {
+                        // As AppModel.setAccess: the quick-questions folder defaults to full, so its read-only is stored.
+                        let quick = URL(fileURLWithPath: path).standardizedFileURL.path == AppPaths.quickFolder.standardizedFileURL.path
+                        Picker("", selection: Binding(get: { settings.value.folderAccess[path] ?? (quick ? .full : .read) },
+                                                      set: { v in if v == .read && !quick { settings.value.folderAccess.removeValue(forKey: path) } else { settings.value.folderAccess[path] = v } })) {
                             ForEach(FolderAccess.allCases) { Text($0.title).tag($0) }
                         }.labelsHidden().frame(width: 140)
                     }
@@ -338,7 +345,11 @@ struct MemorySettings: View {
                 LabeledContent("Stored memories", value: "\(app.memoryCount)")
             }
             Section("Model used for memory") {
-                Picker("Provider", selection: Binding(get: { settings.value.memoryProviderID ?? "" }, set: { settings.value.memoryProviderID = $0.isEmpty ? nil : $0 })) {
+                // Another provider's model goes with the old provider: kept, every memory pass asked the new one for a model it doesn't have.
+                Picker("Provider", selection: Binding(get: { settings.value.memoryProviderID ?? "" }, set: {
+                    if $0 != (settings.value.memoryProviderID ?? "") { settings.value.memoryModel = nil }
+                    settings.value.memoryProviderID = $0.isEmpty ? nil : $0
+                })) {
                     Text("Same as the lesson").tag("")
                     ForEach(app.availableProviders) { Text($0.name).tag($0.id) }
                 }

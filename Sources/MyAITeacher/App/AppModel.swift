@@ -26,7 +26,10 @@ final class AppModel: ObservableObject {
     @Published private(set) var services: Services
     @Published var conversations: [Conversation] = []
     @Published var selection: SidebarItem? {
-        didSet { if case .lesson(let id) = selection { finishedUnseen.remove(id) } }
+        didSet {
+            if case .lesson(let id) = selection { finishedUnseen.remove(id) }
+            if case .lesson(let old) = oldValue, oldValue != selection { sessions[old]?.talk.hangUp() }   // talk mode stays with its lesson
+        }
     }
     /// Every lesson in every folder the learner works in (`SessionIndex`), for the All Sessions list.
     @Published private(set) var allSessions: [SessionIndex.Entry] = []
@@ -279,7 +282,9 @@ final class AppModel: ObservableObject {
     /// Keep memory low: only the selected and running sessions stay resident.
     private func evictSessions(keeping id: String) {
         guard sessions.count > 3 else { return }
-        for (sid, s) in sessions where sid != id && !isActive(sid) {
+        // Never the lesson on screen (a report waking another lesson evicted it, losing its draft and attachments).
+        let shown: String? = { if case .lesson(let s) = selection { return s }; return nil }()
+        for (sid, s) in sessions where sid != id && sid != shown && !isActive(sid) {
             s.close()
             if s.services.workspace !== services.workspace { s.detach(deleted: false) }
             sessions.removeValue(forKey: sid)
@@ -308,9 +313,13 @@ final class AppModel: ObservableObject {
     }
 
     func delete(_ id: String) {
+        sessions[id]?.talk.hangUp()
         sessions[id]?.stop()
         sessions[id]?.detach(deleted: true)
         ShellJobs.shared.stopAll(id)   // its servers and watchers
+        // Its background sub-agents too: they run outside the turn, and would keep calling the model and editing files.
+        for r in SubAgentCenter.shared.runs(in: id) where r.isRunning { r.stop() }
+        undelivered[id] = nil
         sessions.removeValue(forKey: id)
         sessionWatch[id] = nil
         finishedUnseen.remove(id)

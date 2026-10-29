@@ -244,7 +244,7 @@ enum Questions {
     }
 
     /// The number in an answer: "12 seconds", "12 m/s" → 12; "1 1/2" → 1.5; "3/4"; "3,5" → 3.5; "1,234" → 1234;
-    /// "5%" → 5; "10^3" → 1000; "2.5e3". Units and words around it are ignored.
+    /// "5%" → 5; "10^3" → 1000; "2.5e3"; "3×10^8". Units and words around it are ignored.
     static func number(_ a: JSON) -> Double? {
         if let d = a.double { return d }
         guard var s = a.string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
@@ -253,6 +253,9 @@ enum Questions {
             return w < 0 ? w - n / d : w + n / d   // mixed number
         }
         if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)(?![\d.])/#), let a = Double(m.1), let b = Double(m.2), b != 0 { return a / b }
+        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\*|[xX·])\s*10\s*(?:\^|\*\*)\s*([+-]?\d+)/#), let b = Double(m.1), let e = Double(m.2) {
+            return b * pow(10, e)   // scientific notation: "3×10^8", "6.02 x 10^23"
+        }
         if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\^|\*\*)\s*([+-]?\d+)/#), let b = Double(m.1), let e = Double(m.2) { return pow(b, e) }
         if s.wholeMatch(of: #/[+-]?\d{1,3}(,\d{3})+(\.\d+)?.*/#) != nil { s = s.replacingOccurrences(of: ",", with: "") }
         else if let m = s.firstMatch(of: #/^([+-]?\d+),(\d+)\b/#) { s = m.1 + "." + m.2 + s[m.range.upperBound...] }   // decimal comma
@@ -509,6 +512,8 @@ enum MathEquivalence {
     static func equivalent(_ a: String, _ b: String) async -> Bool? {
         let x = toSympy(a), y = toSympy(b)
         guard MathTool.safe(x), MathTool.safe(y), let py = ProcessRunner.which("python3") else { return nil }
+        // Settings → Python off covers SymPy too: the teacher grades the answer instead.
+        guard await MainActor.run(body: { AppModel.shared.settings.value.python }) != .off else { return nil }
         let script = """
         import sys, json
         try:

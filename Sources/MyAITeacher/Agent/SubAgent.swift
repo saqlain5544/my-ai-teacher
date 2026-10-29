@@ -334,6 +334,10 @@ final class SubAgentCenter: ObservableObject {
     /// Called when a background run finishes with a report the teacher hasn't read (the app delivers it to the lesson).
     var onReport: ((SubAgentRun, ToolOutput) -> Void)?
     private var nextHandle = 1
+    /// Calls past the concurrency check that haven't begun their run yet (per lesson), and the runs being resumed: counted
+    /// with the running ones, so parallel `task` calls in one reply can't all pass the limit, nor resume one run twice.
+    var claims: [String: Int] = [:]
+    var resuming: Set<String> = []
     /// Finished runs that keep their transcript in memory (besides running ones and the one on screen); the rest park
     /// theirs on disk until shown or resumed. Only summaries and reports stay resident.
     nonisolated static let resident = 4
@@ -464,15 +468,28 @@ enum SubAgent {
         guard ctx.agentDepth < limits.maxDepth else {
             return .error("Sub-agents nest at most \(limits.maxDepth) deep (Settings → Agents): do this part yourself.")
         }
-        let running = await MainActor.run { center.runs(in: ctx.conversationID).filter(\.isRunning).count }   // run state lives on the main actor
-        if running >= limits.maxConcurrent {
-            return .error("\(running) sub-agents are already running (the limit is \(limits.maxConcurrent)); wait for one or stop one first.")
+        // Checked and claimed in one hop on the main actor (where run state lives); the claim ends once the run has begun.
+        let cid = ctx.conversationID, again = resumed
+        let refused: String? = await MainActor.run {
+            let running = center.runs(in: cid).filter(\.isRunning).count + center.claims[cid, default: 0]
+            if running >= limits.maxConcurrent { return "\(running) sub-agents are already running (the limit is \(limits.maxConcurrent)); wait for one or stop one first." }
+            if let r = again {
+                if r.isRunning || center.resuming.contains(r.id) { return "\(r.handle) is still running: send it a note (`agents` send), wait for it or stop it first." }
+                center.resuming.insert(r.id)
+            }
+            center.claims[cid, default: 0] += 1
+            return nil
+        }
+        if let refused { return .error(refused) }
+        let unclaim = { @MainActor in
+            center.claims[cid] = max(0, center.claims[cid, default: 1] - 1)
+            if let r = again { center.resuming.remove(r.id) }
         }
         await resumed?.unpark()   // its context comes back from disk if it was parked
         let previous = await resumed?.config
         let resolved: (SubAgentConfig, LLMClient, [String])
         do { resolved = try await resolve(q, previous: previous, limits: limits, host: host, ctx: ctx) }
-        catch { return .error(error.localizedDescription) }
+        catch { await unclaim(); return .error(error.localizedDescription) }
         let (cfg, client, notes) = resolved
         // An unbounded run never holds up the lesson: it goes to the background, where it can always be stopped.
         let background = q.background || cfg.budget.unbounded
@@ -485,6 +502,7 @@ enum SubAgent {
                                      blobs: ctx.services.conversations.blobs)
         }
         await run.begin(cfg, background: background)
+        await unclaim()   // running now: counted as such
         await launch(run, cfg, client: client, brief: q.brief, resume: resumed != nil, ctx: ctx, host: host)
         let handle = run.handle
         let said = notes.isEmpty ? "" : notes.joined(separator: " ") + "\n\n"
@@ -598,6 +616,17 @@ enum SubAgent {
             budget = AgentBudget(steps: min(max(1, steps), limits.maxSteps), seconds: min(max(1, secs), limits.maxSeconds),
                                  tokens: toks.map { min(max(1000, $0), limits.maxTokens) })
             if budget.steps != steps || budget.seconds != secs || budget.tokens != toks { notes.append("Budget set to \(budget.label) (the limits in Settings → Agents).") }
+        }
+        // A sub-agent's own sub-agent spends its parent's budget (its tokens are charged up the chain, and a blocking one
+        // runs on the parent's clock): it gets at most what the parent has left.
+        if let handle = ctx.agentCeiling?.handle, let left = await MainActor.run(body: { () -> (tokens: Int?, seconds: Int?)? in
+            guard let p = SubAgentCenter.shared.run(handle), let pb = p.budget, !pb.unbounded else { return nil }
+            return (pb.tokens.map { max(1000, $0 - p.usage.total) }, pb.seconds.map { max(1, $0 - Int(p.elapsed)) })
+        }) {
+            let before = budget
+            if let t = left.tokens { budget.tokens = min(budget.tokens ?? t, t); budget.unbounded = false }
+            if let s = left.seconds { budget.seconds = min(budget.seconds ?? s, s); budget.unbounded = false }
+            if budget != before { notes.append("Budget set to \(budget.label): what \(handle) has left of its own.") }
         }
 
         // Tools: the type's, narrowed by the call; read-only types and the caller's own limits always win.
@@ -747,6 +776,7 @@ enum SubAgent {
                 } else { failure = error.localizedDescription; assistant.error = failure }
             }
             if Task.isCancelled { try handOver(w); stopped = true }
+            ToolArgs.markCutOff(&assistant, finish: metrics.finishReason)
             assistant.metrics = metrics
             assistant.usage = metrics.usage
             turn.steps += 1
@@ -756,6 +786,13 @@ enum SubAgent {
             let m = assistant, u = metrics.usage
             await w { $0.record(u); $0.upsert(m) }
             let calls = assistant.toolUses
+            if wrapUp, !stopped, failure == nil, !calls.isEmpty {
+                // Calls in the report step (parsed out of its text; no tools were offered) don't run, but each gets a
+                // result: a request after them (the output-schema repair) would otherwise carry unanswered tool uses.
+                let notRun = ChatMessage(role: .user, blocks: calls.map { .toolResult(id: $0.id ?? "", name: $0.name ?? "", content: "Not run: the budget is used up.", isError: true) })
+                messages.append(notRun)
+                await w { $0.upsert(notRun) }
+            }
             if stopped || failure != nil || calls.isEmpty || wrapUp { break }
 
             await w { $0.setStatus(calls.count > 1 ? "Running \(calls.count) tools…" : "Running \(calls[0].name ?? "a tool")…") }
@@ -876,6 +913,9 @@ enum SubAgent {
                         ToolMetric(name: name, duration: 0, ok: false))
             }
             let input = ToolArgs.canonical(c.input ?? .object([:]), schema: tool.schema)
+            if input["_cutOff"] != nil {
+                return (.toolResult(id: callID, name: name, content: ToolArgs.cutOffResult, isError: true), ToolMetric(name: name, duration: 0, ok: false))
+            }
             if input["_raw"] != nil {
                 return (.toolResult(id: callID, name: name, content: "Tool input was not valid JSON. Retry with valid JSON arguments.", isError: true), ToolMetric(name: name, duration: 0, ok: false))
             }
@@ -985,14 +1025,16 @@ enum SubAgent {
         // Older turns get the lesson loop's microcompaction. A research run that fetches eight 40k-character pages would
         // otherwise send 80k tokens once per step until the provider rejects it — and the supervisor would restart into
         // the same request.
-        let keepFrom = ContextPolicy.turnStarts(out).last ?? 0
+        // A brief starts a turn; tool results don't, even with a steering note or the budget's wrap-up appended to them
+        // (counted as a turn start, those stubbed every earlier result just as the report was written).
+        let keepFrom = out.indices.last { out[$0].role == .user && !out[$0].blocks.contains { $0.kind == .toolResult } } ?? 0
         for i in out.indices where i < keepFrom { out[i].blocks = out[i].blocks.map(ContextPolicy.trim) }
         // A run usually has one brief, so the rule above alone never trimmed inside it. Within the current brief, tool
         // results older than the latest `recentResultsKept` steps are stubbed too — except with signed thinking in play,
         // where editing an earlier tool result invalidates the later thinking blocks.
         let signed = out.contains { $0.blocks.contains { $0.kind == .thinking && $0.signature != nil } }
         if !signed {
-            let results = out.indices.filter { $0 >= keepFrom && out[$0].isToolResultOnly }
+            let results = out.indices.filter { $0 >= keepFrom && out[$0].blocks.contains { $0.kind == .toolResult } }
             for i in results.dropLast(recentResultsKept) {
                 out[i].blocks = out[i].blocks.map { $0.kind == .toolResult ? ContextPolicy.trim($0) : $0 }
             }

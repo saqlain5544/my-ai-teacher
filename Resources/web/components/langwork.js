@@ -285,7 +285,12 @@
       return h + '</div>';
     },
     mount(el) {
-      const st = readers.get(el.getAttribute('data-key')); if (!st || st.analysed) return;
+      const st = readers.get(el.getAttribute('data-key')); if (!st) return;
+      if (st.analysed) {   // a cached copy of the card (a reset of the same lesson) predates the analysis: draw what is known now
+        const b = el.querySelector('.rd-body'); if (b) b.innerHTML = readingBody(st);
+        el.querySelectorAll('.rd-modes button').forEach(x => x.classList.toggle('on', x.getAttribute('data-v') === st.mode));
+        return;
+      }
       st.analysed = true;
       post({ type: 'langwork', op: 'analyze', key: st.key, text: st.text, lang: st.lang });
     } });
@@ -528,7 +533,7 @@
     if (!box) { box = document.createElement('div'); box.className = 'own-read'; box.setAttribute('data-own', id); msgEl.appendChild(box); }
     const d = R.component('reading'); if (!d) return;
     const p = d.validate ? d.validate(Object.assign({}, props)) : props;
-    box.innerHTML = '<button class="btn mini link own-close" data-act="read-own-close" data-own="' + esc(id) + '">✕ Close</button>' + d.render(p, R._ctx, { code: 'own:' + id + ':' + p.text.length, lang: '' });
+    box.innerHTML = '<button class="btn mini link own-close" data-act="read-own-close" data-own="' + esc(id) + '">✕ Close</button>' + d.render(p, R._ctx, { code: 'own:' + msgEl.id + ':' + id + ':' + R._ctx.hash(p.text), lang: '' });   // the reader's key: per message and text
     box.querySelectorAll('.lw-reading').forEach(el => d.mount(el, R._ctx));
   }
   function addOwn(msgId, id, props) {

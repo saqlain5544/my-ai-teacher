@@ -72,10 +72,11 @@ enum ActivityLog {
             let url = file(for: day)
             if !fm.fileExists(atPath: url.path) { fm.createFile(atPath: url.path, contents: nil) }
             guard let h = try? FileHandle(forWritingTo: url) else { return }
-            h.seekToEndOfFile()
+            _ = try? h.seekToEnd()
             handle = (day, h)
         }
-        handle?.file.write(Data((line + "\n").utf8))
+        // The throwing API: the old `write(_:)` raises an exception on a full disk, which ends the app.
+        do { try handle?.file.write(contentsOf: Data((line + "\n").utf8)) } catch { try? handle?.file.close(); handle = nil }
     }
 
     private static func prune() {

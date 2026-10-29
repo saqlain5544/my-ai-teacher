@@ -186,7 +186,8 @@ enum ReadOnlyShell {
             guard let exe = ProcessRunner.which(words[0]) else { return .error("`\(words[0])` isn't installed.") }
             let p = Process()
             p.executableURL = URL(fileURLWithPath: exe)
-            p.arguments = words[0] == "git" ? hardened(Array(words.dropFirst())) : Array(words.dropFirst())
+            p.arguments = words[0] == "git"
+                ? hardened(Array(words.dropFirst()), filters: await filterDrivers(exe, Array(words.dropFirst()), cwd: cwd)) : Array(words.dropFirst())
             p.currentDirectoryURL = cwd
             p.environment = env
             built.append(p)
@@ -245,16 +246,35 @@ enum ReadOnlyShell {
         return ToolOutput(text: text, isError: timedOut.value, meta: ["exit": .number(Double(status)), "readOnlyShell": true])
     }
 
-    /// git with nothing a repository's config could run: no fsmonitor, hooks, pager, external diff or text conversion.
-    static func hardened(_ args: [String]) -> [String] {
+    /// git with nothing a repository's config could run: no fsmonitor, hooks, pager, external diff, text conversion,
+    /// signature checks, or the `filters` drivers (which a plain `git status` runs on a stale index).
+    static func hardened(_ args: [String], filters: [String] = []) -> [String] {
+        let (head, rest) = globalOptions(args)
+        guard let sub = rest.first else { return args }
+        let extra = ["diff", "log", "show"].contains(sub) ? ["--no-ext-diff", "--no-textconv"] : ["grep", "blame"].contains(sub) ? ["--no-textconv"] : []
+        let noFilters = filters.flatMap { f in ["clean", "smudge", "process"].flatMap { ["-c", "filter.\(f).\($0)="] } + ["-c", "filter.\(f).required=false"] }
+        return ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "log.showSignature=false"] + noFilters
+            + ["--no-pager"] + head + [sub] + extra + Array(rest.dropFirst())
+    }
+
+    /// git's options before the subcommand (`-C dir`, `--no-pager`), and the rest.
+    private static func globalOptions(_ args: [String]) -> ([String], ArraySlice<String>) {
         var head: [String] = [], rest = args[...]
         while let a = rest.first, a.hasPrefix("-") {
             head.append(a); rest = rest.dropFirst()
             if a == "-C", let d = rest.first { head.append(d); rest = rest.dropFirst() }
         }
-        guard let sub = rest.first else { return args }
-        let extra = ["diff", "log", "show"].contains(sub) ? ["--no-ext-diff", "--no-textconv"] : ["grep", "blame"].contains(sub) ? ["--no-textconv"] : []
-        return ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "--no-pager"] + head + [sub] + extra + Array(rest.dropFirst())
+        return (head, rest)
+    }
+
+    /// The filter drivers the repository's config names (`filter.<name>.clean`…). Reading config runs nothing.
+    static func filterDrivers(_ git: String, _ args: [String], cwd: URL) async -> [String] {
+        let r = await ProcessRunner.run(git, globalOptions(args).0 + ["config", "--name-only", "--get-regexp", #"^filter\."#], cwd: cwd, timeout: 5)
+        let names = r.stdout.split(whereSeparator: \.isNewline).compactMap { key -> String? in
+            guard key.hasPrefix("filter."), let dot = key.lastIndex(of: "."), dot > key.index(key.startIndex, offsetBy: 6) else { return nil }
+            return String(key[key.index(key.startIndex, offsetBy: 7)..<dot])
+        }
+        return Array(Set(names)).sorted()
     }
 
     /// The commands of a pipeline: split at each `|` outside quotes (`rg 'a|b'` is one command).

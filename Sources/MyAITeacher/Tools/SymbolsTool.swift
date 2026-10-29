@@ -81,7 +81,7 @@ struct SymbolsTool: Tool {
     static func outline(_ text: String, ext: String) -> [Symbol] {
         let pats = patterns(for: ext)
         var out: [Symbol] = []
-        for (i, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+        for (i, raw) in text.fileLines.enumerated() {   // "\r\n" too: a Windows file is otherwise one line
             let line = String(raw)
             guard !line.trimmingCharacters(in: .whitespaces).isEmpty, line.count < 400 else { continue }
             let t = line.trimmingCharacters(in: .whitespaces)
@@ -104,7 +104,7 @@ struct SymbolsTool: Tool {
             let url = resolvePath(p, workspace: ctx.workspace)
             guard let text = try? String(contentsOf: url, encoding: .utf8) else { return .error("Cannot read \(url.path).") }
             let syms = Self.outline(text, ext: url.pathExtension.lowercased()).filter { wanted == "any" || $0.kind == wanted }
-            if syms.isEmpty { return ToolOutput(text: "No definitions recognised in \(url.lastPathComponent) (\(text.split(separator: "\n").count) lines). `read` it, or `grep` for a name.") }
+            if syms.isEmpty { return ToolOutput(text: "No definitions recognised in \(url.lastPathComponent) (\(text.fileLines.count) lines). `read` it, or `grep` for a name.") }
             let lines = syms.prefix(400).map { s in "\(String(s.line).leftPad(5))  \(s.kind == "function" ? "ƒ" : s.kind == "type" ? "T" : "c")  \(s.text)" }
             return ToolOutput(text: "\(url.lastPathComponent): \(syms.count) definitions\n" + lines.joined(separator: "\n") + (syms.count > 400 ? "\n… \(syms.count - 400) more" : ""),
                               meta: ["count": .number(Double(syms.count))])

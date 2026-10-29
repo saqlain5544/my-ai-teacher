@@ -107,7 +107,10 @@ final class PermissionExtension: AgentExtension {
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
                 || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
             // The shell command this call runs: bash's, an explicit diagnostics or test command, or the project's test command.
+            // `run_tests` without one runs each file in its test folder instead, which no rule for a command covers.
+            let folderRun = tool.name == "run_tests" && (input["command"]?.string ?? "").isEmpty
             let command = tool.name == "bash" ? input["command"]?.string ?? ""
+                : folderRun ? ""
                 : tool.name == "diagnostics" || grant == "tests"
                     ? input["command"]?.string ?? (grant == "tests" ? ProjectStore.load(ws)?.testCommand : nil) ?? "" : ""
             // Looking around needs no approval (`git status`, `ls`, `rg`…: the strict read-only list, run hardened by
@@ -119,7 +122,10 @@ final class PermissionExtension: AgentExtension {
             var what = tool.name == "bash" ? "run this command" : "run this \(input["language"]?.string ?? (tool.name == "trace" ? "Python" : "")) code"
             if grant == "tests" {
                 what = tool.name == "project_review" ? "run your tests for the review" : "run the project's tests"
-                detail = input["command"]?.string ?? ProjectStore.load(ws)?.testCommand ?? detail
+                detail = folderRun
+                    ? RunTestsTool.plan(dir: resolvePath(input["path"]?.string ?? ".teacher/tests", workspace: ws.url), filter: input["filter"]?.string)?
+                        .map(\.1).joined(separator: "\n") ?? detail
+                    : input["command"]?.string ?? ProjectStore.load(ws)?.testCommand ?? detail
             }
             var options = [ApprovalOption(id: "once", label: "Allow once", style: .primary)]
             if let rule { options.append(ApprovalOption(id: "rule", label: "Always allow “\(rule) …” in this folder")) }
@@ -148,8 +154,8 @@ final class PermissionExtension: AgentExtension {
     /// cover: other services, accounts, the network), unless the user allows that server for the lesson or always in
     /// this folder.
     private func mcpGate(_ tool: MCPTool, _ input: JSON, ws: Workspace, conv: String) -> ToolDecision {
-        let grant = "mcp:" + tool.server
-        if app.interactions.isGranted(grant, conversationID: conv) || (app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []).contains(tool.server) { return .allow }
+        let key = tool.config.grantKey, grant = "mcp:" + key
+        if app.interactions.isGranted(grant, conversationID: conv) || (app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []).contains(key) { return .allow }
         let args = input.object?.isEmpty == false ? input.pretty : "(no arguments)"
         return .ask(ApprovalRequest(
             title: "Allow Teacher to use “\(tool.info.name)” from the MCP server “\(tool.server)”?",
@@ -164,7 +170,7 @@ final class PermissionExtension: AgentExtension {
             case "always":
                 if let self {
                     var names = self.app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []
-                    if !names.contains(tool.server) { names.append(tool.server) }
+                    if !names.contains(key) { names.append(key) }
                     self.app.settings.value.mcpAlwaysAllow[ws.url.path] = names
                 }
                 return .allow
@@ -214,8 +220,11 @@ final class PermissionExtension: AgentExtension {
 
     /// Package managers' install commands (one pattern each, so none can swallow another): pip/pip3/pip3.12, pipx,
     /// conda and friends, gem, cargo, go, brew, port, uv (pip install, add, tool install), poetry/pipenv, `python -m pip`,
-    /// and global JavaScript installs (npm -g/--global/--location=global, pnpm/yarn/bun -g, yarn global add).
+    /// and global JavaScript installs (npm -g/--global/--location=global, pnpm/yarn/bun -g, yarn global add); also the
+    /// argument lists code passes to subprocess (`["pip", "install", …]`, `[sys.executable, "-m", "pip", …]`).
     nonisolated static let installPatterns = [
+        #"["'](pip(3(\.\d+)?)?|pipx|conda|mamba|micromamba|gem|cargo|go|brew|port)["']\s*,\s*["']install["']"#,
+        #"["']-m["']\s*,\s*["'](pip|ensurepip)["']"#,
         #"\b(pip(3(\.\d+)?)?|pipx|conda|mamba|micromamba|easy_install|gem|cargo|go|brew|port)\s+install\b"#,
         #"\buv\s+(pip\s+install|add|tool\s+install)\b"#,
         #"\b(poetry\s+add|pipenv\s+install)\b"#,

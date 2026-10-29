@@ -303,37 +303,42 @@ final class ConceptGraph: @unchecked Sendable {
     }
 
     /// Merges `from` concepts into `into`: aliases, subjects, edges and evidence move; memories are re-pointed by the caller.
+    /// One transaction: a failure part-way deleted the aliases it hadn't moved yet.
     func merge(into: Int64, from: [Int64]) {
-        for f in from where f != into {
-            db.run("UPDATE OR IGNORE concept_aliases SET concept_id=? WHERE concept_id=?", into, f)
-            db.run("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) SELECT ?, subject FROM concept_subjects WHERE concept_id=?", into, f)
-            db.run("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT ?, dst, rel, created_at FROM concept_edges WHERE src=? AND dst!=?", into, f, into)
-            db.run("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT src, ?, rel, created_at FROM concept_edges WHERE dst=? AND src!=?", into, f, into)
-            db.run("UPDATE concepts SET evidence=evidence+(SELECT evidence FROM concepts WHERE id=?) WHERE id=?", f, into)
-            // Keep the better mastery evidence.
-            db.run("""
-                UPDATE concepts SET p_known=(SELECT p_known FROM concepts WHERE id=?), attempts=(SELECT attempts FROM concepts WHERE id=?),
-                correct=(SELECT correct FROM concepts WHERE id=?), mastery_at=(SELECT mastery_at FROM concepts WHERE id=?)
-                WHERE id=? AND COALESCE((SELECT mastery_at FROM concepts WHERE id=?), 0) > COALESCE(mastery_at, 0)
-                """, f, f, f, f, into, f)
-            deleteRow(f)
+        db.write("concept merge") {
+            for f in from where f != into {
+                try db.execute("UPDATE OR IGNORE concept_aliases SET concept_id=? WHERE concept_id=?", into, f)
+                try db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) SELECT ?, subject FROM concept_subjects WHERE concept_id=?", into, f)
+                try db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT ?, dst, rel, created_at FROM concept_edges WHERE src=? AND dst!=?", into, f, into)
+                try db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT src, ?, rel, created_at FROM concept_edges WHERE dst=? AND src!=?", into, f, into)
+                try db.execute("UPDATE concepts SET evidence=evidence+(SELECT evidence FROM concepts WHERE id=?) WHERE id=?", f, into)
+                // Keep the better mastery evidence.
+                try db.execute("""
+                    UPDATE concepts SET p_known=(SELECT p_known FROM concepts WHERE id=?), attempts=(SELECT attempts FROM concepts WHERE id=?),
+                    correct=(SELECT correct FROM concepts WHERE id=?), mastery_at=(SELECT mastery_at FROM concepts WHERE id=?)
+                    WHERE id=? AND COALESCE((SELECT mastery_at FROM concepts WHERE id=?), 0) > COALESCE(mastery_at, 0)
+                    """, f, f, f, f, into, f)
+                try deleteRow(f)
+            }
         }
         refresh([into] + from)
     }
 
-    private func deleteRow(_ id: Int64) {
-        db.run("DELETE FROM concept_aliases WHERE concept_id=?", id)
-        db.run("DELETE FROM concept_subjects WHERE concept_id=?", id)
-        db.run("DELETE FROM concept_edges WHERE src=? OR dst=?", id, id)
-        db.run("DELETE FROM concepts WHERE id=?", id)
+    private func deleteRow(_ id: Int64) throws {
+        try db.execute("DELETE FROM concept_aliases WHERE concept_id=?", id)
+        try db.execute("DELETE FROM concept_subjects WHERE concept_id=?", id)
+        try db.execute("DELETE FROM concept_edges WHERE src=? OR dst=?", id, id)
+        try db.execute("DELETE FROM concepts WHERE id=?", id)
     }
     func delete(_ id: Int64) {
-        deleteRow(id)
-        db.run("UPDATE memories SET concept_id=NULL WHERE concept_id=?", id)
+        db.write("concept delete") {
+            try deleteRow(id)
+            try db.execute("UPDATE memories SET concept_id=NULL WHERE concept_id=?", id)
+        }
         refresh([id])
     }
     func deleteAll() {
-        try? db.script("DELETE FROM concept_edges; DELETE FROM concept_subjects; DELETE FROM concept_aliases; DELETE FROM concepts;")
+        db.write("concepts delete all") { try db.script("DELETE FROM concept_edges; DELETE FROM concept_subjects; DELETE FROM concept_aliases; DELETE FROM concepts;") }
         MemorySchema.setMeta(db, "mastery_sync", "0")
         reload()
     }

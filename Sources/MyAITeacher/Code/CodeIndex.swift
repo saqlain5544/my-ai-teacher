@@ -67,6 +67,9 @@ actor CodeIndex {
         }
     }
 
+    /// Lets every index go (memory pressure): the next query reloads from its cache file.
+    static func unloadAll() { shared.with { $0.removeAll() } }
+
     init(root: URL) { self.root = root }
 
     private var cacheURL: URL {
@@ -155,7 +158,7 @@ actor CodeIndex {
     /// One file's entry: definitions with their spans and words, imports, identifiers.
     static func index(_ text: String, path: String, mtime: Double, size: Int) -> FileEntry {
         let ext = (path as NSString).pathExtension.lowercased()
-        let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = text.fileLines   // as outline splits it ("\r\n" too)
         let outline = SymbolsTool.outline(text, ext: ext)
         var syms: [Sym] = []
         for (i, s) in outline.enumerated() {
@@ -435,7 +438,7 @@ actor CodeIndex {
     /// Defined names `sym` (in `path`) uses: what it calls or builds on, with where they're defined.
     func callees(_ path: String, _ sym: Sym) -> [(name: String, at: [(path: String, sym: Sym)])] {
         guard let text = try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8) else { return [] }
-        let body = text.split(separator: "\n", omittingEmptySubsequences: false).dropFirst(sym.line).prefix(max(0, sym.end - sym.line)).joined(separator: "\n")
+        let body = text.fileLines.dropFirst(sym.line).prefix(max(0, sym.end - sym.line)).joined(separator: "\n")
         var seen = Set<String>(), out: [(String, [(path: String, sym: Sym)])] = []
         for m in Self.identRegex.matches(in: body, range: NSRange(body.startIndex..., in: body)) {
             guard let r = Range(m.range, in: body) else { continue }

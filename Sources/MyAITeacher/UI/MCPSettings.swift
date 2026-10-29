@@ -52,6 +52,7 @@ struct MCPSettings: View {
         .sheet(item: $editing) { c in
             MCPServerEditor(draft: c, taken: settings.value.mcpServers.map(\.name).filter { $0 != c.name }) { saved in
                 if !c.name.isEmpty { stopEverywhere(c) }
+                if !c.name.isEmpty, saved.name != c.name || saved.fingerprint != c.fingerprint { forgetGrants(c.name) }   // allowed was the old program
                 if let i = settings.value.mcpServers.firstIndex(where: { $0.name == c.name && !c.name.isEmpty }) { settings.value.mcpServers[i] = saved }
                 else { settings.value.mcpServers.append(saved) }
             }
@@ -80,11 +81,11 @@ struct MCPSettings: View {
                  : statusLine(c, standing: standing, status: status)).font(.caption).foregroundStyle(status?.phase == .failed ? .red : .secondary)
             if standing == .usable {
                 Toggle("Always allow its tools in this folder", isOn: Binding(
-                    get: { (settings.value.mcpAlwaysAllow[folder.path] ?? []).contains(c.name) },
+                    get: { (settings.value.mcpAlwaysAllow[folder.path] ?? []).contains(c.grantKey) },
                     set: { on in
                         var names = settings.value.mcpAlwaysAllow[folder.path] ?? []
-                        names.removeAll { $0 == c.name }
-                        if on { names.append(c.name) }
+                        names.removeAll { $0 == c.grantKey }
+                        if on { names.append(c.grantKey) }
                         settings.value.mcpAlwaysAllow[folder.path] = names.isEmpty ? nil : names
                     })).font(.caption).toggleStyle(.checkbox)
             }
@@ -180,6 +181,14 @@ struct MCPSettings: View {
     private func remove(_ c: MCPServerConfig) {
         settings.value.mcpServers.removeAll { $0.name == c.name }
         stopEverywhere(c)
+        forgetGrants(c.name)
+    }
+    /// An app-level server's "always allow" in every folder: a server added later under its name is another program.
+    private func forgetGrants(_ name: String) {
+        for k in settings.value.mcpAlwaysAllow.keys {
+            settings.value.mcpAlwaysAllow[k]?.removeAll { $0 == name }
+            if settings.value.mcpAlwaysAllow[k]?.isEmpty == true { settings.value.mcpAlwaysAllow[k] = nil }
+        }
     }
     /// An app-level server's instances in every folder.
     private func stopEverywhere(_ c: MCPServerConfig) {

@@ -104,7 +104,10 @@
     const s = run.toLowerCase();
     while (i < s.length) {
       const c = s[i];
-      if (c === 'n' && s[i + 1] === 'n') { out += 'ん'; i += (s[i + 2] && /[aiueoy]/.test(s[i + 2])) ? 1 : 2; continue; }   // konnichiha → こんにちは
+      if (c === 'n' && s[i + 1] === 'n') {   // konnichiha → こんにちは
+        if (i + 2 >= s.length) break;          // "nn" ending the run, typed key by key: the next key decides (nni → んに)
+        out += 'ん'; i += /[aiueoy]/.test(s[i + 2]) ? 1 : 2; continue;
+      }
       if (c === 'n' && s[i + 1] === '\'') { out += 'ん'; i += 2; continue; }
       if (c === 'n' && i + 1 < s.length && !/[aiueoyn']/.test(s[i + 1])) { out += 'ん'; i += 1; continue; }
       if (/[bcdfghjklmpqrstvwxz]/.test(c) && s[i + 1] === c && s[i + 2] && /[aiueoy]/.test(s[i + 2]) || (/[bcdfghjkmpqrstvwz]/.test(c) && s[i + 1] === c && (s[i + 2] === 'h' || s[i + 2] === 'y'))) {

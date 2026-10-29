@@ -4,6 +4,12 @@ import UniformTypeIdentifiers
 
 private let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "gif", "webp", "heic", "tiff", "bmp"]
 
+extension StringProtocol {
+    /// Lines split on "\n" and "\r\n". Swift reads "\r\n" as one Character, so `split(separator: "\n")` sees a file with
+    /// Windows line endings as a single line.
+    var fileLines: [SubSequence] { split(omittingEmptySubsequences: false, whereSeparator: { $0 == "\n" || $0 == "\r\n" }) }
+}
+
 /// What each agent has seen of the files it works on: a file's modification date and size when the agent last read or
 /// wrote it. As in Claude Code, `write` won't replace a file the agent hasn't read, or one that changed since it looked
 /// (the user saved it in their editor, a formatter or a command rewrote it): the overwrite would erase work the agent
@@ -117,7 +123,7 @@ struct ReadTool: Tool {
         if data.prefix(8000).contains(0) { return .error("\(url.lastPathComponent) appears to be a binary file (\(data.count) bytes).") }
         let content = String(decoding: data, as: UTF8.self)
         if content.isEmpty { return ToolOutput(text: "(file is empty)") }
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = content.fileLines
         let offset = max(1, input["offset"]?.int ?? 1)
         let limit = max(1, input["limit"]?.int ?? 2000)
         guard offset <= lines.count else { return .error("offset \(offset) is beyond end of file (\(lines.count) lines).") }
@@ -234,6 +240,11 @@ struct EditTool: Tool {
         let tag = n.map { "Edit \($0): " } ?? ""
         guard !old.isEmpty else { return (nil, tag + "old_string must not be empty. Use `write` to create files.") }
         guard old != new else { return (nil, tag + "old_string and new_string are identical.") }
+        // Models send "\n" line endings; a file with "\r\n" ones would never match a multi-line old_string.
+        if content.contains("\r\n"), !old.contains("\r\n"), old.unicodeScalars.contains("\n") {
+            return apply(content, old: old.replacingOccurrences(of: "\n", with: "\r\n"), new: new.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n"),
+                         all: all, n: n, file: file)
+        }
         let count = content.components(separatedBy: old).count - 1
         if count == 0 {
             // Not found exactly: the same lines with different indentation or trailing spaces is almost always what was meant.
@@ -244,7 +255,10 @@ struct EditTool: Tool {
         }
         if count > 1 && !all { return (nil, tag + "old_string occurs \(count) times. Add surrounding context to make it unique, or set replace_all.") }
         if all { return (content.replacingOccurrences(of: old, with: new), "") }
-        let r = content.range(of: old)!
+        // `components(separatedBy:)` can find text inside a character (the "\n" of "\r\n") that `range(of:)` won't.
+        guard let r = content.range(of: old) else {
+            return (nil, tag + "old_string not found in \(file). Re-read the file and copy the text exactly (whitespace included).")
+        }
         return (content.replacingCharacters(in: r, with: new), "")
     }
 
@@ -285,8 +299,9 @@ struct EditTool: Tool {
     /// `old` as a run of lines matched with leading and trailing whitespace ignored, when that run is unique in the
     /// file; `new` re-indented by the difference between the file's and `old`'s first-line indentation.
     static func fuzzyMatch(_ content: String, old: String, new: String) -> (Range<String.Index>, String)? {
-        let fileLines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-        let oldLines = old.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let fileLines = content.fileLines.map(String.init)
+        let oldLines = old.fileLines.map(String.init)
+        let eol = content.contains("\r\n") ? "\r\n" : "\n"
         let trim = { (s: String) in s.trimmingCharacters(in: .whitespaces) }
         let wanted = oldLines.map(trim)
         guard !wanted.isEmpty, wanted.contains(where: { !$0.isEmpty }), fileLines.count >= wanted.count else { return nil }
@@ -296,13 +311,13 @@ struct EditTool: Tool {
         let start = starts[0], end = start + wanted.count - 1
         let indent = { (s: String) in s.prefix { $0 == " " || $0 == "\t" } }
         let fileIndent = String(indent(fileLines[start])), oldIndent = String(indent(oldLines[0]))
-        let newLines = new.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        let newLines = new.fileLines.map(String.init)
         let reindented = newLines.map { l -> String in
             if l.trimmingCharacters(in: .whitespaces).isEmpty { return l }
             if l.hasPrefix(oldIndent) { return fileIndent + l.dropFirst(oldIndent.count) }
             if oldIndent.hasPrefix(String(indent(l))) { return String(fileIndent.prefix(max(0, fileIndent.count - (oldIndent.count - indent(l).count)))) + l.drop { $0 == " " || $0 == "\t" } }
             return l
-        }.joined(separator: "\n")
+        }.joined(separator: eol)
         // Character offsets of the matched lines in the file.
         var offset = 0
         for i in 0..<start { offset += fileLines[i].count + 1 }

@@ -239,6 +239,10 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
         lastText = ""; self.target = target
         listeningLanguage = language
         isListening = true   // before the awaits: a Stop pressed while the engine is chosen is heard
+        // …and ends the take: without a final result for it, talk mode waited for one for good (and a Stop re-transcribed
+        // the previous take's audio). Replaced by the real handler once the engine runs.
+        currentEngine = .sf(onDevice: false); samples = Samples(rate: 16_000)
+        onFinal = { text in onText(text, true, nil) }
         let lang = language ?? String(Locale.preferredLanguages.first?.prefix(2) ?? "en")
         whisperLanguage = lang
         let chosen = await chooseEngine(language)

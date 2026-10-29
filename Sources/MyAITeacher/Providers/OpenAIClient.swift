@@ -50,6 +50,7 @@ struct OpenAIClient: LLMClient {
             let task = Task {
                 var calls: [Int: PartialToolCall] = [:]
                 var order: [Int] = []
+                var slot: [Int: Int] = [:]   // a wire index → the call it currently feeds (they differ when a server reuses an index)
                 var splitter = ThinkTagSplitter()
                 var usage: Usage?
                 var finish: String?
@@ -87,11 +88,13 @@ struct OpenAIClient: LLMClient {
                             let newID = tc["id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
                             var idx: Int
                             if let i = tc["index"]?.int {
-                                idx = i
-                                // Some servers reuse index 0 for every call: a different id at a busy index is a new call.
+                                idx = slot[i] ?? i
+                                // Some servers reuse index 0 for every call: a different id at a busy index is a new call,
+                                // and the index's later argument chunks (without an id) belong to it too.
                                 if let cur = calls[idx], let nid = newID, nid != cur.id, !cur.args.isEmpty {
                                     idx = 10_000 + order.count
                                 }
+                                slot[i] = idx
                             } else if let nid = newID {
                                 // No index: a new id starts a call; a known id continues its call.
                                 idx = order.first { calls[$0]?.id == nid } ?? (10_000 + order.count)

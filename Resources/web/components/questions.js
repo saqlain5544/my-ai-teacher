@@ -137,7 +137,7 @@
           cls = alts.includes(String(v).trim().toLowerCase()) ? ' ok' : ' bad';
         }
         if (opts && active) {
-          h += '<select class="blank" data-q-blank="' + qi + ':' + k + '"><option value=""></option>' + opts.map(o => '<option' + (o === v ? ' selected' : '') + '>' + ctx.esc(o) + '</option>').join('') + '</select>';
+          h += '<select class="blank" data-q-blank="' + qi + ':' + k + '"><option value=""></option>' + opts.map(o => '<option' + (String(o) === String(v) ? ' selected' : '') + '>' + ctx.esc(o) + '</option>').join('') + '</select>';
         } else {
           h += '<input type="text" class="blank' + cls + '" data-q-blank="' + qi + ':' + k + '" value="' + ctx.esc(v) + '" size="' + Math.max(4, String(v).length + 1) + '"' + dis(active) + '>';
           if (cls === ' bad' && exp) h += '<span class="blank-fix">' + ctx.esc([].concat(exp[k])[0]) + '</span>';
@@ -173,10 +173,11 @@
   };
   T.scale = {
     render(q, qi, F, ctx, active, g) {
-      const min = q.min == null ? 1 : q.min, step = q.step || 1;
+      // Coerced and bounded: a string min concatenates, and a negative step or a huge range never ends (the page hangs).
+      const min = q.min == null ? 1 : +q.min, step = Math.abs(+q.step) || 1;
       const labels = q.labels || [];
-      const max = q.max == null ? (labels.length > 2 ? min + (labels.length - 1) * step : 5) : q.max;
-      const points = []; for (let v = min; v <= max + 1e-9; v += step) points.push(+v.toFixed(6));
+      const max = q.max == null ? (labels.length > 2 ? min + (labels.length - 1) * step : 5) : +q.max;
+      const points = []; for (let v = min; v <= max + 1e-9 && points.length < 101; v += step) points.push(+v.toFixed(6));
       const given = g ? g.given : F.answers[qi];
       const btn = (v, inner, cls) => '<button class="' + cls + (given === v ? ' sel' : '') + '"' + (active ? ' data-act="q-scale"' : ' disabled') + ' data-q="' + qi + '" data-v="' + v + '">' + inner + '</button>';
       // One label per point → labelled options (e.g. self-assessment levels).

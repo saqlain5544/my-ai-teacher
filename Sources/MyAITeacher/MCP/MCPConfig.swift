@@ -62,12 +62,20 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
     var approvalDetail: String {
         var lines = [summary]
         if isHTTP || type == "sse" {
-            if !headers.isEmpty { lines.append("Headers: " + headers.keys.sorted().joined(separator: ", ")) }
+            // A literal value may be a secret, so only its name shows; a `${VAR}` template isn't one, and says which of
+            // the learner's secrets (`Bearer ${ANTHROPIC_API_KEY}`) would go to this URL.
+            if !headers.isEmpty {
+                lines.append("Headers: " + headers.keys.sorted().map { k in headers[k]!.contains("${") ? "\(k): \(headers[k]!)" : k }.joined(separator: ", "))
+            }
         } else {
             lines += env.keys.sorted().map { "\($0)=\(env[$0]!)" }
         }
         return lines.joined(separator: "\n")
     }
+
+    /// What "allow for this lesson" and "always allow in this folder" are stored under: a folder's own server by what it
+    /// runs too, so a `.mcp.json` server named like one of the user's (or changed since) never inherits their grant.
+    var grantKey: String { scope == .app ? name : "\(name)@\(fingerprint)" }
 
     /// Identifies what would run: an approval is for this exact command (or URL), its arguments and environment, so a
     /// `.mcp.json` changed after the approval asks again.

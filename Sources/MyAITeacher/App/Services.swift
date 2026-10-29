@@ -155,12 +155,19 @@ final class SettingsStore: ObservableObject {
     private func scheduleSave() {
         saveWork?.cancel()
         let snapshot = value
-        let w = DispatchWorkItem {
-            let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-            if let d = try? enc.encode(snapshot) { try? d.write(to: AppPaths.settings, options: .atomic) }
-        }
+        let w = DispatchWorkItem { Self.write(snapshot) }
         saveWork = w
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 0.4, execute: w)
+    }
+    private static func write(_ s: AppSettings) {
+        let enc = JSONEncoder(); enc.outputFormatting = [.prettyPrinted, .sortedKeys]
+        if let d = try? enc.encode(s) { try? d.write(to: AppPaths.settings, options: .atomic) }
+    }
+    /// Writes a pending change now (the app is quitting: a save still waiting out its delay would be lost).
+    func flush() {
+        guard let w = saveWork, !w.isCancelled else { return }
+        w.cancel(); saveWork = nil
+        Self.write(value)
     }
 
     var providers: [ProviderConfig] { ProviderCatalog.presets + value.customProviders }

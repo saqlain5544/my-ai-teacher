@@ -119,13 +119,14 @@ final class MCPConnection: @unchecked Sendable {
             self?.abandon(id, reason: "timed out after \(Int(timeout)) s")
             w.once.finish(.failure(MCPError("\(method) timed out after \(Int(timeout)) s.")))
         }
-        defer { timer.cancel(); _ = state.mutate { $0.waiting.removeValue(forKey: id) } }
         // Sent in its own task: an HTTP response may stream for as long as the call runs, and its result arrives
-        // through `received` meanwhile.
+        // through `received` meanwhile. It ends with the call: a stream the server keeps open after the result, a
+        // timeout or a Stop would otherwise hold one of the host's few connections for up to an hour.
         let transport = transport
-        Task {
+        let sending = Task {
             do { try await transport.send(message) } catch { w.once.finish(.failure(MCPError("Couldn't send \(method): \(error.localizedDescription)"))) }
         }
+        defer { timer.cancel(); sending.cancel(); _ = state.mutate { $0.waiting.removeValue(forKey: id) } }
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { (c: CheckedContinuation<JSON, Error>) in w.once.attach(c) }
         } onCancel: { [weak self] in

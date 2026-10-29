@@ -173,9 +173,11 @@ final class MediaPlayer {
     private var file: URL?
     private var boundary: Any?
     private var onEnd: (() -> Void)?
+    private var token = 0   // the current play; a seek that completes after a Stop (or another play) leaves the player alone
 
     func play(_ url: URL, from start: Double, to end: Double, rate: Double, onEnd: @escaping () -> Void) {
         stop()
+        let t = token
         if file != url || player == nil {
             let item = AVPlayerItem(url: url)
             item.audioTimePitchAlgorithm = .timeDomain   // slowed speech keeps its pitch
@@ -187,8 +189,11 @@ final class MediaPlayer {
         boundary = p.addBoundaryTimeObserver(forTimes: [NSValue(time: endTime)], queue: .main) { [weak self] in
             MainActor.assumeIsolated { self?.finish() }
         }
-        p.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { _ in
-            Task { @MainActor in p.rate = Float(min(1.5, max(0.5, rate))) }
+        p.seek(to: CMTime(seconds: start, preferredTimescale: 600), toleranceBefore: .zero, toleranceAfter: .zero) { [weak self] finished in
+            Task { @MainActor in
+                guard finished, self?.token == t else { return }
+                p.rate = Float(min(1.5, max(0.5, rate)))
+            }
         }
     }
     private func finish() {
@@ -197,6 +202,7 @@ final class MediaPlayer {
         let f = onEnd; onEnd = nil; f?()
     }
     func stop() {
+        token += 1
         player?.pause()
         if let b = boundary { player?.removeTimeObserver(b); boundary = nil }
         onEnd = nil

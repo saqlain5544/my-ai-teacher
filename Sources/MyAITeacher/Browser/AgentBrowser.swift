@@ -145,7 +145,9 @@ final class AgentBrowser: ObservableObject {
     /// A navigation (main frame or a frame inside it). While the agent acts: only to sites its lesson approved. Otherwise
     /// public sites are fine (nothing reaches the agent unapproved), but this Mac and the local network need an approval
     /// or the learner's own typing.
-    func mayNavigate(to site: SiteKey, mainFrame: Bool) -> Bool {
+    /// `acting`: whether the agent was acting when the navigation began (a DNS lookup can outlast its action).
+    func mayNavigate(to site: SiteKey, mainFrame: Bool, acting: Bool? = nil) -> Bool {
+        let acting = acting ?? self.acting
         if site.isLocal && !acting && learnerSites.contains(site.id) { return true }
         if acting && mainFrame { return approved(site) }
         return !site.isLocal || approved(site)
@@ -300,6 +302,9 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
             if frames.count > 12, let oldest = frames.keys.min() { frames.removeValue(forKey: oldest) }
             return
         }
+        // The logger runs in the main frame only, but every frame can reach its handler: an unapproved frame's messages
+        // would read as the page's own (and fake requests in flight would keep `settle` waiting).
+        guard m.frameInfo.isMainFrame else { return }
         switch body["t"] as? String {
         case "console":
             append(&console, LogEntry(time: Date(), level: body["level"] as? String ?? "log", text: AXFormat.clip(body["text"] as? String ?? "", 2000)))
@@ -342,10 +347,11 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
         case "data", "javascript": decisionHandler(.allow)   // WebKit itself refuses top-level data: navigations from pages
         case "http", "https", "file":
             guard let site = SiteKey.of(u) else { return decisionHandler(.cancel) }
+            let agents = browser.acting   // whose navigation this is is known now, not when a lookup returns
             let decide = { [weak self] (local: Bool) in
                 guard let self else { return decisionHandler(.cancel) }
                 let key = local && !site.isLocal ? SiteKey(id: site.id + ":\(u.port ?? (u.scheme == "https" ? 443 : 80))", isLocal: true) : site
-                if self.browser.mayNavigate(to: key, mainFrame: main) {
+                if self.browser.mayNavigate(to: key, mainFrame: main, acting: agents) {
                     if main { self.inheritedOrigin = nil }
                     return decisionHandler(.allow)
                 }

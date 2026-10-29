@@ -15,7 +15,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
     func applicationWillTerminate(_ notification: Notification) {
-        MainActor.assumeIsolated { AppModel.shared.flushAll() }
+        MainActor.assumeIsolated { AppModel.shared.flushAll(); AppModel.shared.settings.flush() }
         MCPHub.shared.shutdownNow()   // the MCP servers end with the app
         LiquidModels.stopAll()        // and so do the local model servers
     }

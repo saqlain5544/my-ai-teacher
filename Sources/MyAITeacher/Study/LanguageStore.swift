@@ -92,22 +92,29 @@ extension StudyStore {
         if let e = ex { back += "\n\n> \(e)" + (exm.map { "\n> *\($0)*" } ?? "") }
         if let n = clean(notes) ?? existing?.string("notes") { back += "\n\n" + n }   // register, collocations, word family
         var cardID = existing?.int("card_id").map(Int64.init)
+        // A link to a card deleted before deleteCard unlinked it: the word gets a new card.
+        if let c = cardID, (try? db.query("SELECT 1 AS x FROM cards WHERE id=?", c))?.isEmpty == true { cardID = nil }
         if let c = cardID { db.run("UPDATE cards SET front=?, back=? WHERE id=?", front, back, c) }
         else { cardID = addCard(deck: Self.vocabDeck(lang), front: front, back: back, concept: nil, subject: lang, source: source) }
         db.run("""
             INSERT INTO vocab(lang, term, reading, meaning, pos, example, example_meaning, notes, tags, card_id, source, created_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(lang, term) DO UPDATE SET reading=COALESCE(excluded.reading, vocab.reading), meaning=excluded.meaning, pos=COALESCE(excluded.pos, vocab.pos),
             example=COALESCE(excluded.example, vocab.example), example_meaning=COALESCE(excluded.example_meaning, vocab.example_meaning),
-            notes=COALESCE(excluded.notes, vocab.notes), tags=CASE WHEN excluded.tags='' THEN vocab.tags ELSE excluded.tags END, card_id=COALESCE(vocab.card_id, excluded.card_id)
+            notes=COALESCE(excluded.notes, vocab.notes), tags=CASE WHEN excluded.tags='' THEN vocab.tags ELSE excluded.tags END, card_id=COALESCE(excluded.card_id, vocab.card_id)
             """, lang, term, clean(reading), meaning, clean(pos), clean(example), clean(exampleMeaning), clean(notes), tags.joined(separator: ","), cardID, source, Date())
         return (try? db.query(Self.vocabSelect + " WHERE v.lang=? AND v.term=?", lang, term))?.first.flatMap(vocabItem)
+    }
+
+    /// `s` matched literally inside a LIKE pattern (with `ESCAPE '\'`).
+    static func likeLiteral(_ s: String) -> String {
+        s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "%", with: "\\%").replacingOccurrences(of: "_", with: "\\_")
     }
 
     func vocab(lang: String? = nil, tag: String? = nil, limit: Int = 200) -> [VocabItem] {
         var sql = Self.vocabSelect, params: [SQLBindable?] = []
         var conds: [String] = []
         if let l = lang.flatMap(Languages.code) { conds.append("v.lang=?"); params.append(l) }
-        if let t = tag, !t.isEmpty { conds.append("(',' || v.tags || ',') LIKE ?"); params.append("%,\(t),%") }
+        if let t = tag, !t.isEmpty { conds.append(#"(',' || v.tags || ',') LIKE ? ESCAPE '\'"#); params.append("%,\(Self.likeLiteral(t)),%") }
         if !conds.isEmpty { sql += " WHERE " + conds.joined(separator: " AND ") }
         sql += " ORDER BY v.created_at DESC LIMIT ?"; params.append(limit)
         return ((try? db.query(sql, params: params)) ?? []).compactMap(vocabItem)
@@ -119,7 +126,8 @@ extension StudyStore {
         return ((try? db.query(sql, params: params)) ?? []).compactMap(vocabItem)
     }
     func searchVocab(_ query: String, lang: String? = nil, limit: Int = 50) -> [VocabItem] {
-        var sql = Self.vocabSelect + " WHERE (v.term LIKE ? OR v.meaning LIKE ? OR v.reading LIKE ?)", params: [SQLBindable?] = ["%\(query)%", "%\(query)%", "%\(query)%"]
+        let q = "%\(Self.likeLiteral(query))%"   // "50%" or "_" in the search are text, not wildcards
+        var sql = Self.vocabSelect + #" WHERE (v.term LIKE ? ESCAPE '\' OR v.meaning LIKE ? ESCAPE '\' OR v.reading LIKE ? ESCAPE '\')"#, params: [SQLBindable?] = [q, q, q]
         if let l = lang.flatMap(Languages.code) { sql += " AND v.lang=?"; params.append(l) }
         sql += " ORDER BY v.created_at DESC LIMIT ?"; params.append(limit)
         return ((try? db.query(sql, params: params)) ?? []).compactMap(vocabItem)

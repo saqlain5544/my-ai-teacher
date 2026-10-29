@@ -100,6 +100,9 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
     }
     var toolUses: [Block] { blocks.filter { $0.kind == .toolUse } }
     var isToolResultOnly: Bool { !blocks.isEmpty && blocks.allSatisfy { $0.kind == .toolResult } }
+    /// A message that starts a turn: from the learner (or a background report), not tool results, and not one of the
+    /// loop's hidden notes within a turn (carry on, finish the work, revise, wrap up).
+    var startsTurn: Bool { role == .user && !isToolResultOnly && blocks.contains { $0.meta?["hidden"]?.bool != true } }
 }
 
 enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {

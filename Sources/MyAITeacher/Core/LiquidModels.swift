@@ -77,7 +77,9 @@ final class LiquidModels: ObservableObject {
                 await MainActor.run { if !Task.isCancelled { self?.states[id] = .installed }; self?.tasks[id] = nil }
                 AppLog.write("liquid: installed \(id)")
             } catch {
-                let msg = (error as? CancellationError) != nil ? "Cancelled" : error.localizedDescription
+                // A cancelled download throws URLError.cancelled, not CancellationError: Cancel isn't a failure.
+                let cancelled = Task.isCancelled || error is CancellationError || (error as? URLError)?.code == .cancelled
+                let msg = cancelled ? "Cancelled" : error.localizedDescription
                 await MainActor.run { self?.states[id] = msg == "Cancelled" ? .absent : .failed(msg); self?.tasks[id] = nil }
                 AppLog.write("liquid: \(id) failed: \(msg)")
             }
@@ -85,8 +87,7 @@ final class LiquidModels: ObservableObject {
     }
     func cancel(_ id: String) { tasks[id]?.cancel() }
     func remove(_ id: String) {
-        cancel(id)
-        tasks[id] = nil
+        cancel(id)   // the cancelled task clears its own entry: an Install before then would share its staging folder
         Task {
             // A running server holds the files: stop it first (the runtime serves both).
             for k in Kind.allCases where id == "runtime" || id == k.rawValue { await Self.server(k).stop() }
@@ -347,16 +348,11 @@ enum LocalDecision {
         var fields: [String: JSON] = ["state": state.map(JSON.string) ?? .null, "questions": questions]
         if !files.isEmpty { fields["files"] = .array(files.map(JSON.string)) }
         let body = JSON.object(fields)
-        return await withTaskGroup(of: JSON?.self) { g in
-            g.addTask {
-                do { return try await LiquidModels.server(.d1).post("/v1/systemone", body, timeout: timeout + 5)["answers"] }
-                catch { AppLog.write("d1 failed: \(error.localizedDescription)"); return nil }
-            }
-            g.addTask { try? await Task.sleep(nanoseconds: UInt64(timeout * 1e9)); return nil }
-            let first = await g.next() ?? nil
-            g.cancelAll()
-            return first
-        }
+        // withDeadline, not a task group: a group waits for every child, and a post waiting on the server's start doesn't
+        // end when cancelled, so a cold start held the turn for the whole model load.
+        do { return try await withDeadline(seconds: timeout) { try await LiquidModels.server(.d1).post("/v1/systemone", body, timeout: timeout + 5)["answers"] } }
+        catch is TimeoutError { return nil }
+        catch { AppLog.write("d1 failed: \(error.localizedDescription)"); return nil }
     }
 
     /// What a learner's message asks for: "chat" (thanks, yes, go on), "quick" (a fact, a definition) or "teach"

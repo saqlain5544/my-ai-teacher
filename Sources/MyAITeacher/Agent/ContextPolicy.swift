@@ -52,9 +52,9 @@ enum ContextPolicy {
         return Double(cjk) + Double(total - cjk) / 4.0
     }
 
-    /// Indices of messages that start a learner turn (real user messages, not tool results).
+    /// Indices of messages that start a learner turn (real user messages, not tool results or the loop's hidden notes).
     static func turnStarts(_ msgs: [ChatMessage]) -> [Int] {
-        msgs.indices.filter { msgs[$0].role == .user && !msgs[$0].isToolResultOnly }
+        msgs.indices.filter { msgs[$0].startsTurn }
     }
 
     /// How many of the oldest loaded messages can leave memory: only display-only ones (before `cut`, the compaction

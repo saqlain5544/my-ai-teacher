@@ -12,6 +12,8 @@ import Foundation
 @MainActor
 enum HeadlessLesson {
     static func run(specPath: String, provider: String, model: String, thinking: String?) async -> Int32 {
+        // It rewrites the settings (provider, model, MCP servers, full access to the folder): never the learner's own.
+        guard AppPaths.testHome != nil else { print("--lesson needs MYAITEACHER_HOME (its own profile): the learner's settings would be rewritten"); return 2 }
         guard let d = FileManager.default.contents(atPath: specPath), let spec = JSON.parse(String(decoding: d, as: UTF8.self)) else { print("bad spec"); return 2 }
         let folder = URL(fileURLWithPath: spec["folder"]?.string ?? NSTemporaryDirectory() + "lesson-\(UUID().uuidString.prefix(6))")
         try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

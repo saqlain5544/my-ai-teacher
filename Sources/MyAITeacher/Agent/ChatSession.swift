@@ -116,7 +116,9 @@ final class ChatSession: ObservableObject, Identifiable {
     /// back in when the learner scrolls up. Runs when the learner sends, when the transcript is at the newest message.
     private func trimWindow() {
         guard let through = conversation.compactedThrough, let c = messages.firstIndex(where: { $0.id == through }) else { return }
-        let drop = ContextPolicy.windowTrim(messages, cut: c + 1, window: Self.window, maxBytes: Self.windowBytes)
+        // The compaction point itself stays loaded: requests find the lesson summary by its id (and `truncate` reads a
+        // missing one as "never compacted", which would erase the summary).
+        let drop = ContextPolicy.windowTrim(messages, cut: c, window: Self.window, maxBytes: Self.windowBytes)
         guard drop > 0 else { return }
         messages.removeFirst(drop)
         base += drop
@@ -204,7 +206,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     /// Re-runs the last assistant turn.
     func regenerate() {
-        guard !isRunning, let lastUser = messages.lastIndex(where: { $0.role == .user && !$0.isToolResultOnly }) else { return }
+        guard !isRunning, let lastUser = messages.lastIndex(where: \.startsTurn) else { return }   // the whole turn, not its tail after a hidden note
         truncate(after: lastUser)
         start()
     }
@@ -381,13 +383,20 @@ final class ChatSession: ObservableObject, Identifiable {
                                                   "changed_files": .number(Double(turn.changedFiles?.count ?? 0))])
         EventBus.publish(.turnFinished(conversationID: id, metrics: turn))
         if !detached { app.sessionDidFinishTurn(self) }
+        // Background reports that came in as the turn ended (past its last step boundary, or with a Stop or an error) would
+        // otherwise wait in memory and be lost with the lesson: they join it, and wake the agent unless it was stopped.
+        if !inbox.isEmpty, !discarded {
+            let wake = !turn.cancelled && errorMessage == nil
+            drainInbox()
+            if wake { DispatchQueue.main.async { [weak self] in if let self, !self.isRunning { self.start() } } }
+        }
     }
 
     /// How many times one turn may be sent back to work by `willEndTurn` (a Stop hook that always objects can't loop forever).
     static let sendBackLimit = 3
 
     private func loop() async {
-        guard let provider = app.settings.provider(conversation.providerID) else {
+        guard var provider = app.settings.provider(conversation.providerID) else {
             errorMessage = "Unknown provider \(conversation.providerID)."; return
         }
         let key = KeyStore.shared.key(for: provider)
@@ -396,7 +405,7 @@ final class ChatSession: ObservableObject, Identifiable {
             app.requestKey(for: provider)
             return
         }
-        let client = provider.client(apiKey: key)
+        var client = provider.client(apiKey: key)
         if conversation.systemPrompt == nil { conversation.systemPrompt = await buildSystemPrompt(model: conversation.model) }
         var steps = 0
         var limitContinues = 0
@@ -437,6 +446,18 @@ final class ChatSession: ObservableObject, Identifiable {
         let stepCap = settings.maxToolTurns   // 0: no limit (the default)
         while !Task.isCancelled && (stepCap <= 0 || steps < stepCap || wrapping) {
             steps += 1
+            // The learner may switch mode or model while the turn runs (both clear the prompt): the next step is built for
+            // the new one, with its provider's client (the old one would be sent the new model's id).
+            if conversation.providerID != provider.id {
+                guard let p = app.settings.provider(conversation.providerID) else { errorMessage = "Unknown provider \(conversation.providerID)."; break }
+                let k = KeyStore.shared.key(for: p)
+                guard k != nil || p.keyOptional else {
+                    errorMessage = "No API key for \(p.name). Add one in Settings → Providers (or export \(p.envKeys.first ?? "a key") in your shell)."
+                    app.requestKey(for: p); break
+                }
+                provider = p; client = p.client(apiKey: k)
+            }
+            if conversation.systemPrompt == nil { conversation.systemPrompt = await buildSystemPrompt(model: conversation.model) }
             let history = await compactIfNeeded(client: client)
             setStatus(wrapping ? "Writing it up…" : steps == 1 ? "Thinking…" : "Continuing…")
             let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: conversation.id, mode: conversation.mode, folder: services.workspace.url)
@@ -499,13 +520,20 @@ final class ChatSession: ObservableObject, Identifiable {
             }
             if Task.isCancelled && assistant.blocks.isEmpty { assistant.error = "Stopped." }
             assistant.blocks.removeAll { $0.kind == .toolUse && $0.meta?["pending"]?.bool == true }
+            ToolArgs.markCutOff(&assistant, finish: step.finishReason)
+            // A failed step's calls never run, and nothing answers them: kept, every later request would carry tool uses
+            // without results, which every provider refuses.
+            if assistant.error != nil { assistant.blocks.removeAll { $0.kind == .toolUse } }
             // Cut off at the output limit without asking for a tool (often a long plan, or one huge tool call that never
             // finished): carry on by itself, twice at most, before handing it to the learner.
             let cutOff = step.finishReason == "max_tokens" && assistant.toolUses.isEmpty && !Task.isCancelled && assistant.error == nil
             // Without a step limit a cut-off reply carries on longer, but not for ever: a model stuck repeating itself hits
             // the limit every time, and each carry-on is another full-length paid request.
             let carryOn = cutOff && limitContinues < (stepCap <= 0 ? 6 : 2)
-            if step.finishReason == "max_tokens" && !carryOn { assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*")) }
+            // (A reply cut off in a tool call goes on: the call is refused and the model is told to split it.)
+            if step.finishReason == "max_tokens" && !carryOn && assistant.toolUses.isEmpty {
+                assistant.blocks.append(.text("\n\n*(Response hit the length limit — say “continue” to keep going.)*"))
+            }
             step.toolCalls = assistant.toolUses.count
             assistant.metrics = step
             assistant.usage = step.usage
@@ -778,6 +806,10 @@ final class ChatSession: ObservableObject, Identifiable {
             record(false)
             ActivityLog.record("tool", conv: id, ["tool": .string(name), "call": .string(callID), "ok": false, "unavailable": true])
             return .toolResult(id: callID, name: name, content: Self.unavailable(name, node: node), isError: true)
+        }
+        if input["_cutOff"] != nil {
+            record(false)
+            return .toolResult(id: callID, name: name, content: ToolArgs.cutOffResult, isError: true)
         }
         if input["_raw"] != nil {
             record(false)

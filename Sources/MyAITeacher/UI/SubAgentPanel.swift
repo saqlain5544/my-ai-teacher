@@ -214,7 +214,7 @@ struct SubAgentWebView: NSViewRepresentable {
         }
 
         func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
-            guard let body = message.body as? [String: Any] else { return }
+            guard message.frameInfo.isMainFrame, let body = message.body as? [String: Any] else { return }   // not a visual's frame
             let j = JSON(any: body)
             MainActor.assumeIsolated {
                 switch j["type"]?.string {

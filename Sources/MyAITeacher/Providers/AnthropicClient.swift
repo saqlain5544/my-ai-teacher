@@ -56,11 +56,12 @@ struct AnthropicClient: LLMClient {
                 var members: [Int: String] = [:]   // computer-toolset calls: the member (left_click…) is the block's name
                 var thinkingSig: [Int: String] = [:]
                 var usage = Usage()
+                var ended = false   // a stop reason or message_stop arrived
                 do {
                     for try await ev in SSEClient.stream(req) {
                         if SSEClient.trace { FileHandle.standardError.write(Data(("SSE " + ev.data + "\n").utf8)) }
                         if ev.event == "__json__" {
-                            try Self.emitNonStreaming(ev.data, continuation); continue
+                            try Self.emitNonStreaming(ev.data, continuation); ended = true; continue
                         }
                         guard let j = JSON.parse(ev.data), let type = j["type"]?.string else { continue }
                         switch type {
@@ -106,6 +107,7 @@ struct AnthropicClient: LLMClient {
                         case "message_delta":
                             if let u = j["usage"] { usage = Self.usage(u, base: usage) }
                             if let r = j["delta"]?["stop_reason"]?.string {
+                                ended = true
                                 continuation.yield(.usage(usage))
                                 if r == "refusal" {
                                     let why = j["delta"]?["stop_details"]?["explanation"]?.string ?? "The model declined this request."
@@ -113,6 +115,7 @@ struct AnthropicClient: LLMClient {
                                 }
                                 continuation.yield(.stop(r))
                             }
+                        case "message_stop": ended = true
                         case "error":
                             let msg = j["error"]?["message"]?.string ?? ev.data
                             throw HTTPError(status: HTTPError.status(errorType: j["error"]?["type"]?.string),
@@ -120,6 +123,9 @@ struct AnthropicClient: LLMClient {
                         default: break
                         }
                     }
+                    // Closed with neither a stop reason nor message_stop: the connection dropped mid-reply (as in the
+                    // OpenAI-compatible client). Thrown as a lost connection, so it is retried rather than taken as finished.
+                    if !ended { throw URLError(.networkConnectionLost) }
                     for (i, t) in tools { continuation.yield(.toolCall(NativeComputerTool.call(t.finish(), member: members[i]))) }
                     continuation.finish()
                 } catch {

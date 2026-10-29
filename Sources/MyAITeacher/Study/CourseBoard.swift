@@ -493,7 +493,11 @@ struct CourseBoard: Sendable, Equatable {
 
     // MARK: Persistence
 
-    static let day: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; return f }()
+    // The model writes Gregorian dates: read in the learner's calendar (Buddhist, Japanese), 2026 was another era.
+    static let day: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; return f
+    }()
 
     /// Reads a board out of a plan row: version 2 data, or a legacy `modules` plan converted on the fly (and saved back
     /// as version 2 by the next mutation). Corrupt data yields an empty board rather than a broken request.

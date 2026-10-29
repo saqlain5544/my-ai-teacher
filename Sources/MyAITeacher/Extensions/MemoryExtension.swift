@@ -137,9 +137,10 @@ final class ActivityExtension: AgentExtension {
     }
     func didFinishTurn(_ metrics: inout TurnMetrics, session: ChatSession) {
         session.services.study.logActivity(seconds: tick(session))
-        let lastUser = session.messages.lastIndex { $0.role == .user && !$0.isToolResultOnly } ?? -1
-        for m in session.messages[(lastUser + 1)...] where m.role == .assistant {
-            if let step = m.metrics { session.services.logUsage(provider: step.provider, model: step.model, usage: step.usage) }
+        // Every step of this turn, by time: a hidden note or a background report mid-turn is also a user message, and
+        // counting from the last one dropped the steps before it.
+        for m in session.messages where m.role == .assistant {
+            if let step = m.metrics, step.startedAt >= metrics.startedAt { session.services.logUsage(provider: step.provider, model: step.model, usage: step.usage) }
         }
     }
 }

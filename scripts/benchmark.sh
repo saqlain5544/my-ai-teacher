@@ -3,12 +3,14 @@
 cd "$(dirname "$0")/.."
 APP="build/My AI Teacher.app"; LOG=~/Library/Logs/MyAITeacher.log
 times=()
+# grep -c prints 0 and fails when nothing matches (so `|| echo 0` printed it twice), and nothing when there's no log yet.
+ready() { local n; n=$(grep -c "transcript ready" $LOG 2>/dev/null); echo ${n:-0}; }
 for i in 1 2 3 4 5; do
   pkill -f "$APP/Contents/MacOS/MyAITeacher"; sleep 1.5
-  n0=$(grep -c "transcript ready" $LOG 2>/dev/null || echo 0)
+  n0=$(ready)
   t0=$(python3 -c 'import time;print(time.time())')
   open "$APP"
-  while [ "$(grep -c 'transcript ready' $LOG)" -le "$n0" ]; do sleep 0.02; done
+  while [ "$(ready)" -le "$n0" ]; do sleep 0.02; done
   times+=$(python3 -c "import time;print('%.2f'%(time.time()-$t0))")
 done
 echo "cold launch → transcript ready (s): ${times[*]}"

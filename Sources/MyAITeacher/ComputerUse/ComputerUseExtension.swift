@@ -130,7 +130,7 @@ final class ComputerUseGate {
 
     /// Every download asks. The page names the file, so the name stays in the card's details, never its title.
     private func downloadDecision(_ input: JSON, folder: URL) -> ToolDecision {
-        guard let url = AgentBrowser.parseURL(input["url"]?.string) ?? browser.tab(input["tab"]?.int)?.blockedDownload?.url else { return .allow }
+        guard let url = AgentBrowser.parseURL(input["url"]?.string) else { return .allow }   // the tool refuses a call without one
         let known = browser.tabs.compactMap(\.blockedDownload).first { $0.url == url }
         let name = AXFormat.clip((known?.name ?? url.lastPathComponent).components(separatedBy: .controlCharacters).joined(), 80)
         return .ask(ApprovalRequest(

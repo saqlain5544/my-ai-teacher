@@ -39,6 +39,7 @@ final class MemoryGovernor {
         lastShed = Date()
         Task { await FetchCache.shared.clear() }
         MemoryStore.unloadAll()
+        CodeIndex.unloadAll()
         Database.releaseAllMemory()
         BlobStore.releaseMemory()
         URLCache.shared.removeAllCachedResponses()

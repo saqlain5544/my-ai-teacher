@@ -114,7 +114,16 @@
       '<div>\n<span/data-act="suggest" data-text="x">G</span> <b title="a"class="fake-ui">H</b> <em/id="fake-id">I</em>\n</div>');
     ok(!$('[data-act], .fake-ui, [id="fake-id"], [style]', sly), 'no app attributes however they are separated: ' + sly.innerHTML);
     ok($('abbr[title="kept"]', sly) && /A.*B.*C.*D.*E.*F.*G.*H.*I/s.test(sly.textContent), 'allowed attributes and the text stay');
-    const u = { id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'image', mime: 'image/png', data: 'x" onerror="window.__pwned=1' }] };
+    // The parser reads no tags inside comments or raw-text elements: a quote there must not hide the real tag after it.
+    for (const h of [`<div><!-- <a title=' --><b data-act="suggest" data-text="X">c1</b>'> --></div>`,
+                     `<div><!x <a title='><b data-act="suggest" data-text="X">c2</b>'></div>`, `<div><? <a title='><b data-act="suggest" data-text="X">c3</b>'></div>`,
+                     `<div></ <a title='><b data-act="suggest" data-text="X">c4</b>'></div>`, `<div></b title='><b data-act="suggest" data-text="X">c7</b>'></div>`,
+                     `<div><textarea><a title='</textarea><b data-act="suggest" data-text="X">c5</b>'></div>`,
+                     `<div><title><a title='</title><b data-act="suggest" data-text="X">c8</b>'></div>`]) {
+      ok(!$('[data-act]', show(h)), 'no app button from ' + h);
+    }
+    ok(!/note/.test(show('<!-- a note -->\nVisible text').textContent), 'comments still hidden');
+    const u ={ id: 'u' + (++seq), role: 'user', blocks: [{ kind: 'image', mime: 'image/png', data: 'x" onerror="window.__pwned=1' }] };
     T.reset([u], {}); eq(window.__pwned, 0, 'attachment data is never markup');
   });
 
@@ -1854,6 +1863,8 @@
     eq(text.value, 'こんにちはせかい', 'romaji typed on the keyboard becomes kana');
     for (const ch of 'kyo') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
     eq(text.value, 'こんにちはせかいきょ', 'digraphs');
+    for (const ch of 'minna') { text.setRangeText(ch, text.value.length, text.value.length, 'end'); text.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: ch })); }
+    eq(text.value, 'こんにちはせかいきょみんな', '"nn" before a vowel typed key by key: ん + な, not ん + あ');
     click($('[data-fn="mode"]', kbd));
     // Another language from the menu; a language without a panel hides it.
     const sel = $('select[data-layout]', kbd); sel.value = 'ko'; sel.dispatchEvent(new Event('change', { bubbles: true }));

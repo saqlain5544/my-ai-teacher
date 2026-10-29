@@ -55,19 +55,31 @@
   // closing quote separates attributes as well as a space, and a '>' inside a quoted value doesn't end the tag (a regex
   // that assumed otherwise let `<i title=">" data-act=…>` and `<span/data-act=…>` make working app buttons).
   const UNSAFE_ATTR = /^(?:style|class|id|data-[\w-]*|on\w+|slot|is|popover\w*|form\w*)$/i;
-  const TAG = /<[a-zA-Z][^\s/>]*/y, ATTR = /[\s/]*([^\s/>=][^\s/>=]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>][^\s>]*))?/y, END = /[\s/]*>/y;
+  // Nor does it read tags where the parser reads none: inside a comment or a raw-text element (<textarea>, <title>…), a
+  // tag-like run with an open quote made the real tag after it look like part of an attribute value, so it kept data-act.
+  const TAG = /<(\/?)([a-zA-Z][^\s/>]*)/y, ATTR = /[\s/]*([^\s/>=][^\s/>=]*)(?:\s*=\s*("[^"]*"|'[^']*'|[^\s"'>][^\s>]*))?/y, END = /[\s/]*>/y;
+  const RAWTEXT = /^(?:textarea|title|xmp|iframe|noembed|noframes|noscript|plaintext|script|style)$/i;
   function cleanHTML(s) {
     let out = '', i = 0;
     for (let lt; (lt = s.indexOf('<', i)) >= 0; ) {
+      out += s.slice(i, lt);
+      // Comments and bogus comments (<!x>, <?x>, </ x>) are dropped whole.
+      if (/^<(?:!|\?|\/(?![a-zA-Z]))/.test(s.slice(lt, lt + 3))) {
+        const c = s.startsWith('<!--', lt) ? /^<!--(?:-?>|[\s\S]*?--!?>)/.exec(s.slice(lt)) : null;
+        const gt = s.indexOf('>', lt);
+        i = c ? lt + c[0].length : s.startsWith('<!--', lt) || gt < 0 ? s.length : gt + 1;
+        continue;
+      }
       TAG.lastIndex = lt;
       const name = TAG.exec(s);
-      if (!name) { out += s.slice(i, lt + 1); i = lt + 1; continue; }
-      out += s.slice(i, lt) + name[0];
+      if (!name || RAWTEXT.test(name[2])) { out += '&lt;'; i = lt + 1; continue; }
+      const closing = !!name[1];
+      out += name[0];
       let at = TAG.lastIndex, m;
       ATTR.lastIndex = at;
       while ((m = ATTR.exec(s))) {
         at = ATTR.lastIndex;
-        if (!UNSAFE_ATTR.test(m[1])) out += ' ' + m[1] + (m[2] === undefined ? '' : '=' + m[2]);
+        if (!closing && !UNSAFE_ATTR.test(m[1])) out += ' ' + m[1] + (m[2] === undefined ? '' : '=' + m[2]);
       }
       END.lastIndex = at;
       const end = END.exec(s);
