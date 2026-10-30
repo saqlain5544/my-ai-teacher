@@ -591,7 +591,7 @@ struct TranscriptView: NSViewRepresentable {
                 // A ```visual in the latest reply failed in the learner's view: the teacher hears it with the next message.
                 guard let s = session, let msg = j["msg"]?.string else { return }
                 let kind = j["kind"]?.string ?? "visual"
-                let note = "A ```\(kind) block in your last reply (“\(j["title"]?.string ?? kind)”) failed to render for the learner: \(msg). Include a corrected, working version in your next reply."
+                let note = ChatSession.renderFailure(kind, title: j["title"]?.string ?? kind, message: msg, node: AgentTree.node(for: s.conversation.mode))
                 if !s.studyNotes.contains(note) { s.studyNotes.append(String(note.prefix(500))) }
             case "quick":
                 if let q = j["q"]?.string, let p = ProjectCommands.quickPrompts.first(where: { $0.name == q })?.prompt { session?.send(p) }

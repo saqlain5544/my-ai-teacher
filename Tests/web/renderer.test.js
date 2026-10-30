@@ -307,6 +307,14 @@
     ok(told.kind === 'mermaid' && /error/i.test(told.msg), JSON.stringify(told));
   });
 
+  test('a broken component is reported as its own kind (so the teacher loads the right format)', async () => {
+    const el = show('```predict\nWrite down what sizeof prints.\n```\n\n```chart\n{"type": "bar", "series": [}\n```', { components: ['predict', 'chart'] });
+    ok($('.comp-error', el), 'error boxes');
+    posts.length = 0; T.status('Thinking', true); T.status('', false);
+    await until(() => posts.filter(p => p.type === 'visualError').length >= 2, 'both reported', 4000);
+    eq(posts.filter(p => p.type === 'visualError').map(p => p.kind).sort(), ['chart', 'predict']);
+  });
+
   // ───────────── Plots and charts ─────────────
   // The plotter is a lazy module: the first ```plot shows a placeholder until components/plot.js has loaded.
   test('plot: functions, ranges and errors (the plotter loads on first use)', async () => {
@@ -1102,6 +1110,7 @@
       ['mastery', { action: 'update', concept: 'cells' }, 'ok'], ['lesson_plan', { action: 'create', title: 'Plan' }, '# Plan\n- step'],
       ['memory', { action: 'save', content: 'Likes examples' }, 'Saved #3'], ['memory', { action: 'search', query: 'examples' }, '#3'],
       ['load_tools', { names: ['grep', 'glob'] }, 'Loaded'], ['some_new_tool', { x: 1 }, 'fine'],
+      ['draw', { kinds: ['mermaid', 'chart'] }, 'Drawings are fenced blocks…', { meta: { kinds: ['mermaid', 'chart'] } }],
     ];
     const msgs = [U('do things')];
     const blocks = calls.map((c, i) => ({ kind: 'toolUse', id: 'tc' + i, name: c[0], input: c[1] }));
@@ -2187,6 +2196,48 @@
     ok(!$('.turn-undo'), 'no undo when nothing changed');
   });
 
+
+  // ───────────── Drawing references ─────────────
+  // Every example in Resources/drawing (the harness injects them from `Drawing`) draws as documented, in light and dark:
+  // what `draw` hands an agent must render without an error box.
+  const DRAWN = { mermaid: '.mermaid-block svg', plot: '.plot-block svg', chart: '.chart-block svg', svg: '.svg-block svg', visual: '.visual iframe',
+    math: '.katex', steps: '.steps .step', timeline: '.timeline .tl-item', compare: '.compare-table', cards: '.cards .card', kv: '.kv dt', csv: '.csv table',
+    json: '.json-tree', predict: '.comp.predict', annotate: '.comp.annotate .an-notes li', trace: '.comp.trace', layout: '.comp.layout .lay-bar', tree: '.comp.ftree .ft-row' };
+  test('every drawing reference example renders', async () => {
+    const examples = window.__drawingExamples || [];
+    ok(examples.length >= 30, 'the harness passed the examples (' + examples.length + ')');
+    ok(new Set(examples.map(e => e.kind)).size >= 23, 'every kind has one');
+    // The check can fail: a visual that throws shows its error within the same wait.
+    const bad = show('```visual\n<!-- libs: three -->\n<script>new THREE.OrbitControls()</script>\n```');
+    ok(await until(() => { const b = $('.visual-error', bad); return b && !b.hidden; }, 'a broken visual to report', 2000).catch(() => false), 'control: a broken visual is caught');
+    for (const ex of examples) {
+      const what = ex.kind + ' example (```' + ex.lang + ')';
+      const el = show(ex.fence);
+      await until(() => !$('.diagram-pending, .comp-loading, .mermaid-block[data-pending]', el), what + ' drawn', 10000);
+      noErrors(el, what);
+      ok(DRAWN[ex.lang] && $(DRAWN[ex.lang], el), what + ': nothing drawn (' + DRAWN[ex.lang] + ')');
+      ok(!document.body.textContent.includes('Syntax error in text'), what + ': no stray Mermaid error graphic');
+      if (ex.lang === 'visual') {
+        // Libraries load, then the script runs: an error in it (or in a callback) shows within a moment.
+        const box = $('.visual-error', el);
+        const failed = await until(() => !box.hidden && box, what + ' error', 2000).catch(() => null);
+        ok(!failed, what + ' threw: ' + (failed && failed.textContent));
+      }
+    }
+  });
+
+  test('a draw call is a quiet line naming the kinds, its reference never drawn in the card', () => {
+    const ref = 'Drawings are fenced blocks…\n\n## ```mermaid\n```mermaid\nflowchart LR\n  a --> b\n```';
+    const msgs = [U('explain TCP'), A([{ kind: 'toolUse', id: 'dr1', name: 'draw', input: { kinds: ['mermaid', 'sequence'] } }]),
+      R('dr1', 'draw', ref, { meta: { kinds: ['mermaid'] } }), A([{ kind: 'toolUse', id: 'dr2', name: 'draw', input: {} }]), R('dr2', 'draw', 'Pick the form…'),
+      A('Here it is.')];
+    T.status('', false); T.reset(msgs, {});
+    const card = $('[data-tool-id="dr1"]'); ok(card, 'card');
+    ok(card.classList.contains('quiet') && !card.classList.contains('framed'), 'a compact line, like skill and load_tools');
+    ok(/Drawing formats/.test(card.textContent) && /mermaid, sequence/.test(card.textContent), card.textContent);
+    ok(/catalog/.test($('[data-tool-id="dr2"]').textContent), 'no kinds reads as the catalog');
+    ok(!$('.mermaid-block', card) && !$('.mermaid-block', $('[data-tool-id="dr2"]')), 'the examples are for the agent, not drawn for the learner');
+  });
 
   // ───────────── Code mentor ─────────────
   test('code mentor: test runs show a pass/fail bar and a review round shows its findings by file', () => {

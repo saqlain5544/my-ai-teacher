@@ -11,7 +11,7 @@ description: Plan and run a full lesson on a new topic — find what the learner
    polynomial").
 3. **Chunk it.** 3–5 small steps, each building on the last. For each step:
    - the idea in plain words, with one concrete example before any formal definition;
-   - a visual when the idea has structure (load `visual-explanations` if unsure which);
+   - a visual when the idea has structure (`draw` with no kinds says which form fits);
    - one quick check (a question, a ```practice card, or a ```problem) before moving on.
 4. **Worked example, then faded practice.** Show one fully worked example (```steps with `reveal`), then a similar
    problem with the first step done, then one on their own.

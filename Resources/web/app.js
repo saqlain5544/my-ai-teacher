@@ -621,7 +621,10 @@
     if (!last) return;
     last.querySelectorAll('.diagram-error').forEach(e => {
       const text = (e.firstChild && e.firstChild.textContent || e.textContent || '').trim().slice(0, 300);
-      const kind = e.closest('.mermaid-block') ? 'mermaid' : e.closest('.plot-block') ? 'plot' : 'chart';
+      // Component errors start with the component's name ("predict: Invalid JSON…"): report that kind, so the teacher
+      // is pointed at the right format (every non-diagram error used to be reported as a chart).
+      const named = /^([a-z][a-z0-9-]*):/.exec(text), comp = named && R.components[named[1]];
+      const kind = e.closest('.mermaid-block') ? 'mermaid' : e.closest('.plot-block') ? 'plot' : comp ? comp.name : 'chart';
       const k = last.id + '|' + text;
       if (!text || reported.has(k)) return;
       reported.add(k);

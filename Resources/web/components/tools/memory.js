@@ -1,4 +1,4 @@
-// Tool cards for the learner-model and housekeeping tools: memory, project_memory, load_tools. All compact: one line
+// Tool cards for the learner-model and housekeeping tools: memory, project_memory, load_tools, skill, draw. All compact: one line
 // when closed, so a reply that remembers something does not grow a box.
 (function () {
   'use strict';
@@ -22,4 +22,6 @@
   R.defineTool({ name: 'load_tools', icon: 'toolbox', tone: 'grey', title: 'Load tools', compact: true, summary: n => (input(n).names || []).join(', ') });
   R.defineTool({ name: 'skill', icon: 'sparkles', tone: 'grey', title: 'Skill', compact: true,
     summary: n => input(n).name || (input(n).query ? 'search: ' + input(n).query : '') });
+  R.defineTool({ name: 'draw', icon: 'image', tone: 'grey', title: 'Drawing formats', compact: true,
+    summary: n => { const k = input(n).kinds; return (Array.isArray(k) ? k.join(', ') : k || '') || 'catalog'; } });
 })();

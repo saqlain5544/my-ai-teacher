@@ -930,6 +930,7 @@ enum SubAgent {
             sub.agentDepth = cfg.depth
             sub.agentCeiling = AgentCeiling(handle: handle, readOnly: cfg.scope.readOnly, tools: Set(cfg.tools))
             sub.agentProvider = cfg.providerID
+            sub.agentNode = ctx.agentNode   // the lesson's branch: its skills, and the drawings its page draws
             sub.checkpointTurn = ctx.checkpointTurn
             sub.codeAgent = ctx.codeAgent   // a coder's writes are syntax-checked and guarded like the lesson's own
             // Working in the lesson's own folder (not a worktree copy): the change joins the turn's Undo.
@@ -989,6 +990,9 @@ enum SubAgent {
         - Budget: \(cfg.budget.label). When it runs out you are asked to report from what you have.
         - Notes may arrive while you work ("[Note from the teacher while you work] …"): follow them.
         """
+        if cfg.tools.contains("draw") {
+            s += "\n- Your report may carry drawings (```mermaid, ```chart, ```plot, ```svg, ```visual…; `draw` gives their formats): the teacher can show them to the learner as they are."
+        }
         if let schema = cfg.schema {
             s += "\n\n# Report format\nYour final reply must be one JSON value matching this JSON Schema, with nothing around it:\n```json\n\(schema.pretty)\n```"
         }

@@ -82,8 +82,8 @@ enum Skills {
         }
     }
 
-    /// A `SKILL.md`: front matter between `---` lines, then the body. The name defaults to the folder's.
-    static func parse(_ text: String, dir: URL, source: Skill.Source) -> Skill? {
+    /// Front matter between `---` lines (`key: value`, keys lower-cased, values unquoted), then the body.
+    static func frontMatter(_ text: String) -> (meta: [String: String], body: String) {
         var meta: [String: String] = [:], body = text
         let lines = text.components(separatedBy: "\n")
         if lines.first?.trimmingCharacters(in: .whitespaces) == "---", let end = lines.dropFirst().firstIndex(where: { $0.trimmingCharacters(in: .whitespaces) == "---" }) {
@@ -94,6 +94,12 @@ enum Skills {
             }
             body = lines[(end + 1)...].joined(separator: "\n")
         }
+        return (meta, body)
+    }
+
+    /// A `SKILL.md`: front matter between `---` lines, then the body. The name defaults to the folder's.
+    static func parse(_ text: String, dir: URL, source: Skill.Source) -> Skill? {
+        let (meta, body) = frontMatter(text)
         let name = (meta["name"].flatMap { $0.isEmpty ? nil : $0 } ?? dir.lastPathComponent).lowercased()
         guard name.range(of: #"^[a-z0-9][a-z0-9._-]{0,63}$"#, options: .regularExpression) != nil else { return nil }
         let description = (meta["description"] ?? "").replacingOccurrences(of: "\n", with: " ")

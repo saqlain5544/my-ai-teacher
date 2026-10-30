@@ -66,7 +66,7 @@ struct AgentDefinition: Codable, Sendable, Equatable, Identifiable, Hashable {
 }
 
 enum AgentCatalog {
-    static let research = ["read", "ls", "glob", "grep", "web_search", "web_fetch", "math", "memory"]
+    static let research = ["read", "ls", "glob", "grep", "web_search", "web_fetch", "math", "memory", "draw"]
     static let general = research + ["write", "edit", "bash", "run_code", "task", "agents"]
 
     private static let reportRules = """

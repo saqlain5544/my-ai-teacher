@@ -21,11 +21,24 @@ protocol TranscriptSink: AnyObject {
 /// Everything optional (permissions, memory, languages, logging…) lives in `AgentExtension`s.
 @MainActor
 final class ChatSession: ObservableObject, Identifiable {
+    /// What the teacher hears with the learner's next message when a drawing in its last reply failed in their view: the
+    /// error, and where the format is when `draw` documents that kind.
+    nonisolated static func renderFailure(_ kind: String, title: String, message: String, node: String) -> String {
+        let documented = Drawing.find(kind, in: Drawing.kinds(node)) != nil
+        return "A ```\(kind) block in your last reply (“\(title)”) failed to render for the learner: \(message). Include a corrected, working version in your next reply" +
+            (documented ? " (`draw` with \"\(kind)\" has the exact format)." : ".")
+    }
+
     /// Why a call can't run. Models call rendering components as tools (`vocab`, `chart`): those are fences, written in
     /// the reply; say so, rather than a bare "not available" they retry.
     nonisolated static func unavailable(_ name: String, node: String) -> String {
-        if AgentTree.components(node).contains(name) {
-            return "`\(name)` is not a tool: it's a fence. Write it in your reply as ```\(name) followed by its content (see The app), and the learner sees it drawn."
+        let kind = Drawing.find(name, in: Drawing.kinds(node)), drawing = kind.flatMap { $0.isLibrary ? nil : $0.name }
+        if let lib = kind, lib.isLibrary {
+            return "`\(name)` is not a tool: it's a library for a ```\(lib.needs ?? "visual") in your reply (`draw` with \"\(lib.name)\" gives an example)."
+        }
+        if let fence = drawing ?? (AgentTree.components(node).contains(name) ? name : nil) {
+            return "`\(name)` is not a tool: it's a fence. Write it in your reply as ```\(fence) followed by its content (" +
+                (drawing != nil ? "`draw` with \"\(fence)\" gives the format" : "see your instructions") + "), and the learner sees it drawn."
         }
         if name.hasPrefix("mcp__"), AgentTree.usesMCP(node) {
             return "Tool `\(name)` is not available: load it (or its whole server, `mcp__<server>`) with `load_tools` first; the MCP servers here are in your instructions."

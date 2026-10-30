@@ -95,7 +95,9 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
             guard !injected else { return }
             injected = true
             let filter = only.flatMap { try? JSONEncoder().encode($0) }.flatMap { String(data: $0, encoding: .utf8) }.map { "window.__only = \($0);" } ?? ""
-            web.evaluateJavaScript(filter + suite + "\n;0") { _, err in
+            // Every example in the drawing references (`Drawing`), so the suite proves each one draws as documented.
+            let examples = JSON.array(Drawing.shipped.kinds.flatMap { k in k.examples.map { e -> JSON in ["kind": .string(k.name), "node": .string(k.node), "lang": .string(e.lang), "fence": .string(e.fence)] } })
+            web.evaluateJavaScript(filter + "window.__drawingExamples = \(examples.compact);" + suite + "\n;0") { _, err in
                 if let err { print("SUITE FAILED TO LOAD: \(err)"); exit(2) }
             }
         case "log" where j["level"]?.string == "error":

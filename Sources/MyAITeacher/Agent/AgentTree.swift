@@ -3,8 +3,9 @@ import Foundation
 /// Every agent in the app is a node in one tree. A node declares what it adds; an agent gets everything on its path to
 /// the root, never what its children add, and a node can drop an inherited tool its own work replaces:
 ///
-///     root ── core for every agent: files, batch edit, web, sub-agents, the core visualisations;
-///             the agent browser and Mac control (deferred); the user's MCP servers' tools (deferred, `mcp__<server>__<tool>`)
+///     root ── core for every agent: files, batch edit, web, skills, the drawing set (`draw`: formats on demand);
+///             sub-agents, saving a visual, the agent browser and Mac control (deferred); the user's MCP servers' tools
+///             (deferred, `mcp__<server>__<tool>`)
 ///     └── teacher ── teaching: questions and quizzes, the course board, learner memory, math, code to show things
 ///         ├── tutor · socratic · explain · quiz · exam · eli5 · research   (their instructions differ, not their tools)
 ///         ├── language ── the language mentor: language and vocab tools; listening, gloss, dialogue, conjugation, tones, reading, correction
@@ -32,7 +33,7 @@ struct AgentNode: Sendable {
 enum AgentTree {
     static let nodes: [AgentNode] = [
         AgentNode(id: "root", parent: nil,
-                  core: ["read", "write", "edit", "ls", "web_search", "web_fetch", "load_tools", "skill"],
+                  core: ["read", "write", "edit", "ls", "web_search", "web_fetch", "load_tools", "skill", "draw"],
                   deferred: ["task", "agents", "visual", "browser", "mac", "computer"],
                   components: ["mermaid", "math", "chart", "plot", "timeline", "steps", "cards", "compare", "kv", "json", "csv", "visual"],
                   guide: Guides.root, mcp: true),
@@ -97,7 +98,7 @@ enum AgentTree {
 enum Guides {
     static let root = """
     # The app
-    - Replies render Markdown + LaTeX (`$…$`, `$$…$$`, `\\ce{}`) and callouts (`> [!NOTE|TIP|WARNING|EXAMPLE|DEFINITION|THEOREM] title`). Fences: ```mermaid (quote any label with brackets, parentheses, quotes or `<br/>`: `A["cwnd × β (0.7)"]`, `A -->|"loss"| B`); ```plot {"functions":["sin(x)"],"x":[-6,6]}; ```chart {"type":"bar|line|area|pie|scatter","labels":[…],"series":[{"name":"…","data":[…]}]}; ```timeline [{"date","title","text"}]; ```steps [{"title","text"}] (`{"reveal":true,"steps":[…]}` reveals a worked example step by step); ```compare {"columns":[…],"rows":[[label,…]]}; ```visual: self-contained offline HTML/JS, first line `<!-- title: …; libs: three, d3, chart, matter; height: 360 -->`, no reasoning inside; must run as written (declare before use, no clashes with element ids) and read on light and dark. JSON must be valid. Use them freely; several per reply is fine.
+    - Replies render Markdown + LaTeX (`$…$`, `$$…$$`, `\\ce{}`) and callouts (`> [!NOTE|TIP|WARNING|EXAMPLE|DEFINITION|THEOREM] title`). Draw in fences: ```mermaid (~30 diagram types), ```plot, ```chart, ```svg, ```visual (interactive HTML/JS; three.js, d3, Chart.js, Matter.js, KaTeX), ```math, ```steps, ```timeline, ```compare, ```cards, ```kv, ```csv, ```json. Formats are strict: before a kind's first use in a lesson, `draw` with its name gives the format, an example and the limits. Several per reply is fine.
     - Tools explain themselves in their definitions. More load on demand: call one by name (it loads and runs; its definition is yours from the next step) or `load_tools` to read definitions first:
     {more_tools}
     - Independent tools in parallel; don't narrate tool mechanics. A `<background-agent>` or `<background-task>` message is the report of work you launched in the background, not the person you work with.
@@ -116,6 +117,6 @@ enum Guides {
     # Code mentor tools
     - Tests check every rule the starter states; try them on a reference solution in `/tmp/…`, never here. Until a pass the app refuses your edits and commands on their files and tests; your own files and `.teacher/mentor/` stay writable. Their Project panel runs the tests, requests a `project_review`, shows hints one rung at a time.
     - Their code: `symbols`, `grep`, `diagnostics`. `trace` (Python; steps into their modules) and `bench` (Python or JavaScript, `run_<name>` variants) give the learner a card: no need to repeat their numbers.
-    - Fences: ```predict {"code","language","output","explain"}: they write the output before seeing it (run it first for `output`); ```annotate {"code","language","file","start","notes":[{"lines":"3-5","text"}]}: a line-by-line walk-through; ```trace {"language","code","steps":[{"line","vars":{},"out","note"}]}: a hand-made stepper for other languages; ```layout {"name","size","align","fields":[{"name","type","offset","size"}]} (numbers from the compiler); ```tree ["src/", "  main.zig  # entry point"].
+    - Code views (formats: `draw`): ```predict (they write the output before seeing it; run it first for `output`), ```annotate (notes pinned to lines), ```trace (a hand-made stepper for other languages), ```layout (a type's memory layout drawn as bytes; numbers from the compiler), ```tree (a file tree).
     """
 }

@@ -33,7 +33,7 @@ enum Instructions {
             switch self {
             case .teacher: "Who the teacher is and the standard of its work. Every teaching mode."
             case .mode: "Added for this mode only."
-            case .app: "The root of the agent tree: how replies render and the tools every agent has. Edit with care: the app relies on these formats."
+            case .app: "The root of the agent tree: how replies render (it names the drawing kinds; `draw` gives their formats) and the tools every agent has. Edit with care: the app relies on what it names."
             case .guide: "What this branch of the agent tree adds (its tools and components). Its children inherit it."
             case .board: "How the teacher keeps long-term state for goals that span many lessons."
             case .subAgent: "A built-in sub-agent type the teacher can delegate to."

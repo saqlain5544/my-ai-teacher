@@ -44,6 +44,12 @@ enum AppPaths {
         return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
             .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/skills")
     }
+    /// The drawing kinds' references (`Resources/drawing/<agent tree node>/<kind>.md`, see `Drawing`).
+    static var drawingResources: URL {
+        if let r = Bundle.main.resourceURL?.appendingPathComponent("drawing"), FileManager.default.fileExists(atPath: r.path) { return r }
+        return URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+            .deletingLastPathComponent().deletingLastPathComponent().appendingPathComponent("Resources/drawing")
+    }
 }
 
 /// GUI apps launched from Finder/Dock don't inherit the user's shell environment, so API keys

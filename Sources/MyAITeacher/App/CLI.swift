@@ -64,7 +64,8 @@ enum CLI {
         if args.contains("--measure") {
             // Approximate tokens as chars/4 (good enough to rank costs). `--mode code` measures that mode's agent.
             let mode = opt("--mode").flatMap(TeachingMode.init(rawValue:)) ?? .tutor
-            let sys = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: services.memory.coreBlock(), model: model)
+            // `--no-memory` leaves out the learner's memory block, so runs compare like for like.
+            let sys = SystemPrompt.build(settings: AppSettings(), mode: mode, coreMemory: args.contains("--no-memory") ? "" : services.memory.coreBlock(), model: model)
             if args.contains("--print") { print(sys) }
             print("system prompt: \(sys.count) chars ≈ \(sys.count / 4) tokens")
             var total = 0

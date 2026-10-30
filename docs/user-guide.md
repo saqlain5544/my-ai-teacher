@@ -120,6 +120,9 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
       a mode command is sent in the new mode.
 * **Code blocks** have a **Run** button. Python, JavaScript, TypeScript, Swift, C, C++, Go, Rust, Ruby, Java, Zig and
   Bash run on your Mac when the toolchain is installed.
+* **Drawings.** Every mode draws in its replies: diagrams, function plots, charts, exact SVG figures and interactive
+  visuals (3D, physics, d3, Chart.js) that run offline in a sandbox. Code lessons add steppers, annotated code, memory
+  layouts and file trees. A quiet **Drawing formats** line shows when the teacher looks a format up.
 * **The on-screen keyboard** for the language you're learning appears only in Language mentor lessons.
 
 ### Skills
@@ -129,7 +132,7 @@ shows when it does), so its instructions stay short. They come in a tree, like t
 
 | Who | Skills |
 |---|---|
-| Every agent | web-research, read-long-documents, visual-explanations |
+| Every agent | web-research, read-long-documents |
 | Every teaching mode | lesson-design, quiz-writing, feedback-on-answers |
 | Language mentor | conversation-practice, grammar-drills, pronunciation-coaching |
 | Code mentor | debugging-coaching, code-review-feedback, project-scaffolding |

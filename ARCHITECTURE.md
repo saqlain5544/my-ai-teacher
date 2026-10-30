@@ -21,6 +21,7 @@ Sources/MyAITeacher/
   UI/          SwiftUI views + TranscriptView bridge + Inspector (files, plan, changes, browser, agents)
   App/         App entry, AppModel, settings, CLI (--cli), DebugHooks
 Resources/web/ Transcript renderer (core app.js + registry.js + icons.js + components/*.js)
+Resources/drawing/ The drawing set's references (`draw`), one file per kind, by agent tree node
 ```
 
 ## Invariants
@@ -51,7 +52,7 @@ Resources/web/ Transcript renderer (core app.js + registry.js + icons.js + compo
 
 ## Context and cost
 Every request = fixed prefix (system prompt + tool schemas) + history prepared by `ContextPolicy` (all O(n)):
-1. **Deferred tools.** An agent's core tools are always sent (a tutor's 14); the rarely used ones (a tutor's 9, per
+1. **Deferred tools.** An agent's core tools are always sent (a tutor's 14); the rarely used ones (a tutor's 14, per
    `AgentTree`) are listed by one line each and loaded with
    `load_tools` (or automatically on first direct call). Tool order only ever grows, so the cached prefix holds.
 2. **Old reasoning** is not resent (except Claude adaptive thinking, which must replay).
@@ -88,6 +89,19 @@ and let requests run past the budget before compaction fired. The lesson window 
 | Cache hit, later steps of a lesson (real lessons) | — | **71–82%** |
 | Cache hit, first request of a new lesson (shared prefix) | ~1% | **~5k of ~5.05k tokens** |
 
+**Drawing formats load on demand.** The prompt names the drawing kinds in one line and `draw` returns a kind's format,
+example and limits when the agent asks (see Live visuals). The root guide used to carry every fence's format, and the
+code mentor's guide its views' JSON shapes, in every request. Measured with `--cli --measure --no-memory` (chars/4,
+learner memory left out):
+
+| Fixed prefix per request | Before | After |
+|---|---|---|
+| Tutor, Socratic (system prompt + core tools) | 6,384 tok | **6,328 tok** (−56) |
+| Language mentor | 8,557 tok | **8,501 tok** (−56) |
+| Code mentor | 7,856 tok | **7,740 tok** (−116) |
+| of which `draw`'s definition (new, every request) | — | 80 tok |
+| On demand: one kind's reference / the catalog | — | 136–987 tok (mermaid largest) / 895 tok |
+
 ## Evaluations
 Comparisons run offline, never randomised for learners: the course board system's three arms are forced with
 `MYAITEACHER_EXP=course_board=nested|shallow|off` or the CLI's `--exp` (`BoardSystem`, `scripts/ab-board.py`), and a
@@ -96,6 +110,27 @@ arms, exposure telemetry, an Insights card) once tested the `visual` tool's plac
 placement, so it is runtime-loaded — and was removed once nothing used it.
 
 ## Live visuals and practice
+* **The drawing set** (`Drawing`, `DrawTool`): every kind of figure an agent can put in a reply. These are the fences
+  ```mermaid (Mermaid 12, ~30 diagram types), ```plot, ```chart, ```svg, ```visual, ```math, ```steps, ```timeline,
+  ```compare, ```cards, ```kv, ```csv and ```json; the libraries a visual loads (three.js r158, d3 7.9, Chart.js 4.5,
+  Matter.js 0.20, KaTeX 0.19); and the code mentor's views (```predict, ```annotate, ```trace, ```layout, ```tree).
+  The prompt names the kinds in one line of the root guide. `draw` (core at the root, so every mentor and the research
+  sub-agents have it; ~80 tokens) returns a kind's exact format, a working example and its limits; with no kinds it
+  returns the catalog and how to choose (the old visual-explanations skill). References are
+  `Resources/drawing/<node>/<kind>.md` and follow the agent tree like skills, gated by the components the agent's page
+  draws: a tutor asking for ```layout is told it belongs to the code mentor. A fence or library called as a tool, and a
+  drawing that fails in the learner's view, both point the agent to `draw`. A failed drawing is reported by its own kind
+  (the page used to report every broken component as a chart). The renderer suite draws every example in every
+  reference (light and dark), so a format that drifts fails a test.
+* Live check (MiniMax-M3.1-Flash, thinking off, same prompts, `main` against this): the tutor drew a diagram and a
+  chart in 2/2 runs in both arms, loading `draw` both times; the code mentor drew in 1/3 runs before and 3/3 after (a
+  ```predict each time, a ```layout once). The risk the design carries showed once: a run that skipped `draw` wrote a
+  ```predict with prose for JSON. The learner saw the error, and it reached the teacher with its format's name.
+* Limits the references state, measured in the app's WebKit: the ```svg sanitiser drops `id`, `class`, `<style>` and
+  `<foreignObject>` (so no gradients, markers or `<use>`); three.js is the core build (no OrbitControls); visuals have
+  no storage or modules (a `type="module"` script runs as a classic one); KaTeX inside a visual needs
+  `output: 'mathml'` (the frame has no KaTeX stylesheet); Matter's mouse swallows the wheel unless its listener is
+  removed.
 * ```` ```visual ```` fence (no extra round trip) or the `visual` tool (persists to `.teacher/visuals/`). Runtime:
   scripts run through indirect eval with async callbacks wrapped, so real error messages reach the learner and the
   Fix button sends them to the teacher; frames size to their content and load lazily.
@@ -696,8 +731,8 @@ the root and never what its children add:
 
 ```
 root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-agents, browser and Mac control (runtime);
-│        the user's MCP servers' tools (runtime, `mcp__<server>__<tool>`); core visualisations
-│        skills: web-research, read-long-documents, visual-explanations
+│        the user's MCP servers' tools (runtime, `mcp__<server>__<tool>`); the drawing set (`draw`: formats on demand)
+│        skills: web-research, read-long-documents
 └── teacher ── ask_learner, math, run_code, memory, lesson_plan; bash, mastery, flashcards… (runtime); vocab, practice, problem
     │          skills: lesson-design, quiz-writing, feedback-on-answers
     ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
@@ -724,10 +759,15 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
 * **Guides follow it too.** Each node has a guide (`Guides`, editable in Settings › Instructions as "App guide" and
   "Tools guide: …"); an agent's prompt joins the guides on its path, root first, with `{more_tools}` filled from its own
   loadable tools.
+* **Drawings follow it too** (`Drawing`): `Resources/drawing/<node>/` holds a node's drawing kinds, so the code
+  mentor's views reach only the code mentor. `draw` resolves against the agent's path and its page's components, and
+  a sub-agent resolves against its lesson's branch (it inherits `agentNode`).
 * **The course board is core** for teachers: it must never depend on another tool being loaded (it used to arrive with
   `mastery`, so switching quizzes off removed the board too).
 
 ## Instructions and limits
+* Guides name what their node adds; formats live in references loaded at runtime (`draw` for drawings, `skill` for
+  know-how, tool definitions after `load_tools`), never in the prompt.
 * Every agent's standing instructions live in `Instructions` (teacher, each mode, board, app guide, tools
   guides, built-in sub-agents), short by default and editable in Settings → Instructions (stored in `AppSettings.instructions`;
   a lesson keeps the prompt it started with, so its cached prefix stays valid — until its teaching mode or model
@@ -910,12 +950,13 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 * `scripts/e2e.sh [--live]` — the whole loop: build, unit tests, renderer suite (light + dark), and with `--live`
   the scripted lessons. Run it after every change.
 * `swift test` — unit tests (SSE/think-tag parsing, FSRS, BKT, grader, math equivalence, HTML→Markdown, workspaces,
+  the drawing set's discovery and loading for every mentor and sub-agent (`DrawingTests`),
   memory, deadlines, sub-agent model choice / failure / cancellation). `RuntimeTests`: mailbox order, both restart
   strategies, intensity and per-child limits with backoff, restart policies, watchdog, stop without leaked tasks, links and
   monitors. `SubAgentTests` (a scripted fake model): budgets, types, read-only and grant ceilings, structured output with
   repair, steering, restart-and-resume, provider/model/effort choice (fuzzy, retired ids), nesting, memory bounds.
 * `MyAITeacher --webtest Tests/web/renderer.test.js [--dark] [--only name]` — loads the real transcript page in the
-  app's WebKit (offscreen) and runs ~60 tests: every fence and component, streaming frame by frame, sanitising,
+  app's WebKit (offscreen) and runs ~165 tests: every fence and component, every example in the drawing references, streaming frame by frame, sanitising,
   tool cards, quiz answering, visuals, Mermaid re-render from cache, performance. Exits non-zero on any failure or
   unexpected page error.
 * `scripts/e2e-live.py [--only name] [--keep] [--model x:free]` — live lessons on a free model in a throwaway profile
@@ -993,6 +1034,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | Task / Agent | `task` + `agents` | types (explore/general/coder/reviewer/tester + app, `.teacher/agents/*.md` and `.claude/agents/*.md` with Claude Code's tool names), provider/model/effort/budget per call, tool allow/deny, JSON-schema reports, steering notes, resume, nesting, supervised restarts; never above the lesson's grants |
 | AskUserQuestion | `ask_learner` | 13 interactive component types, not just multiple choice |
 | NotebookEdit | — | not needed for tutoring; `edit` works on `.ipynb` JSON |
+| — (extra) | `draw` | the drawing set's formats on demand: a kind's fence format, example and limits; the catalog with no kinds |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
