@@ -115,6 +115,19 @@ final class CodeMentorTests: XCTestCase {
 
     // MARK: The tools
 
+    @MainActor func testReviewStartShowsWhoElseUsesWhatChanged() async throws {
+        try write("shop.py", "def total(items):\n    return 0\n")
+        try write("cart.py", "from shop import total\n\n\ndef checkout(items):\n    return total(items)\n")
+        func git(_ a: String...) async { _ = await Worktree.run(["-C", dir.path] + a) }
+        await git("init", "-q"); await git("add", "-A")
+        await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        ProjectStore.snapshot(ws, why: "starter")
+        try write("shop.py", "def total(items):\n    return sum(i['price'] * i['qty'] for i in items)\n")
+        let start = try await ProjectReviewTool().run(["action": "start", "run_tests": false], ctx())
+        XCTAssertFalse(start.isError, start.text)
+        XCTAssertTrue(start.text.contains("Reach of the changes") && start.text.contains("shop.py:1") && start.text.contains("cart.py:5  in checkout"), start.text)
+    }
+
     @MainActor func testTestsMustBeRedOnTheStarterAndReviewRoundsCarryFindings() async throws {
         try XCTSkipIf(ProcessRunner.which("python3") == nil, "python3 not installed")
         let check = await ProcessRunner.run(ProcessRunner.which("python3")!, ["-c", "import pytest"], timeout: 20)
