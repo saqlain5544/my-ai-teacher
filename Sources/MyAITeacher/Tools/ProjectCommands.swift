@@ -18,6 +18,13 @@ enum ProjectCommands {
         ("research", .research), ("language", .language), ("code", .code),
     ]
 
+    /// `/review [revision]`: a code review that names its steps, so it doesn't depend on the model choosing the skill.
+    static func reviewPrompt(_ base: String) -> String {
+        let against = base.isEmpty ? "" : " with `base` set to `\(base)`"
+        return "Review my \(base.isEmpty ? "uncommitted changes" : "changes since `\(base)`"). Load the `code` tool (load_tools if it isn't loaded), call it with action=review\(against), "
+            + "then follow the review-changes skill: read the code around each hunk and the callers it lists, check each risk before reporting it, and give findings ranked, each with file:line."
+    }
+
     /// A teaching lesson's command: a follow-up's prompt, or a mode to switch to (with any text after it to send). Nil
     /// when the message isn't one.
     enum LessonCommand: Equatable { case prompt(String), mode(TeachingMode, then: String) }
@@ -27,6 +34,7 @@ enum ProjectCommands {
         let rest = t.dropFirst(name.count + 1).trimmingCharacters(in: .whitespacesAndNewlines)
         if let q = quickPrompts.first(where: { $0.name == name }) { return .prompt(rest.isEmpty ? q.prompt : q.prompt + " " + rest) }
         if let m = modeCommands.first(where: { $0.name == name }) { return .mode(m.mode, then: rest) }
+        if name == "review" { return .prompt(reviewPrompt(rest)) }
         return nil
     }
 
@@ -34,6 +42,7 @@ enum ProjectCommands {
     static func lessonSuggestions(current: TeachingMode) -> [Suggestion] {
         quickPrompts.map { Suggestion(name: $0.name, detail: $0.detail, source: "follow-up") }
             + modeCommands.filter { $0.mode != current }.map { Suggestion(name: $0.name, detail: "Switch to \($0.mode.title) mode", source: "mode") }
+            + [Suggestion(name: "review", detail: "Review the uncommitted changes (or `/review <branch>`) with what they reach", source: "work")]
     }
 
     /// A command in the composer's `/` menu.

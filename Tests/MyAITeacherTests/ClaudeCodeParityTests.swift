@@ -211,6 +211,12 @@ final class ClaudeCodeParityTests: XCTestCase {
         XCTAssertTrue(lesson.contains { $0.name == "socratic" } && !lesson.contains { $0.name == "tutor" }, "the other modes, not the current one")
         XCTAssertEqual(ProjectCommands.lessonCommand("/simpler"), .prompt("Can you explain that again more simply, with an everyday analogy?"))
         XCTAssertEqual(ProjectCommands.lessonCommand("/socratic why is the sky blue?"), .mode(.socratic, then: "why is the sky blue?"))
+        XCTAssertTrue(lesson.contains { $0.name == "review" }, "/review is everyone's")
+        XCTAssertEqual(ProjectCommands.matches("/rev", in: lesson)?.map(\.name), ["review"])
+        guard case .prompt(let plain)? = ProjectCommands.lessonCommand("/review") else { return XCTFail("/review is a prompt") }
+        XCTAssertTrue(plain.contains("uncommitted changes") && plain.contains("action=review") && plain.contains("review-changes") && !plain.contains("base"), plain)
+        guard case .prompt(let since)? = ProjectCommands.lessonCommand("/review origin/main") else { return XCTFail("/review <rev> is a prompt") }
+        XCTAssertTrue(since.contains("since `origin/main`") && since.contains("`base` set to `origin/main`"), since)
         XCTAssertNil(ProjectCommands.lessonCommand("/nothing"))
         XCTAssertNil(ProjectCommands.lessonCommand("the /socratic method"))
     }
