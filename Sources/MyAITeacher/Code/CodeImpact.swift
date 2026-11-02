@@ -23,6 +23,8 @@ enum CodeImpact {
         var changed: [Changed]
         var removed: [Removed]
         var unindexed: [String]
+        /// Definitions the change took out of a file, whether or not anything still names them.
+        var gone: [String: [String]] = [:]
     }
 
     /// The new-side lines each file's diff (`git diff -U0`) touches, and the text of the lines it removed. A pure
@@ -171,7 +173,14 @@ enum CodeImpact {
                 if !uses.isEmpty { removed.append(Removed(name: name, path: p, uses: uses)) }
             }
         }
-        return Report(files: Set(ranges.keys).union(removedText.keys).sorted(), changed: changed, removed: removed, unindexed: unindexed)
+        var gone: [String: [String]] = [:]
+        for (p, lines) in removedText {
+            let ext = (p as NSString).pathExtension.lowercased()
+            let now = Set(await index.entry(p)?.symbols.map(\.name) ?? [])
+            let names = Set(SymbolsTool.outline(lines.joined(separator: "\n"), ext: ext).map(\.name)).subtracting(now).sorted()
+            if !names.isEmpty { gone[p] = names }
+        }
+        return Report(files: Set(ranges.keys).union(removedText.keys).sorted(), changed: changed, removed: removed, unindexed: unindexed, gone: gone)
     }
 
     /// The report as the agent reads it: what is at risk first.
@@ -245,6 +254,21 @@ enum CodeImpact {
         return nil
     }
 
+    /// What changed, file by file: definitions added, modified and removed. Deterministic, so it also serves a commit message.
+    static func summary(_ r: Report) -> String {
+        var lines: [String] = []
+        for p in r.files {
+            let mine = r.changed.filter { $0.path == p }
+            var parts: [String] = []
+            let added = mine.filter(\.isNew).map(\.sym.name), edited = mine.filter { !$0.isNew }.map(\.sym.name)
+            if !added.isEmpty { parts.append("added " + added.prefix(8).joined(separator: ", ")) }
+            if !edited.isEmpty { parts.append("changed " + edited.prefix(8).joined(separator: ", ")) }
+            if let g = r.gone[p] { parts.append("removed " + g.prefix(8).joined(separator: ", ")) }
+            lines.append("- \(p)" + (parts.isEmpty ? "" : ": " + parts.joined(separator: "; ")))
+        }
+        return lines.joined(separator: "\n")
+    }
+
     /// A review's whole brief for a change: the diff (bounded), what it reaches, the repository's rules, and how to
     /// report. The caller reads the files around each hunk and answers; nothing here runs a model.
     static func reviewBrief(root: URL, index: CodeIndex, base: String?, diffLimit: Int = 24_000) async throws -> String {
@@ -253,7 +277,7 @@ enum CodeImpact {
         let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
         let rev = given.isEmpty ? "HEAD" : given
         let diff = await Worktree.run(["-C", root.path, "diff", "-U3", "--no-color", "--no-ext-diff", "--relative", rev, "--"], timeout: 60).stdout
-        var s = "REVIEW BRIEF\n\n## Diff\n"
+        var s = "REVIEW BRIEF\n\n## What changed\n" + summary(r) + "\n\n## Diff\n"
         s += diff.count > diffLimit ? "```diff\n" + diff.prefix(diffLimit) + "\n```\n(diff cut at \(diffLimit) characters; `git diff` the rest, file by file)\n" : "```diff\n" + diff + "```\n"
         s += "\n## Reach\n" + render(r, base: base)
         if let rules = rules(root: root) { s += "\n## Repository review rules (REVIEW.md)\n" + rules + "\n" }
