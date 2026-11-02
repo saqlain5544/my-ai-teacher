@@ -11,21 +11,24 @@ struct CodeTool: Tool {
     backed off", "parse config"), ranked; def — where `name` is defined; refs — every use of `name`, grouped by the \
     function it's in; callers — the functions that use `name`; callees — what function `name` calls or builds on; \
     outline — `path`'s definitions with their lines; related — the files `path` uses and that use it; map — the \
-    repository's most central files and their main definitions (start here in an unfamiliar codebase). Use `grep` only \
-    for exact text (strings, error messages, config keys).
+    repository's most central files and their main definitions (start here in an unfamiliar codebase); impact — what \
+    the uncommitted changes (or everything since git revision `base`) reach: the definitions they touch, who uses each \
+    outside the change, the tests that name them, and removed definitions still named somewhere (use it before a review \
+    or a commit). Use `grep` only for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map"]),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact"]),
             "query": Schema.string("find: what you're looking for, in words or names."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
             "path": Schema.string("outline, related: a file (relative to the folder)."),
+            "base": Schema.string("impact: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
         let a = input["action"]?.string ?? ""
-        return [a, input["query"]?.string ?? input["name"]?.string ?? input["path"]?.string ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
+        return [a, input["query"]?.string ?? input["name"]?.string ?? input["path"]?.string ?? input["base"]?.string ?? ""].filter { !$0.isEmpty }.joined(separator: " ")
     }
     func timeout(_ input: JSON) -> Double? { 120 }   // the first query of a large repository builds its index
 
@@ -99,8 +102,13 @@ struct CodeTool: Tool {
             return ToolOutput(text: note + "\(st.files) files, \(st.symbols) definitions. Most central (used by the most others):\n" + m.map { e in
                 "\(e.path)\n" + e.symbols.map { "    \($0.line)  \($0.text)" }.joined(separator: "\n")
             }.joined(separator: "\n"))
+        case "impact":
+            let base = input["base"]?.string
+            let r = try await CodeImpact.report(root: ctx.workspace, index: index, base: base)
+            return ToolOutput(text: note + CodeImpact.render(r, base: base),
+                              meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact.")
         }
     }
 

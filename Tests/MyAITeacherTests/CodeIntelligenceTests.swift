@@ -113,4 +113,81 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertTrue(map.text.contains("4 files") && map.text.contains("backoff_delay"), map.text)
         XCTAssertTrue(AgentTree.deferred("code-mentor").contains("code"), "the code mentor loads it on demand")
     }
+
+    func testADiffParsesToChangedLinesAndRemovedText() {
+        let diff = """
+        diff --git a/src/a.py b/src/a.py
+        --- a/src/a.py
+        +++ b/src/a.py
+        @@ -4,2 +4,3 @@ def f():
+        -    return 1
+        -    pass
+        +    return 2
+        +    pass
+        +    # more
+        @@ -20 +20,0 @@ def g():
+        -def gone():
+        diff --git a/old.py b/old.py
+        --- a/old.py
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -def legacy(): pass
+        """
+        let d = CodeImpact.parse(diff)
+        XCTAssertEqual(d.ranges["src/a.py"], [4...6, 20...20], "a pure deletion marks the line it sits after")
+        XCTAssertEqual(d.removed["src/a.py"]?.last, "def gone():")
+        XCTAssertEqual(d.removed["old.py"], ["def legacy(): pass"], "a deleted file is keyed by its old path")
+        XCTAssertNil(d.ranges["old.py"])
+    }
+
+    @MainActor func testImpactTracesAChangeToItsCallersTestsAndBrokenNames() async throws {
+        try write("tests/test_retry.py", """
+        from src.net.retry import backoff_delay
+
+
+        def test_delay_grows():
+            assert backoff_delay(2) > backoff_delay(1)
+        """)
+        func git(_ args: String...) async { _ = await Worktree.run(["-C", dir.path] + args) }
+        await git("init", "-q"); await git("add", "-A")
+        await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        let tool = CodeTool(), c = ctx()
+        let clean = try await tool.run(["action": "impact"], c)
+        XCTAssertTrue(clean.text.contains("No uncommitted changes"), clean.text)
+
+        // backoff_delay's body changes, RetryPolicy goes (client.py still builds one), and a new file adds a function.
+        try write("src/net/retry.py", """
+        import random
+
+
+        def backoff_delay(attempt, base=0.5):
+            # Wait longer before each retry, with jitter, so clients don't retry in lockstep.
+            return min(30, base * (2 ** attempt)) + random.random() * base
+        """)
+        try write("src/net/limits.py", """
+        def clamp_delay(d, ceiling=30):
+            return min(d, ceiling)
+        """)
+        let out = try await tool.run(["action": "impact"], c)
+        let t = out.text
+        XCTAssertTrue(t.contains("REMOVED BUT STILL NAMED") && t.contains("RetryPolicy (was in src/net/retry.py)") && t.contains("src/client.py:"), t)
+        XCTAssertTrue(t.contains("src/net/retry.py:4 ƒ def backoff_delay") && t.contains("in fetch"), "its caller outside the change: " + t)
+        XCTAssertTrue(t.contains("tests/test_retry.py — backoff_delay"), "the test that names it: " + t)
+        XCTAssertTrue(t.contains("clamp_delay [new]"), "an untracked file's definitions are new and used nowhere: " + t)
+        XCTAssertFalse(t.contains("backoff_delay [new]"), "an edited definition isn't new")
+
+        let since = try await tool.run(["action": "impact", "base": "HEAD"], c)
+        XCTAssertTrue(since.text.contains("since `HEAD`"), since.text)
+        let bad = try? await tool.run(["action": "impact", "base": "--output=/tmp/x"], c)
+        XCTAssertNil(bad, "a base that is an option is refused")
+    }
+
+    func testImpactCountsOnlyUsesThatCanBeTheDefinitions() {
+        func u(_ path: String, _ text: String) -> CodeTool.Use { CodeTool.Use(path: path, line: 1, text: text, within: nil) }
+        let uses = [u("a.js", "const x = blank(v);"), u("a.js", "<input class=\"blank\">"), u("a.js", "el.querySelector('input.blank')"),
+                    u("a.js", "foo(); // blank here"), u("a.js", "'q-blank' + blank_fix"), u("b.swift", "blank(1)"), u("a.js", "let y = a.blank")]
+        let kept = CodeImpact.plausible(uses, name: "blank", from: "z.js", local: false)
+        XCTAssertEqual(kept.map(\.text), ["const x = blank(v);", "let y = a.blank"], "not strings, comments, other identifiers or another language")
+        XCTAssertTrue(CodeImpact.plausible([u("a.swift", "f()"), u("b.swift", "f()")], name: "f", from: "a.swift", local: true).count == 1, "private: its own file only")
+    }
 }
