@@ -17,18 +17,18 @@ struct CodeTool: Tool {
     the repository's REVIEW.md rules and a review checklist: start here to review a change; \
     learn — remember `query` as a rule for this folder's later reviews (after the user says a finding is wrong here, or \
     names something to always check; one short sentence); forget — drop the rules containing `query`; \
-    graph — a mermaid flowchart of what function `name` calls, `depth` levels down (default 2, at most 3): put the \
+    describe — a commit or pull-request description drafted from the change (title, what changed, what to check, tests; facts only, you add the why); graph — a mermaid flowchart of what function `name` calls, `depth` levels down (default 2, at most 3): put the \
     ```mermaid block in your answer to show how a change flows. Use `grep` only for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review", "learn", "forget", "graph"]),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review", "learn", "forget", "graph", "describe"]),
             "query": Schema.string("find: what you're looking for, in words or names. learn: the rule. forget: part of the rule to drop."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
             "path": Schema.string("outline, related: a file (relative to the folder)."),
             "depth": Schema.integer("graph: how many levels of callees to draw (default 2, at most 3)."),
-            "base": Schema.string("impact, review: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
+            "base": Schema.string("impact, review, describe: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
@@ -115,6 +115,8 @@ struct CodeTool: Tool {
                               meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
         case "review":
             return ToolOutput(text: note + (try await CodeImpact.reviewBrief(root: ctx.workspace, index: index, base: input["base"]?.string)))
+        case "describe":
+            return ToolOutput(text: note + (try await CodeImpact.describe(root: ctx.workspace, index: index, base: input["base"]?.string)))
         case "graph":
             let n = try input.req("name")
             guard let root = await index.definitions(n).first else { return .error("No definition of `\(n)` in the index.") }
@@ -127,7 +129,7 @@ struct CodeTool: Tool {
             let n = ReviewMemory.forget(try input.req("query"), root: ctx.workspace)
             return ToolOutput(text: n == 0 ? "No review rule contains that." : "Dropped \(n) review rule\(n == 1 ? "" : "s").")
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review, learn, forget, graph.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review, learn, forget, graph, describe.")
         }
     }
 

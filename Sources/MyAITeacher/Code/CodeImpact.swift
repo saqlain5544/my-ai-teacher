@@ -308,6 +308,49 @@ enum CodeImpact {
         return lines.joined(separator: "\n")
     }
 
+    /// A commit or pull-request description drafted from the change itself: a title from what it touches, what changed
+    /// per file, what to check (removed names still used, callers outside it, pattern flags) and the test picture.
+    /// Facts only: the author adds the why.
+    static func describe(root: URL, index: CodeIndex, base: String?) async throws -> String {
+        let r = try await report(root: root, index: index, base: base)
+        guard !r.files.isEmpty else { return render(r, base: base) }
+        let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
+        let diff = await Worktree.run(["-C", root.path, "diff", "-U0", "--no-color", "--no-ext-diff", "--relative", given.isEmpty ? "HEAD" : given, "--"], timeout: 60).stdout
+        let flagged = flags(diff)
+        // The title: the definitions that matter most (added first, then the most used), else the files.
+        var ordered: [Changed] = []
+        for c in r.changed where c.isNew { ordered.append(c) }
+        let edited: [Changed] = r.changed.filter { !$0.isNew && !$0.untraced }
+        ordered += edited.sorted { (x: Changed, y: Changed) -> Bool in x.outside.count > y.outside.count }
+        var seen = Set<String>(), names: [String] = []
+        for c in ordered where seen.insert(c.sym.name).inserted { names.append(c.sym.name) }
+        var what = ""
+        if names.isEmpty {
+            what = r.files.prefix(2).map { ($0 as NSString).lastPathComponent }.joined(separator: ", ")
+        } else {
+            what = names.prefix(3).joined(separator: ", ")
+            if names.count > 3 { what += " and \(names.count - 3) more" }
+        }
+        let verb = r.changed.allSatisfy(\.isNew) && !r.changed.isEmpty ? "Add" : "Change"
+        var s = "\(verb) \(what)\n\n## What changed\n" + summary(r) + "\n"
+        var check: [String] = []
+        for x in r.removed { check.append("`\(x.name)` was removed from \(x.path) but is still named in \(x.uses.prefix(3).map { "\($0.path):\($0.line)" }.joined(separator: ", "))") }
+        for c in r.changed where !c.untraced && !c.outside.isEmpty && !c.isNew {
+            let files = Set(c.outside.filter { !isTest($0.path) }.map(\.path))
+            if !files.isEmpty { check.append("`\(c.sym.name)` is used outside this change in \(files.sorted().prefix(3).joined(separator: ", "))\(files.count > 3 ? " and \(files.count - 3) more" : "")") }
+        }
+        for f in flagged.prefix(8) { check.append("\(f.path):\(f.line) \(f.what)") }
+        if !check.isEmpty { s += "\n## To check\n" + check.map { "- " + $0 }.joined(separator: "\n") + "\n" }
+        let traced = r.changed.filter { !$0.untraced && $0.sym.kind == "function" && !isTest($0.path) }
+        let covered = traced.filter { $0.outside.contains { isTest($0.path) } }, bare = traced.filter { c in !c.outside.contains { isTest($0.path) } }
+        if !covered.isEmpty || !bare.isEmpty {
+            s += "\n## Tests\n"
+            if !covered.isEmpty { s += "- Named by tests: " + covered.prefix(8).map { "`\($0.sym.name)`" }.joined(separator: ", ") + "\n" }
+            if !bare.isEmpty { s += "- No test names: " + bare.prefix(8).map { "`\($0.sym.name)`" }.joined(separator: ", ") + "\n" }
+        }
+        return s
+    }
+
     /// A review's whole brief for a change: the diff (bounded), what it reaches, the repository's rules, and how to
     /// report. The caller reads the files around each hunk and answers; nothing here runs a model.
     static func reviewBrief(root: URL, index: CodeIndex, base: String?, diffLimit: Int = 24_000) async throws -> String {
