@@ -121,11 +121,13 @@ final class CodeMentorTests: XCTestCase {
         func git(_ a: String...) async { _ = await Worktree.run(["-C", dir.path] + a) }
         await git("init", "-q"); await git("add", "-A")
         await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        defer { try? FileManager.default.removeItem(at: ReviewMemory.url(dir)) }
+        ReviewMemory.learn("Empty carts are fine to total as 0", root: dir)
         ProjectStore.snapshot(ws, why: "starter")
         try write("shop.py", "def total(items):\n    return sum(i['price'] * i['qty'] for i in items)\n")
         let start = try await ProjectReviewTool().run(["action": "start", "run_tests": false], ctx())
         XCTAssertFalse(start.isError, start.text)
-        XCTAssertTrue(start.text.contains("Reach of the changes") && start.text.contains("shop.py:1") && start.text.contains("cart.py:5  in checkout"), start.text)
+        XCTAssertTrue(start.text.contains("Reach of the changes") && start.text.contains("shop.py:1") && start.text.contains("cart.py:5  in checkout") && start.text.contains("Empty carts are fine"), start.text)
     }
 
     @MainActor func testTestsMustBeRedOnTheStarterAndReviewRoundsCarryFindings() async throws {
