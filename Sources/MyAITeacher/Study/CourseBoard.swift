@@ -314,6 +314,7 @@ struct CourseBoard: Sendable, Equatable {
             s.points = item.points.map { String($0.prefix(300)) }
             s.done = item.done || doneTitles.contains(s.title.lowercased())
             s.sections = sections(from: item.children, prefix: id, old: old, depth: depth + 1)
+            if !s.sections.isEmpty { s.done = s.sections.allSatisfy(\.done) }
             out.append(s)
         }
         return out
@@ -446,7 +447,8 @@ struct CourseBoard: Sendable, Equatable {
         var fresh: [Card] = []
         for m in modules {
             guard let t = m["title"]?.string?.trimmingCharacters(in: .whitespaces), !t.isEmpty else { continue }
-            var c = old.first { $0.title.lowercased() == t.lowercased() } ?? Card(id: "", title: t)
+            let claimed = Set(fresh.map(\.id))
+            var c = old.first { !claimed.contains($0.id) && $0.title.lowercased() == t.lowercased() } ?? Card(id: "", title: t)
             if c.id.isEmpty { c.id = Self.nextID(among: old + fresh) }
             if let o = m["objectives"]?.array?.compactMap(\.string), !o.isEmpty { c.objectives = o }
             if let s = m["status"]?.string { c.lane = Self.lane(forStatus: s, current: c.lane) }

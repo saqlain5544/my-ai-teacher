@@ -55,17 +55,26 @@ enum TextAnalysis {
         let ns = text as NSString
         guard let tok = CFStringTokenizerCreate(nil, text as CFString, CFRange(location: 0, length: ns.length), kCFStringTokenizerUnitWordBoundary,
                                                 Locale(identifier: "ja") as CFLocale) else { return [] }
-        var out: [Token] = []
+        var out: [Token] = [], lastWord = ""
         while CFStringTokenizerAdvanceToNextToken(tok) != [] {
             let r = CFStringTokenizerGetCurrentTokenRange(tok)
             let w = ns.substring(with: NSRange(location: r.location, length: r.length))
             guard w.unicodeScalars.contains(where: { CharacterSet.alphanumerics.contains($0) }) else { continue }   // punctuation, spaces
+            if w == "時", let hr = LanguageWork.hours[lastWord], !out.isEmpty {
+                let romaji = hr.applyingTransform(.toLatin, reverse: false)
+                out[out.count - 1] = Token(text: lastWord + w, lemma: nil, pos: nil, reading: [hr, romaji].compactMap { $0 }.joined(separator: " "))
+                lastWord = ""
+                continue
+            }
+            lastWord = w
             let latin = (CFStringTokenizerCopyCurrentTokenAttribute(tok, kCFStringTokenizerAttributeLatinTranscription) as? String)?.lowercased()
             let hasKanji = w.unicodeScalars.contains { (0x4E00...0x9FFF).contains($0.value) || (0x3400...0x4DBF).contains($0.value) }
-            let kana = hasKanji ? latin.flatMap { $0.applyingTransform(.latinToHiragana, reverse: false) } : nil
+            let common = hasKanji ? commonReadings[w] : nil
+            let kana = common ?? (hasKanji ? latin.flatMap { $0.applyingTransform(.latinToHiragana, reverse: false) } : nil)
+            let romaji = common.flatMap { $0.applyingTransform(.toLatin, reverse: false) } ?? (latin == w.lowercased() ? nil : latin)
             // は, へ and を standing alone are the particles, read wa, e and o (the tokenizer spells them ha, he, wo).
             if let particle = ["は": "wa", "へ": "e", "を": "o"][w] { out.append(Token(text: w, lemma: nil, pos: "particle", reading: particle)); continue }
-            let reading = [kana, latin == w.lowercased() ? nil : latin].compactMap { $0 }.joined(separator: " ")
+            let reading = [kana, romaji].compactMap { $0 }.joined(separator: " ")
             out.append(Token(text: w, lemma: nil, pos: nil, reading: reading.isEmpty ? nil : reading))
         }
         return out

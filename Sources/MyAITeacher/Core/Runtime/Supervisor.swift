@@ -127,10 +127,10 @@ actor Supervisor {
 
     private func launch(_ id: String) async {
         guard let i = index(id) else { return }
-        let spec = children[i].spec
-        let proc = await spec.start(children[i].attempt)
+        let spec = children[i].spec, attempt = children[i].attempt
+        let proc = await spec.start(attempt)
         // Removed, replaced or shutting down while it started: it isn't ours to keep.
-        guard !stopping, let j = index(id), children[j].proc == nil else {
+        guard !stopping, let j = index(id), children[j].proc == nil, children[j].attempt == attempt else {
             proc.control.stop(.shutdown, grace: spec.shutdownGrace); return
         }
         children[j].proc = proc

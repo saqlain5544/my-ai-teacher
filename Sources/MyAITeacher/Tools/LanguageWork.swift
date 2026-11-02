@@ -61,7 +61,7 @@ enum LanguageWork {
             }
         }
         // Clock times: the tokenizer splits 七時 into 七 (なな) and 時 (じ), and 七時 is しちじ, 四時 よじ, 九時 くじ.
-        if code == "ja" {
+        if code == "ja" || (code == nil && text.unicodeScalars.contains { (0x3040...0x30FF).contains($0.value) }) {
             var merged: [JSON] = []
             for t in tokens {
                 if let prev = merged.last, let ps = prev["s"]?.int, let pe = prev["e"]?.int, let s = t["s"]?.int, let e = t["e"]?.int, pe == s,
@@ -173,9 +173,9 @@ enum LanguageWork {
     /// the same converter as `web_fetch`, cached with it), Markdown taken out, at most `limit` characters cut at a
     /// paragraph. Returns {title, text, url, truncated, shown, total} or {note}.
     static func page(_ raw: String, limit: Int = 8000) async -> JSON {
-        var s = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        if !s.hasPrefix("http") { s = "https://" + s }
-        guard let url = URL(string: s), ["http", "https"].contains(url.scheme ?? "") else { return ["note": "That isn't a web address."] }
+        guard let url = WebFetchTool.url(["url": .string(raw)]), let host = url.host else { return ["note": "That isn't a web address."] }
+        let local = LocalNetwork.isLocal(host) ? true : await LocalNetwork.resolvesLocal(host)
+        if local { return ["note": "Local network addresses aren't loaded here."] }
         var md: String, title: String?
         switch try? await WebPage.load(url) {
         case .text(let m, let t)?: (md, title) = (m, t)

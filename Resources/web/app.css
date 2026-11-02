@@ -215,6 +215,7 @@ button { font: inherit; color: inherit; }
 
 /* Diagrams & plots */
 .mermaid-block, .plot-block, .svg-block { margin: 0.8em 0; padding: 12px; border: 1px solid var(--border); border-radius: 12px; background: var(--bg); overflow-x: auto; text-align: center; }
+.mermaid-block { contain: paint; }
 .mermaid-block svg { max-width: 100%; height: auto; }
 /* Model-written SVG: painted inside its box only (no overlays), default ink follows the theme. */
 .svg-block { contain: paint; }

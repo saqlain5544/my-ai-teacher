@@ -221,8 +221,8 @@ final class ConceptGraph: @unchecked Sendable {
                 // A one-word concept needs more than a shared word: a short name (C, R, Go) must appear as itself, with its
                 // capitals ("vitamin c", "go home" aren't programming); a common word must come with other content or a
                 // learning cue ("no energy today" isn't about physics; "explain kinetic energy" is).
-                if st.count == 1, let name = nodes[id]?.name {
-                    if name.count <= 2 {
+                if st.count == 1, let only = st.first, let name = nodes[id]?.name {
+                    if only.count <= 2 && name.count <= 2 {
                         let re = shortNamePatterns[name] ?? {
                             let r = try! NSRegularExpression(pattern: "(?<![\\w#+])" + NSRegularExpression.escapedPattern(for: name) + "(?![\\w#+])")
                             shortNamePatterns[name] = r
@@ -305,23 +305,27 @@ final class ConceptGraph: @unchecked Sendable {
     /// Merges `from` concepts into `into`: aliases, subjects, edges and evidence move; memories are re-pointed by the caller.
     /// One transaction: a failure part-way deleted the aliases it hadn't moved yet.
     func merge(into: Int64, from: [Int64]) {
+        guard concept(into) != nil else { return }
+        let sources = Array(Set(from)).filter { $0 != into }
+        guard !sources.isEmpty else { return }
         db.write("concept merge") {
-            for f in from where f != into {
+            for f in sources {
                 try db.execute("UPDATE OR IGNORE concept_aliases SET concept_id=? WHERE concept_id=?", into, f)
                 try db.execute("INSERT OR IGNORE INTO concept_subjects(concept_id, subject) SELECT ?, subject FROM concept_subjects WHERE concept_id=?", into, f)
                 try db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT ?, dst, rel, created_at FROM concept_edges WHERE src=? AND dst!=?", into, f, into)
                 try db.execute("INSERT OR IGNORE INTO concept_edges(src, dst, rel, created_at) SELECT src, ?, rel, created_at FROM concept_edges WHERE dst=? AND src!=?", into, f, into)
-                try db.execute("UPDATE concepts SET evidence=evidence+(SELECT evidence FROM concepts WHERE id=?) WHERE id=?", f, into)
+                try db.execute("UPDATE concepts SET evidence=evidence+COALESCE((SELECT evidence FROM concepts WHERE id=?), 0) WHERE id=?", f, into)
                 // Keep the better mastery evidence.
                 try db.execute("""
                     UPDATE concepts SET p_known=(SELECT p_known FROM concepts WHERE id=?), attempts=(SELECT attempts FROM concepts WHERE id=?),
                     correct=(SELECT correct FROM concepts WHERE id=?), mastery_at=(SELECT mastery_at FROM concepts WHERE id=?)
                     WHERE id=? AND COALESCE((SELECT mastery_at FROM concepts WHERE id=?), 0) > COALESCE(mastery_at, 0)
                     """, f, f, f, f, into, f)
+                try db.execute("UPDATE memories SET concept_id=? WHERE concept_id=?", into, f)
                 try deleteRow(f)
             }
         }
-        refresh([into] + from)
+        refresh([into] + sources)
     }
 
     private func deleteRow(_ id: Int64) throws {

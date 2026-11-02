@@ -491,11 +491,19 @@ final class BrowserTab: NSObject, ObservableObject, Identifiable, WKNavigationDe
 
     func download(_ download: WKDownload, decideDestinationUsing response: URLResponse, suggestedFilename: String, completionHandler: @escaping @MainActor (URL?) -> Void) {
         guard let dir = downloadDir, downloadDone != nil else { return completionHandler(nil) }
+        if let u = response.url, let site = SiteKey.of(u), site.isLocal && !browser.mayNavigate(to: site, mainFrame: true) {
+            finishDownload(.failure(ToolError("The download redirected to \(site.label), which isn't approved.")))
+            return completionHandler(nil)
+        }
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let safe = String(suggestedFilename.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_").prefix(120))
-        var dest = dir.appendingPathComponent(safe.isEmpty || safe.hasPrefix(".") ? "download" + safe : safe), n = 2
+        let raw = String(suggestedFilename.replacingOccurrences(of: "/", with: "_").replacingOccurrences(of: ":", with: "_").prefix(120))
+        let safe = raw.isEmpty || raw.hasPrefix(".") ? "download" + raw : raw
+        var dest = dir.appendingPathComponent(safe), n = 2
         while FileManager.default.fileExists(atPath: dest.path) {
-            dest = dir.appendingPathComponent("\((safe as NSString).deletingPathExtension) \(n)").appendingPathExtension((safe as NSString).pathExtension); n += 1
+            let ext = (safe as NSString).pathExtension
+            let stem = "\((safe as NSString).deletingPathExtension) \(n)"
+            dest = dir.appendingPathComponent(ext.isEmpty ? stem : "\(stem).\(ext)")
+            n += 1
         }
         downloadDest = dest
         completionHandler(dest)

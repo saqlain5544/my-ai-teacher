@@ -92,6 +92,7 @@ final class ComputerController {
         if let c = controlling, c != conv {
             throw ToolError("Another lesson is controlling the Mac right now. Wait until it is done, or ask the learner to stop it.")
         }
+        try checkStopped()
         guard controlling == nil else { return }
         controlling = conv
         aborted = false
@@ -240,6 +241,7 @@ final class ComputerController {
             let (img, text) = try await screenshot(conv)
             return ToolOutput(text: text, images: [img.block], meta: ["width": .number(Double(img.width)), "height": .number(Double(img.height))])
         case "zoom":
+            try begin(conv)
             guard vision else { return try await textInstead(conv) }
             let (img, text) = try await zoom(input["region"], conv)
             return ToolOutput(text: text, images: [img.block])
@@ -325,7 +327,11 @@ final class ComputerController {
             return "\(action.replacingOccurrences(of: "_", with: " ").capitalized) at \(pixels(p)) in \(front)."
         case "mouse_move":
             let p = try screenPoint(input["coordinate"])
-            try await send(.move(p), .click, conv)
+            if held["mleft"] != nil {
+                try await send(.drag(.left, p), .full, conv)
+            } else {
+                try await send(.move(p), .click, conv)
+            }
             return "Moved the pointer to \(pixels(p))."
         case "left_click_drag":
             let a = try screenPoint(input["start_coordinate"]), b = try screenPoint(input["coordinate"])
@@ -338,7 +344,8 @@ final class ComputerController {
             try await send(.up(.left, b, clicks: 1, flags: 0), .full, conv)
             return "Dragged from \(pixels(a)) to \(pixels(b)) in \(front)."
         case "left_mouse_down", "left_mouse_up":
-            let p = poster.cursor()
+            let p = input["coordinate"] == nil ? poster.cursor() : try screenPoint(input["coordinate"])
+            if input["coordinate"] != nil { try await send(.move(p), .full, conv) }
             try await send(action == "left_mouse_down" ? .down(.left, p, clicks: 1, flags: 0) : .up(.left, p, clicks: 1, flags: 0), .full, conv)
             return "Left button \(action == "left_mouse_down" ? "down (released at left_mouse_up or the end of the turn)" : "up") at \(pixels(p))."
         case "scroll":

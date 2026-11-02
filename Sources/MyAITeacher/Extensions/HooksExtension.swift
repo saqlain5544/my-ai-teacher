@@ -313,7 +313,7 @@ final class HooksExtension: AgentExtension {
         guard !hooks.isEmpty else { return }
         let folder = session.services.workspace.url
         var fields = Self.toolFields(call, tool: tool, folder: folder)
-        fields["tool_response"] = HookRunner.clamp(["output": .string(result.text ?? ""), "is_error": false])
+        fields["tool_response"] = HookRunner.clamp(["output": .string(result.text ?? ""), "is_error": .bool(result.isError ?? false)])
         // A file the call wrote: a hook that rewrites it (a formatter) leaves the agent's copy stale, so it is told.
         let file = ["write", "edit"].contains(tool) ? call.input?["path"]?.string.map { resolvePath($0, workspace: folder) } : nil
         let before = file.flatMap(Self.contents)

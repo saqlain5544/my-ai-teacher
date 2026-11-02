@@ -142,8 +142,9 @@ actor CodeIndex {
     /// Without ripgrep: a walk that skips the usual build and dependency folders.
     private static func walk(_ root: URL) -> [String] {
         let skip: Set<String> = [".git", "node_modules", ".build", "build", "dist", "target", "DerivedData", "__pycache__", ".venv", "venv", ".teacher", "zig-out", ".zig-cache"]
-        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) else { return [] }
-        let base = root.path.count + 1
+        let resolvedRoot = root.resolvingSymlinksInPath()
+        guard let e = FileManager.default.enumerator(at: resolvedRoot, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsPackageDescendants]) else { return [] }
+        let base = resolvedRoot.path.count + 1
         var paths: [String] = []
         while let u = e.nextObject() as? URL {
             if skip.contains(u.lastPathComponent) { e.skipDescendants(); continue }
@@ -339,7 +340,8 @@ actor CodeIndex {
         guard key.count >= 2 else { return [] }
         return files.keys.filter { p in
             let stem = (p as NSString).deletingPathExtension
-            return stem == key || stem.hasSuffix("/" + key) || stem == key + "/index" || stem.hasSuffix("/" + key + "/index") || stem.hasSuffix("/" + key + "/__init__")
+            return stem == key || stem.hasSuffix("/" + key) || stem == key + "/index" || stem.hasSuffix("/" + key + "/index")
+                || stem == key + "/__init__" || stem.hasSuffix("/" + key + "/__init__")
         }
     }
 
@@ -439,7 +441,7 @@ actor CodeIndex {
     /// `calledOnly`: just the names used as `name(…)`, not every word that happens to match a definition.
     func callees(_ path: String, _ sym: Sym, calledOnly: Bool = false) -> [(name: String, at: [(path: String, sym: Sym)])] {
         guard let text = try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8) else { return [] }
-        let body = text.fileLines.dropFirst(sym.line).prefix(max(0, sym.end - sym.line)).joined(separator: "\n")
+        let body = text.fileLines.dropFirst(max(0, sym.line - 1)).prefix(max(0, sym.end - sym.line + 1)).joined(separator: "\n")
         var seen = Set<String>(), out: [(String, [(path: String, sym: Sym)])] = []
         for m in Self.identRegex.matches(in: body, range: NSRange(body.startIndex..., in: body)) {
             guard let r = Range(m.range, in: body) else { continue }

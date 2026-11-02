@@ -159,7 +159,7 @@ final class SubAgentTests: XCTestCase {
 
     func testWritesFollowTheLessonsGrants() async throws {
         let calls = step(.tools([("write", ["path": "made.txt", "content": "x"]), ("write", ["path": .string("/tmp/outside-\(UUID().uuidString).txt"), "content": "x"]),
-                                 ("write", ["path": ".teacher/x.txt", "content": "x"]), ("bash", ["command": "echo ran"])]))
+                                 ("write", ["path": ".teacher/x.txt", "content": "x"]), ("bash", ["command": "touch ran.txt"])]))   // not a read-only command: those run at any access level
         var c = ctx(ScriptedLLM([calls, step(.text("done"))]))   // read-only folder (the default)
         _ = try await task(["description": "G", "prompt": "x", "type": "general"], c)
         var text = await transcript(c)

@@ -22,6 +22,7 @@ struct RunTestsTool: Tool {
         ])
     }
     func summary(_ input: JSON) -> String { input["command"]?.string ?? input["filter"]?.string ?? "tests" }
+    func timeout(_ input: JSON) -> Double? { Double(min(700, min(600, max(1, input["timeout"]?.int ?? 120)) * 6 + 30)) }
 
     struct Case: Sendable { var name: String; var passed: Bool; var seconds: Double; var output: String; var counts: (passed: Int, failed: Int)? }
 
@@ -95,11 +96,11 @@ struct RunTestsTool: Tool {
         if let r = s.range(of: #"\d+/\d+ tests passed"#, options: .regularExpression) {                 // zig build
             return (Int(s[r].prefix { $0.isNumber }) ?? 0, (n(#"\d+ failed"#) ?? 0) + (n(#"\d+ crashed"#) ?? 0) + (n(#"\d+ timed out"#) ?? 0))
         }
+        if let p = n(#"test result: \w+\. \d+ passed"#) { return (p, n(#"\d+ failed"#) ?? 0) }          // cargo
         if let p = n(#"\d+ passed"#) { return (p, n(#"\d+ failed"#) ?? 0) }                             // zig, pytest
         if let p = n(#"# pass \d+"#) { return (p, n(#"# fail \d+"#) ?? 0) }                              // node --test
         let goPass = s.components(separatedBy: "--- PASS").count - 1, goFail = s.components(separatedBy: "--- FAIL").count - 1
         if goPass + goFail > 0 { return (goPass, goFail) }                                               // go test -v
-        if let p = n(#"test result: \w+\. \d+ passed"#) { return (p, n(#"\d+ failed"#) ?? 0) }          // cargo
         return nil
     }
 

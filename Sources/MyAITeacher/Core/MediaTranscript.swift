@@ -124,10 +124,10 @@ enum MediaTranscript {
 
     /// One stretch through Apple's recogniser (a file request): on device where the Mac has the language, else online.
     static func appleTranscribe(_ piece: [Float], lang: String?) async -> (text: String?, engine: String) {
-        guard let wav = Speech.writeWAV(piece, rate: 16_000),
-              let rec = Speech.recognizerLocale(lang).flatMap(SFSpeechRecognizer.init(locale:)) ?? SFSpeechRecognizer(locale: Locale.current), rec.isAvailable
-        else { return (nil, "") }
+        guard let wav = Speech.writeWAV(piece, rate: 16_000) else { return (nil, "") }
         defer { try? FileManager.default.removeItem(at: wav) }
+        guard let rec = Speech.recognizerLocale(lang).flatMap(SFSpeechRecognizer.init(locale:)) ?? SFSpeechRecognizer(locale: Locale.current), rec.isAvailable
+        else { return (nil, "") }
         let req = SFSpeechURLRecognitionRequest(url: wav)
         req.shouldReportPartialResults = false
         if rec.supportsOnDeviceRecognition { req.requiresOnDeviceRecognition = true }

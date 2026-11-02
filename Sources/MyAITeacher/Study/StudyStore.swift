@@ -36,6 +36,7 @@ enum FSRS {
             let dPrime = d - w[6] * Double(g - 3) * (10 - d) / 9
             n.difficulty = clampD(w[7] * d0(4) + (1 - w[7]) * dPrime)
             if elapsed < 1 {
+                if rating == .again { n.lapses += 1 }
                 n.stability = s.stability * exp(w[17] * (Double(g - 3) + w[18]))
             } else {
                 let r = retrievability(elapsed: elapsed, stability: s.stability)
@@ -307,7 +308,7 @@ final class StudyStore: @unchecked Sendable {
     private func open(_ kinds: [FollowUp.Kind], concept: String) -> [FollowUp] {
         let key = MemoryText.conceptKey(concept)
         let rows = (try? db.query("SELECT * FROM followups WHERE resolved_at IS NULL AND kind IN (\(kinds.map { "'\($0.rawValue)'" }.joined(separator: ",")))")) ?? []
-        return rows.compactMap(followUp).filter { $0.concept.caseInsensitiveCompare(concept) == .orderedSame || MemoryText.conceptKey($0.concept) == key }
+        return rows.compactMap(followUp).filter { $0.concept.caseInsensitiveCompare(concept) == .orderedSame || (!key.isEmpty && MemoryText.conceptKey($0.concept) == key) }
     }
 
     /// Adds a follow-up, or refreshes the open one of the same kind for the concept (the earlier due date wins).
@@ -396,7 +397,10 @@ final class StudyStore: @unchecked Sendable {
         }
     }
 
-    static let dayFormatter: DateFormatter = { let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd"; return f }()
+    static let dayFormatter: DateFormatter = {
+        let f = DateFormatter(); f.locale = Locale(identifier: "en_US_POSIX"); f.calendar = Calendar(identifier: .gregorian)
+        f.dateFormat = "yyyy-MM-dd"; f.timeZone = .current; return f
+    }()
 
     func logActivity(seconds: Double = 0, messages: Int = 0, reviews: Int = 0) {
         let day = Self.dayFormatter.string(from: Date())
@@ -406,8 +410,8 @@ final class StudyStore: @unchecked Sendable {
             """, day, seconds, messages, reviews)
     }
 
-    func activity(days: Int = 84) -> [String: (seconds: Double, messages: Int, reviews: Int)] {
-        let since = Self.dayFormatter.string(from: Date().addingTimeInterval(-Double(days) * 86400))
+    func activity(days: Int = 84, now: Date = Date()) -> [String: (seconds: Double, messages: Int, reviews: Int)] {
+        let since = Self.dayFormatter.string(from: now.addingTimeInterval(-Double(days) * 86400))
         var out: [String: (Double, Int, Int)] = [:]
         for r in (try? db.query("SELECT * FROM study_log WHERE day>=?", since)) ?? [] {
             if let d = r.string("day") { out[d] = (r.double("seconds") ?? 0, r.int("messages") ?? 0, r.int("reviews") ?? 0) }
@@ -419,7 +423,7 @@ final class StudyStore: @unchecked Sendable {
     /// (which skip or repeat a day at a DST change); a day whose row has only time logged (a turn that finished after
     /// midnight) doesn't count, and doesn't break yesterday's streak either.
     func streakDays(now: Date = Date()) -> Int {
-        let log = activity(days: 400), cal = Calendar.current
+        let log = activity(days: 400, now: now), cal = Calendar.current
         func active(_ d: Date) -> Bool { log[Self.dayFormatter.string(from: d)].map { $0.messages + $0.reviews > 0 } ?? false }
         var day = cal.startOfDay(for: now), streak = 0
         if !active(day) { day = cal.date(byAdding: .day, value: -1, to: day) ?? day }

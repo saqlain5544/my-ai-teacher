@@ -66,14 +66,17 @@ enum SubAgentPolicy {
             }
             return .allow
         case .execute:
-            if scope.readOnly {
-                guard tool.name == "bash", let cmd = input["command"]?.string, ReadOnlyShell.allows(cmd) else {
-                    return .deny("\(who.capitalizedFirst) is read-only: it may only run read-only commands (git diff/log/show/status/blame/grep, " +
-                                 "ls, cat, grep, rg, find, head, tail, wc, sort, diff…) with their reading flags. They run directly, without a shell: " +
-                                 "no redirection, chaining, globs or expansions, and no word with \\ $ { } * ? [ ] ( ) = ! ~. Use read, grep and glob for the rest.")
-                }
+            if tool.name == "bash", let cmd = input["command"]?.string, input["background"]?.bool != true, ReadOnlyShell.allows(cmd) {
+                return .allow
             }
-            guard grants.access == .full || grants.granted.contains(tool.name) else {
+            if scope.readOnly {
+                return .deny("\(who.capitalizedFirst) is read-only: it may only run read-only commands (git diff/log/show/status/blame/grep, " +
+                             "ls, cat, grep, rg, find, head, tail, wc, sort, diff…) with their reading flags. They run directly, without a shell: " +
+                             "no redirection, chaining, globs or expansions, and no word with \\ $ { } * ? [ ] ( ) = ! ~. Use read, grep and glob for the rest.")
+            }
+            let grant = tool.name == "diagnostics" ? "bash" : PermissionExtension.runsTests(tool, input) != nil ? "tests" : PermissionExtension.runsSnippets(tool) ? "run_code" : tool.name
+            let impliedByBash = grant == "tests" || grant == "run_code"
+            guard grants.access == .full || grants.granted.contains(grant) || (impliedByBash && grants.granted.contains("bash")) else {
                 return .deny("Running commands needs full access to “\(scope.folderName)” (or the learner's approval in this lesson), and sub-agents can't ask.")
             }
             return .allow
@@ -251,10 +254,12 @@ enum ReadOnlyShell {
     static func hardened(_ args: [String], filters: [String] = []) -> [String] {
         let (head, rest) = globalOptions(args)
         guard let sub = rest.first else { return args }
+        let tail = Array(rest.dropFirst())
         let extra = ["diff", "log", "show"].contains(sub) ? ["--no-ext-diff", "--no-textconv"] : ["grep", "blame"].contains(sub) ? ["--no-textconv"] : []
+        let rev = sub == "shortlog" && !tail.contains(where: { !$0.hasPrefix("-") }) ? ["HEAD"] : []
         let noFilters = filters.flatMap { f in ["clean", "smudge", "process"].flatMap { ["-c", "filter.\(f).\($0)="] } + ["-c", "filter.\(f).required=false"] }
         return ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "log.showSignature=false"] + noFilters
-            + ["--no-pager"] + head + [sub] + extra + Array(rest.dropFirst())
+            + ["--no-pager"] + head + [sub] + extra + tail + rev
     }
 
     /// git's options before the subcommand (`-C dir`, `--no-pager`), and the rest.

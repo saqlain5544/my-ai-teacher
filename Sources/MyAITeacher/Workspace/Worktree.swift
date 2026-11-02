@@ -14,12 +14,14 @@ struct Worktree: Sendable {
     static var git: String { ProcessRunner.which("git") ?? "/usr/bin/git" }
     static let keepDays = 14
     static var dir: URL { AppPaths.support.appendingPathComponent("worktrees", isDirectory: true) }
-    /// Config the repository can't override for these commands: no hooks (a checkout would run post-checkout) and no
-    /// fsmonitor (status would run it).
-    static let safe = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"]
+    /// Config the repository can't override for these commands: no hooks (a checkout would run post-checkout), no
+    /// fsmonitor (status would run it), no external diff, and any filter drivers blanked.
+    static let safe = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false", "-c", "diff.external=", "-c", "log.showSignature=false"]
 
     static func run(_ args: [String], timeout: TimeInterval = 60) async -> ProcessResult {
-        await ProcessRunner.run(git, safe + args, timeout: timeout)
+        let filters = await ReadOnlyShell.filterDrivers(git, args, cwd: URL(fileURLWithPath: "/tmp"))
+        let noFilters = filters.flatMap { f in ["clean", "smudge", "process"].flatMap { ["-c", "filter.\(f).\($0)="] } + ["-c", "filter.\(f).required=false"] }
+        return await ProcessRunner.run(git, safe + noFilters + args, timeout: timeout)
     }
 
     static func create(folder: URL, label: String) async throws -> Worktree {
@@ -70,7 +72,7 @@ struct Worktree: Sendable {
             _ = await Self.run(["-C", repo.path, "branch", "-D", branch], timeout: 20)
             return "It worked on a git worktree and changed nothing (the worktree was removed)."
         }
-        let stat = await Self.run(["-C", path.path, "diff", "--stat", base], timeout: 30)
+        let stat = await Self.run(["-C", path.path, "diff", "--no-ext-diff", "--no-textconv", "--stat", base], timeout: 30)
         return """
         Its changes are on a git worktree, not in the folder: \(path.path) (branch `\(branch)`, from \(base.prefix(8))). \
         Review them with `git -C \(path.path.shellQuoted) diff \(base.prefix(8))` and copy or merge what you want; untracked files show in \

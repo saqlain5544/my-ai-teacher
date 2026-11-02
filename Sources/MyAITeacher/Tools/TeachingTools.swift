@@ -322,10 +322,12 @@ struct MathTool: Tool {
     func summary(_ input: JSON) -> String { "\(input["operation"]?.string ?? "") \(input["expression"]?.string ?? "")" }
 
     static func safe(_ s: String) -> Bool {
-        let banned = ["__", "import", "exec", "eval", "open", "os.", "sys", "lambda", "globals", "locals", "getattr", "setattr", "compile", "input", "file", "subprocess", "breakpoint", "help"]
+        let banned = ["__", "import", "exec", "eval", "open", "os.", "sys", "lambda", "globals", "locals", "getattr", "setattr",
+                      "delattr", "hasattr", "compile", "input", "file", "subprocess", "breakpoint", "help", "vars", "chr", "ord",
+                      "dir", "type", "object", "repr", "ascii"]
         let l = s.lowercased()
         if banned.contains(where: { l.contains($0) }) { return false }
-        return s.range(of: #"^[\w\s\+\-\*/\^\(\)\.,=<>\[\]!;:'|&%]*$"#, options: .regularExpression) != nil
+        return s.range(of: #"^[\w\s\+\-\*/\^\(\)\.,=<>\[\]!;|&%]*$"#, options: .regularExpression) != nil
     }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {

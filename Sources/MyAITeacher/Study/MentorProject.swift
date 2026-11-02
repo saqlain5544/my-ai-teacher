@@ -153,6 +153,7 @@ enum ProjectStore {
         let root = ws.url.resolvingSymlinksInPath()
         guard let e = fm.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey, .fileSizeKey], options: [.skipsPackageDescendants]) else { return [] }
         var out: [String] = []
+        var seen = Set<String>()
         while let raw = e.nextObject() as? URL {
             let u = raw.resolvingSymlinksInPath()
             let name = u.lastPathComponent
@@ -163,7 +164,9 @@ enum ProjectStore {
             if (v?.fileSize ?? 0) > maxFileBytes { continue }
             guard Self.isText(u) else { continue }
             guard u.path.hasPrefix(root.path + "/") else { continue }
-            out.append(String(u.path.dropFirst(root.path.count + 1)))
+            let rel = String(u.path.dropFirst(root.path.count + 1))
+            if rel.split(separator: "/").contains(where: { $0.hasPrefix(".") || ProjectProfile.skip.contains(String($0)) }) { continue }
+            if seen.insert(rel).inserted { out.append(rel) }
             if out.count >= maxFiles { break }
         }
         return out.sorted()
@@ -187,7 +190,9 @@ enum ProjectStore {
         writes.lock(); defer { writes.unlock() }
         let dir = ws.stateDir.appendingPathComponent("projects", isDirectory: true)
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        let n = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).count + 1
+        let existing = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? [])
+            .compactMap { Int($0.replacingOccurrences(of: ".json", with: "")) }
+        let n = (existing.max() ?? 0) + 1
         try? FileManager.default.copyItem(at: file(ws), to: dir.appendingPathComponent("\(n).json"))
     }
 

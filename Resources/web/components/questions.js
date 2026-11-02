@@ -37,7 +37,7 @@
   const CERTAINTY = [[0, 'Don\'t know yet'], [1, 'Guessing'], [2, 'Unsure'], [3, 'Sure']];
   // Why a quiz was skipped: the teacher reacts differently to each (Testing.SkipReason in the app).
   const SKIP_REASONS = [['need_more', 'I need more explanation first'], ['too_easy', 'Too easy for me'], ['not_now', 'Not now, keep going'], ['unclear', 'A question is unclear or wrong']];
-  const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => x == null || x === '' || x === -1)) || (typeof a === 'object' && !Array.isArray(a) && !a.heard && !a.image);
+  const blank = a => a == null || a === '' || (Array.isArray(a) && a.every(x => blank(x) || x === -1)) || (typeof a === 'object' && !Array.isArray(a) && !a.heard && !a.image);
   const dis = a => a ? '' : ' disabled';
 
   // ── Type renderers ────────────────────────────────────────────────────
@@ -87,7 +87,8 @@
         if (!active) return '<div class="q-given' + (mono ? ' mono' : '') + '">' + (v == null || v === '' ? '<span class="muted">(no answer)</span>' : ctx.esc(v)) + '</div>';
         const ph = ctx.esc(q.placeholder || (mono ? '' : 'Type your answer…'));
         const max = limit(q, multiline);
-        const attrs = ' maxlength="' + max + '"' + (q.min_length ? ' data-minlen="' + (+q.min_length) + '"' : '') + (q.pattern ? ' data-pattern="' + ctx.esc(q.pattern) + '"' : '');
+        const attrs = ' maxlength="' + max + '"' + (q.min_length ? ' data-minlen="' + (+q.min_length) + '"' : '') + (q.pattern ? ' data-pattern="' + ctx.esc(q.pattern) + '"' : '') +
+          (multiline && q.starter && v == null ? ' data-starter="' + ctx.esc(q.starter) + '"' : '');
         const val = v == null ? (multiline ? (q.starter || '') : '') : String(v);
         return (multiline
           ? '<textarea class="q-text' + (mono ? ' mono' : '') + '" data-q-input="' + qi + '" placeholder="' + ph + '" spellcheck="false"' + (mono ? ' rows="8"' : '') + attrs + '>' + ctx.esc(val) + '</textarea>'
@@ -133,8 +134,12 @@
         const opts = q.blank_options && q.blank_options[k];
         let cls = '';
         if (exp && exp[k] != null) {
-          const alts = [].concat(exp[k]).map(x => String(x).trim().toLowerCase());
-          cls = alts.includes(String(v).trim().toLowerCase()) ? ' ok' : ' bad';
+          const fold = s => {
+            s = String(s).trim().toLowerCase();
+            return q.accents === 'strict' ? s : s.normalize('NFD').replace(/[\u0300-\u036f]/g, '').normalize('NFC').replace(/^[\p{P}]+|[\p{P}]+$/gu, '');
+          };
+          const alts = [].concat(exp[k]).map(fold);
+          cls = alts.includes(fold(v)) ? ' ok' : ' bad';
         }
         if (opts && active) {
           h += '<select class="blank" data-q-blank="' + qi + ':' + k + '"><option value=""></option>' + opts.map(o => '<option' + (String(o) === String(v) ? ' selected' : '') + '>' + ctx.esc(o) + '</option>').join('') + '</select>';
@@ -423,21 +428,29 @@
   // ── Typed input: numbers accept only numeric characters; text has length bounds and an optional pattern ──
   const limit = (q, multiline) => Math.max(1, Math.min(+q.max_length || (multiline ? 5000 : 300), 100000));
   // Integer fields still accept "." and "," so the learner sees why 12.5 isn't allowed instead of getting 125.
-  const NUM_CHARS = { num: /[^0-9.,+\-eE\/ \u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, int: /[^0-9.,\-\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g };
-  /** Arabic-Indic, Persian, full-width and Devanagari digits → 0-9. */
-  const normDigits = s => String(s).replace(/[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, c => {
+  const NUM_CHARS = { num: /[^0-9.,+\-\u2212*×xX^⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻eE\/ \u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, int: /[^0-9.,\-\u2212\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g };
+  const SUPERS = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁺': '+', '⁻': '-' };
+  /** Arabic-Indic, Persian, full-width and Devanagari digits → 0-9; unicode minus and superscript exponents normalised. */
+  const normDigits = s => String(s).replace(/\u2212/g, '-').replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/g, m => '^' + Array.from(m).map(c => SUPERS[c]).join('')).replace(/\^+/g, '^').replace(/\^\+-|\^-\+/g, '^-').replace(/[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/g, c => {
     const k = c.charCodeAt(0);
     return String(k - (k >= 0xFF10 ? 0xFF10 : k >= 0x0966 ? 0x0966 : k >= 0x06F0 ? 0x06F0 : 0x0660));
   });
-  /** A number from what the learner typed: 3.5, -2, 1/2, 2,5 (decimal comma), 1e3; NaN when it isn't one. */
+  /** A number from what the learner typed: 3.5, -2, 1/2, 1 1/2, 2,5 (decimal comma), 1e3, 3×10^8, 2^1.5; NaN when it isn't one. */
   function toNumber(s) {
-    s = normDigits(s).trim().replace(/\s+/g, '');
+    s = normDigits(s).trim();
     if (!s) return NaN;
+    const mixed = /^([+-]?\d+)\s+(\d+)\s*\/\s*(\d+)$/.exec(s);
+    if (mixed) return +mixed[3] ? (mixed[1].startsWith('-') ? -1 : 1) * (Math.abs(+mixed[1]) + +mixed[2] / +mixed[3]) : NaN;
+    s = s.replace(/\s+/g, '');
     if (/^[+-]?\d{1,3}(,\d{3})+(\.\d+)?$/.test(s)) s = s.replace(/,/g, '');   // 1,234.5
     const frac = /^([+-]?\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/.exec(s);
     if (frac) return +frac[2] ? +frac[1] / +frac[2] : NaN;
     if (/^[+-]?\d+,\d+$/.test(s)) s = s.replace(',', '.');
     else s = s.replace(/,(?=\d{3}(\D|$))/g, '');
+    const sci = /^([+-]?\d+(?:\.\d+)?)[×xX*]10\^([+-]?\d+(?:\.\d+)?)$/.exec(s);
+    if (sci) return +sci[1] * Math.pow(10, +sci[2]);
+    const pow = /^([+-]?\d+(?:\.\d+)?)\^([+-]?\d+(?:\.\d+)?)$/.exec(s);
+    if (pow) return Math.pow(+pow[1], +pow[2]);
     return /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?$/i.test(s) ? Number(s) : NaN;
   }
   /** The problem with one field's value, or '' — what the learner sees under the field. */
@@ -499,11 +512,20 @@
   }, true);
 
   function collect(card, F) {
-    card.querySelectorAll('[data-q-input]').forEach(inp => { F.answers[+inp.getAttribute('data-q-input')] = inp.value; });
+    card.querySelectorAll('[data-q-input]').forEach(inp => {
+      const qi = +inp.getAttribute('data-q-input'), st = inp.getAttribute('data-starter');
+      if (st != null && inp.value === st && !inp._edited) return;
+      F.answers[qi] = inp.value;
+    });
     card.querySelectorAll('[data-q-other]').forEach(inp => { F.other[+inp.getAttribute('data-q-other')] = inp.value; });
     card.querySelectorAll('[data-q-blank]').forEach(inp => {
       const [q, k] = inp.getAttribute('data-q-blank').split(':').map(Number);
       (F.answers[q] = Array.isArray(F.answers[q]) ? F.answers[q] : [])[k] = inp.value;
+    });
+    card.querySelectorAll('[data-q-cell]').forEach(inp => {
+      const [q, r, c] = inp.getAttribute('data-q-cell').split(':').map(Number);
+      const a = Array.isArray(F.answers[q]) ? F.answers[q] : (F.answers[q] = []);
+      (a[r] = Array.isArray(a[r]) ? a[r] : [])[c] = inp.value;
     });
     card.querySelectorAll('[data-q-match]').forEach(sel => {
       const [q, l] = sel.getAttribute('data-q-match').split(':').map(Number);
@@ -514,11 +536,13 @@
     const t = e.target; if (!t || !t.closest) return;
     const card = t.closest('[data-tool-id]'); if (!card) return;
     const kind = t.getAttribute && t.getAttribute('data-numeric');
-    if (kind && (NUM_CHARS[kind].test(t.value) || /[\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/.test(t.value))) {
+    if (kind && (NUM_CHARS[kind].test(t.value) || /[\u2212⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻\u0660-\u0669\u06F0-\u06F9\uFF10-\uFF19\u0966-\u096F]/.test(t.value))) {
       NUM_CHARS[kind].lastIndex = 0; t.value = normDigits(t.value.replace(NUM_CHARS[kind], ''));   // pasted text, other digit scripts
     }
     if (kind) NUM_CHARS[kind].lastIndex = 0;
     if (t.hasAttribute('data-q-input')) {
+      t._edited = true;
+      t.removeAttribute('data-starter');
       const c = card.querySelector('[data-count="' + t.getAttribute('data-q-input') + '"]');
       if (c) c.textContent = t.value.length + ' / ' + t.getAttribute('maxlength');
       if (t._touched) showProblem(card, t);

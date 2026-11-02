@@ -96,7 +96,7 @@ final class OpenSpeech: ObservableObject {
         states[id] = .downloading(0, "Starting…")
         tasks[id] = Task { [weak self] in
             do {
-                try await Self.download(c) { frac, note in Task { @MainActor in self?.states[id] = .downloading(frac, note) } }
+                try await Self.download(c) { frac, note in Task { @MainActor in guard self?.tasks[id] != nil else { return }; self?.states[id] = .downloading(frac, note) } }
                 await MainActor.run { if !Task.isCancelled { self?.states[id] = .installed }; self?.tasks[id] = nil }
                 AppLog.write("open speech: installed \(id)")
             } catch {
@@ -213,7 +213,8 @@ final class OpenSpeech: ObservableObject {
         if let style { args.insert("--supertonic-voice-style=\(style.path)", at: 6) }
         args.append(text)
         let r = await ProcessRunner.run(bin.path, args, cwd: bin.deletingLastPathComponent(), timeout: 60)
-        guard r.exitCode == 0, FileManager.default.fileExists(atPath: out.path) else {
+        guard !Task.isCancelled, r.exitCode == 0, FileManager.default.fileExists(atPath: out.path) else {
+            try? FileManager.default.removeItem(at: out)
             AppLog.write("supertonic failed (\(r.exitCode)): \(r.stderr.suffix(300))"); return nil
         }
         return out

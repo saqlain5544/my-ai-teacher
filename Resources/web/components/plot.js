@@ -73,7 +73,11 @@
       if (a && b) {
         const aEnd = a.t === 'num' || (a.t === 'id' && !FUNCS[a.v]) || (a.t === 'op' && (a.v === ')' || a.v === '!'));
         const bStart = b.t === 'num' || b.t === 'id' || (b.t === 'op' && b.v === '(');
-        if (aEnd && bStart) t2.push({ t: 'op', v: '*' });
+        const fnPow = b.t === 'op' && b.v === '(' && (
+          (i >= 3 && toks[i - 2].v === '^' && toks[i - 3].t === 'id' && FUNCS[toks[i - 3].v]) ||
+          (i >= 4 && (toks[i - 2].v === '-' || toks[i - 2].v === '+') && toks[i - 3].v === '^' && toks[i - 4].t === 'id' && FUNCS[toks[i - 4].v])
+        );
+        if (aEnd && bStart && !fnPow) t2.push({ t: 'op', v: '*' });
       }
       t2.push(b);
     }
@@ -121,10 +125,17 @@
       if (t.t === 'id') {
         if (FUNCS[t.v]) {
           const f = FUNCS[t.v];
-          if (peek() && peek().v === '^') { // sin^2(x)
-            next(); const pw = parseAtom();
+          if (peek() && peek().v === '^') { // sin^2(x), sin^-1(x)
+            next();
+            let neg = false;
+            if (peek() && peek().t === 'op' && (peek().v === '-' || peek().v === '+')) neg = next().v === '-';
+            const pw0 = parseAtom(), pw = neg ? (s => -pw0(s)) : pw0;
             const arg = parseFuncArgs();
-            return s => Math.pow(f(...arg.map(a => a(s))), pw(s));
+            return s => {
+              const e = pw(s);
+              if (e === -1 && (t.v === 'sin' || t.v === 'cos' || t.v === 'tan')) return FUNCS['a' + t.v](...arg.map(a => a(s)));
+              return Math.pow(f(...arg.map(a => a(s))), e);
+            };
           }
           const args = parseFuncArgs();
           return s => f(...args.map(a => a(s)));
@@ -188,7 +199,7 @@
   function evalConst(s) { try { return compile(String(s), [])({}); } catch (_) { return parseFloat(s); } }
 
   function niceStep(range, target) {
-    const raw = range / target, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
+    const raw = Math.abs(range) / (target || 1) || 1, mag = Math.pow(10, Math.floor(Math.log10(raw))), n = raw / mag;
     return (n < 1.5 ? 1 : n < 3 ? 2 : n < 7 ? 5 : 10) * mag;
   }
   const fmt = v => {
@@ -220,14 +231,19 @@
       const xs = series.flatMap(s => s.pts.map(p => p[0])); x0 = Math.min(...xs); x1 = Math.max(...xs);
       const pad = (x1 - x0) * 0.05 || 1; x0 -= pad; x1 += pad;
     }
+    if (x1 < x0) [x0, x1] = [x1, x0];
+    if (!(x1 - x0 > 1e-9)) { x0 = (Number.isFinite(x0) ? x0 : 0) - 1; x1 = x0 + 2; }
     const N = 800, samples = fns.map(f => {
       const arr = [];
       for (let i = 0; i <= N; i++) { const x = x0 + (x1 - x0) * i / N; let y; try { y = f.fn({ x }); } catch (_) { y = NaN; } arr.push([x, y]); }
       return arr;
     });
     let y0, y1;
-    if (spec.y || spec.yrange) [y0, y1] = spec.y || spec.yrange;
-    else {
+    if (spec.y || spec.yrange) {
+      [y0, y1] = spec.y || spec.yrange;
+      if (y1 < y0) [y0, y1] = [y1, y0];
+      if (!(y1 - y0 > 1e-9)) { y0 = (Number.isFinite(y0) ? y0 : 0) - 1; y1 = y0 + 2; }
+    } else {
       const ys = samples.flat().map(p => p[1]).concat(series.flatMap(s => s.pts.map(p => p[1])), points.map(p => p.y)).filter(Number.isFinite).sort((a, b) => a - b);
       if (!ys.length) { y0 = -10; y1 = 10; }
       else {
@@ -262,11 +278,11 @@
         d += (pen ? 'L' : 'M') + sx(x).toFixed(2) + ' ' + Y.toFixed(2);
         pen = true; prev = y;
       }
-      svg += `<path d="${d}" fill="none" stroke="${fns[i].color}" stroke-width="2.2" ${fns[i].dashed ? 'stroke-dasharray="6 4"' : ''} stroke-linejoin="round"/>`;
+      svg += `<path d="${d}" fill="none" stroke="${esc(fns[i].color)}" stroke-width="2.2" ${fns[i].dashed ? 'stroke-dasharray="6 4"' : ''} stroke-linejoin="round"/>`;
     });
     series.forEach(s => {
-      if (s.type !== 'scatter') svg += `<path d="${s.pts.map((p, j) => (j ? 'L' : 'M') + sx(p[0]).toFixed(2) + ' ' + sy(p[1]).toFixed(2)).join('')}" fill="none" stroke="${s.color}" stroke-width="2"/>`;
-      s.pts.forEach(p => { svg += `<circle cx="${sx(p[0])}" cy="${sy(p[1])}" r="3" fill="${s.color}"/>`; });
+      if (s.type !== 'scatter') svg += `<path d="${s.pts.map((p, j) => (j ? 'L' : 'M') + sx(p[0]).toFixed(2) + ' ' + sy(p[1]).toFixed(2)).join('')}" fill="none" stroke="${esc(s.color)}" stroke-width="2"/>`;
+      s.pts.forEach(p => { svg += `<circle cx="${sx(p[0])}" cy="${sy(p[1])}" r="3" fill="${esc(s.color)}"/>`; });
     });
     points.forEach(p => {
       svg += `<circle cx="${sx(p.x)}" cy="${sy(p.y)}" r="4.5" class="plot-point"/>`;
@@ -280,7 +296,7 @@
       let ly = M.t + 8;
       svg += '<g class="plot-legend">';
       legend.forEach(l => {
-        svg += `<rect x="${W - M.r - 170}" y="${ly - 9}" width="12" height="3" fill="${l.color}"/><text x="${W - M.r - 152}" y="${ly - 4}">${esc(l.name.length > 22 ? l.name.slice(0, 21) + '…' : l.name)}</text>`;
+        svg += `<rect x="${W - M.r - 170}" y="${ly - 9}" width="12" height="3" fill="${esc(l.color)}"/><text x="${W - M.r - 152}" y="${ly - 4}">${esc(l.name.length > 22 ? l.name.slice(0, 21) + '…' : l.name)}</text>`;
         ly += 16;
       });
       svg += '</g>';

@@ -250,13 +250,13 @@ enum Questions {
         guard var s = a.string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
         s = s.replacingOccurrences(of: "−", with: "-").replacingOccurrences(of: "×", with: "*")
         if let m = s.firstMatch(of: #/^([+-]?\d+)\s+(\d+)\s*/\s*(\d+)/#), let w = Double(m.1), let n = Double(m.2), let d = Double(m.3), d != 0 {
-            return w < 0 ? w - n / d : w + n / d   // mixed number
+            return m.1.hasPrefix("-") ? w - n / d : w + n / d   // mixed number
         }
         if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*/\s*([+-]?\d+(?:\.\d+)?)(?![\d.])/#), let a = Double(m.1), let b = Double(m.2), b != 0 { return a / b }
-        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\*|[xX·])\s*10\s*(?:\^|\*\*)\s*([+-]?\d+)/#), let b = Double(m.1), let e = Double(m.2) {
+        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\*|[xX·])\s*10\s*(?:\^|\*\*)\s*([+-]?\d+(?:\.\d+)?)(?![\d.])/#), let b = Double(m.1), let e = Double(m.2) {
             return b * pow(10, e)   // scientific notation: "3×10^8", "6.02 x 10^23"
         }
-        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\^|\*\*)\s*([+-]?\d+)/#), let b = Double(m.1), let e = Double(m.2) { return pow(b, e) }
+        if let m = s.firstMatch(of: #/^([+-]?\d+(?:\.\d+)?)\s*(?:\^|\*\*)\s*([+-]?\d+(?:\.\d+)?)(?![\d.])/#), let b = Double(m.1), let e = Double(m.2) { return pow(b, e) }
         if s.wholeMatch(of: #/[+-]?\d{1,3}(,\d{3})+(\.\d+)?.*/#) != nil { s = s.replacingOccurrences(of: ",", with: "") }
         else if let m = s.firstMatch(of: #/^([+-]?\d+),(\d+)\b/#) { s = m.1 + "." + m.2 + s[m.range.upperBound...] }   // decimal comma
         guard let m = s.firstMatch(of: #/[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?/#) else { return nil }
@@ -315,7 +315,8 @@ enum Questions {
             guard !e.isEmpty else { return Grade() }
             let g = Set(a.array?.compactMap(index) ?? [])
             let hits = Double(g.intersection(e).count), wrong = Double(g.subtracting(e).count)
-            return Grade(correct: g == e, score: max(0, (hits - wrong) / Double(e.count)), expected: e.sorted().map(String.init).joined(separator: ", "))
+            return Grade(correct: g == e, score: max(0, (hits - wrong) / Double(e.count)),
+                         expected: e.sorted().map { opts.indices.contains($0) ? opts[$0] : String($0) }.joined(separator: ", "))
         case "true_false":
             guard let e = ans?.bool, let g = a.bool else { return Grade() }
             return Grade(correct: e == g, score: e == g ? 1 : 0, expected: e ? "True" : "False")
@@ -327,6 +328,7 @@ enum Questions {
         case "short_text":
             let alts = (ans?.array?.compactMap(\.string) ?? ans?.string.map { [$0] } ?? []).map { norm($0, strict: strict, pinyin: pinyin) }
             guard !alts.isEmpty, let g = a.string else { return Grade(expected: ans.map(describe)) }
+            if g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return Grade(correct: false, score: 0, expected: describe(ans!)) }
             if alts.contains(norm(g, strict: strict, pinyin: pinyin)) { return Grade(correct: true, score: 1, expected: describe(ans!)) }
             // Right but for the accents: a mistake in a language test, not a judgement call.
             if strict, alts.map({ norm($0, pinyin: pinyin) }).contains(norm(g, pinyin: pinyin)) { return Grade(correct: false, score: 0, expected: describe(ans!)) }
@@ -366,6 +368,7 @@ enum Questions {
             // One expression, or several accepted forms: right when it equals any of them.
             let keys = (ans?.array ?? ans.map { [$0] } ?? []).compactMap { $0.string ?? $0.double.map { String($0) } }
             guard let e = keys.first, let g = a.string else { return Grade(expected: ans.map(describe)) }
+            if g.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return Grade(correct: false, score: 0, expected: e) }
             var verdict: Bool? = false
             for k in keys {
                 let eq = await MathEquivalence.equivalent(g, k)

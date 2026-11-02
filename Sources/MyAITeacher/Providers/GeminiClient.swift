@@ -68,7 +68,7 @@ struct GeminiClient: LLMClient {
                         }
                     }
                     if let usage { continuation.yield(.usage(usage)) }
-                    continuation.yield(.stop(sawCall ? "tool_use" : finish))
+                    continuation.yield(.stop(finish == "max_tokens" ? "max_tokens" : (sawCall ? "tool_use" : finish)))
                     continuation.finish()
                 } catch {
                     continuation.finish(throwing: error)

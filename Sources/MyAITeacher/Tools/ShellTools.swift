@@ -68,7 +68,13 @@ struct BashTool: Tool {
         }
         switch outcome {
         case .finished, .timedOut, .cancelled:
-            if outcome != .finished { job.stop() }
+            if outcome != .finished {
+                job.stop()
+                if let newDir = try? String(contentsOf: cwdFile, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines), !newDir.isEmpty {
+                    await ShellState.shared.set(session, URL(fileURLWithPath: newDir))
+                }
+            }
+            try? FileManager.default.removeItem(at: cwdFile)
             if outcome == .cancelled { throw CancellationError() }
             var text = truncateMiddle(job.output, max: 30_000).trimmingTrailingNewlines
             if text.isEmpty { text = "(no output)" }
@@ -106,7 +112,10 @@ private extension String {
 /// The background jobs `bash` left running: list them, read what they printed since the last look, stop them.
 struct BashJobsTool: Tool {
     var subAgentVariant: Tool? { self }
-    func timeout(_ input: JSON) -> Double? { Double(min(60, max(0, input["wait"]?.int ?? 0))) + 15 }
+    func timeout(_ input: JSON) -> Double? {
+        let waitDefault = input["action"]?.string?.lowercased() == "wait" ? 60 : 0
+        return Double(min(60, max(0, input["wait"]?.int ?? waitDefault))) + 15
+    }
     let name = "bash_jobs"
     let description = """
     The lesson's background shell jobs (servers, watchers, anything `bash` moved to the background). \

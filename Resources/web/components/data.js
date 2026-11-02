@@ -80,7 +80,7 @@
       const px = (x1 - x0) * 0.06 || 1, py = (y1 - y0) * 0.08 || 1; x0 -= px; x1 += px; y1 += py;
       const sx = x => M.l + (x - x0) / (x1 - x0) * (W - M.l - M.r), sy = y => H - M.b - (y - y0) / (y1 - y0) * (H - M.t - M.b);
       svg += axes(x0, x1, y0, y1, sx, sy, W, H, M, true);
-      series.forEach((s, i) => s.data.forEach(p => { svg += '<circle cx="' + sx(+p[0]) + '" cy="' + sy(+p[1]) + '" r="4" fill="' + (s.color || COLORS[i % COLORS.length]) + '" fill-opacity=".8"><title>' + esc((s.name ? s.name + ': ' : '') + '(' + p[0] + ', ' + p[1] + ')') + '</title></circle>'; }));
+      series.forEach((s, i) => s.data.forEach(p => { svg += '<circle cx="' + sx(+p[0]) + '" cy="' + sy(+p[1]) + '" r="4" fill="' + esc(s.color || COLORS[i % COLORS.length]) + '" fill-opacity=".8"><title>' + esc((s.name ? s.name + ': ' : '') + '(' + p[0] + ', ' + p[1] + ')') + '</title></circle>'; }));
       return svg + legend(series, W, M, esc) + labelsXY(spec, W, H, M, esc) + '</svg>';
     }
     // bar / line / area share a categorical x axis.
@@ -102,12 +102,12 @@
         v = +v || 0;
         const x = stacked ? sx(i) - gw / 2 : sx(i) - gw / 2 + si * bw;
         const yTop = stacked ? sy(base[i] + v) : sy(Math.max(0, v)), yBot = stacked ? sy(base[i]) : sy(Math.min(0, v));
-        svg += '<rect x="' + x + '" y="' + yTop + '" width="' + Math.max(1, bw - 2) + '" height="' + Math.max(0.5, yBot - yTop) + '" rx="3" fill="' + (s.color || COLORS[si % COLORS.length]) + '"><title>' + esc((s.name ? s.name + ' · ' : '') + labels[i] + ': ' + v) + '</title></rect>';
+        svg += '<rect x="' + x + '" y="' + yTop + '" width="' + Math.max(1, bw - 2) + '" height="' + Math.max(0.5, yBot - yTop) + '" rx="3" fill="' + esc(s.color || COLORS[si % COLORS.length]) + '"><title>' + esc((s.name ? s.name + ' · ' : '') + labels[i] + ': ' + v) + '</title></rect>';
         if (stacked) base[i] += v;
       }));
     } else {
       series.forEach((s, si) => {
-        const c = s.color || COLORS[si % COLORS.length];
+        const c = esc(s.color || COLORS[si % COLORS.length]);
         const d = s.data.map((v, i) => (i ? 'L' : 'M') + sx(i).toFixed(1) + ' ' + sy(+v).toFixed(1)).join('');
         if (type === 'area') svg += '<path d="' + d + 'L' + sx(s.data.length - 1) + ' ' + sy(Math.max(0, y0)) + 'L' + sx(0) + ' ' + sy(Math.max(0, y0)) + 'Z" fill="' + c + '" fill-opacity=".15"/>';
         svg += '<path d="' + d + '" fill="none" stroke="' + c + '" stroke-width="2.4" stroke-linejoin="round"/>';
@@ -133,7 +133,7 @@
     if (series.length < 2) return '';
     let x = M.l, s = '<g class="chart-legend">';
     series.forEach((se, i) => {
-      s += '<rect x="' + x + '" y="' + (M.t - 2) + '" width="10" height="10" rx="2" fill="' + (se.color || COLORS[i % COLORS.length]) + '"/><text x="' + (x + 14) + '" y="' + (M.t + 7) + '">' + esc(se.name || '') + '</text>';
+      s += '<rect x="' + x + '" y="' + (M.t - 2) + '" width="10" height="10" rx="2" fill="' + esc(se.color || COLORS[i % COLORS.length]) + '"/><text x="' + (x + 14) + '" y="' + (M.t + 7) + '">' + esc(se.name || '') + '</text>';
       x += 24 + String(se.name || '').length * 6.5;
     });
     return s + '</g>';
@@ -302,15 +302,15 @@
       const t = state.tokens;
       for (let i = 0; i < t.length - 2; i++) {
         if (t[i].type !== 'blockquote_open' || t[i + 1].type !== 'paragraph_open' || t[i + 2].type !== 'inline') continue;
-        const m = /^\[!(\w+)\][+-]?\s*(.*)$/m.exec(t[i + 2].content);
+        const m = /^\[!(\w+)\][+-]?[ \t]*(.*)/.exec(t[i + 2].content);
         if (!m || !CALLOUTS[m[1].toLowerCase()]) continue;
         const kind = m[1].toLowerCase();
         t[i].attrJoin('class', 'callout callout-' + kind);
         const inl = t[i + 2];
         // The first line ("[!NOTE] optional title") becomes the callout title.
-        let k = 0, line = '';
-        while (k < inl.children.length && !/break$/.test(inl.children[k].type)) { line += inl.children[k].content; k++; }
-        const custom = ((/^\[!\w+\][+-]?\s*(.*)$/.exec(line) || [])[1] || '').trim();
+        let k = 0;
+        while (k < inl.children.length && !/break$/.test(inl.children[k].type)) k++;
+        const custom = (m[2] || '').trim();
         const title = new state.Token('html_inline', '', 0);
         title.meta = { trusted: true };
         if (custom && custom.length <= 60) {

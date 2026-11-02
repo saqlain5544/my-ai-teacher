@@ -205,12 +205,12 @@ final class PermissionExtension: AgentExtension {
     nonisolated static func isPython(_ tool: Tool, _ input: JSON) -> Bool {
         if tool.name == "math" || tool.name == "trace" { return true }
         guard runsSnippets(tool) else { return false }
-        return ["python", "python3", "py"].contains((input["language"]?.string ?? "").lowercased())
+        return ["python", "python3", "py"].contains((input["language"]?.string ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
     }
 
     /// Package installs in shell commands or code (pip, uv, conda, poetry, npm -g…). Returns what matched.
     nonisolated static func packageInstall(tool: Tool, input: JSON) -> String? {
-        guard tool.name == "bash" || runsSnippets(tool) else { return nil }
+        guard tool.name == "bash" || tool.name == "diagnostics" || runsSnippets(tool) || runsTests(tool, input) == true else { return nil }
         let text = (input["command"]?.string ?? "") + "\n" + (input["code"]?.string ?? "")
         for pattern in installPatterns {
             if let r = text.range(of: pattern, options: [.regularExpression, .caseInsensitive]) { return String(text[r]) }

@@ -91,7 +91,8 @@ enum Reflection {
         let reply = await complete(client: client, model: model, system: system, user: user)
         guard let json = reply.json else { return Outcome(title: nil, applied: 0, failed: reply.failed) }
         // Only memories the model was shown may be changed or removed.
-        let shownIDs = Set((existing + "\n" + related).matches(of: #/\[#(\w+)\]/#).map { String($0.1) })
+        let shownText = existing + "\n" + related + "\n" + concepts
+        let shownIDs = Set(shownText.matches(of: #/\[#(\w+)\]|#(c\d+)/#).compactMap { $0.1.map(String.init) ?? $0.2.map(String.init) })
         var out = apply(json, hub: hub, conversationID: conversationID, allowed: shownIDs)
         out.title = needsTitle ? json["title"]?.string?.trimmingCharacters(in: CharacterSet(charactersIn: "\"' \n")) : nil
         return out
@@ -166,17 +167,22 @@ enum Reflection {
                                partOf: strings(c["part_of"]), summary: c["summary"]?.string, status: c["status"]?.string,
                                estimate: c["mastery"]?.double, origin: origin, source: conversationID) != nil { out.concepts += 1 }
         }
+        let cleanID = { (raw: String) -> String in raw.trimmingCharacters(in: CharacterSet(charactersIn: "#[] ")) }
         for m in json["merge_concepts"]?.array ?? [] {
-            guard let into = m["into"]?.string, hub.concept(into) != nil else { continue }
-            hub.mergeConcepts(into: into, from: strings(m["from"])); out.updated += 1
+            guard let rawInto = m["into"]?.string else { continue }
+            let into = cleanID(rawInto)
+            guard hub.concept(into) != nil, allowed?.contains(into) ?? true else { continue }
+            let from = strings(m["from"]).map(cleanID).filter { allowed?.contains($0) ?? true }
+            guard !from.isEmpty else { continue }
+            hub.mergeConcepts(into: into, from: from); out.updated += 1
         }
         for l in json["links"]?.array ?? [] {
-            guard let a = l["from"]?.string, let b = l["to"]?.string, let graph = hub.graph,
+            guard let a = l["from"]?.string.map(cleanID), let b = l["to"]?.string.map(cleanID), let graph = hub.graph,
                   let ca = hub.concept(a), let cb = hub.concept(b) else { continue }
             graph.link(ca.rowid, cb.rowid, ConceptRelation(loose: l["rel"]?.string ?? "related") ?? .related); out.updated += 1
         }
         for op in json["operations"]?.array ?? [] {
-            let id = op["id"]?.string ?? op["id"]?.int.map(String.init)
+            let id = (op["id"]?.string ?? op["id"]?.int.map(String.init)).map(cleanID)
             switch op["op"]?.string?.lowercased() {
             case "add":
                 guard let c = op["content"]?.string, !c.isEmpty else { continue }
@@ -199,7 +205,7 @@ enum Reflection {
                 if kind == .episode { continue }                                                       // facts don't become logs
                 if hub.concept(id) != nil, (op["content"]?.string?.count ?? 0) > 80 { continue }     // a concept name, not a sentence
                 hub.update(id, content: op["content"]?.string, importance: op["importance"]?.double,
-                           kind: kind, concept: op["concept"]?.string, source: conversationID)
+                           kind: kind, subject: op["subject"]?.string, concept: op["concept"]?.string, source: conversationID)
                 out.updated += 1
             case "resolve", "achieve", "archive":
                 guard let id, hub.get(id) != nil, allowed?.contains(id) ?? true else { continue }
@@ -247,11 +253,7 @@ enum Reflection {
         guard let json = await complete(client: client, model: model, system: system, user: user).json else { return Outcome(title: nil, applied: local.merged) }
         // Only touch ids that were shown.
         let known = Set(all.map(\.id) + concepts.map(\.id))
-        var filtered = json.object ?? [:]
-        filtered["operations"] = .array((json["operations"]?.array ?? []).filter { op in
-            op["op"]?.string == "add" || (op["id"]?.string ?? op["id"]?.int.map(String.init)).map(known.contains) == true
-        })
-        var out = apply(.object(filtered), hub: hub, conversationID: nil, origin: "consolidation")
+        var out = apply(json, hub: hub, conversationID: nil, origin: "consolidation", allowed: known)
         out.updated += local.merged
         out.applied += local.merged
         UserDefaults.standard.set(Date(), forKey: "memory.lastConsolidated")

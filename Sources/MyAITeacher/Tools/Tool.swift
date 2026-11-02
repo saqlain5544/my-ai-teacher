@@ -169,15 +169,18 @@ enum ProcessRunner {
         let out = OutputCollector(limit: outputLimit), err = OutputCollector(limit: outputLimit / 4)
         let closed = DispatchGroup()
         closed.enter(); closed.enter()
+        let outLeft = Locked(false), errLeft = Locked(false)
+        let leaveOut = { @Sendable in if outLeft.mutate({ was in defer { was = true }; return !was }) { closed.leave() } }
+        let leaveErr = { @Sendable in if errLeft.mutate({ was in defer { was = true }; return !was }) { closed.leave() } }
         outPipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil; closed.leave(); return }
+            if d.isEmpty { h.readabilityHandler = nil; leaveOut(); return }
             out.append(d)
             onOutput?(String(decoding: d, as: UTF8.self))
         }
         errPipe.fileHandleForReading.readabilityHandler = { h in
             let d = h.availableData
-            if d.isEmpty { h.readabilityHandler = nil; closed.leave(); return }
+            if d.isEmpty { h.readabilityHandler = nil; leaveErr(); return }
             err.append(d)
             onOutput?(String(decoding: d, as: UTF8.self))
         }
@@ -188,6 +191,10 @@ enum ProcessRunner {
                     // The rest of the output, for as long as the pipes take to close. A child the program left running
                     // (a server it started) holds them open: reading to the end waited for it forever.
                     let lingering = closed.wait(timeout: .now() + 1.5) == .timedOut
+                    if lingering {
+                        outPipe.fileHandleForReading.readabilityHandler = nil; leaveOut()
+                        errPipe.fileHandleForReading.readabilityHandler = nil; leaveErr()
+                    }
                     var o = out.string
                     if lingering { o += "\n[a process it started is still running; its output is not shown]" }
                     if out.dropped > 0 { o += "\n… [\(out.dropped) bytes of output dropped]" }
@@ -196,6 +203,8 @@ enum ProcessRunner {
                 do {
                     try p.run()
                 } catch {
+                    outPipe.fileHandleForReading.readabilityHandler = nil; leaveOut()
+                    errPipe.fileHandleForReading.readabilityHandler = nil; leaveErr()
                     c.resume(returning: ProcessResult(stdout: "", stderr: "Failed to launch \(executable): \(error.localizedDescription)", exitCode: -1, timedOut: false))
                     return
                 }

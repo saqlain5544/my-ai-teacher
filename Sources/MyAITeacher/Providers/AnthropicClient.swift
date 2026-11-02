@@ -108,6 +108,11 @@ struct AnthropicClient: LLMClient {
                             if let u = j["usage"] { usage = Self.usage(u, base: usage) }
                             if let r = j["delta"]?["stop_reason"]?.string {
                                 ended = true
+                                for i in tools.keys.sorted() {
+                                    if let t = tools.removeValue(forKey: i) {
+                                        continuation.yield(.toolCall(NativeComputerTool.call(t.finish(), member: members.removeValue(forKey: i))))
+                                    }
+                                }
                                 continuation.yield(.usage(usage))
                                 if r == "refusal" {
                                     let why = j["delta"]?["stop_details"]?["explanation"]?.string ?? "The model declined this request."

@@ -199,9 +199,9 @@ struct BenchTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let (code, _) = HeredocSlip.strip(try input.req("code"))
         let lang = RunCodeTool.normalize(try input.req("language"))
-        var sizes = (input["sizes"]?.array ?? []).compactMap(\.int).filter { $0 > 0 }
+        var sizes = Array(Set((input["sizes"]?.array ?? []).compactMap(\.int).filter { $0 > 0 })).sorted()
         if sizes.count < 3 { sizes = Self.defaultSizes }
-        sizes = Array(Set(sizes)).sorted().prefix(8).map { $0 }
+        sizes = Array(sizes.prefix(8))
         let r: ProcessResult
         switch lang {
         case "python":

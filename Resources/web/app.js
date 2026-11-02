@@ -519,6 +519,7 @@
     P.scale.forEach((c, i) => { vars['cScale' + i] = c; vars['cScaleLabel' + i] = P.text; });
     return {
       startOnLoad: false, securityLevel: 'strict', theme: 'base', look: 'neo', themeVariables: vars, suppressErrorRendering: true,
+      dompurifyConfig: { FORBID_ATTR: ['data-act'] },
       fontFamily: vars.fontFamily,
       flowchart: { htmlLabels: true, curve: 'basis', padding: 14, nodeSpacing: 44, rankSpacing: 52, useMaxWidth: true },
       sequence: { mirrorActors: false, actorMargin: 56, boxMargin: 8, messageFontSize: 14, noteFontSize: 13, useMaxWidth: true },
@@ -640,7 +641,10 @@
     const svg = r.error ? '' : r.replace(/\bmmd(\d+)\b/g, 'mmd$1x' + (++fillSeq));
     if (r.error && el.hasAttribute('data-unfinished')) { el.innerHTML = unfinished('mermaid', code); return; }
     el.innerHTML = r.error ? tools + '<div class="diagram-error">Diagram error: ' + esc(r.error) + '<pre>' + esc(code) + '</pre></div>' : tools + svg;
-    if (!r.error) fitDiagram(el);
+    if (!r.error) {
+      el.querySelectorAll('svg [data-act], svg a[href^="javascript:"]').forEach(n => { n.removeAttribute('data-act'); n.removeAttribute('href'); });
+      fitDiagram(el);
+    }
   }
   async function processMermaid(root) {
     let blocks = Array.from(root.querySelectorAll('.mermaid-block[data-pending]'));
@@ -680,10 +684,25 @@
     mdCache.set(key, html);
     return html;
   }
+  /** Returns the opening fence marker (` ``` ` or `~~~`) if `text` ends inside an unclosed fence, else null. */
+  function scanFences(text) {
+    let fence = null;
+    for (const line of String(text || '').split('\n')) {
+      const m = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (!m) continue;
+      if (!fence) {
+        if (m[1][0] === '`' && m[2].includes('`')) continue;
+        fence = m[1];
+      } else if (m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) {
+        fence = null;
+      }
+    }
+    return fence;
+  }
   function renderMarkdown(text, streaming, plain) {
     const env = { streaming, plain: !!plain };
-    // An odd number of fence markers: the last fence is still open (streaming), or the reply ended inside it (stopped).
-    if (text.indexOf('```') >= 0 || text.indexOf('~~~') >= 0) { const f = text.match(/^\s{0,3}(```|~~~)/gm); env.openFence = !!(f && f.length % 2 === 1); }
+    // An unclosed fence: the last fence is still open (streaming), or the reply ended inside it (stopped).
+    if (text.indexOf('```') >= 0 || text.indexOf('~~~') >= 0) env.openFence = !!scanFences(text);
     try {
       const tokens = md.parse(text, env);
       if (env.openFence) { for (let i = tokens.length - 1; i >= 0; i--) if (tokens[i].type === 'fence') { env.lastFenceIdx = i; break; } }
@@ -693,9 +712,13 @@
   const inline = s => markdown(String(s == null ? '' : s), false).replace(/^\s*<p>|<\/p>\s*$/g, '');
   /** Single newlines as hard breaks (outside fences), for text that was written as lines, not markdown paragraphs. */
   function hardLines(text) {
-    const out = []; let fence = false;
+    const out = []; let fence = null;
     for (const line of String(text == null ? '' : text).split('\n')) {
-      if (/^\s{0,3}(```|~~~)/.test(line)) fence = !fence;
+      const m = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+      if (m) {
+        if (!fence) { if (!(m[1][0] === '`' && m[2].includes('`'))) fence = m[1]; }
+        else if (m[1][0] === fence[0] && m[1].length >= fence.length && !m[2].trim()) fence = null;
+      }
       out.push(!fence && line.trim() ? line + '  ' : line);
     }
     return out.join('\n');
@@ -708,11 +731,21 @@
   const segCache = new Cache(400, 4e6);
   function segments(text) {
     const lines = text.split('\n'), segs = [];
-    let cur = [], fence = null, math = false;
+    let cur = [], fence = null, math = null;
     for (let i = 0; i < lines.length; i++) {
-      const l = lines[i], f = /^\s{0,3}(`{3,}|~{3,})/.exec(l);
-      if (f) { if (!fence) fence = f[1]; else if (l.trim().startsWith(fence)) fence = null; }
-      else if (!fence && /^\s*\$\$\s*$/.test(l)) math = !math;
+      const l = lines[i], f = /^\s{0,3}(`{3,}|~{3,})(.*)$/.exec(l);
+      if (f) {
+        if (!fence) { if (!(f[1][0] === '`' && f[2].includes('`'))) fence = f[1]; }
+        else if (f[1][0] === fence[0] && f[1].length >= fence.length && !f[2].trim()) fence = null;
+      } else if (!fence) {
+        const t = l.trim();
+        if (!math) {
+          if (t.startsWith('$$') && !(t.endsWith('$$') && t.length >= 4)) math = '$$';
+          else if (t.startsWith('\\[') && !t.endsWith('\\]')) math = '\\]';
+        } else if (t.endsWith(math)) {
+          math = null;
+        }
+      }
       cur.push(l);
       const next = lines[i + 1];
       if (!fence && !math && !l.trim() && next !== undefined && next.trim() && !/^\s/.test(next) && !/^([-*+]|\d+[.)])\s/.test(next) && !/^\|/.test(next)) {
@@ -783,7 +816,7 @@
   }
   // Re-rendering a card must never steal the learner's caret: remember the focused field (by its data-* key), restore
   // it after, and while an IME composition is in progress (Arabic, Japanese…) defer the update until it ends.
-  const FOCUS_KEYS = ['data-q-input', 'data-q-blank', 'data-q-other', 'data-ask-text', 'data-focus'];
+  const FOCUS_KEYS = ['data-q-input', 'data-q-blank', 'data-q-cell', 'data-q-other', 'data-ls-input', 'data-ask-text', 'data-focus'];
   let composing = false;
   const deferred = new Set();
   document.addEventListener('compositionstart', () => { composing = true; }, true);
@@ -1030,7 +1063,8 @@
   /** Thinking cut off inside a code block (an output limit) would render the rest as prose, its regex as broken math. */
   function closedFences(text) {
     text = text || '';
-    return (text.match(/^\s*```/gm) || []).length % 2 ? text + '\n```' : text;
+    const open = scanFences(text);
+    return open ? text + '\n' + open : text;
   }
 
   /** Thinking streams the way the reply does: markdown rendered by segments (finished ones cached, so a frame costs only

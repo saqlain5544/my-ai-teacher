@@ -153,7 +153,7 @@ final class FileTreeModel: ObservableObject {
     /// Expands the folders down to `url` and selects it.
     func reveal(_ url: URL, root rootURL: URL) {
         open(rootURL)
-        guard var node = root, url.path.hasPrefix(rootURL.path) else { return }
+        guard var node = root, url.path == rootURL.path || url.path.hasPrefix(rootURL.path + "/") else { return }
         let parts = url.path.dropFirst(rootURL.path.count).split(separator: "/")
         for p in parts {
             if node.children == nil { node.load() }
@@ -239,7 +239,7 @@ struct FilePreview: View {
                 if let session {
                     Button("Attach") { Composer.attach([url], to: session) }.help("Attach to your next message")
                     Button("Ask") {
-                        let rel = url.path.hasPrefix(root.path) ? String(url.path.dropFirst(root.path.count + 1)) : url.path
+                        let rel = url.path.hasPrefix(root.path + "/") ? String(url.path.dropFirst(root.path.count + 1)) : url.path
                         session.draft = (session.draft.isEmpty ? "" : session.draft + "\n") + "About `\(rel)`: "
                     }.help("Ask the teacher about this file")
                 }

@@ -260,12 +260,13 @@ struct TextProtocolParser {
         let s = raw.replacingOccurrences(of: "]<]minimax[>[", with: "")   // MiniMax M3 namespace token, inside bodies too
         switch f {
         case .dsml:
-            return matches(#"<｜DSML｜invoke name="([^"]+)"\s*>([\s\S]*?)(?:</｜DSML｜invoke>|$)"#, s).map { m in
+            return matches(#"<｜DSML｜invoke name="([^"]+)"\s*>([\s\S]*?)(</｜DSML｜invoke>|$)"#, s).map { m in
                 let params = matches(#"<｜DSML｜parameter name="([^"]+)"(?:\s+string="(true|false)")?\s*>([\s\S]*?)</｜DSML｜parameter>"#, m[2])
                 var args: [String: JSON] = [:]
                 for p in params {
                     args[p[1]] = p[2] == "true" ? .string(p[3]) : p[2] == "false" ? (JSON.parse(p[3].trimmingCharacters(in: .whitespacesAndNewlines)) ?? .string(p[3])) : typed(p[3], tool: m[1], key: p[1])
                 }
+                if m[3].isEmpty, m[2].components(separatedBy: "<｜DSML｜parameter").count - 1 > params.count { args["_cutOff"] = true }
                 return call(m[1], .object(args))
             }
         case .deepseek:
@@ -283,9 +284,11 @@ struct TextProtocolParser {
             let t = s.trimmingCharacters(in: .whitespacesAndNewlines)
             if t.hasPrefix("{") || t.hasPrefix("[") { return jsonCalls(t) }
             if t.contains("<function=") {   // Qwen3-Coder / Nemotron 3
-                return matches(#"<function=([^>\s]+)>([\s\S]*?)(?:</function>|$)"#, t).map { m in
+                return matches(#"<function=([^>\s]+)>([\s\S]*?)(</function>|$)"#, t).map { m in
                     var args: [String: JSON] = [:]
-                    for p in matches(#"<parameter=([^>\s]+)>\n?([\s\S]*?)\n?</parameter>"#, m[2]) { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) }
+                    let params = matches(#"<parameter=([^>\s]+)>\n?([\s\S]*?)\n?</parameter>"#, m[2])
+                    for p in params { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) }
+                    if m[3].isEmpty, m[2].components(separatedBy: "<parameter=").count - 1 > params.count { args["_cutOff"] = true }
                     return call(m[1], .object(args))
                 }
             }
@@ -294,16 +297,22 @@ struct TextProtocolParser {
                 let name = t.split(separator: "\n", maxSplits: 1).first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? ""
                 guard !name.isEmpty, tools[name] != nil || t.contains("<arg_key>") else { return [] }
                 var args: [String: JSON] = [:]
-                for p in matches(#"<arg_key>([\s\S]*?)</arg_key>\s*<arg_value>([\s\S]*?)</arg_value>"#, t) { args[p[1]] = typed(p[2], tool: name, key: p[1]) }
+                let pairs = matches(#"<arg_key>([\s\S]*?)</arg_key>\s*<arg_value>([\s\S]*?)</arg_value>"#, t)
+                for p in pairs { args[p[1]] = typed(p[2], tool: name, key: p[1]) }
+                if t.components(separatedBy: "<arg_key>").count - 1 > pairs.count { args["_cutOff"] = true }
                 return [call(name, .object(args))]
             }
             return []
         case .minimax:
-            return matches(#"<invoke name="([^"]+)"\s*>([\s\S]*?)(?:</invoke>|$)"#, s).map { m in
+            return matches(#"<invoke name="([^"]+)"\s*>([\s\S]*?)(</invoke>|$)"#, s).map { m in
                 var args: [String: JSON] = [:]
                 let named = matches(#"<parameter name="([^"]+)"\s*>([\s\S]*?)</parameter>"#, m[2])
-                if !named.isEmpty { for p in named { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) } }
-                else { for p in matches(#"<([A-Za-z_][\w.-]*)>([\s\S]*?)</\1>"#, m[2]) { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) } }   // M3: tag = name
+                if !named.isEmpty {
+                    for p in named { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) }
+                    if m[3].isEmpty, m[2].components(separatedBy: "<parameter ").count - 1 > named.count { args["_cutOff"] = true }
+                } else {
+                    for p in matches(#"<([A-Za-z_][\w.-]*)>([\s\S]*?)</\1>"#, m[2]) { args[p[1]] = typed(p[2], tool: m[1], key: p[1]) }
+                }   // M3: tag = name
                 return call(m[1], .object(args))
             }
         case .kimi:
@@ -399,7 +408,7 @@ enum ToolArgs {
     /// A reply cut off at the output limit was writing its last tool call: the arguments are incomplete (the JSON repair
     /// closed them), and running it would write half a file or a truncated command. Marked for the executors to refuse.
     static func markCutOff(_ m: inout ChatMessage, finish: String) {
-        guard finish == "max_tokens", let k = m.blocks.lastIndex(where: { $0.kind == .toolUse }), var o = m.blocks[k].input?.object else { return }
+        guard finish == "max_tokens", m.blocks.last?.kind == .toolUse, let k = m.blocks.lastIndex(where: { $0.kind == .toolUse }), var o = m.blocks[k].input?.object else { return }
         o["_cutOff"] = true
         m.blocks[k].input = .object(o)
     }

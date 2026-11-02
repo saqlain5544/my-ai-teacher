@@ -207,6 +207,7 @@ final class ShellJob: @unchecked Sendable {
     /// Without terminal colour and cursor codes, and with carriage-return redraws reduced to their last state.
     static func plain(_ s: String) -> String {
         var t = s.replacingOccurrences(of: #"\u001B\[[0-9;?]*[ -/]*[@-~]|\u001B[()][A-Z0-9]|\u001B[=>]"#, with: "", options: .regularExpression)
+            .replacingOccurrences(of: "\r\n", with: "\n")
         if t.contains("\r") {
             t = t.split(separator: "\n", omittingEmptySubsequences: false)
                 .map { line in line.split(separator: "\r", omittingEmptySubsequences: false).last(where: { !$0.isEmpty }).map(String.init) ?? "" }

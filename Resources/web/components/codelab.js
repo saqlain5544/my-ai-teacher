@@ -299,7 +299,7 @@
     svg += '<text class="tick" x="' + ((W + M.l) / 2) + '" y="' + (H - 4) + '" text-anchor="middle">input size n</text>';
     series.forEach(s => {
       svg += '<path d="' + s.pts.map((p, i) => (i ? 'L' : 'M') + sx(p[0]).toFixed(1) + ',' + sy(p[1]).toFixed(1)).join('') + '" fill="none" stroke="' + s.c + '" stroke-width="2.2"/>';
-      s.pts.forEach(p => { svg += '<circle cx="' + sx(p[0]).toFixed(1) + '" cy="' + sy(p[1]).toFixed(1) + '" r="3.2" fill="' + s.c + '"><title>' + s.name + ': n=' + p[0] + ', ' + fmtT(p[1]) + '</title></circle>'; });
+      s.pts.forEach(p => { svg += '<circle cx="' + sx(p[0]).toFixed(1) + '" cy="' + sy(p[1]).toFixed(1) + '" r="3.2" fill="' + s.c + '"><title>' + (R._ctx ? R._ctx.esc(s.name) : String(s.name || '')) + ': n=' + p[0] + ', ' + fmtT(p[1]) + '</title></circle>'; });
     });
     return svg + '</svg>';
   }

@@ -93,8 +93,10 @@ extension StudyStore {
     @discardableResult
     func recordGrammar(lang raw: String, point: String, correct: Bool, evidence: String?, level: String? = nil, assisted: Bool = false) -> GrammarPoint? {
         guard let code = Languages.code(raw) else { return nil }
-        let known = grammarSyllabus(lang: code).first { $0.name.compare(point, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
-        let name = known?.name ?? point.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmed = point.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else { return nil }
+        let known = grammarSyllabus(lang: code).first { $0.name.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame }
+        let name = known?.name ?? trimmed
         if known == nil {
             let lv = level.flatMap(Self.cefrLevel) ?? languageProfile(code)?.level.flatMap(Self.cefrLevel) ?? "A1"
             addGrammarPoints(lang: code, [(name, lv, nil)])
@@ -193,7 +195,8 @@ enum VocabTransfer {
     /// Words from a text export: Anki's (headers `#separator:`, `#html:`, `#columns:`, `#tags column:`), this app's,
     /// or a spreadsheet's (a header row naming the columns, or term and meaning first).
     static func parse(_ text: String) -> [Entry] {
-        var lines = text.components(separatedBy: "\n")
+        let norm = text.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\r", with: "\n")
+        var lines = norm.components(separatedBy: "\n")
         var sep: Character? = nil, html = false, names: [String]? = nil, tagsColumn: Int? = nil
         while let first = lines.first, first.hasPrefix("#"), first.contains(":") {
             let kv = first.dropFirst().split(separator: ":", maxSplits: 1).map(String.init)
@@ -300,12 +303,12 @@ enum VocabTransfer {
     /// Saves entries as vocabulary (each with its flashcard); words already saved are updated, not duplicated.
     static func importEntries(_ entries: [Entry], lang: String, into study: StudyStore, source: String) -> (added: Int, updated: Int) {
         var added = 0, updated = 0
-        let existing = Set(study.vocab(lang: lang, limit: 100_000).map(\.term))
+        var existing = Set(study.vocab(lang: lang, limit: 100_000).map(\.term))
         for e in entries {
             let tags = e.tags.filter { !$0.isEmpty && $0.lowercased() != "marked" && $0.lowercased() != "leech" }
-            guard study.addVocab(lang: lang, term: e.term, reading: e.reading, meaning: e.meaning, pos: e.pos, example: e.example,
-                                 exampleMeaning: e.exampleMeaning, notes: e.notes, tags: tags, source: source) != nil else { continue }
-            if existing.contains(e.term) { updated += 1 } else { added += 1 }
+            guard let item = study.addVocab(lang: lang, term: e.term, reading: e.reading, meaning: e.meaning, pos: e.pos, example: e.example,
+                                            exampleMeaning: e.exampleMeaning, notes: e.notes, tags: tags, source: source) else { continue }
+            if !existing.insert(item.term).inserted { updated += 1 } else { added += 1 }
         }
         return (added, updated)
     }

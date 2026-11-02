@@ -213,8 +213,8 @@ extension ComputerController {
             guard let pid = w[kCGWindowOwnerPID as String] as? pid_t, let app = granted[pid] else { hidden += 1; continue }
             let r = (w[kCGWindowBounds as String] as? NSDictionary).flatMap { CGRect(dictionaryRepresentation: $0) } ?? .zero
             let title = (w[kCGWindowName as String] as? String).map { "\"\($0)\"" } ?? "(untitled)"
-            let pos = mapping.map { m -> String in let a = m.toImage(r.origin), b = m.toImage(CGPoint(x: r.maxX, y: r.maxY)); return "(\(Int(a.x)), \(Int(a.y)))–(\(Int(b.x)), \(Int(b.y))) px" }
-                ?? "\(Int(r.minX)),\(Int(r.minY)) \(Int(r.width))×\(Int(r.height)) pt"
+            let pos = mapping.map { m -> String in let a = m.toImage(r.origin), b = m.toImage(CGPoint(x: r.maxX, y: r.maxY)); return "(\(pixelText(a.x)), \(pixelText(a.y)))–(\(pixelText(b.x)), \(pixelText(b.y))) px" }
+                ?? "\(pixelText(r.minX)),\(pixelText(r.minY)) \(pixelText(r.width))×\(pixelText(r.height)) pt"
             lines.append("\(app.name): \(title) \(pos)")
         }
         if hidden > 0 { lines.append("(\(hidden) windows of apps you have no access to are not listed)") }

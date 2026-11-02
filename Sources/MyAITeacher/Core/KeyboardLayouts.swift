@@ -176,7 +176,7 @@ enum ScriptComposer {
         for k in romajiTable.keys { var s = ""; for c in k.dropLast() { s.append(c); p.insert(s) } }
         return p
     }()
-    static func romaji(_ run: String, katakana: Bool) -> String {
+    static func romaji(_ run: String, katakana: Bool, live: Bool = false) -> String {
         let s = Array(run.lowercased()), raw = Array(run)
         let vowel: (Character) -> Bool = { "aiueo".contains($0) }
         let consonant: (Character) -> Bool = { "bcdfghjklmpqrstvwxz".contains($0) }
@@ -185,13 +185,14 @@ enum ScriptComposer {
             let c = s[i]
             let next: Character? = i + 1 < s.count ? s[i + 1] : nil, after: Character? = i + 2 < s.count ? s[i + 2] : nil
             if c == "n", next == "n" {
+                if after == nil, live { break }
                 // "nn" before a vowel or y: ん and the n that starts the next syllable (konnichiha); otherwise just ん.
                 if let a = after, vowel(a) || a == "y" { out += "ん"; i += 1 } else { out += "ん"; i += 2 }
                 continue
             }
             if c == "n", next == "'" { out += "ん"; i += 2; continue }
             if c == "n", let n = next, !vowel(n), n != "y", n != "'" { out += "ん"; i += 1; continue }
-            if consonant(c), next == c, let a = after, vowel(a) || a == "y" || a == "h" { out += "っ"; i += 1; continue }
+            if consonant(c), next == c, let a = after, vowel(a) || a == "y" || a == "h" || a == "s" { out += "っ"; i += 1; continue }
             var hit: String?
             for n in [4, 3, 2, 1] where i + n <= s.count {
                 let k = String(s[i..<(i + n)])

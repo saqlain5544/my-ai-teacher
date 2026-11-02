@@ -73,7 +73,7 @@ final class LiquidModels: ObservableObject {
         states[id] = .downloading(0, "Starting…")
         tasks[id] = Task { [weak self] in
             do {
-                try await OpenSpeech.download(c, into: Self.root) { frac, note in Task { @MainActor in self?.states[id] = .downloading(frac, note) } }
+                try await OpenSpeech.download(c, into: Self.root) { frac, note in Task { @MainActor in guard self?.tasks[id] != nil else { return }; self?.states[id] = .downloading(frac, note) } }
                 await MainActor.run { if !Task.isCancelled { self?.states[id] = .installed }; self?.tasks[id] = nil }
                 AppLog.write("liquid: installed \(id)")
             } catch {
@@ -166,7 +166,8 @@ final class LiquidModels: ObservableObject {
         let args = ["-m", f.model.path, "-mm", f.projector.path, "--tts-lang", String(lang.prefix(2)).lowercased(), "--tts-voice", voice,
                     "-p", text, "-o", out.path]
         let r = await ProcessRunner.run(bin.path, args, cwd: bin.deletingLastPathComponent(), timeout: 120)
-        guard r.exitCode == 0, FileManager.default.fileExists(atPath: out.path) else {
+        guard !Task.isCancelled, r.exitCode == 0, FileManager.default.fileExists(atPath: out.path) else {
+            try? FileManager.default.removeItem(at: out)
             AppLog.write("llama-tts failed (\(r.exitCode)): \(r.stderr.suffix(300))"); return nil
         }
         return out
@@ -207,6 +208,7 @@ actor LlamaServer {
     var isRunning: Bool { process?.isRunning == true }
 
     func stop() {
+        starting?.cancel(); starting = nil
         watcher?.cancel(); watcher = nil
         if let p = process, p.isRunning { p.terminate() }
         process = nil; base = nil
@@ -247,7 +249,9 @@ actor LlamaServer {
         p.executableURL = URL(fileURLWithPath: "/bin/sh")
         p.arguments = ["-c", LiquidModels.watchdog, "sh", String(ProcessInfo.processInfo.processIdentifier), bin.path] + args
         p.currentDirectoryURL = bin.deletingLastPathComponent()
-        if let h = try? FileHandle(forWritingTo: log) { p.standardOutput = h; p.standardError = h }
+        let logHandle = try? FileHandle(forWritingTo: log)
+        defer { try? logHandle?.close() }
+        if let logHandle { p.standardOutput = logHandle; p.standardError = logHandle }
         p.standardInput = FileHandle.nullDevice
         try p.run()
         process = p
@@ -257,7 +261,10 @@ actor LlamaServer {
         // Loading the weights takes a few seconds (more the first time, from disk).
         let deadline = Date().addingTimeInterval(180)
         while Date() < deadline {
-            try Task.checkCancellation()
+            if Task.isCancelled {
+                p.terminate(); process = nil; LiquidModels.track(kind, pid: nil)
+                throw CancellationError()
+            }
             guard p.isRunning else {
                 let tail = (try? String(contentsOf: log, encoding: .utf8)).map { String($0.suffix(400)) } ?? ""
                 LiquidModels.track(kind, pid: nil); process = nil
@@ -269,7 +276,11 @@ actor LlamaServer {
                 AppLog.write("liquid: \(kind.rawValue) server ready")
                 return u
             }
-            try await Task.sleep(nanoseconds: 250_000_000)
+            do { try await Task.sleep(nanoseconds: 250_000_000) }
+            catch {
+                p.terminate(); process = nil; LiquidModels.track(kind, pid: nil)
+                throw error
+            }
         }
         p.terminate(); process = nil; LiquidModels.track(kind, pid: nil)
         throw Failure(errorDescription: "The local \(kind.rawValue) server didn't start within 3 minutes.")

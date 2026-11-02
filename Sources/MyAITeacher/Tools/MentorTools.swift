@@ -272,11 +272,6 @@ struct ProjectReviewTool: Tool {
                 }
                 if p.testsUnlockedAt != nil { return .error("A pass needs the tests locked, and they are unlocked: re-baseline them (`project_tests` set) and review again, or record `changes`.") }
             }
-            // Findings are about the learner's work. A live review, told its green run with nothing blocking was a pass,
-            // filed a `must` against its own test file (the tests didn't check a rule the learner's code already met).
-            if let mine = (input["findings"]?.array ?? []).compactMap({ $0["file"]?.string }).first(where: { $0.hasPrefix(".teacher/") || $0.hasPrefix("./.teacher/") || $0.contains("/.teacher/") }) {
-                return .error("Nothing recorded: `\(mine)` is yours, not the learner's — findings point at their files. A rule your tests miss is your gap: if their code meets it, it isn't a finding (tighten the tests for the next project, or `project_tests` unlock if a test is wrong).")
-            }
             let stated: Help = ["hint": .hint, "solution": .solution][input["help"]?.string ?? ""] ?? .none
             let helped = Help(rawValue: max(stated.rawValue, p.helpSinceReview.rawValue)) ?? .none
             var next = p.nextFindingID
@@ -286,6 +281,9 @@ struct ProjectReviewTool: Tool {
                 // As the changes name it (relative to the folder): a `must` filed as "./src/x.py" or by its absolute path
                 // would otherwise never count as changed, and stay open for good.
                 let file = MentorGuard.relative(resolvePath(named, workspace: ws.url), ws)
+                if file == ".teacher" || file.hasPrefix(".teacher/") || file.hasPrefix("..") {
+                    return .error("Nothing recorded: `\(named)` is yours, not the learner's — findings point at their files. A rule your tests miss is your gap: if their code meets it, it isn't a finding (tighten the tests for the next project, or `project_tests` unlock if a test is wrong).")
+                }
                 let sev = ["must", "should", "nit"].contains(f["severity"]?.string ?? "") ? f["severity"]!.string! : "should"
                 let hints = (f["hints"]?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }.prefix(3)
                 findings.append(MentorProject.Finding(id: next, file: file, line: f["line"]?.int, severity: sev, text: text, concept: f["concept"]?.string,
@@ -297,16 +295,21 @@ struct ProjectReviewTool: Tool {
             let changed = Set(open.changed)
             var kept: [Int] = []
             if let last = p.rounds.last {
-                for f in last.findings where resolvedIDs.contains(f.id) && f.severity == "must" && !changed.contains(f.file) {
+                for f in last.findings where !f.resolved && resolvedIDs.contains(f.id) && f.severity == "must" && !changed.contains(f.file) {
                     resolvedIDs.remove(f.id); kept.append(f.id)
                 }
             }
             var carried: [MentorProject.Finding] = []
+            var resolvedCount = 0
             var rounds = p.rounds
             if let last = rounds.indices.last {
                 for i in rounds[last].findings.indices where !rounds[last].findings[i].resolved {
-                    if resolvedIDs.contains(rounds[last].findings[i].id) { rounds[last].findings[i].resolved = true }
-                    else { carried.append(rounds[last].findings[i]) }
+                    if resolvedIDs.contains(rounds[last].findings[i].id) {
+                        rounds[last].findings[i].resolved = true
+                        resolvedCount += 1
+                    } else {
+                        carried.append(rounds[last].findings[i])
+                    }
                 }
             }
             let blocking = findings.contains { $0.severity == "must" } || carried.contains { $0.severity == "must" }
@@ -333,7 +336,7 @@ struct ProjectReviewTool: Tool {
                 }
             }
             ProjectStore.snapshot(ws, why: "review \(round.number)")
-            var text = "Round \(round.number) recorded: \(verdict), \(findings.count) new finding\(findings.count == 1 ? "" : "s"), \(carried.count) carried over, \(resolvedIDs.count) resolved."
+            var text = "Round \(round.number) recorded: \(verdict), \(findings.count) new finding\(findings.count == 1 ? "" : "s"), \(carried.count) carried over, \(resolvedCount) resolved."
             if !kept.isEmpty { text += " Still open: \(kept.map { "[\($0)]" }.joined(separator: ", ")) — a `must` is resolved when its file has changed, and it hasn't." }
             if findings.contains(where: { $0.hints == nil }) { text += " Give each finding a hint ladder (`hints`) next time: the learner reveals one rung at a time instead of being handed the answer." }
             if verdict == "pass" {

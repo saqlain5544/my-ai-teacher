@@ -183,6 +183,7 @@ enum LibrarySources {
 
     /// Files under the root whose name contains `query` (case-insensitive), bounded.
     static func find(_ query: String, in root: URL, limit: Int = 100) -> [String] {
+        let root = root.resolvingSymlinksInPath()
         let q = query.lowercased()
         guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]) else { return [] }
         var out: [String] = [], n = 0
@@ -190,8 +191,9 @@ enum LibrarySources {
             if skipDirs.contains(u.lastPathComponent) { e.skipDescendants(); continue }
             n += 1; if n > 60_000 { break }
             if (try? u.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true { continue }
-            if u.lastPathComponent.lowercased().contains(q) || q.contains("/") && u.path.lowercased().contains(q) {
-                out.append(String(u.path.dropFirst(root.path.count + 1)))
+            let resolved = u.resolvingSymlinksInPath()
+            if u.lastPathComponent.lowercased().contains(q) || q.contains("/") && resolved.path.lowercased().contains(q) {
+                if resolved.path.hasPrefix(root.path + "/") { out.append(String(resolved.path.dropFirst(root.path.count + 1))) }
                 if out.count >= limit { break }
             }
         }
@@ -240,6 +242,7 @@ struct SourceTool: Tool {
             if rootIsFile, p.isEmpty || root.lastPathComponent == p || root.path.hasSuffix("/" + p) { return .file(root) }
             guard !p.isEmpty else { return .problem("Give `path`, a file under \(root.path) (`locate` lists it).") }
             let u = p.hasPrefix("/") ? URL(fileURLWithPath: p) : root.appendingPathComponent(p)
+            guard u.isInside(root) else { return .problem("\(p) is outside \(root.path): `source` reads only within the resolved library.") }
             guard fm.fileExists(atPath: u.path, isDirectory: &isDir) else { return .problem("No file \(p) under \(root.path): `find` it by name.") }
             return isDir.boolValue ? .problem("\(u.path) is a folder: give a file in it (`locate` or `find` lists them).") : .file(u)
         }
@@ -268,7 +271,7 @@ struct SourceTool: Tool {
             switch resolveFile(input["path"]?.string ?? "") { case .problem(let m): return .error(m); case .file(let f): file = f }
             guard let text = try? String(contentsOf: file, encoding: .utf8) else { return .error("Cannot read \(file.path).") }
             let syms = SymbolsTool.outline(text, ext: file.pathExtension.lowercased())
-            if syms.isEmpty { return ToolOutput(text: "No definitions recognised in \(file.lastPathComponent) (\(text.split(separator: "\n").count) lines): `read` it.", meta: meta) }
+            if syms.isEmpty { return ToolOutput(text: "No definitions recognised in \(file.lastPathComponent) (\(text.fileLines.count) lines): `read` it.", meta: meta) }
             return ToolOutput(text: "\(file.path): \(syms.count) definitions\n" + syms.prefix(500).map { "\(String($0.line).leftPad(5))  \($0.kind == "function" ? "ƒ" : $0.kind == "type" ? "T" : "c")  \($0.text)" }.joined(separator: "\n") + (syms.count > 500 ? "\n… \(syms.count - 500) more" : ""), meta: meta)
         case "read":
             let file: URL

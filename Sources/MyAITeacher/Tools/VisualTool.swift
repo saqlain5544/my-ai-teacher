@@ -28,7 +28,7 @@ struct VisualTool: Tool {
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let html = try input.req("html")
         let title = input["title"]?.string ?? "Visual"
-        if html.range(of: #"(src|href)\s*=\s*["']https?://"#, options: .regularExpression) != nil {
+        if html.range(of: #"(src|href)\s*=\s*["']https?://"#, options: [.regularExpression, .caseInsensitive]) != nil {
             return .error("Visuals run offline: remove external URLs and use `libs` instead.")
         }
         var saved: String?
@@ -54,8 +54,9 @@ final class TeacherLibSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url else { return }
         let name = (url.host ?? "") + url.path
-        let file = dir.appendingPathComponent(name.replacingOccurrences(of: "..", with: ""))
-        guard file.path.hasPrefix(dir.path), let data = try? Data(contentsOf: file) else {
+        let base = dir.standardizedFileURL.resolvingSymlinksInPath()
+        let file = base.appendingPathComponent(name.replacingOccurrences(of: "..", with: "")).standardizedFileURL.resolvingSymlinksInPath()
+        guard file.path.hasPrefix(base.path + "/"), let data = try? Data(contentsOf: file) else {
             task.didFailWithError(URLError(.fileDoesNotExist)); return
         }
         let resp = HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1",

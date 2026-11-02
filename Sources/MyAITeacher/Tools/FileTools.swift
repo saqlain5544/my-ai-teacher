@@ -181,7 +181,7 @@ struct WriteTool: Tool {
         let existed = FileManager.default.fileExists(atPath: url.path)
         try Data(content.utf8).write(to: url, options: .atomic)
         FileViews.shared.saw(url, agent: FileViews.agent(ctx))
-        let lines = content.split(separator: "\n", omittingEmptySubsequences: false).count
+        let lines = content.fileLines.count
         var text = "\(existed ? "Overwrote" : "Created") \(url.path) (\(lines) lines)." + (strayEOF ? " " + HeredocSlip.note : "")
         var meta: [String: JSON] = ["path": .string(url.path)]
         if ctx.codeAgent, let check = await Diagnostics.quickCheck(url, folder: ctx.workspace) { Diagnostics.attach(check, to: &text, meta: &meta) }
@@ -205,12 +205,13 @@ struct WriteTool: Tool {
 enum HeredocSlip {
     static let note = "(A trailing `EOF` line was removed: `write` and `run_code` take the content itself, no heredoc terminator.)"
     static func strip(_ content: String) -> (String, Bool) {
-        var lines = content.components(separatedBy: "\n")
+        let eol = content.contains("\r\n") ? "\r\n" : "\n"
+        var lines = content.fileLines.map(String.init)
         while let l = lines.last, l.trimmingCharacters(in: .whitespaces).isEmpty, lines.count > 1 { lines.removeLast() }
         guard let last = lines.last?.trimmingCharacters(in: .whitespaces), ["EOF", "'EOF'", "\"EOF\""].contains(last),
               !content.contains("<<") else { return (content, false) }
         lines.removeLast()
-        return (lines.joined(separator: "\n") + "\n", true)
+        return (lines.joined(separator: eol) + eol, true)
     }
 }
 
@@ -241,9 +242,15 @@ struct EditTool: Tool {
         guard !old.isEmpty else { return (nil, tag + "old_string must not be empty. Use `write` to create files.") }
         guard old != new else { return (nil, tag + "old_string and new_string are identical.") }
         // Models send "\n" line endings; a file with "\r\n" ones would never match a multi-line old_string.
-        if content.contains("\r\n"), !old.contains("\r\n"), old.unicodeScalars.contains("\n") {
-            return apply(content, old: old.replacingOccurrences(of: "\n", with: "\r\n"), new: new.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n"),
-                         all: all, n: n, file: file)
+        if content.contains("\r\n") {
+            if !old.contains("\r\n"), old.unicodeScalars.contains("\n"), !content.contains(old) {
+                return apply(content, old: old.replacingOccurrences(of: "\n", with: "\r\n"),
+                             new: new.replacingOccurrences(of: "\r\n", with: "\n").replacingOccurrences(of: "\n", with: "\r\n"),
+                             all: all, n: n, file: file)
+            }
+            if !new.contains("\r\n"), new.unicodeScalars.contains("\n") {
+                return apply(content, old: old, new: new.replacingOccurrences(of: "\n", with: "\r\n"), all: all, n: n, file: file)
+            }
         }
         let count = content.components(separatedBy: old).count - 1
         if count == 0 {
@@ -286,8 +293,9 @@ struct EditTool: Tool {
         FileViews.shared.saw(url, agent: FileViews.agent(ctx))
         // Small diff preview for the UI (the first change).
         let first = changes[0]
-        let line = content.range(of: first.old).map { content[..<$0.lowerBound].split(separator: "\n", omittingEmptySubsequences: false).count } ?? 1
-        let summary = changes.count == 1 ? "replaced \(first.all ? max(1, content.components(separatedBy: first.old).count - 1) : 1) occurrence(s) near line \(line)"
+        let oldInFile = content.range(of: first.old) != nil ? first.old : first.old.replacingOccurrences(of: "\n", with: "\r\n")
+        let line = content.range(of: oldInFile).map { content[..<$0.lowerBound].fileLines.count } ?? 1
+        let summary = changes.count == 1 ? "replaced \(first.all ? max(1, content.components(separatedBy: oldInFile).count - 1) : 1) occurrence(s) near line \(line)"
                                          : "applied \(changes.count) edits"
         var text = "Edited \(url.path): \(summary)" + (notes.isEmpty ? "" : " (\(notes.joined(separator: "; ")))") + "."
         var meta: [String: JSON] = ["path": .string(url.path), "old": .string(String(first.old.prefix(2000))), "new": .string(String(first.new.prefix(2000))),

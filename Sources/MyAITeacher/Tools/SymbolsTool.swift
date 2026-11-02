@@ -127,7 +127,8 @@ struct SymbolsTool: Tool {
             .filter { line in
                 // Keep definitions whose kind matches, judged by the line's own text.
                 guard wanted != "any" else { return true }
-                let l = line.lowercased()
+                let code = line.range(of: #"^[^:]+:\d+:"#, options: .regularExpression).map { String(line[$0.upperBound...]) } ?? line
+                let l = code.lowercased()
                 switch wanted {
                 case "function": return l.contains("func") || l.contains("fn ") || l.contains("def ") || l.contains("function") || l.contains("proc ") || l.contains("sub ")
                 case "type": return ["class ", "struct ", "enum ", "protocol ", "interface ", "trait ", "type ", "typealias ", "actor ", "module ", "record "].contains { l.contains($0) }

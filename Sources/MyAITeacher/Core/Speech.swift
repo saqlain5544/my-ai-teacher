@@ -37,11 +37,17 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
                 let wav = engine == .omni ? await LiquidModels.synthesize(text, lang: lang)
                                           : await OpenSpeech.synthesize(text, lang: lang, speed: rate / 0.5)
                 await MainActor.run {
-                    guard self.openTicket == ticket else { return }
+                    guard self.openTicket == ticket else {
+                        if let wav { try? FileManager.default.removeItem(at: wav) }
+                        return
+                    }
                     if let wav, let p = try? AVAudioPlayer(contentsOf: wav) {
                         self.player = p; self.playerFinish = onFinish; self.playerFile = wav
                         p.delegate = self; p.play()
-                    } else { self.openTicket = nil; self.speakApple(text, language: language, voice: voice, rate: rate, onFinish: onFinish) }
+                    } else {
+                        if let wav { try? FileManager.default.removeItem(at: wav) }
+                        self.openTicket = nil; self.speakApple(text, language: language, voice: voice, rate: rate, onFinish: onFinish)
+                    }
                 }
             }
             return
@@ -130,7 +136,8 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
     }
 
     func stop() {
-        if synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
+        last = nil; finish = nil
+        if isSpeaking || synth.isSpeaking { synth.stopSpeaking(at: .immediate) }
         if player != nil || openTicket != nil { endPlayer(); playerFinish = nil }
         isSpeaking = false
     }
@@ -328,8 +335,8 @@ final class Speech: NSObject, ObservableObject, AVSpeechSynthesizerDelegate, AVA
     }
 
     func stopListening() {
-        guard isListening || engine != nil else { return }
         generation += 1   // whatever the current take still has on its way is dropped
+        guard isListening || engine != nil else { onFinal = nil; return }
         engine?.stop()
         engine?.inputNode.removeTap(onBus: 0)
         engine = nil

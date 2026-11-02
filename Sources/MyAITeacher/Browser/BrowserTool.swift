@@ -87,9 +87,13 @@ extension BrowserTab {
         // A frame keeps its id when it navigates to another site, but its site (what approvals were checked against) is
         // the one it had when it registered: the call names that site, and a frame showing another refuses it.
         if let o = info?.securityOrigin, ["http", "https"].contains(o.protocol), !o.host.isEmpty {
-            a["frameScheme"] = .string(o.protocol); a["frameHost"] = .string(o.host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+            a["frameScheme"] = .string(o.protocol)
+            a["frameHost"] = .string(o.host.trimmingCharacters(in: CharacterSet(charactersIn: "[]")))
+            a["framePort"] = .string(o.port > 0 ? String(o.port) : "")
+        } else if info != nil {
+            a["frameHost"] = ""
         }
-        let body = #"if (!window.__ta) return '{"error":"nohelper"}'; if (args.frameHost != null && (location.protocol !== args.frameScheme + ':' || location.hostname.replace(/^\[|\]$/g, '') !== args.frameHost)) return '{"error":"moved"}'; return JSON.stringify(await window.__ta[fn](args));"#
+        let body = #"if (!window.__ta) return '{"error":"nohelper"}'; if (args.frameHost === '' ? location.hostname !== '' : (args.frameHost != null && (location.protocol !== args.frameScheme + ':' || location.hostname.replace(/^\[|\]$/g, '') !== args.frameHost || (args.framePort != null && location.port !== args.framePort)))) return '{"error":"moved"}'; return JSON.stringify(await window.__ta[fn](args));"#
         let world = browser.world
         func once() async throws -> JSON {
             let r = try await web.callAsyncJavaScript(body, arguments: ["fn": fn, "args": JSON.object(a).any], in: info, contentWorld: world)
@@ -293,8 +297,10 @@ extension AgentBrowser {
             return try await act(t, action, args, frame: frame, snapshot: input["snapshot"]?.bool == true)
         case "key":
             guard let k = input["key"]?.string ?? input["text"]?.string, !k.isEmpty else { return .error("`key` is required (Enter, Tab, cmd+a…).") }
-            // A key that types a character or pastes is typing: never into a password, payment or ID field.
-            if KeyCombo.parse(k).map({ $0.typesText || $0.isPaste }) ?? (k.count == 1) { try await refuseSensitive(t, text: "", args: args, frame: frame) }
+            // A key that types a character, pastes or edits a value is typing: never into a password, payment or ID field.
+            let tail = (k.split(separator: "+").last.map(String.init) ?? k).lowercased()
+            let edits = tail.count == 1 || ["backspace", "delete", "up", "down", "arrowup", "arrowdown"].contains(tail)
+            if (KeyCombo.parse(k).map({ $0.typesText || $0.isPaste }) ?? true) || edits { try await refuseSensitive(t, text: "", args: args, frame: frame) }
             args["key"] = .string(k)
             return try await act(t, action, args, frame: frame, snapshot: input["snapshot"]?.bool == true)
         case "scroll":

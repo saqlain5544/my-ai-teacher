@@ -80,14 +80,16 @@ struct SiteKey: Hashable, Sendable {
     /// The site a URL belongs to. blob: URLs belong to the origin inside them; data: documents form one local "site";
     /// about: pages have none of their own (a tab attributes them to the page that opened them).
     static func of(_ url: URL) -> SiteKey? {
-        switch url.scheme?.lowercased() {
-        case "file": return SiteKey(id: "file:" + url.deletingLastPathComponent().path, isLocal: true)
+        let scheme = url.scheme?.lowercased()
+        switch scheme {
+        case "file": return SiteKey(id: "file:" + url.standardizedFileURL.resolvingSymlinksInPath().deletingLastPathComponent().path, isLocal: true)
         case "http", "https":
             guard var host = url.host()?.lowercased(), !host.isEmpty else { return nil }
-            host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            host = host.trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
+            let rawLocal = LocalNetwork.isLocal(host)
             if host.hasPrefix("www.") { host.removeFirst(4) }
-            let local = LocalNetwork.isLocal(host)
-            return SiteKey(id: local ? "\(host):\(url.port ?? (url.scheme == "https" ? 443 : 80))" : host, isLocal: local)
+            let local = rawLocal || LocalNetwork.isLocal(host)
+            return SiteKey(id: local ? "\(host):\(url.port ?? (scheme == "https" ? 443 : 80))" : host, isLocal: local)
         case "blob": return URL(string: String(url.absoluteString.dropFirst(5))).flatMap(of)
         case "data": return SiteKey(id: "data:", isLocal: true)
         default: return nil
@@ -113,7 +115,8 @@ enum LocalNetwork {
     }
 
     /// nil when `h` isn't an IP address.
-    static func addressIsLocal(_ h: String) -> Bool? {
+    static func addressIsLocal(_ rawHost: String) -> Bool? {
+        let h = rawHost.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
         var v4 = in_addr(), v6 = in6_addr()
         if inet_pton(AF_INET, h, &v4) == 1 { return v4Local(UInt32(bigEndian: v4.s_addr)) }
         guard inet_pton(AF_INET6, h, &v6) == 1 else { return nil }
@@ -133,7 +136,7 @@ enum LocalNetwork {
 
     /// Whether a name resolves to a local address (DNS, off the main thread, at most `timeout`); remembered per name.
     static func resolvesLocal(_ host: String, timeout: Double = 1.5) async -> Bool {
-        let h = host.lowercased()
+        let h = host.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "[]."))
         if let known = lock.withLock({ resolved[h] }) { return known }
         let lookup = Task.detached { () -> Bool in
             var hints = addrinfo(), res: UnsafeMutablePointer<addrinfo>?

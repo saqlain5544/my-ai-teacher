@@ -158,7 +158,7 @@ final class MCPConnection: @unchecked Sendable {
             if method == "notifications/progress", let token = message["params"]?["progressToken"]?.int,
                let w = state.get().waiting[token], let report = w.progress {
                 let p = message["params"]!
-                let amount = [p["progress"]?.double, p["total"]?.double].compactMap { $0 }.map { String(Int($0)) }.joined(separator: "/")
+                let amount = [p["progress"]?.int, p["total"]?.int].compactMap { $0 }.map(String.init).joined(separator: "/")
                 report([amount, p["message"]?.string ?? ""].filter { !$0.isEmpty }.joined(separator: " "))
             } else {
                 onNotification?(method, message["params"] ?? .null)
@@ -334,7 +334,12 @@ final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
         let done = Locked((stdout: false, exit: Optional<String>.none))
         let finish = { @Sendable (update: (inout (stdout: Bool, exit: String?)) -> Void) in
             // Closed once both the output has been read to its end and the process has exited, so no last reply is lost.
-            let reason = done.mutate { s -> String? in update(&s); return s.stdout ? s.exit : nil }
+            let reason = done.mutate { s -> String? in
+                update(&s)
+                guard s.stdout, let e = s.exit else { return nil }
+                s.exit = nil
+                return e
+            }
             if let reason { closed(reason) }
         }
         Thread.detachNewThread {
@@ -369,6 +374,7 @@ final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
         Thread.detachNewThread { [weak self] in
             var status: Int32 = 0
             while waitpid(child, &status, 0) < 0 && errno == EINTR {}
+            self?.lock.withLock { if self?._pid == child { self?._pid = 0 } }
             let sig = status & 0x7f
             let why = sig == 0 ? "exited with status \((status >> 8) & 0xff)" : "was killed by signal \(sig)"
             log.note("pid \(child) \(why)")
@@ -413,9 +419,13 @@ final class MCPStdioTransport: MCPTransport, @unchecked Sendable {
         guard !already else { return }
         closeInput()
         guard pid > 0 else { return }
-        DispatchQueue.global().asyncAfter(deadline: .now() + 1) {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 1) { [weak self] in
+            guard self?.pid == pid else { return }
             if kill(pid, 0) == 0 { kill(-pid, SIGTERM); kill(pid, SIGTERM) }
-            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { if kill(-pid, 0) == 0 || kill(pid, 0) == 0 { kill(-pid, SIGKILL); kill(pid, SIGKILL) } }
+            DispatchQueue.global().asyncAfter(deadline: .now() + 2) { [weak self] in
+                guard self?.pid == pid else { return }
+                if kill(-pid, 0) == 0 || kill(pid, 0) == 0 { kill(-pid, SIGKILL); kill(pid, SIGKILL) }
+            }
         }
     }
 

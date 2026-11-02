@@ -38,8 +38,10 @@ struct Composer: View {
                         showKeyboard = false
                         InputSources.restore()
                     }
+                    .id("\(session.id):\(layout.code)")
                 }
                 .onAppear { loadKanaWords(layout.code) }
+                .onChange(of: layout.code) { _, c in loadKanaWords(c) }
             }
             VStack(alignment: .leading, spacing: 6) {
                 if !slashItems.isEmpty { slashMenu(slashItems) }
@@ -708,7 +710,7 @@ final class ComposerTextView: NSTextView {
         let head = ns.substring(to: caret)
         guard let m = head.range(of: "[A-Za-z'\\-.,?!]+$", options: .regularExpression) else { return }
         let run = String(head[m])
-        let kana = ScriptComposer.romaji(run, katakana: katakana)
+        let kana = ScriptComposer.romaji(run, katakana: katakana, live: true)
         guard kana != run else { return }
         insertText(kana, replacementRange: NSRange(location: caret - (run as NSString).length, length: (run as NSString).length))
     }

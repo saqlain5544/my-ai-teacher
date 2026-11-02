@@ -50,12 +50,23 @@ final class MentorGuard: AgentExtension {
             return .deny("\(url.lastPathComponent) is the learner's file while their project is open: you don't change it. Teach toward the change with questions, hints and the concept; show an idea on a separate example (a new file, or run_code).")
         case "task":
             let types = AgentCatalog.all(app: session.settings.agents.definitions, folder: ws.url, instructions: session.settings.instructions)
+            let word = { (k: String) -> String? in
+                guard let s = call.input?[k]?.string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
+                return s
+            }
             let name: String = {
-                if let r = call.input?["resume"]?.string, let run = SubAgentCenter.shared.run(r) { return run.typeName }
-                return AgentDefinition.normalized(call.input?["type"]?.string ?? call.input?["subagent_type"]?.string ?? "explore")
+                if let r = word("resume"), let run = SubAgentCenter.shared.run(r) { return run.typeName }
+                return AgentDefinition.normalized(word("type") ?? word("subagent_type") ?? word("agent_type") ?? word("agent") ?? "explore")
             }()
             if AgentCatalog.find(name, in: types)?.readOnly == true { return .allow }
             log(ws, "refused", "a `\(name)` sub-agent (it can write)")
+            return .deny("While the learner's project is open only read-only sub-agents run (explore, reviewer): a `\(name)` agent could change the learner's files.")
+        case "agents" where call.input?["action"]?.string == "resume":
+            let types = AgentCatalog.all(app: session.settings.agents.definitions, folder: ws.url, instructions: session.settings.instructions)
+            let key = call.input?["id"]?.string ?? call.input?["handle"]?.string ?? ""
+            let name = SubAgentCenter.shared.run(key)?.typeName ?? ""
+            if AgentCatalog.find(name, in: types)?.readOnly == true { return .allow }
+            log(ws, "refused", "resuming a `\(name)` sub-agent (it can write)")
             return .deny("While the learner's project is open only read-only sub-agents run (explore, reviewer): a `\(name)` agent could change the learner's files.")
         case "project_tests" where call.input?["action"]?.string == "park":
             let title = ProjectStore.load(ws)?.title ?? "this project"

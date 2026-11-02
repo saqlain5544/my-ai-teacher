@@ -400,8 +400,8 @@ final class MemoryStore: @unchecked Sendable {
             // A new vector replaces an older build's Float32 one, which would otherwise win over it (see Embedder.decode).
             db.run("""
                 UPDATE memories SET content=?, importance=?, updated_at=?, evidence=evidence+1, concept_id=COALESCE(?, concept_id),
-                subject=COALESCE(subject, ?), norm=?, vec=COALESCE(?, vec), embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
-                """, newContent, max(min(1, max(0, importance)), old.importance), now, conceptID, subject, MemoryText.norm(newContent), blob, blob, old.rowid)
+                subject=COALESCE(subject, ?), norm=?, vec=CASE WHEN ? THEN ? ELSE vec END, embedding=CASE WHEN ? THEN NULL ELSE embedding END WHERE id=?
+                """, newContent, max(min(1, max(0, importance)), old.importance), now, conceptID, subject, MemoryText.norm(newContent), takeNew ? 1 : 0, blob, takeNew ? 1 : 0, old.rowid)
             refresh(old.rowid)
             return WriteOutcome(rowid: old.rowid, status: .merged, reason: nil, similar: [])
         }
@@ -422,19 +422,21 @@ final class MemoryStore: @unchecked Sendable {
                 conceptID: Int64?? = nil, source: String? = nil) {
         guard var m = get(id) else { return }
         var blob: Data?
+        var contentChanged = false
         if let content, !Self.clean(content).isEmpty, Self.clean(content) != m.content {
             recordHistory(id, content: m.content, change: "updated", source: source)
             m.content = MemoryText.clip(Self.clean(content), 400)
             blob = Embedder.shared.vector(m.content).map(Embedder.int8)
+            contentChanged = true
         }
         if let importance { m.importance = min(1, max(0, importance)) }
         if let kind { m.kind = kind }
         if let subject { m.subject = MemoryText.subject(subject) }
         if let conceptID { m.conceptID = conceptID }
         db.run("""
-            UPDATE memories SET content=?, importance=?, kind=?, subject=?, concept_id=?, updated_at=?, norm=?, vec=COALESCE(?, vec),
-            embedding=CASE WHEN ? IS NULL THEN embedding END WHERE id=?
-            """, m.content, m.importance, m.kind.rawValue, m.subject, m.conceptID, Date(), MemoryText.norm(m.content), blob, blob, id)
+            UPDATE memories SET content=?, importance=?, kind=?, subject=?, concept_id=?, updated_at=?, norm=?,
+            vec=CASE WHEN ? THEN ? ELSE vec END, embedding=CASE WHEN ? THEN NULL ELSE embedding END WHERE id=?
+            """, m.content, m.importance, m.kind.rawValue, m.subject, m.conceptID, Date(), MemoryText.norm(m.content), contentChanged ? 1 : 0, blob, contentChanged ? 1 : 0, id)
         refresh(id)
     }
 
@@ -862,9 +864,10 @@ final class MemoryStore: @unchecked Sendable {
                         UPDATE memories SET content=?, norm=?, vec=(SELECT vec FROM memories WHERE id=?), embedding=(SELECT embedding FROM memories WHERE id=?) WHERE id=?
                         """, x.content, MemoryText.norm(x.content), drop, drop, keep)
                 }
-                db.run("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?) WHERE id=?", x.evidence, x.importance, keep)
+                db.run("UPDATE memories SET evidence=evidence+?, importance=MAX(importance, ?), subject=COALESCE(subject, ?), concept_id=COALESCE(concept_id, ?) WHERE id=?",
+                       x.evidence, x.importance, x.subject, x.conceptID, keep)
                 archive(drop, status: "merged into #\(keep)")
-                if keepNew { refresh(keep) }
+                refresh(keep)
                 gone.insert(drop); rep.merged += 1
                 if drop == id { break }
             }

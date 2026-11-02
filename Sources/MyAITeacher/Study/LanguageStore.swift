@@ -76,14 +76,15 @@ extension StudyStore {
 
     /// The deck a language's words are reviewed in.
     static func vocabDeck(_ lang: String) -> String { "\(Languages.englishName(lang)) vocabulary" }
+    private static func langKey(_ raw: String) -> String { Languages.code(raw) ?? raw.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }
 
     /// Adds a word (or updates its meaning/example) and its flashcard. Returns the item.
     @discardableResult
     func addVocab(lang raw: String, term: String, reading: String? = nil, meaning: String, pos: String? = nil, example: String? = nil,
                   exampleMeaning: String? = nil, notes: String? = nil, tags: [String] = [], source: String? = nil) -> VocabItem? {
-        let lang = Languages.code(raw) ?? raw.lowercased()
+        let lang = Self.langKey(raw)
         let term = term.trimmingCharacters(in: .whitespacesAndNewlines), meaning = meaning.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !term.isEmpty, !meaning.isEmpty else { return nil }
+        guard !lang.isEmpty, !term.isEmpty, !meaning.isEmpty else { return nil }
         let clean = { (s: String?) -> String? in s.flatMap { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : $0 } }
         let existing = (try? db.query("SELECT card_id, reading, example, example_meaning, notes FROM vocab WHERE lang=? AND term=?", lang, term))?.first
         let r = clean(reading) ?? existing?.string("reading"), ex = clean(example) ?? existing?.string("example"), exm = clean(exampleMeaning) ?? existing?.string("example_meaning")
@@ -113,7 +114,7 @@ extension StudyStore {
     func vocab(lang: String? = nil, tag: String? = nil, limit: Int = 200) -> [VocabItem] {
         var sql = Self.vocabSelect, params: [SQLBindable?] = []
         var conds: [String] = []
-        if let l = lang.flatMap(Languages.code) { conds.append("v.lang=?"); params.append(l) }
+        if let l = lang.map(Self.langKey), !l.isEmpty { conds.append("v.lang=?"); params.append(l) }
         if let t = tag, !t.isEmpty { conds.append(#"(',' || v.tags || ',') LIKE ? ESCAPE '\'"#); params.append("%,\(Self.likeLiteral(t)),%") }
         if !conds.isEmpty { sql += " WHERE " + conds.joined(separator: " AND ") }
         sql += " ORDER BY v.created_at DESC LIMIT ?"; params.append(limit)
@@ -121,19 +122,20 @@ extension StudyStore {
     }
     func dueVocab(lang: String? = nil, limit: Int = 50, now: Date = Date()) -> [VocabItem] {
         var sql = Self.vocabSelect + " WHERE c.suspended=0 AND c.due<=?", params: [SQLBindable?] = [now]
-        if let l = lang.flatMap(Languages.code) { sql += " AND v.lang=?"; params.append(l) }
+        if let l = lang.map(Self.langKey), !l.isEmpty { sql += " AND v.lang=?"; params.append(l) }
         sql += " ORDER BY c.due LIMIT ?"; params.append(limit)
         return ((try? db.query(sql, params: params)) ?? []).compactMap(vocabItem)
     }
     func searchVocab(_ query: String, lang: String? = nil, limit: Int = 50) -> [VocabItem] {
         let q = "%\(Self.likeLiteral(query))%"   // "50%" or "_" in the search are text, not wildcards
         var sql = Self.vocabSelect + #" WHERE (v.term LIKE ? ESCAPE '\' OR v.meaning LIKE ? ESCAPE '\' OR v.reading LIKE ? ESCAPE '\')"#, params: [SQLBindable?] = [q, q, q]
-        if let l = lang.flatMap(Languages.code) { sql += " AND v.lang=?"; params.append(l) }
+        if let l = lang.map(Self.langKey), !l.isEmpty { sql += " AND v.lang=?"; params.append(l) }
         sql += " ORDER BY v.created_at DESC LIMIT ?"; params.append(limit)
         return ((try? db.query(sql, params: params)) ?? []).compactMap(vocabItem)
     }
     func removeVocab(lang: String, term: String) -> Bool {
-        guard let l = Languages.code(lang), let row = (try? db.query("SELECT id, card_id FROM vocab WHERE lang=? AND term=?", l, term))?.first, let id = row.int("id") else { return false }
+        let l = Self.langKey(lang), t = term.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !l.isEmpty, let row = (try? db.query("SELECT id, card_id FROM vocab WHERE lang=? AND term=?", l, t))?.first, let id = row.int("id") else { return false }
         // The word and its flashcard go together: a failure between the two left a word pointing at a deleted card.
         var removed = false
         db.write("remove a word") {

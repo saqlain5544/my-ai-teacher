@@ -53,14 +53,24 @@ final class ComputerUseGate {
     // MARK: Browser
 
     private func browserDecision(_ input: JSON, conv: String, folder: URL) -> ToolDecision {
-        let action = input["action"]?.string ?? ""
+        let action = input["action"]?.string ?? (input["steps"] != nil ? "steps" : "")
         if ["tabs", "switch_tab", "close_tab", "dialog"].contains(action) || (action == "new_tab" && input["url"] == nil) { return .allow }   // content is gated in the tool
         if action == "download" { return downloadDecision(input, folder: folder) }
         let tab = browser.tab(input["tab"]?.int)
         let target = AgentBrowser.parseRef(input["ref"]?.string)
         // What the call reaches: the address being opened, or the page, and the frame a ref points into.
         var sites: [(SiteKey, URL?)] = []
-        if ["navigate", "new_tab"].contains(action) {
+        if action == "steps" {
+            if let tab, let s = tab.site { sites.append((s, tab.web.url)) }
+            for step in input["steps"]?.array ?? [] {
+                let sa = step["action"]?.string ?? ""
+                if ["navigate", "new_tab"].contains(sa), let u = AgentBrowser.parseURL(step["url"]?.string), let s = SiteKey.of(u) { sites.append((s, u)) }
+                if let tab, let f = AgentBrowser.parseRef(step["ref"]?.string)?.frame, let s = tab.frameSite(f) { sites.append((s, tab.frame(f)?.request.url)) }
+                for f in step["fields"]?.array ?? [] {
+                    if let fr = AgentBrowser.parseRef(f["ref"]?.string)?.frame, let tab, let s = tab.frameSite(fr) { sites.append((s, tab.frame(fr)?.request.url)) }
+                }
+            }
+        } else if ["navigate", "new_tab"].contains(action) {
             if let u = AgentBrowser.parseURL(input["url"]?.string), let s = SiteKey.of(u) { sites.append((s, u)) }
         } else if let tab {
             if let s = tab.site { sites.append((s, tab.web.url)) }
@@ -71,8 +81,11 @@ final class ComputerUseGate {
                 if let fr = AgentBrowser.parseRef(f["ref"]?.string)?.frame, let tab, let s = tab.frameSite(fr) { sites.append((s, tab.frame(fr)?.request.url)) }
             }
         }
+        var seen = Set<SiteKey>()
+        sites = sites.filter { seen.insert($0.0).inserted }
         let decision = chain(sites, conv: conv)
-        guard action == "evaluate", let site = sites.first?.0 else { return decision }
+        guard action == "evaluate" else { return decision }
+        let site = sites.first?.0 ?? SiteKey(id: "about:blank", isLocal: false)
         // JavaScript runs in the page with the learner's session: its own card, after the site's.
         return then(decision) { [weak self] in self?.jsDecision(site, js: input["js"]?.string ?? input["text"]?.string ?? "", conv: conv) ?? .deny("Closed.") }
     }

@@ -120,6 +120,8 @@ enum Runtime {
                 do { try await work(Job(attempt: attempt, beat: { ctx.heartbeat() })); AppJobs.shared.ended(tracked, error: nil) }
                 catch { AppJobs.shared.ended(tracked, error: error.localizedDescription); throw error }
             }.proc
+        }, onExit: { reason in
+            AppJobs.shared.ended(tracked, error: reason.isCrash ? "\(reason)" : nil)
         }))
         if !ok { AppJobs.shared.ended(tracked, error: "already running") }
         return ok
@@ -138,10 +140,10 @@ enum Runtime {
                 result.attach(c)
                 Task {
                     guard !result.isDone else { return }
-                    let started = await jobs.startChild(ChildSpec(id: id, restart: .transient, intensity: limit, backoff: Backoff(initial: 1, max: 10), start: { _ in
+                    let started = await jobs.startChild(ChildSpec(id: id, restart: .transient, intensity: limit, backoff: Backoff(initial: 1, max: 10), start: { attempt in
                         Proc.spawn(id, of: Never.self, watchdog: watchdog) { ctx in
                             guard !result.isDone else { return }   // the caller gave up (cancelled) before this incarnation began
-                            AppJobs.shared.started(id, attempt: 1)
+                            AppJobs.shared.started(id, attempt: attempt + 1)
                             result.finish(.success(try await work({ ctx.heartbeat() })))
                             AppJobs.shared.ended(id, error: nil)
                         }.proc

@@ -30,7 +30,7 @@ enum Prosody {
     /// `n`, they are the syllables; when there are more, the closest neighbours are joined; when fewer, the longest
     /// stretch is cut at its loudness dip. nil when there isn't enough voice for `n` syllables.
     static func syllables(_ e: [Float], f0: [Double?], count n: Int) -> [Syllable]? {
-        guard n > 0, let first = f0.firstIndex(where: { $0 != nil }), let last = f0.lastIndex(where: { $0 != nil }), last - first >= n * 6 else { return nil }
+        guard n > 0, !e.isEmpty, let first = f0.firstIndex(where: { $0 != nil }), let last = f0.lastIndex(where: { $0 != nil }), last - first >= n * 6 else { return nil }
         var runs: [Syllable] = []
         var i = first
         while i <= last {
@@ -87,7 +87,9 @@ enum Prosody {
 
     /// A syllable's pitch (semitones around the speaker's median), its voiced frames only, lightly smoothed.
     static func contour(_ f0: [Double?], _ s: Syllable, median: Double) -> [Double] {
-        let v = f0[max(0, s.start)...min(f0.count - 1, s.end)].compactMap { $0 }.map { 12 * log2($0 / median) }
+        guard !f0.isEmpty else { return [] }
+        let hi = min(f0.count - 1, max(0, s.end)), lo = min(max(0, s.start), hi)
+        let v = f0[lo...hi].compactMap { $0 }.map { 12 * log2($0 / median) }
         guard v.count >= 3 else { return v }
         return v.indices.map { i in let w = v[max(0, i - 1)...min(v.count - 1, i + 1)].sorted(); return w[w.count / 2] }
     }
@@ -182,7 +184,10 @@ enum Prosody {
         // lowering at the end of a word, so no drop there (heiban, or odaka, which only shows on a particle after).
         var c: [Double?] = Array(repeating: nil, count: f0.count)
         // (more than 8 semitones above the middle is the tracker jumping an octave: brought back down)
-        for sy in syl { for t in max(0, sy.start)...min(f0.count - 1, sy.end) { if let v = f0[t] { var x = 12 * log2(v / median); if x > 8 { x -= 12 }; c[t] = x } } }
+        for sy in syl {
+            let hi = min(f0.count - 1, max(0, sy.end)), lo = min(max(0, sy.start), hi)
+            for t in lo...hi { if let v = f0[t] { var x = 12 * log2(v / median); if x > 8 { x -= 12 }; c[t] = x } }
+        }
         var peak = -Double.infinity
         for t in first...last {
             guard let v = c[t] else { continue }
@@ -228,7 +233,8 @@ enum Prosody {
         let score = syl.map { s -> Double in
             let c = contour(f0, s, median: median)
             let pitch = c.max() ?? -12
-            let loud = Double(e[s.start...min(e.count - 1, s.end)].max() ?? 0) / Double(maxE)
+            let hi = min(e.count - 1, max(0, s.end)), lo = min(max(0, s.start), hi)
+            let loud = Double(e[lo...hi].max() ?? 0) / Double(maxE)
             return pitch / 6 + loud * 2 + Double(s.end - s.start) / 30
         }
         return score.indices.max(by: { score[$0] < score[$1] })

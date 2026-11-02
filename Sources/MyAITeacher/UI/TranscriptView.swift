@@ -57,8 +57,11 @@ struct TranscriptView: NSViewRepresentable {
     """
 
     static func dismantleNSView(_ web: WKWebView, coordinator: Coordinator) {
+        coordinator.dismantled = true
         coordinator.watchdog?.stop()
         coordinator.stopFrameLoop()
+        coordinator.session?.sink = nil
+        NotificationCenter.default.removeObserver(coordinator)
         web.configuration.userContentController.removeScriptMessageHandler(forName: "bridge")
     }
 
@@ -66,6 +69,7 @@ struct TranscriptView: NSViewRepresentable {
     final class Coordinator: NSObject, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, TranscriptSink {
         weak var web: WKWebView?
         var watchdog: WebWatchdog?
+        var dismantled = false
         /// After paging in earlier messages, keep the view on the message the learner was looking at.
         private var pendingAnchor: String?
         /// Lessons whose page froze (a looping visual): their visuals wait for a click from then on.
@@ -216,7 +220,7 @@ struct TranscriptView: NSViewRepresentable {
         /// Flush text on the display's own cadence — 120 Hz on ProMotion, 60 Hz elsewhere — so streamed replies move at
         /// the same rate as everything else on screen. A timer here would cap them at a fixed rate the display doesn't share.
         private func startFrameLoop() {
-            guard frameLink == nil else { return }
+            guard !dismantled, frameLink == nil else { return }
             if let link = web?.displayLink(target: self, selector: #selector(onDisplayFrame(_:))) {
                 // ProMotion stays at 120 Hz for the length of the stream (and degrades to the display's own rate otherwise).
                 link.preferredFrameRateRange = CAFrameRateRange(minimum: 60, maximum: 120, preferred: 120)
@@ -396,10 +400,16 @@ struct TranscriptView: NSViewRepresentable {
                 case "mediaURL":
                     // An audio file on the web the learner wants to listen to (an openly licensed podcast, a news clip):
                     // downloaded at their click, then transcribed and attached like a file they dropped in.
-                    guard let url = URL(string: j["url"]?.string ?? ""), ["http", "https"].contains(url.scheme ?? "") else { return }
+                    guard let url = WebFetchTool.url(["url": .string(j["url"]?.string ?? "")]), !LocalNetwork.isLocal(url.host ?? "") else {
+                        run("T.notice('That address cannot be downloaded.')")
+                        return
+                    }
                     Task { @MainActor in
+                        // A name that resolves to a local address is refused too (the lookup is async).
+                        if await LocalNetwork.resolvesLocal(url.host ?? "") { self.run("T.notice('That address cannot be downloaded.')"); return }
+                        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-audio-\(UUID().uuidString.prefix(8))", isDirectory: true)
+                        defer { try? FileManager.default.removeItem(at: dir) }
                         do {
-                            let dir = FileManager.default.temporaryDirectory.appendingPathComponent("myaiteacher-audio-\(UUID().uuidString.prefix(8))", isDirectory: true)
                             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
                             // The name is decoded from the URL ("..%2F..%2F.zshrc" is "../../.zshrc"), and the download
                             // replaces whatever is at `dest`: only a plain name inside `dir`.
@@ -408,9 +418,8 @@ struct TranscriptView: NSViewRepresentable {
                             guard dest.standardizedFileURL.deletingLastPathComponent().path == dir.standardizedFileURL.path else { return }
                             try await Downloader.fetch(url, to: dest) { _ in }
                             let size = (try? FileManager.default.attributesOfItem(atPath: dest.path)[.size] as? NSNumber)?.int64Value ?? 0
-                            guard size < 500_000_000 else { try? FileManager.default.removeItem(at: dir); self.run("T.notice('That audio is over 500 MB.')"); return }
+                            guard size < 500_000_000 else { self.run("T.notice('That audio is over 500 MB.')"); return }
                             Composer.attachMedia(dest, to: s)
-                            try? FileManager.default.removeItem(at: dir)
                             self.run("T.notice(\(JSON.string("Transcribing \(url.lastPathComponent)… it will be attached to your next message.").compact))")
                         } catch { self.run("T.notice(\(JSON.string("The audio didn't download: \(error.localizedDescription)").compact))") }
                     }

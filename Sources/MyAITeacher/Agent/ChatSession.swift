@@ -228,9 +228,13 @@ final class ChatSession: ObservableObject, Identifiable {
     func edit(messageID: String, newText: String) {
         guard !isRunning, let idx = messages.firstIndex(where: { $0.id == messageID }) else { return }
         var m = messages[idx]
-        // Hidden context stays (recalled memory, a mode note), except the plan, which was for the old question.
-        m.blocks = m.blocks.filter { ($0.kind != .text || $0.meta?["hidden"]?.bool == true) && $0.meta?["deepPlan"]?.bool != true } + [.text(newText)]
+        // Attachments stay; recalled memory, the plan, and any UserPromptSubmit hook output from the old text are rebuilt.
+        m.blocks = m.blocks.filter {
+            $0.kind != .text || ($0.meta?["hidden"]?.bool == true && $0.meta?["ephemeral"]?.bool != true
+                && $0.meta?["deepPlan"]?.bool != true && !($0.text?.hasPrefix("<context>\nFrom the user's UserPromptSubmit hook:\n") == true))
+        } + [.text(newText)]
         truncate(after: idx - 1)
+        host.willSend(&m, self)
         append(m)
         start(prompted: true)
     }
@@ -277,7 +281,7 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    func close() { host.sessionWillClose(self); save() }
+    func close() { talk.hangUp(); host.sessionWillClose(self); save() }
 
     /// The app no longer owns this lesson; `deleted` also stops every write (a turn still finishing re-created the
     /// deleted lesson, in the database and the sidebar).
@@ -318,7 +322,10 @@ final class ChatSession: ObservableObject, Identifiable {
     /// Background reports join the conversation (at a step boundary of a running turn).
     private func drainInbox() {
         guard !inbox.isEmpty else { return }
-        for m in inbox { append(m) }
+        for var m in inbox {
+            var meta = m.meta?.object ?? [:]; meta["midTurn"] = true; m.meta = .object(meta)
+            append(m)
+        }
         inbox.removeAll()
         save()
     }
@@ -614,8 +621,8 @@ final class ChatSession: ObservableObject, Identifiable {
                 continue
             }
             if calls.isEmpty {
-                // A background report arrived during this step: read it before ending the turn.
-                if !Task.isCancelled, !inbox.isEmpty { drainInbox(); continue }
+                // A background report arrived during this step: read it before ending the turn (unless wrapping up without tools).
+                if !Task.isCancelled, !wrapping, !inbox.isEmpty { drainInbox(); continue }
                 // An extension may send the agent back to work (a user's Stop hook: "the tests fail"), a few times at most.
                 if !Task.isCancelled, !wrapping, sentBack < Self.sendBackLimit, let why = await host.willEndTurn(self, continued: sentBack), !Task.isCancelled {
                     sentBack += 1
@@ -644,11 +651,12 @@ final class ChatSession: ObservableObject, Identifiable {
                 break
             }
             await runTools(calls, client: client)
-            drainInbox()
             if stepCap > 0, steps >= stepCap, !Task.isCancelled {
                 wrapping = true
                 append(ChatMessage(role: .user, blocks: [Block(kind: .text, text: Self.wrapUpNote(settings.maxToolTurns),
                                                                meta: ["hidden": true, "ephemeral": true])]))
+            } else {
+                drainInbox()
             }
         }
     }
@@ -1007,6 +1015,11 @@ final class ChatSession: ObservableObject, Identifiable {
         if let t = conversation.compactedThrough, !messages.contains(where: { $0.id == t }) {
             conversation.compactedThrough = nil; conversation.compactSummary = nil
         }
+        if let t = conversation.trimmedThrough, !messages.contains(where: { $0.id == t }) {
+            conversation.trimmedThrough = nil
+        }
+        conversation.reflectedCount = conversation.reflectedCount.map { min($0, base + messages.count) }
+        todos = messages.lazy.reversed().flatMap(\.toolUses).first { $0.name == "todo_write" }?.input?["todos"]?.array ?? []
         sink?.reset(messages, conversation: conversation)
         revision += 1
     }

@@ -42,7 +42,7 @@ struct Block: Codable, Sendable, Hashable {
     static func toolResult(id: String, name: String, content: String, isError: Bool = false,
                            images: [Block] = [], meta: JSON? = nil) -> Block {
         var b = Block(kind: .toolResult, text: content, id: id, name: name, isError: isError, meta: meta)
-        if let img = images.first { b.mime = img.mime; b.data = img.data }
+        if let img = images.first { b.mime = img.mime; b.data = img.data; b.blob = img.blob }
         return b
     }
 }
@@ -101,8 +101,8 @@ struct ChatMessage: Codable, Sendable, Identifiable, Hashable {
     var toolUses: [Block] { blocks.filter { $0.kind == .toolUse } }
     var isToolResultOnly: Bool { !blocks.isEmpty && blocks.allSatisfy { $0.kind == .toolResult } }
     /// A message that starts a turn: from the learner (or a background report), not tool results, and not one of the
-    /// loop's hidden notes within a turn (carry on, finish the work, revise, wrap up).
-    var startsTurn: Bool { role == .user && !isToolResultOnly && blocks.contains { $0.meta?["hidden"]?.bool != true } }
+    /// loop's hidden notes or mid-turn background reports within a turn.
+    var startsTurn: Bool { role == .user && !isToolResultOnly && meta?["midTurn"]?.bool != true && blocks.contains { $0.meta?["hidden"]?.bool != true } }
 }
 
 enum TeachingMode: String, Codable, CaseIterable, Identifiable, Sendable {

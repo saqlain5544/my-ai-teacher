@@ -170,8 +170,11 @@ final class MCPInstance: @unchecked Sendable {
     }
 
     private func listed(_ tools: [MCPToolInfo], instructions: String? = nil) {
-        state.mutate { $0.tools = tools }
-        hub?.remember(config, tools: tools, instructions: instructions)
+        let inst = state.mutate { s -> String? in
+            s.tools = tools
+            return instructions ?? s.server?.instructions
+        }
+        hub?.remember(config, tools: tools, instructions: inst)
     }
 
     /// Gone for good: stopped, or its restarts used up.
@@ -346,8 +349,8 @@ final class MCPHub: @unchecked Sendable {
     /// its tools. Returns what was loaded and a note per name it couldn't.
     func load(_ wanted: [String], ctx: ToolContext) async -> (loaded: [String], notes: [String]) {
         let folder = ctx.workspace
-        let settings = await MainActor.run { MCPHub.settings() }
-        let entries = MCPConfig.entries(folder, settings)
+        var settings = await MainActor.run { MCPHub.settings() }
+        var entries = MCPConfig.entries(folder, settings)
         var loaded: [String] = [], notes: [String] = []
         for raw in wanted where raw.hasPrefix("mcp__") {
             let name = raw.hasSuffix("*") ? String(raw.dropLast()) : raw
@@ -365,7 +368,10 @@ final class MCPHub: @unchecked Sendable {
             case .declined: notes.append("\(raw): the user declined “\(server)”; they can allow it in Settings → MCP."); continue
             case .unsupported: notes.append("\(raw): “\(server)” uses the old HTTP+SSE transport, which isn't supported."); continue
             case .needsApproval:
-                guard await approve(e.config, ctx: ctx) else { notes.append("\(raw): the user didn't allow “\(server)” to run."); continue }
+                let ok = await approve(e.config, ctx: ctx)
+                settings = await MainActor.run { MCPHub.settings() }
+                entries = MCPConfig.entries(folder, settings)
+                guard ok else { notes.append("\(raw): the user didn't allow “\(server)” to run."); continue }
             case .usable: break
             }
             var tools = knownTools(e.config, folder: folder)

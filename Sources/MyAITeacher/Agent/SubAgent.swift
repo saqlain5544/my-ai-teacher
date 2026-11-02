@@ -203,7 +203,7 @@ final class SubAgentRun: ObservableObject, Identifiable {
     /// (a parent can't spend past its budget through its children), up the chain.
     private func charge(_ u: Usage, cost c: Double?) {
         usage = usage + u; totalUsage = totalUsage + u
-        cost = c.flatMap { c in cost.map { $0 + c } }
+        if let c { cost = (cost ?? 0) + c }
         if let parent, let p = SubAgentCenter.shared.run(parent), p.isRunning { p.charge(u, cost: c) }
     }
 
@@ -226,10 +226,13 @@ final class SubAgentRun: ObservableObject, Identifiable {
             }
             sink?.upsert(messages[i])
         }
-        if let last = messages.last(where: { $0.role == .assistant && $0.error == nil }), last.id == messages.last?.id, !last.toolUses.isEmpty {
-            upsert(ChatMessage(role: .user, blocks: last.toolUses.map { .toolResult(id: $0.id ?? "", name: $0.name ?? "", content: interrupted, isError: true) }))
+        var kept = messages.filter { m in !(m.role == .assistant && (m.error != nil || !m.blocks.contains { $0.kind == .text || $0.kind == .toolUse })) }
+        if let last = kept.last, last.role == .assistant, !last.toolUses.isEmpty {
+            let reply = ChatMessage(role: .user, blocks: last.toolUses.map { .toolResult(id: $0.id ?? "", name: $0.name ?? "", content: interrupted, isError: true) })
+            upsert(reply)
+            kept.append(reply)
         }
-        return messages.filter { m in !(m.role == .assistant && (m.error != nil || !m.blocks.contains { $0.kind == .text || $0.kind == .toolUse })) }
+        return kept
     }
 
     /// The report for this brief (once; later calls are ignored). A background run's report is delivered to the lesson
@@ -538,7 +541,7 @@ enum SubAgent {
                                 ctx: ToolContext) async throws -> (SubAgentConfig, LLMClient, [String]) {
         var notes: [String] = []
         let types = AgentCatalog.all(app: limits.definitions, folder: host.folder, instructions: await host.instructions())
-        let typeName = q.type ?? previous?.type.name ?? "explore"
+        let typeName = previous?.type.name ?? q.type ?? "explore"
         // A type named loosely ("general-purpose", Claude Code's name) resolves like a model when one clearly fits.
         var named = AgentCatalog.find(typeName, in: types)
         if named == nil, case .guess(let d) = pick(typeName, types.map { ($0, [$0.description, $0.name]) }) {
@@ -619,13 +622,16 @@ enum SubAgent {
         }
         // A sub-agent's own sub-agent spends its parent's budget (its tokens are charged up the chain, and a blocking one
         // runs on the parent's clock): it gets at most what the parent has left.
-        if let handle = ctx.agentCeiling?.handle, let left = await MainActor.run(body: { () -> (tokens: Int?, seconds: Int?)? in
+        if let handle = ctx.agentCeiling?.handle, let left = await MainActor.run(body: { () -> (steps: Int?, tokens: Int?, seconds: Int?)? in
             guard let p = SubAgentCenter.shared.run(handle), let pb = p.budget, !pb.unbounded else { return nil }
-            return (pb.tokens.map { max(1000, $0 - p.usage.total) }, pb.seconds.map { max(1, $0 - Int(p.elapsed)) })
+            return (pb.steps.map { max(1, $0 - p.steps) }, pb.tokens.map { max(1000, $0 - p.usage.total) }, pb.seconds.map { max(1, $0 - Int(p.elapsed)) })
         }) {
             let before = budget
-            if let t = left.tokens { budget.tokens = min(budget.tokens ?? t, t); budget.unbounded = false }
-            if let s = left.seconds { budget.seconds = min(budget.seconds ?? s, s); budget.unbounded = false }
+            budget.unbounded = false
+            if let st = left.steps { budget.steps = min(budget.steps ?? min(st, limits.maxSteps), min(st, limits.maxSteps)) }
+            else if budget.steps == nil { budget.steps = min(max(1, def.budget.steps ?? limits.steps), limits.maxSteps) }
+            if let t = left.tokens { budget.tokens = min(budget.tokens ?? t, t) }
+            if let s = left.seconds { budget.seconds = min(budget.seconds ?? s, s) }
             if budget != before { notes.append("Budget set to \(budget.label): what \(handle) has left of its own.") }
         }
 
@@ -777,6 +783,7 @@ enum SubAgent {
             }
             if Task.isCancelled { try handOver(w); stopped = true }
             ToolArgs.markCutOff(&assistant, finish: metrics.finishReason)
+            if assistant.error != nil { assistant.blocks.removeAll { $0.kind == .toolUse } }
             assistant.metrics = metrics
             assistant.usage = metrics.usage
             turn.steps += 1

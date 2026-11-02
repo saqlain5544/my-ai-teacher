@@ -386,6 +386,7 @@ final class AppModel: ObservableObject {
         folders = folders.filter { URL(fileURLWithPath: $0).canonicalPath != here }
         Task {
             let others = await Task.detached(priority: .userInitiated) { SessionIndex.scan(folders) }.value
+            guard workspace.url.path == current else { return }
             var list = conversations.map { SessionIndex.Entry(conversation: $0, folder: current) } + others
             for i in list.indices { if let live = sessions[list[i].id]?.conversation { list[i] = .init(conversation: live, folder: list[i].folder) } }
             allSessions = SessionIndex.unique(list)

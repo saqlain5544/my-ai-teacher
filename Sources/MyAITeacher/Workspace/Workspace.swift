@@ -116,6 +116,7 @@ extension URL {
     /// Whether this path is `base` or lies under it, after symlinks and case.
     func isInside(_ base: URL) -> Bool {
         let p = canonicalPath, b = base.canonicalPath
+        guard !p.hasPrefix("\u{0}"), !b.hasPrefix("\u{0}") else { return false }
         return p == b || p.hasPrefix(b.hasSuffix("/") ? b : b + "/")
     }
 }
@@ -144,8 +145,8 @@ final class GlobalStore: @unchecked Sendable {
 
     /// Lessons created before folder workspaces existed lived in the global DB; move them to the default folder.
     func migrateLegacyConversations(into ws: Workspace) {
-        guard let rows = try? db.query("SELECT id, data, updated_at FROM conversations"), !rows.isEmpty else { return }
-        let msgs = (try? db.query("SELECT * FROM messages")) ?? []
+        guard let rows = try? db.query("SELECT id, data, updated_at FROM conversations"), !rows.isEmpty,
+              let msgs = try? db.query("SELECT * FROM messages") else { return }
         // Deleted from here only once copied: a copy that failed (the folder's database busy or the disk full) rolled
         // back, and deleting anyway lost every lesson.
         do { try ws.db.transaction {

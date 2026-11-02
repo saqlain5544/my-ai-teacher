@@ -86,12 +86,13 @@ struct OpenAIClient: LLMClient {
                         }
                         for tc in d?["tool_calls"]?.array ?? [] {
                             let newID = tc["id"]?.string.flatMap { $0.isEmpty ? nil : $0 }
+                            let newName = tc["function"]?["name"]?.string.flatMap { $0.isEmpty ? nil : $0 }
                             var idx: Int
                             if let i = tc["index"]?.int {
                                 idx = slot[i] ?? i
-                                // Some servers reuse index 0 for every call: a different id at a busy index is a new call,
+                                // Some servers reuse index 0 for every call: a different id or function name at a busy index is a new call,
                                 // and the index's later argument chunks (without an id) belong to it too.
-                                if let cur = calls[idx], let nid = newID, nid != cur.id, !cur.args.isEmpty {
+                                if let cur = calls[idx], (newID != nil && !cur.id.isEmpty && newID != cur.id) || (newName != nil && !cur.name.isEmpty && newName != cur.name) {
                                     idx = 10_000 + order.count
                                 }
                                 slot[i] = idx
@@ -145,7 +146,7 @@ struct OpenAIClient: LLMClient {
     static func normalize(_ finish: String?, hasTools: Bool) -> String {
         switch finish {
         case "tool_calls", "function_call": return "tool_use"
-        case "length": return "max_tokens"
+        case "length", "max_tokens": return "max_tokens"
         case nil: return hasTools ? "tool_use" : "end_turn"
         default: return hasTools ? "tool_use" : "end_turn"
         }
@@ -161,13 +162,25 @@ struct OpenAIClient: LLMClient {
 
     private static func emitNonStreaming(_ body: String, _ c: AsyncThrowingStream<StreamEvent, Error>.Continuation) {
         guard let j = JSON.parse(body), let m = j["choices"]?[0]?["message"] else { return }
-        if let r = m["reasoning_content"]?.string ?? m["reasoning"]?.string { c.yield(.thinking(r)) }
+        if let r = m["reasoning_content"]?.string ?? m["reasoning"]?.string, !r.isEmpty { c.yield(.thinking(r)) }
         var splitter = ThinkTagSplitter()
-        if let t = m["content"]?.string { splitter.feed(t).forEach { c.yield($0) } }
+        switch m["content"] {
+        case .string(let t): splitter.feed(t).forEach { c.yield($0) }
+        case .array(let parts):
+            for p in parts {
+                if p["type"]?.string == "thinking" {
+                    let t = p["thinking"]?.array?.compactMap { $0["text"]?.string }.joined() ?? p["thinking"]?.string ?? ""
+                    if !t.isEmpty { c.yield(.thinking(t)) }
+                } else if let t = p["text"]?.string { splitter.feed(t).forEach { c.yield($0) } }
+            }
+        default: break
+        }
         splitter.flush().forEach { c.yield($0) }
         for tc in m["tool_calls"]?.array ?? [] {
             var p = PartialToolCall(id: tc["id"]?.string ?? UUID().uuidString, name: tc["function"]?["name"]?.string ?? "")
-            p.args = tc["function"]?["arguments"]?.string ?? "{}"
+            if let a = tc["function"]?["arguments"]?.string { p.args = a }
+            else if let obj = tc["function"]?["arguments"], obj.object != nil { p.args = obj.compact }
+            if let sig = tc["extra_content"]?["google"]?["thought_signature"]?.string { p.signature = sig }
             c.yield(.toolCall(p.finish()))
         }
         if let u = j["usage"] { c.yield(.usage(usage(u))) }
