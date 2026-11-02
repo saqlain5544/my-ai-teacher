@@ -436,14 +436,16 @@ actor CodeIndex {
     }
 
     /// Defined names `sym` (in `path`) uses: what it calls or builds on, with where they're defined.
-    func callees(_ path: String, _ sym: Sym) -> [(name: String, at: [(path: String, sym: Sym)])] {
+    /// `calledOnly`: just the names used as `name(…)`, not every word that happens to match a definition.
+    func callees(_ path: String, _ sym: Sym, calledOnly: Bool = false) -> [(name: String, at: [(path: String, sym: Sym)])] {
         guard let text = try? String(contentsOf: root.appendingPathComponent(path), encoding: .utf8) else { return [] }
         let body = text.fileLines.dropFirst(sym.line).prefix(max(0, sym.end - sym.line)).joined(separator: "\n")
         var seen = Set<String>(), out: [(String, [(path: String, sym: Sym)])] = []
         for m in Self.identRegex.matches(in: body, range: NSRange(body.startIndex..., in: body)) {
             guard let r = Range(m.range, in: body) else { continue }
             let w = String(body[r])
-            guard w != sym.name, w.count >= 3, !seen.contains(w), let d = defs[w], d.count <= 6 else { continue }
+            guard w != sym.name, w.count >= 3, !seen.contains(w), let d = defs[w], d.count <= (calledOnly ? 60 : 6) else { continue }
+            if calledOnly, body[r.upperBound...].drop(while: { $0 == " " }).first != "(" { continue }
             seen.insert(w); out.append((w, d))
         }
         return out

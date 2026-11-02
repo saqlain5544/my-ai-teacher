@@ -111,6 +111,13 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertTrue(related.text.contains("Uses: src/net/retry.py"), related.text)
         let map = try await tool.run(["action": "map"], c)
         XCTAssertTrue(map.text.contains("4 files") && map.text.contains("backoff_delay"), map.text)
+        let graph = try await tool.run(["action": "graph", "name": "fetch"], c)
+        XCTAssertTrue(graph.text.hasPrefix("```mermaid\nflowchart LR") && graph.text.contains("[\"fetch<br/>client.py\"]") && graph.text.contains("[\"backoff_delay<br/>retry.py\"]")
+                      && graph.text.contains("[\"RetryPolicy<br/>retry.py\"]") && graph.text.contains(" --> ") && graph.text.contains("backoff_delay = src/net/retry.py:4"), graph.text)
+        let leaf = try await tool.run(["action": "graph", "name": "backoff_delay"], c)
+        XCTAssertTrue(leaf.text.contains("calls nothing else defined"), leaf.text)
+        let missing = try await tool.run(["action": "graph", "name": "nope"], c)
+        XCTAssertTrue(missing.isError)
         XCTAssertTrue(AgentTree.deferred("code-mentor").contains("code"), "the code mentor loads it on demand")
         XCTAssertTrue(AgentTree.deferred("tutor").contains("code"), "every agent can load it: the review-changes skill is everyone's")
     }

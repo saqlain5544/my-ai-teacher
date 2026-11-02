@@ -16,15 +16,18 @@ struct CodeTool: Tool {
     outside the change, the tests that name them, and removed definitions still named somewhere (use it before a commit); review — the same plus the diff, \
     the repository's REVIEW.md rules and a review checklist: start here to review a change; \
     learn — remember `query` as a rule for this folder's later reviews (after the user says a finding is wrong here, or \
-    names something to always check; one short sentence); forget — drop the rules containing `query`. Use `grep` only for exact text (strings, error messages, config keys).
+    names something to always check; one short sentence); forget — drop the rules containing `query`; \
+    graph — a mermaid flowchart of what function `name` calls, `depth` levels down (default 2, at most 3): put the \
+    ```mermaid block in your answer to show how a change flows. Use `grep` only for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review", "learn", "forget"]),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review", "learn", "forget", "graph"]),
             "query": Schema.string("find: what you're looking for, in words or names. learn: the rule. forget: part of the rule to drop."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
             "path": Schema.string("outline, related: a file (relative to the folder)."),
+            "depth": Schema.integer("graph: how many levels of callees to draw (default 2, at most 3)."),
             "base": Schema.string("impact, review: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
         ], required: ["action"])
     }
@@ -112,6 +115,11 @@ struct CodeTool: Tool {
                               meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
         case "review":
             return ToolOutput(text: note + (try await CodeImpact.reviewBrief(root: ctx.workspace, index: index, base: input["base"]?.string)))
+        case "graph":
+            let n = try input.req("name")
+            guard let root = await index.definitions(n).first else { return .error("No definition of `\(n)` in the index.") }
+            let depth = min(3, max(1, input["depth"]?.int ?? 2))
+            return ToolOutput(text: note + (await Self.callGraph(from: root, depth: depth, index: index)))
         case "learn":
             let rules = ReviewMemory.learn(try input.req("query"), root: ctx.workspace)
             return ToolOutput(text: "Remembered. \(rules.count) review rule\(rules.count == 1 ? "" : "s") for this folder; later `code` review briefs include them:\n" + (ReviewMemory.render(rules) ?? ""))
@@ -119,8 +127,57 @@ struct CodeTool: Tool {
             let n = ReviewMemory.forget(try input.req("query"), root: ctx.workspace)
             return ToolOutput(text: n == 0 ? "No review rule contains that." : "Dropped \(n) review rule\(n == 1 ? "" : "s").")
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review, learn, forget.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review, learn, forget, graph.")
         }
+    }
+
+    /// Conversions and standard types that read as calls (`Int(x)`): never a project definition.
+    static let builtinTypes: Set<String> = ["Int", "Int32", "Int64", "UInt8", "Double", "Float", "String", "Bool", "Character", "Substring", "Array", "Set",
+                                            "Dictionary", "Data", "URL", "Date", "Range", "Optional", "Result", "Error", "Task", "Text", "str", "int", "float", "len", "list", "dict", "set"]
+
+    /// What `root` calls, `depth` levels down, as a mermaid flowchart (bounded to 25 definitions) and the lines of each box.
+    static func callGraph(from root: (path: String, sym: CodeIndex.Sym), depth: Int, index: CodeIndex, maxNodes: Int = 25) async -> String {
+        struct Node { var path: String; var sym: CodeIndex.Sym }
+        func key(_ n: Node) -> String { "\(n.path):\(n.sym.line)" }
+        var ids: [String: String] = [:], nodes: [Node] = [], edges: [(String, String)] = []
+        func id(_ n: Node) -> String {
+            if let i = ids[key(n)] { return i }
+            let i = "n\(ids.count)"; ids[key(n)] = i; nodes.append(n); return i
+        }
+        var frontier = [Node(path: root.path, sym: root.sym)]
+        _ = id(frontier[0])
+        var seenEdges = Set<String>(), cut = false
+        for _ in 0..<depth {
+            var next: [Node] = []
+            for n in frontier {
+                for c in await index.callees(n.path, n.sym, calledOnly: true) where !Self.builtinTypes.contains(c.name) {
+                    // The definition it can mean: same language, not a test (unless the walk started in one), not a constant;
+                    // the one in its own file, else the only one: an ambiguous name draws nothing rather than a wrong box.
+                    let fam = CodeImpact.family(n.path), fromTest = CodeImpact.isTest(root.path)
+                    let fits = c.at.filter { CodeImpact.family($0.path) == fam && $0.sym.kind != "constant" && (fromTest || !CodeImpact.isTest($0.path)) }
+                    guard let d = fits.first(where: { $0.path == n.path }) ?? (fits.count == 1 ? fits[0] : nil) else { continue }
+                    let target = Node(path: d.path, sym: d.sym)
+                    if ids[key(target)] == nil && nodes.count >= maxNodes { cut = true; continue }
+                    let isNew = ids[key(target)] == nil
+                    let (a, b) = (id(n), id(target))
+                    if a != b, seenEdges.insert(a + ">" + b).inserted { edges.append((a, b)) }
+                    if isNew { next.append(target) }
+                }
+            }
+            frontier = next
+            if frontier.isEmpty { break }
+        }
+        func label(_ n: Node) -> String {
+            n.sym.name.replacingOccurrences(of: "\"", with: "'") + "<br/>" + (n.path as NSString).lastPathComponent
+        }
+        var out = "```mermaid\nflowchart LR\n"
+        for n in nodes { out += "  \(ids[key(n)]!)[\"\(label(n))\"]\n" }
+        for (a, b) in edges { out += "  \(a) --> \(b)\n" }
+        out += "```\n"
+        if edges.isEmpty { return "`\(root.sym.name)` (\(root.path):\(root.sym.line)) calls nothing else defined in this project.\n" }
+        out += "\nBoxes: " + nodes.prefix(maxNodes).map { "\($0.sym.name) = \($0.path):\($0.sym.line)" }.joined(separator: ", ") + "\n"
+        if cut { out += "(cut at \(maxNodes) definitions; ask for a smaller `depth` or a deeper function)\n" }
+        return out
     }
 
     static func relative(_ p: String, root: URL) -> String {
