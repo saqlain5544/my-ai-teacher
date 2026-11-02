@@ -244,4 +244,28 @@ enum CodeImpact {
         }
         return nil
     }
+
+    /// A review's whole brief for a change: the diff (bounded), what it reaches, the repository's rules, and how to
+    /// report. The caller reads the files around each hunk and answers; nothing here runs a model.
+    static func reviewBrief(root: URL, index: CodeIndex, base: String?, diffLimit: Int = 24_000) async throws -> String {
+        let r = try await report(root: root, index: index, base: base)
+        guard !r.files.isEmpty else { return render(r, base: base) }
+        let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
+        let rev = given.isEmpty ? "HEAD" : given
+        let diff = await Worktree.run(["-C", root.path, "diff", "-U3", "--no-color", "--no-ext-diff", "--relative", rev, "--"], timeout: 60).stdout
+        var s = "REVIEW BRIEF\n\n## Diff\n"
+        s += diff.count > diffLimit ? "```diff\n" + diff.prefix(diffLimit) + "\n```\n(diff cut at \(diffLimit) characters; `git diff` the rest, file by file)\n" : "```diff\n" + diff + "```\n"
+        s += "\n## Reach\n" + render(r, base: base)
+        if let rules = rules(root: root) { s += "\n## Repository review rules (REVIEW.md)\n" + rules + "\n" }
+        s += """
+
+        ## How to review
+        Read the code around each hunk (`read` offset/limit), not only the diff. For each finding give file:line, what is \
+        wrong, and why it matters; rank must-fix over nits, and say nothing about style the repository's formatter owns. \
+        Check, in order: a removed or renamed name still used (above); callers listed under "used outside the change" \
+        that the new behaviour breaks; the error and empty cases; missing tests for the touched functions; anything the \
+        repository rules forbid. If nothing is wrong, say so plainly rather than inventing findings.
+        """
+        return s
+    }
 }

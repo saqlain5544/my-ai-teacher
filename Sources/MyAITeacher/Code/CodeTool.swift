@@ -13,17 +13,17 @@ struct CodeTool: Tool {
     outline — `path`'s definitions with their lines; related — the files `path` uses and that use it; map — the \
     repository's most central files and their main definitions (start here in an unfamiliar codebase); impact — what \
     the uncommitted changes (or everything since git revision `base`) reach: the definitions they touch, who uses each \
-    outside the change, the tests that name them, and removed definitions still named somewhere (use it before a review \
-    or a commit). Use `grep` only for exact text (strings, error messages, config keys).
+    outside the change, the tests that name them, and removed definitions still named somewhere (use it before a commit); review — the same plus the diff, \
+    the repository's REVIEW.md rules and a review checklist: start here to review a change. Use `grep` only for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact"]),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review"]),
             "query": Schema.string("find: what you're looking for, in words or names."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
             "path": Schema.string("outline, related: a file (relative to the folder)."),
-            "base": Schema.string("impact: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
+            "base": Schema.string("impact, review: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
         ], required: ["action"])
     }
     func summary(_ input: JSON) -> String {
@@ -108,8 +108,10 @@ struct CodeTool: Tool {
             let rules = CodeImpact.rules(root: ctx.workspace).map { "\n\nThis repository's review rules (REVIEW.md) — check the change against them:\n" + $0 } ?? ""
             return ToolOutput(text: note + CodeImpact.render(r, base: base) + rules,
                               meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
+        case "review":
+            return ToolOutput(text: note + (try await CodeImpact.reviewBrief(root: ctx.workspace, index: index, base: input["base"]?.string)))
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review.")
         }
     }
 

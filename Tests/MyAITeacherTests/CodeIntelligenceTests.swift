@@ -176,6 +176,10 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertTrue(t.contains("clamp_delay [new]"), "an untracked file's definitions are new and used nowhere: " + t)
         XCTAssertFalse(t.contains("backoff_delay [new]"), "an edited definition isn't new")
 
+        try write("REVIEW.md", "Retries must be capped.")
+        let review = try await tool.run(["action": "review"], c)
+        XCTAssertTrue(review.text.hasPrefix("REVIEW BRIEF") && review.text.contains("+    return min(30,") && review.text.contains("## Reach")
+                      && review.text.contains("Retries must be capped.") && review.text.contains("## How to review"), review.text)
         let since = try await tool.run(["action": "impact", "base": "HEAD"], c)
         XCTAssertTrue(since.text.contains("since `HEAD`"), since.text)
         let bad = try? await tool.run(["action": "impact", "base": "--output=/tmp/x"], c)
