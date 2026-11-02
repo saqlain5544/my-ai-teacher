@@ -1,11 +1,12 @@
 ---
 name: review-changes
-description: Review a code change (uncommitted work, a branch, a commit range) the way a careful maintainer would — with what it reaches, not just the diff.
+description: Review or check a code change before it is committed or merged — uncommitted work, a branch, a commit range. Use for "review my changes", "is this safe to commit", "what does my change break", "look over my diff", "feedback on what I changed", "what should I fix first". Looks at what the change reaches (callers, tests), not just the diff.
 ---
 
 # Review changes
 
-1. **Start from the brief.** `code` action=review (add `base` for a branch or commit to compare with). It gives what
+1. **Start from the brief.** `load_tools` the `code` tool if it isn't loaded yet, then call it with action=review (add
+   `base` for a branch or commit to compare with). It gives what
    changed, the diff, pattern flags, who uses the touched code outside the change, the tests that name it, the
    repository's own rules, and what earlier reviews here learned. Read all of it before forming a view.
 2. **Read around the hunks.** The diff is three lines of context; the bug is usually outside it. `read` the whole
