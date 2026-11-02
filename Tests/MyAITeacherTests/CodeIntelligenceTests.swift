@@ -225,4 +225,33 @@ final class CodeIntelligenceTests: XCTestCase {
         for i in 0..<ReviewMemory.maxRules + 5 { ReviewMemory.learn("rule \(i)", root: dir) }
         XCTAssertEqual(ReviewMemory.load(dir).count, ReviewMemory.maxRules, "bounded; the oldest go first")
     }
+
+    func testTheRiskScanFlagsAddedLinesOnlyAtTheirNewLineNumbers() {
+        let diff = """
+        diff --git a/api.py b/api.py
+        --- a/api.py
+        +++ b/api.py
+        @@ -10,3 +10,5 @@ def f():
+         ctx = 1
+        -password = "oldoldoldoldold1"
+        +api_key = "sk_live_abcdefghijklmnop"
+        +out = eval(user_text)
+         end = 2
+        diff --git a/tests/test_api.py b/tests/test_api.py
+        --- a/tests/test_api.py
+        +++ b/tests/test_api.py
+        @@ -1,0 +2,2 @@
+        +# TODO cover the error case
+        +print(eval("1"))
+        diff --git a/App.swift b/App.swift
+        --- a/App.swift
+        +++ b/App.swift
+        @@ -5 +5 @@
+        -let x = y
+        +let x = try! load()
+        """
+        let f = CodeImpact.flags(diff).map { "\($0.path):\($0.line) \($0.what)" }
+        XCTAssertEqual(f, ["api.py:11 hardcoded secret", "api.py:12 runs a string as code", "tests/test_api.py:2 unfinished", "App.swift:5 force unwrap or forced cast"], f.description)
+        XCTAssertTrue(CodeImpact.flags("+++ b/a.py\n@@ -1 +1 @@\n+x = compute(1, 2)\n").isEmpty)
+    }
 }

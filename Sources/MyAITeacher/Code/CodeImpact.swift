@@ -254,6 +254,45 @@ enum CodeImpact {
         return nil
     }
 
+    struct Flag: Sendable, Equatable { var path: String; var line: Int; var what: String; var text: String }
+
+    /// Patterns worth a reviewer's eye on a line the change added: not verdicts, leads. `tests`: whether they apply in test files.
+    static let patterns: [(what: String, regex: String, tests: Bool)] = [
+        ("hardcoded secret", #"(?i)(api[_-]?key|secret|passw(or)?d|token)\w*\s*[:=]\s*["'][A-Za-z0-9_\-/+=]{12,}["']"#, false),
+        ("private key", #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#, true),
+        ("runs a string as code", #"\b(eval|exec)\s*\(|new Function\(|shell\s*=\s*True|os\.system\(|Runtime\.getRuntime\(\)\.exec"#, false),
+        ("TLS or certificate checks off", #"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false|InsecureSkipVerify|NSAllowsArbitraryLoads|CURLOPT_SSL_VERIFYPEER,\s*(0|false)"#, true),
+        ("force unwrap or forced cast", #"\btry!|\bas!|\w\)?!\.\w|\w!\s*$"#, false),
+        ("unfinished", #"\b(TODO|FIXME|XXX|HACK)\b"#, true),
+        ("debug leftover", #"console\.(log|debug)\(|\bdebugger\b|\bbreakpoint\(\)|\bpdb\.set_trace"#, false),
+        ("SQL built from a string", #"(?i)(select|insert|update|delete)\b[^\n]*(\+\s*\w|\$\{|%s|\\\()[^\n]*\b(from|into|set|where)\b|(execute|query)\(\s*f?["'][^"']*(\{|%s|\+)"#, false),
+    ]
+
+    /// The patterns' hits on the lines a unified diff adds (`diff -U<n>`), with the new-file line numbers.
+    static func flags(_ diff: String) -> [Flag] {
+        var out: [Flag] = []
+        var path: String?, line = 0
+        for raw in diff.split(separator: "\n", omittingEmptySubsequences: false) {
+            if raw.hasPrefix("+++ ") { let t = raw.dropFirst(4); path = t == "/dev/null" ? nil : String(t.hasPrefix("b/") ? t.dropFirst(2) : t); continue }
+            if raw.hasPrefix("--- ") { continue }
+            if raw.hasPrefix("@@"), let m = raw.range(of: #"\+(\d+)"#, options: .regularExpression) { line = (Int(raw[m].dropFirst()) ?? 1) - 1; continue }
+            guard let p = path else { continue }
+            if raw.hasPrefix("+") {
+                line += 1
+                let text = String(raw.dropFirst())
+                let test = isTest(p), fam = family(p)
+                for (what, rx, inTests) in patterns where inTests || !test {
+                    if what == "force unwrap or forced cast", fam != "swift" { continue }
+                    if what == "debug leftover", test { continue }
+                    if text.range(of: rx, options: .regularExpression) != nil {
+                        out.append(Flag(path: p, line: line, what: what, text: text.trimmingCharacters(in: .whitespaces).prefix(140).description))
+                    }
+                }
+            } else if !raw.hasPrefix("-") && !raw.hasPrefix("\\") { line += 1 }
+        }
+        return out
+    }
+
     /// What changed, file by file: definitions added, modified and removed. Deterministic, so it also serves a commit message.
     static func summary(_ r: Report) -> String {
         var lines: [String] = []
@@ -279,6 +318,12 @@ enum CodeImpact {
         let diff = await Worktree.run(["-C", root.path, "diff", "-U3", "--no-color", "--no-ext-diff", "--relative", rev, "--"], timeout: 60).stdout
         var s = "REVIEW BRIEF\n\n## What changed\n" + summary(r) + "\n\n## Diff\n"
         s += diff.count > diffLimit ? "```diff\n" + diff.prefix(diffLimit) + "\n```\n(diff cut at \(diffLimit) characters; `git diff` the rest, file by file)\n" : "```diff\n" + diff + "```\n"
+        let flagged = flags(diff)
+        if !flagged.isEmpty {
+            s += "\n## Pattern flags (leads from a scan of the added lines, not verdicts: confirm in context)\n"
+            s += flagged.prefix(30).map { "- \($0.path):\($0.line)  \($0.what): \($0.text)" }.joined(separator: "\n") + "\n"
+            if flagged.count > 30 { s += "(and \(flagged.count - 30) more)\n" }
+        }
         s += "\n## Reach\n" + render(r, base: base)
         if let rules = rules(root: root) { s += "\n## Repository review rules (REVIEW.md)\n" + rules + "\n" }
         if let learned = ReviewMemory.render(ReviewMemory.load(root)) { s += "\n## Learned from earlier reviews here (the user's corrections; follow them)\n" + learned + "\n" }
