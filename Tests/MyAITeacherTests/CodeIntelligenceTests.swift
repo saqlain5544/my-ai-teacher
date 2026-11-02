@@ -253,5 +253,7 @@ final class CodeIntelligenceTests: XCTestCase {
         let f = CodeImpact.flags(diff).map { "\($0.path):\($0.line) \($0.what)" }
         XCTAssertEqual(f, ["api.py:11 hardcoded secret", "api.py:12 runs a string as code", "tests/test_api.py:2 unfinished", "App.swift:5 force unwrap or forced cast"], f.description)
         XCTAssertTrue(CodeImpact.flags("+++ b/a.py\n@@ -1 +1 @@\n+x = compute(1, 2)\n").isEmpty)
+        let quiet = "+++ b/a.js\n@@ -1 +1,3 @@\n+const m = /^(\\d+)$/.exec(s);\n+try db.execute(\"UPDATE t SET n=n+COALESCE((SELECT n FROM t WHERE id=?), 0) WHERE id=?\", a, b)\n+q = \"select * from t where id=\" + id\n"
+        XCTAssertEqual(CodeImpact.flags(quiet).map(\.what), ["SQL built from a string"], "RegExp.exec and a parametrized statement are not leads; concatenation is")
     }
 }

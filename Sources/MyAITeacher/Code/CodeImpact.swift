@@ -260,12 +260,12 @@ enum CodeImpact {
     static let patterns: [(what: String, regex: String, tests: Bool)] = [
         ("hardcoded secret", #"(?i)(api[_-]?key|secret|passw(or)?d|token)\w*\s*[:=]\s*["'][A-Za-z0-9_\-/+=]{12,}["']"#, false),
         ("private key", #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#, true),
-        ("runs a string as code", #"\b(eval|exec)\s*\(|new Function\(|shell\s*=\s*True|os\.system\(|Runtime\.getRuntime\(\)\.exec"#, false),
+        ("runs a string as code", #"(?<![.\w])(eval|exec)\s*\(|new Function\(|shell\s*=\s*True|os\.system\(|Runtime\.getRuntime\(\)\.exec"#, false),
         ("TLS or certificate checks off", #"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false|InsecureSkipVerify|NSAllowsArbitraryLoads|CURLOPT_SSL_VERIFYPEER,\s*(0|false)"#, true),
         ("force unwrap or forced cast", #"\btry!|\bas!|\w\)?!\.\w|\w!\s*$"#, false),
         ("unfinished", #"\b(TODO|FIXME|XXX|HACK)\b"#, true),
         ("debug leftover", #"console\.(log|debug)\(|\bdebugger\b|\bbreakpoint\(\)|\bpdb\.set_trace"#, false),
-        ("SQL built from a string", #"(?i)(select|insert|update|delete)\b[^\n]*(\+\s*\w|\$\{|%s|\\\()[^\n]*\b(from|into|set|where)\b|(execute|query)\(\s*f?["'][^"']*(\{|%s|\+)"#, false),
+        ("SQL built from a string", #"(?i)\b(select|insert|update|delete)\b[^\n]*(?:(["']\s*\+|\+\s*["']|\$\{|\\\(|%s|\{\w+\})[^\n]*\b(from|into|set|where)\b|\b(from|into|set|where)\b[^\n]*(["']\s*\+|\+\s*["']|\$\{|\\\(|%s|\{\w+\}))"#, false),
     ]
 
     /// The patterns' hits on the lines a unified diff adds (`diff -U<n>`), with the new-file line numbers.
