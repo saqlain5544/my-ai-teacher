@@ -257,6 +257,7 @@ enum CodeImpact {
         s += diff.count > diffLimit ? "```diff\n" + diff.prefix(diffLimit) + "\n```\n(diff cut at \(diffLimit) characters; `git diff` the rest, file by file)\n" : "```diff\n" + diff + "```\n"
         s += "\n## Reach\n" + render(r, base: base)
         if let rules = rules(root: root) { s += "\n## Repository review rules (REVIEW.md)\n" + rules + "\n" }
+        if let learned = ReviewMemory.render(ReviewMemory.load(root)) { s += "\n## Learned from earlier reviews here (the user's corrections; follow them)\n" + learned + "\n" }
         s += """
 
         ## How to review

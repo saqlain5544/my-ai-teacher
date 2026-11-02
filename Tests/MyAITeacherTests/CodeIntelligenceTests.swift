@@ -202,4 +202,27 @@ final class CodeIntelligenceTests: XCTestCase {
         try write("REVIEW.md", String(repeating: "x", count: 5000))
         XCTAssertTrue(CodeImpact.rules(root: dir, limit: 100)?.contains("REVIEW.md goes on") == true)
     }
+
+    @MainActor func testReviewsRememberWhatTheUserCorrected() async throws {
+        defer { try? FileManager.default.removeItem(at: ReviewMemory.url(dir)) }
+        XCTAssertTrue(ReviewMemory.load(dir).isEmpty)
+        let tool = CodeTool(), c = ctx()
+        var out = try await tool.run(["action": "learn", "query": "Retries without jitter are fine in tests/\nfixtures"], c)
+        XCTAssertTrue(out.text.contains("1. Retries without jitter are fine in tests/ fixtures"), out.text)
+        _ = try await tool.run(["action": "learn", "query": "retries without jitter are fine in tests/ fixtures"], c)
+        XCTAssertEqual(ReviewMemory.load(dir).count, 1, "the same rule twice is kept once")
+        _ = try await tool.run(["action": "learn", "query": "Always check the migration"], c)
+        try write("src/net/retry.py", "import random\n\n\ndef backoff_delay(attempt):\n    return 1\n")
+        let git = { (a: [String]) async in _ = await Worktree.run(["-C", self.dir.path] + a) }
+        await git(["init", "-q"]); await git(["add", "-A"])
+        await git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b"])
+        try write("src/net/retry.py", "import random\n\n\ndef backoff_delay(attempt):\n    return 2\n")
+        out = try await tool.run(["action": "review"], c)
+        XCTAssertTrue(out.text.contains("Learned from earlier reviews") && out.text.contains("2. Always check the migration"), out.text)
+        out = try await tool.run(["action": "forget", "query": "migration"], c)
+        XCTAssertTrue(out.text.contains("Dropped 1"), out.text)
+        XCTAssertEqual(ReviewMemory.load(dir).map(\.text), ["Retries without jitter are fine in tests/ fixtures"])
+        for i in 0..<ReviewMemory.maxRules + 5 { ReviewMemory.learn("rule \(i)", root: dir) }
+        XCTAssertEqual(ReviewMemory.load(dir).count, ReviewMemory.maxRules, "bounded; the oldest go first")
+    }
 }

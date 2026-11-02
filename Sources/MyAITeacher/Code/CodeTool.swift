@@ -14,13 +14,15 @@ struct CodeTool: Tool {
     repository's most central files and their main definitions (start here in an unfamiliar codebase); impact — what \
     the uncommitted changes (or everything since git revision `base`) reach: the definitions they touch, who uses each \
     outside the change, the tests that name them, and removed definitions still named somewhere (use it before a commit); review — the same plus the diff, \
-    the repository's REVIEW.md rules and a review checklist: start here to review a change. Use `grep` only for exact text (strings, error messages, config keys).
+    the repository's REVIEW.md rules and a review checklist: start here to review a change; \
+    learn — remember `query` as a rule for this folder's later reviews (after the user says a finding is wrong here, or \
+    names something to always check; one short sentence); forget — drop the rules containing `query`. Use `grep` only for exact text (strings, error messages, config keys).
     """
     let risk = ToolRisk.readOnly
     var schema: JSON {
         Schema.object([
-            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review"]),
-            "query": Schema.string("find: what you're looking for, in words or names."),
+            "action": Schema.string("What to look up.", enum: ["find", "def", "refs", "callers", "callees", "outline", "related", "map", "impact", "review", "learn", "forget"]),
+            "query": Schema.string("find: what you're looking for, in words or names. learn: the rule. forget: part of the rule to drop."),
             "name": Schema.string("def, refs, callers, callees: the symbol."),
             "path": Schema.string("outline, related: a file (relative to the folder)."),
             "base": Schema.string("impact, review: a git revision to compare with (a branch, tag or commit); default HEAD, the uncommitted work."),
@@ -110,8 +112,14 @@ struct CodeTool: Tool {
                               meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
         case "review":
             return ToolOutput(text: note + (try await CodeImpact.reviewBrief(root: ctx.workspace, index: index, base: input["base"]?.string)))
+        case "learn":
+            let rules = ReviewMemory.learn(try input.req("query"), root: ctx.workspace)
+            return ToolOutput(text: "Remembered. \(rules.count) review rule\(rules.count == 1 ? "" : "s") for this folder; later `code` review briefs include them:\n" + (ReviewMemory.render(rules) ?? ""))
+        case "forget":
+            let n = ReviewMemory.forget(try input.req("query"), root: ctx.workspace)
+            return ToolOutput(text: n == 0 ? "No review rule contains that." : "Dropped \(n) review rule\(n == 1 ? "" : "s").")
         default:
-            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review.")
+            return .error("action is one of find, def, refs, callers, callees, outline, related, map, impact, review, learn, forget.")
         }
     }
 
