@@ -112,6 +112,7 @@ final class CodeIntelligenceTests: XCTestCase {
         let map = try await tool.run(["action": "map"], c)
         XCTAssertTrue(map.text.contains("4 files") && map.text.contains("backoff_delay"), map.text)
         XCTAssertTrue(AgentTree.deferred("code-mentor").contains("code"), "the code mentor loads it on demand")
+        XCTAssertTrue(AgentTree.deferred("tutor").contains("code"), "every agent can load it: the review-changes skill is everyone's")
     }
 
     func testADiffParsesToChangedLinesAndRemovedText() {
