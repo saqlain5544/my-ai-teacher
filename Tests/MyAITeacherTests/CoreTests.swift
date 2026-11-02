@@ -338,4 +338,31 @@ final class CoreTests: XCTestCase {
         await m.checkpoint(dir)
         XCTAssertTrue(m.files.isEmpty); XCTAssertTrue(m.lastCommit?.hasPrefix("Checkpoint") == true)
     }
+
+    @MainActor
+    func testChangesPanelTracesReachOnlyWhileItsSectionIsOpen() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("chg-\(UUID().uuidString.prefix(6))").resolvingSymlinksInPath()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try "def charge(user, cents):\n    return cents\n".write(to: dir.appendingPathComponent("pay.py"), atomically: true, encoding: .utf8)
+        try "from pay import charge\n\n\ndef checkout(user, total):\n    return charge(user, total)\n".write(to: dir.appendingPathComponent("checkout.py"), atomically: true, encoding: .utf8)
+        _ = try Workspace(url: dir)
+        let m = ChangesModel()
+        await m.initRepo(dir)
+        try "def charge(user, cents, currency):\n    return cents\n".write(to: dir.appendingPathComponent("pay.py"), atomically: true, encoding: .utf8)
+        await m.reload(dir)
+        XCTAssertNil(m.reach, "closed: nothing is traced on an edit")
+        m.reachWanted = true
+        await m.loadReach(dir)
+        XCTAssertTrue(m.reach?.contains("checkout.py:5  in checkout") == true && m.reach?.contains("pay.py") == true, m.reach ?? "nil")
+        await m.reload(dir)
+        XCTAssertNotNil(m.reach, "open: an edit re-traces")
+        m.reachWanted = false
+        await m.reload(dir)
+        XCTAssertNil(m.reach, "closing drops it")
+        await m.checkpoint(dir)
+        m.reachWanted = true
+        await m.loadReach(dir)
+        XCTAssertNil(m.reach, "no changes, nothing to trace")
+    }
 }

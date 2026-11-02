@@ -42,6 +42,17 @@ struct ChangesPanel: View {
                     }
                     .listStyle(.plain).frame(minHeight: 80, maxHeight: 220)
                     Divider()
+                    DisclosureGroup(isExpanded: $model.reachWanted) {
+                        ScrollView {
+                            Text(model.reach ?? "Tracing who uses what changed…").font(.caption.monospaced()).textSelection(.enabled)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }.frame(maxHeight: 170)
+                    } label: {
+                        Label("Reach of these changes", systemImage: "point.3.connected.trianglepath.dotted").font(.subheadline)
+                    }
+                    .padding(.horizontal, 10).padding(.vertical, 6)
+                    .help("Who else uses the definitions you changed, and which tests name them")
+                    Divider()
                     DiffView(lines: model.diff)
                 }
             }
@@ -49,6 +60,7 @@ struct ChangesPanel: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)   // the header stays on top when the list is empty
         .task(id: folder) { await model.reload(folder) }
         .onChange(of: model.selected) { _, p in Task { await model.loadDiff(folder, p) } }
+        .onChange(of: model.reachWanted) { _, on in if on { Task { await model.loadReach(folder) } } }
         .onReceive(EventBus.subject.filter {
             if case .toolFinished(_, let t, _, _) = $0 { return ["edit", "write", "bash", "run_code"].contains(t) }
             if case .turnFinished = $0 { return true }
@@ -106,6 +118,9 @@ final class ChangesModel: ObservableObject {
     @Published var selected: String?
     @Published var diff: [String] = []
     @Published var lastCommit: String?
+    /// "Reach of these changes": traced only while the section is open (it re-indexes and searches the project).
+    @Published var reachWanted = false
+    @Published var reach: String?
 
     static let maxDiffLines = 5000
 
@@ -134,8 +149,15 @@ final class ChangesModel: ObservableObject {
         }
         lastCommit = await git(folder, ["log", "-1", "--format=%s · %cr"]).stdout.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty
         state = .ready
+        if reachWanted { await loadReach(folder) } else { reach = nil }
         if selected == nil || !files.contains(where: { $0.path == selected }) { selected = files.first?.path }
         await loadDiff(folder, selected)
+    }
+
+    func loadReach(_ folder: URL) async {
+        guard !files.isEmpty else { reach = nil; return }
+        let text = await CodeImpact.brief(root: folder, maxLines: 30) ?? "Nothing else in the project uses what these changes touch."
+        if reachWanted { reach = text }   // closed while it was tracing: drop it
     }
 
     func loadDiff(_ folder: URL, _ path: String?) async {
