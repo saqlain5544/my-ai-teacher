@@ -242,6 +242,8 @@ struct ProjectReviewTool: Tool {
             }
             if p.helpSinceReview != .none { s += "Help since the last round: \(p.helpSinceReview == .solution ? "a solution" : "hints") (a pass records it as helped).\n\n" }
             s += "Changed since the \(p.snapshotWhy ?? "baseline")\(p.snapshotAt.map { " (\(ProjectTestsTool.ago($0)))" } ?? ""):\n" + ProjectStore.render(changes)
+            // What the changes reach beyond their own lines (callers outside the diff, tests that name them), when the folder is a git repository.
+            if !changes.isEmpty, let reach = await CodeImpact.brief(root: ws.url) { s += "\n\nReach of the changes (who else uses what they touched; check these callers still hold):\n" + reach }
             // The round this start opens: findings are recorded against it (what changed, the run it made, the checks).
             let ran = input["run_tests"]?.bool != false
             ProjectStore.mutate(ws) { q in

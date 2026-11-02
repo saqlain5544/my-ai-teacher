@@ -221,4 +221,15 @@ enum CodeImpact {
         if !r.unindexed.isEmpty { s += "Not indexed: " + r.unindexed.prefix(10).joined(separator: ", ") + "\n" }
         return s
     }
+
+    /// The report cut to what a review needs in front of it (`maxLines`), or nil when there is nothing to say or the
+    /// folder isn't a git repository: the review goes on without it.
+    static func brief(root: URL, maxLines: Int = 40) async -> String? {
+        let index = CodeIndex.of(root)
+        _ = await index.refresh()
+        guard let r = try? await report(root: root, index: index, base: nil), !r.changed.isEmpty || !r.removed.isEmpty else { return nil }
+        let lines = render(r, base: nil).split(separator: "\n", omittingEmptySubsequences: true)
+        let cut = lines.count > maxLines ? lines.prefix(maxLines) + ["… (`code` action=impact for the rest)"] : lines.map { $0 }
+        return cut.joined(separator: "\n")
+    }
 }
