@@ -29,7 +29,7 @@ final class SkillsTests: XCTestCase {
         let language = Set(Skills.available(node: "language", folder: nil, home: nil, builtIn: real).map(\.name))
         let mentor = Set(Skills.available(node: "code-mentor", folder: nil, home: nil, builtIn: real).map(\.name))
         let base = Set(Skills.scan(real.appendingPathComponent("root"), source: .app("root")).map(\.name))
-        XCTAssertTrue(base.contains("web-research"))
+        XCTAssertTrue(base.contains("web-research") && base.contains("review-changes"))
         for s in [tutor, language, mentor] { XCTAssertTrue(base.isSubset(of: s), "every agent has the base skills") }
         XCTAssertTrue(tutor.contains("lesson-design") && language.contains("lesson-design") && mentor.contains("lesson-design"), "every teacher's")
         XCTAssertTrue(language.contains("conversation-practice") && !mentor.contains("conversation-practice"))

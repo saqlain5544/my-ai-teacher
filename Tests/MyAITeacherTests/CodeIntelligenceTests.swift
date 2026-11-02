@@ -113,4 +113,147 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertTrue(map.text.contains("4 files") && map.text.contains("backoff_delay"), map.text)
         XCTAssertTrue(AgentTree.deferred("code-mentor").contains("code"), "the code mentor loads it on demand")
     }
+
+    func testADiffParsesToChangedLinesAndRemovedText() {
+        let diff = """
+        diff --git a/src/a.py b/src/a.py
+        --- a/src/a.py
+        +++ b/src/a.py
+        @@ -4,2 +4,3 @@ def f():
+        -    return 1
+        -    pass
+        +    return 2
+        +    pass
+        +    # more
+        @@ -20 +20,0 @@ def g():
+        -def gone():
+        diff --git a/old.py b/old.py
+        --- a/old.py
+        +++ /dev/null
+        @@ -1 +0,0 @@
+        -def legacy(): pass
+        """
+        let d = CodeImpact.parse(diff)
+        XCTAssertEqual(d.ranges["src/a.py"], [4...6, 20...20], "a pure deletion marks the line it sits after")
+        XCTAssertEqual(d.removed["src/a.py"]?.last, "def gone():")
+        XCTAssertEqual(d.removed["old.py"], ["def legacy(): pass"], "a deleted file is keyed by its old path")
+        XCTAssertNil(d.ranges["old.py"])
+    }
+
+    @MainActor func testImpactTracesAChangeToItsCallersTestsAndBrokenNames() async throws {
+        try write("tests/test_retry.py", """
+        from src.net.retry import backoff_delay
+
+
+        def test_delay_grows():
+            assert backoff_delay(2) > backoff_delay(1)
+        """)
+        func git(_ args: String...) async { _ = await Worktree.run(["-C", dir.path] + args) }
+        await git("init", "-q"); await git("add", "-A")
+        await git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "base")
+        let tool = CodeTool(), c = ctx()
+        let clean = try await tool.run(["action": "impact"], c)
+        XCTAssertTrue(clean.text.contains("No uncommitted changes"), clean.text)
+
+        // backoff_delay's body changes, RetryPolicy goes (client.py still builds one), and a new file adds a function.
+        try write("src/net/retry.py", """
+        import random
+
+
+        def backoff_delay(attempt, base=0.5):
+            # Wait longer before each retry, with jitter, so clients don't retry in lockstep.
+            return min(30, base * (2 ** attempt)) + random.random() * base
+        """)
+        try write("src/net/limits.py", """
+        def clamp_delay(d, ceiling=30):
+            return min(d, ceiling)
+        """)
+        let out = try await tool.run(["action": "impact"], c)
+        let t = out.text
+        XCTAssertTrue(t.contains("REMOVED BUT STILL NAMED") && t.contains("RetryPolicy (was in src/net/retry.py)") && t.contains("src/client.py:"), t)
+        XCTAssertTrue(t.contains("src/net/retry.py:4 ƒ def backoff_delay") && t.contains("in fetch"), "its caller outside the change: " + t)
+        XCTAssertTrue(t.contains("tests/test_retry.py — backoff_delay"), "the test that names it: " + t)
+        XCTAssertTrue(t.contains("clamp_delay [new]"), "an untracked file's definitions are new and used nowhere: " + t)
+        XCTAssertFalse(t.contains("backoff_delay [new]"), "an edited definition isn't new")
+
+        try write("REVIEW.md", "Retries must be capped.")
+        let review = try await tool.run(["action": "review"], c)
+        XCTAssertTrue(review.text.hasPrefix("REVIEW BRIEF") && review.text.contains("+    return min(30,") && review.text.contains("## Reach") && review.text.contains("## What changed") && review.text.contains("- src/net/retry.py: changed backoff_delay; removed RetryPolicy") && review.text.contains("- src/net/limits.py: added clamp_delay")
+                      && review.text.contains("Retries must be capped.") && review.text.contains("## How to review"), review.text)
+        let since = try await tool.run(["action": "impact", "base": "HEAD"], c)
+        XCTAssertTrue(since.text.contains("since `HEAD`"), since.text)
+        let bad = try? await tool.run(["action": "impact", "base": "--output=/tmp/x"], c)
+        XCTAssertNil(bad, "a base that is an option is refused")
+    }
+
+    func testImpactCountsOnlyUsesThatCanBeTheDefinitions() {
+        func u(_ path: String, _ text: String) -> CodeTool.Use { CodeTool.Use(path: path, line: 1, text: text, within: nil) }
+        let uses = [u("a.js", "const x = blank(v);"), u("a.js", "<input class=\"blank\">"), u("a.js", "el.querySelector('input.blank')"),
+                    u("a.js", "foo(); // blank here"), u("a.js", "'q-blank' + blank_fix"), u("b.swift", "blank(1)"), u("a.js", "let y = a.blank")]
+        let kept = CodeImpact.plausible(uses, name: "blank", from: "z.js", local: false)
+        XCTAssertEqual(kept.map(\.text), ["const x = blank(v);", "let y = a.blank"], "not strings, comments, other identifiers or another language")
+        XCTAssertTrue(CodeImpact.plausible([u("a.swift", "f()"), u("b.swift", "f()")], name: "f", from: "a.swift", local: true).count == 1, "private: its own file only")
+    }
+
+    func testReviewRulesComeFromTheRepository() throws {
+        XCTAssertNil(CodeImpact.rules(root: dir))
+        try write("REVIEW.md", "  \nEvery retry must be capped.\n")
+        XCTAssertEqual(CodeImpact.rules(root: dir), "Every retry must be capped.")
+        try write("REVIEW.md", String(repeating: "x", count: 5000))
+        XCTAssertTrue(CodeImpact.rules(root: dir, limit: 100)?.contains("REVIEW.md goes on") == true)
+    }
+
+    @MainActor func testReviewsRememberWhatTheUserCorrected() async throws {
+        defer { try? FileManager.default.removeItem(at: ReviewMemory.url(dir)) }
+        XCTAssertTrue(ReviewMemory.load(dir).isEmpty)
+        let tool = CodeTool(), c = ctx()
+        var out = try await tool.run(["action": "learn", "query": "Retries without jitter are fine in tests/\nfixtures"], c)
+        XCTAssertTrue(out.text.contains("1. Retries without jitter are fine in tests/ fixtures"), out.text)
+        _ = try await tool.run(["action": "learn", "query": "retries without jitter are fine in tests/ fixtures"], c)
+        XCTAssertEqual(ReviewMemory.load(dir).count, 1, "the same rule twice is kept once")
+        _ = try await tool.run(["action": "learn", "query": "Always check the migration"], c)
+        try write("src/net/retry.py", "import random\n\n\ndef backoff_delay(attempt):\n    return 1\n")
+        let git = { (a: [String]) async in _ = await Worktree.run(["-C", self.dir.path] + a) }
+        await git(["init", "-q"]); await git(["add", "-A"])
+        await git(["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "b"])
+        try write("src/net/retry.py", "import random\n\n\ndef backoff_delay(attempt):\n    return 2\n")
+        out = try await tool.run(["action": "review"], c)
+        XCTAssertTrue(out.text.contains("Learned from earlier reviews") && out.text.contains("2. Always check the migration"), out.text)
+        out = try await tool.run(["action": "forget", "query": "migration"], c)
+        XCTAssertTrue(out.text.contains("Dropped 1"), out.text)
+        XCTAssertEqual(ReviewMemory.load(dir).map(\.text), ["Retries without jitter are fine in tests/ fixtures"])
+        for i in 0..<ReviewMemory.maxRules + 5 { ReviewMemory.learn("rule \(i)", root: dir) }
+        XCTAssertEqual(ReviewMemory.load(dir).count, ReviewMemory.maxRules, "bounded; the oldest go first")
+    }
+
+    func testTheRiskScanFlagsAddedLinesOnlyAtTheirNewLineNumbers() {
+        let diff = """
+        diff --git a/api.py b/api.py
+        --- a/api.py
+        +++ b/api.py
+        @@ -10,3 +10,5 @@ def f():
+         ctx = 1
+        -password = "oldoldoldoldold1"
+        +api_key = "sk_live_abcdefghijklmnop"
+        +out = eval(user_text)
+         end = 2
+        diff --git a/tests/test_api.py b/tests/test_api.py
+        --- a/tests/test_api.py
+        +++ b/tests/test_api.py
+        @@ -1,0 +2,2 @@
+        +# TODO cover the error case
+        +print(eval("1"))
+        diff --git a/App.swift b/App.swift
+        --- a/App.swift
+        +++ b/App.swift
+        @@ -5 +5 @@
+        -let x = y
+        +let x = try! load()
+        """
+        let f = CodeImpact.flags(diff).map { "\($0.path):\($0.line) \($0.what)" }
+        XCTAssertEqual(f, ["api.py:11 hardcoded secret", "api.py:12 runs a string as code", "tests/test_api.py:2 unfinished", "App.swift:5 force unwrap or forced cast"], f.description)
+        XCTAssertTrue(CodeImpact.flags("+++ b/a.py\n@@ -1 +1 @@\n+x = compute(1, 2)\n").isEmpty)
+        let quiet = "+++ b/a.js\n@@ -1 +1,3 @@\n+const m = /^(\\d+)$/.exec(s);\n+try db.execute(\"UPDATE t SET n=n+COALESCE((SELECT n FROM t WHERE id=?), 0) WHERE id=?\", a, b)\n+q = \"select * from t where id=\" + id\n"
+        XCTAssertEqual(CodeImpact.flags(quiet).map(\.what), ["SQL built from a string"], "RegExp.exec and a parametrized statement are not leads; concatenation is")
+    }
 }
