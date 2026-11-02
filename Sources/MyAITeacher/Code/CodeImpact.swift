@@ -232,4 +232,16 @@ enum CodeImpact {
         let cut = lines.count > maxLines ? lines.prefix(maxLines) + ["… (`code` action=impact for the rest)"] : lines.map { $0 }
         return cut.joined(separator: "\n")
     }
+
+    /// The repository's own review rules (`REVIEW.md`, else `.github/REVIEW.md`): what its maintainers want checked in
+    /// a change, which no index can know. Bounded; nil when there is none.
+    static func rules(root: URL, limit: Int = 3000) -> String? {
+        for rel in ["REVIEW.md", ".github/REVIEW.md"] {
+            guard let text = try? String(contentsOf: root.appendingPathComponent(rel), encoding: .utf8) else { continue }
+            let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            if t.isEmpty { continue }
+            return t.count > limit ? String(t.prefix(limit)) + "\n… (\(rel) goes on; read it)" : t
+        }
+        return nil
+    }
 }

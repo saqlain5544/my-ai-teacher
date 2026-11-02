@@ -190,4 +190,12 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertEqual(kept.map(\.text), ["const x = blank(v);", "let y = a.blank"], "not strings, comments, other identifiers or another language")
         XCTAssertTrue(CodeImpact.plausible([u("a.swift", "f()"), u("b.swift", "f()")], name: "f", from: "a.swift", local: true).count == 1, "private: its own file only")
     }
+
+    func testReviewRulesComeFromTheRepository() throws {
+        XCTAssertNil(CodeImpact.rules(root: dir))
+        try write("REVIEW.md", "  \nEvery retry must be capped.\n")
+        XCTAssertEqual(CodeImpact.rules(root: dir), "Every retry must be capped.")
+        try write("REVIEW.md", String(repeating: "x", count: 5000))
+        XCTAssertTrue(CodeImpact.rules(root: dir, limit: 100)?.contains("REVIEW.md goes on") == true)
+    }
 }
