@@ -117,6 +117,15 @@ enum CodeImpact {
         return w.contains("test") || w.contains("spec")
     }
 
+    /// What to diff the working tree against: HEAD without a base; with one (a branch, tag or commit) the point this work
+    /// branched from, as a review on a git host compares, so commits the base gained since are not shown as reverted.
+    static func since(root: URL, rev: String) async -> String {
+        guard rev != "HEAD" else { return rev }
+        let r = await Worktree.run(["-C", root.path, "merge-base", "HEAD", rev], timeout: 20)
+        let sha = r.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return r.exitCode == 0 && !sha.isEmpty ? sha : rev
+    }
+
     /// The change's reach. `base`: a git revision to compare the working tree with (default HEAD: uncommitted work).
     static func report(root: URL, index: CodeIndex, base: String?) async throws -> Report {
         let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
@@ -126,7 +135,8 @@ enum CodeImpact {
         let g = ["-C", root.path]
         let inside = await Worktree.run(g + ["rev-parse", "--is-inside-work-tree"], timeout: 20)
         guard inside.exitCode == 0 else { throw ToolError("This folder isn't a git repository, so there is no change to trace. Use `code` action=refs or callers on a name instead.") }
-        let diff = await Worktree.run(g + ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "--relative", rev, "--"], timeout: 60)
+        let from = await since(root: root, rev: rev)
+        let diff = await Worktree.run(g + ["diff", "-U0", "--no-color", "--no-ext-diff", "--no-renames", "--relative", from, "--"], timeout: 60)
         guard diff.exitCode == 0 else {
             throw ToolError("git couldn't diff against `\(rev)`: " + diff.stderr.trimmingCharacters(in: .whitespacesAndNewlines).prefix(300))
         }
@@ -315,7 +325,8 @@ enum CodeImpact {
         let r = try await report(root: root, index: index, base: base)
         guard !r.files.isEmpty else { return render(r, base: base) }
         let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
-        let diff = await Worktree.run(["-C", root.path, "diff", "-U0", "--no-color", "--no-ext-diff", "--relative", given.isEmpty ? "HEAD" : given, "--"], timeout: 60).stdout
+        let from = await since(root: root, rev: given.isEmpty ? "HEAD" : given)
+        let diff = await Worktree.run(["-C", root.path, "diff", "-U0", "--no-color", "--no-ext-diff", "--relative", from, "--"], timeout: 60).stdout
         let flagged = flags(diff)
         // The title: the definitions that matter most (added first, then the most used), else the files.
         var ordered: [Changed] = []
@@ -358,7 +369,8 @@ enum CodeImpact {
         guard !r.files.isEmpty else { return render(r, base: base) }
         let given = base?.trimmingCharacters(in: .whitespaces) ?? ""
         let rev = given.isEmpty ? "HEAD" : given
-        let diff = await Worktree.run(["-C", root.path, "diff", "-U3", "--no-color", "--no-ext-diff", "--relative", rev, "--"], timeout: 60).stdout
+        let from = await since(root: root, rev: rev)
+        let diff = await Worktree.run(["-C", root.path, "diff", "-U3", "--no-color", "--no-ext-diff", "--relative", from, "--"], timeout: 60).stdout
         var s = "REVIEW BRIEF\n\n## What changed\n" + summary(r) + "\n\n## Diff\n"
         s += diff.count > diffLimit ? "```diff\n" + diff.prefix(diffLimit) + "\n```\n(diff cut at \(diffLimit) characters; `git diff` the rest, file by file)\n" : "```diff\n" + diff + "```\n"
         let flagged = flags(diff)

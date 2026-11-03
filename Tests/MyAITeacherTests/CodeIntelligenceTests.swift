@@ -270,4 +270,22 @@ final class CodeIntelligenceTests: XCTestCase {
         let quiet = "+++ b/a.js\n@@ -1 +1,3 @@\n+const m = /^(\\d+)$/.exec(s);\n+try db.execute(\"UPDATE t SET n=n+COALESCE((SELECT n FROM t WHERE id=?), 0) WHERE id=?\", a, b)\n+q = \"select * from t where id=\" + id\n"
         XCTAssertEqual(CodeImpact.flags(quiet).map(\.what), ["SQL built from a string"], "RegExp.exec and a parametrized statement are not leads; concatenation is")
     }
+
+    /// A review of a branch against `main` shows this branch's work, not what `main` gained since it branched.
+    @MainActor func testImpactAgainstABranchStartsAtTheMergeBase() async throws {
+        func git(_ a: String...) async { _ = await Worktree.run(["-C", self.dir.path, "-c", "user.name=t", "-c", "user.email=t@t"] + a) }
+        await git("init", "-q", "-b", "main"); await git("add", "-A"); await git("commit", "-qm", "base")
+        await git("checkout", "-qb", "feature")
+        try write("src/client.py", "from src.net.retry import backoff_delay, RetryPolicy\n\n\ndef fetch(url, policy=None, timeout=5):\n    return url\n")
+        await git("commit", "-qam", "feature work")
+        await git("checkout", "-q", "main")
+        try write("src/main.py", "from src.client import fetch\n\n\ndef main():\n    print(fetch(\"https://example.org\"))\n\n\ndef main_only_on_trunk():\n    return 1\n")
+        await git("commit", "-qam", "trunk moves on")
+        await git("checkout", "-q", "feature")
+        let out = try await CodeTool().run(["action": "impact", "base": "main"], ctx())
+        XCTAssertTrue(out.text.contains("src/client.py") && out.text.contains("fetch"), out.text)
+        XCTAssertTrue(out.text.hasPrefix("1 source file changed"), "only the branch's own file: " + out.text)
+        XCTAssertFalse(out.text.contains("main_only_on_trunk"), "what main gained since is not this branch's change: " + out.text)
+        XCTAssertTrue(out.text.contains("since `main`"), out.text)
+    }
 }
