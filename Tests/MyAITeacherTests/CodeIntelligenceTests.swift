@@ -288,4 +288,22 @@ final class CodeIntelligenceTests: XCTestCase {
         XCTAssertFalse(out.text.contains("main_only_on_trunk"), "what main gained since is not this branch's change: " + out.text)
         XCTAssertTrue(out.text.contains("since `main`"), out.text)
     }
+
+    func testTheRiskScanReadsCodeNotCommentsOrStrings() {
+        let diff = """
+        +++ b/App.swift
+        @@ -1,0 +1,4 @@
+        +// Done! this used to be try! load()
+        +let note = "call eval(x) and console.log(x)"
+        +let a = load()!
+        +let b = try! load()
+        +++ b/app.js
+        @@ -1,0 +1,3 @@
+        +// remember to avoid eval(x) and console.log(x) here
+        +const s = "console.log(x)";
+        +console.log(x);
+        """
+        let f = CodeImpact.flags(diff).map { "\($0.path):\($0.line) \($0.what)" }
+        XCTAssertEqual(f, ["App.swift:3 force unwrap or forced cast", "App.swift:4 force unwrap or forced cast", "app.js:3 debug leftover"], f.description)
+    }
 }

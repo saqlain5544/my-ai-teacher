@@ -272,7 +272,7 @@ enum CodeImpact {
         ("private key", #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#, true),
         ("runs a string as code", #"(?<![.\w])(eval|exec)\s*\(|new Function\(|shell\s*=\s*True|os\.system\(|Runtime\.getRuntime\(\)\.exec"#, false),
         ("TLS or certificate checks off", #"(?i)verify\s*=\s*False|rejectUnauthorized\s*:\s*false|InsecureSkipVerify|NSAllowsArbitraryLoads|CURLOPT_SSL_VERIFYPEER,\s*(0|false)"#, true),
-        ("force unwrap or forced cast", #"\btry!|\bas!|\w\)?!\.\w|\w!\s*$"#, false),
+        ("force unwrap or forced cast", #"\btry!|\bas!|[\w)\]]!\.\w|[\w)\]]!\s*$"#, false),
         ("unfinished", #"\b(TODO|FIXME|XXX|HACK)\b"#, true),
         ("debug leftover", #"console\.(log|debug)\(|\bdebugger\b|\bbreakpoint\(\)|\bpdb\.set_trace"#, false),
         ("SQL built from a string", #"(?i)\b(select|insert|update|delete)\b[^\n]*(?:(["']\s*\+|\+\s*["']|\$\{|\\\(|%s|\{\w+\})[^\n]*\b(from|into|set|where)\b|\b(from|into|set|where)\b[^\n]*(["']\s*\+|\+\s*["']|\$\{|\\\(|%s|\{\w+\}))"#, false),
@@ -291,10 +291,13 @@ enum CodeImpact {
                 line += 1
                 let text = String(raw.dropFirst())
                 let test = isTest(p), fam = family(p)
+                // These look at code, not at a comment that says "eval(" or a string that contains "console.log(".
+                let codeOnly = code(text, family: fam)
+                let codeChecks: Set<String> = ["force unwrap or forced cast", "runs a string as code", "debug leftover"]
                 for (what, rx, inTests) in patterns where inTests || !test {
                     if what == "force unwrap or forced cast", fam != "swift" { continue }
                     if what == "debug leftover", test { continue }
-                    if text.range(of: rx, options: .regularExpression) != nil {
+                    if (codeChecks.contains(what) ? codeOnly : text).range(of: rx, options: .regularExpression) != nil {
                         out.append(Flag(path: p, line: line, what: what, text: text.trimmingCharacters(in: .whitespaces).prefix(140).description))
                     }
                 }
