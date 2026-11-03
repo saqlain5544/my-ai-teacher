@@ -3,7 +3,11 @@ import Foundation
 /// Code research over the folder's index (`CodeIndex`): search by meaning, definitions, uses and callers, what a function
 /// calls, a file's imports and neighbours, and a map of the repository. `grep` stays for exact text.
 struct CodeTool: Tool {
-    var subAgentVariant: Tool? { self }
+    /// Rules saved with `learn` reach every later review, so only the lesson (the user is there) may teach them: a
+    /// sub-agent works through web pages and files nobody is watching, and must not be able to plant one.
+    var allowsLearning = true
+    static let notFromASubAgent = ToolOutput.error("Review rules are taught by the user in a lesson, not from a sub-agent: report back and the lesson can `learn` it.")
+    var subAgentVariant: Tool? { CodeTool(allowsLearning: false) }
     let name = "code"
     let description = """
     Research the project's code through its index (definitions, references, imports, a usage graph; incremental, so it \
@@ -123,9 +127,11 @@ struct CodeTool: Tool {
             let depth = min(3, max(1, input["depth"]?.int ?? 2))
             return ToolOutput(text: note + (await Self.callGraph(from: root, depth: depth, index: index)))
         case "learn":
+            guard allowsLearning else { return Self.notFromASubAgent }
             let rules = ReviewMemory.learn(try input.req("query"), root: ctx.workspace)
             return ToolOutput(text: "Remembered. \(rules.count) review rule\(rules.count == 1 ? "" : "s") for this folder; later `code` review briefs include them:\n" + (ReviewMemory.render(rules) ?? ""))
         case "forget":
+            guard allowsLearning else { return Self.notFromASubAgent }
             let n = ReviewMemory.forget(try input.req("query"), root: ctx.workspace)
             return ToolOutput(text: n == 0 ? "No review rule contains that." : "Dropped \(n) review rule\(n == 1 ? "" : "s").")
         default:
