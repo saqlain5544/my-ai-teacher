@@ -114,7 +114,7 @@ struct CodeTool: Tool {
         case "impact":
             let base = input["base"]?.string
             let r = try await CodeImpact.report(root: ctx.workspace, index: index, base: base)
-            let rules = CodeImpact.rules(root: ctx.workspace).map { "\n\nThis repository's review rules (REVIEW.md) — check the change against them:\n" + $0 } ?? ""
+            let rules = CodeImpact.rules(root: ctx.workspace).map { "\n\nThis repository's review rules (REVIEW.md) — check the change against them:\n" + CodeImpact.rulesCaveat + "\n" + $0 } ?? ""
             return ToolOutput(text: note + CodeImpact.render(r, base: base) + rules,
                               meta: ["touched": .number(Double(r.changed.count)), "removed": .number(Double(r.removed.count))])
         case "review":

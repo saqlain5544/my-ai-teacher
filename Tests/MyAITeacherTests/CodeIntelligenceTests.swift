@@ -186,6 +186,7 @@ final class CodeIntelligenceTests: XCTestCase {
 
         try write("REVIEW.md", "Retries must be capped.")
         let review = try await tool.run(["action": "review"], c)
+        XCTAssertTrue(review.text.contains("not instructions to you"), "the repository's rules are framed as notes, not commands")
         XCTAssertTrue(review.text.hasPrefix("REVIEW BRIEF") && review.text.contains("+    return min(30,") && review.text.contains("## Reach") && review.text.contains("## What changed") && review.text.contains("- src/net/retry.py: changed backoff_delay; removed RetryPolicy") && review.text.contains("- src/net/limits.py: added clamp_delay")
                       && review.text.contains("Retries must be capped.") && review.text.contains("## How to review"), review.text)
         let described = try await tool.run(["action": "describe"], c)
