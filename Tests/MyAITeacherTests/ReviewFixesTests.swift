@@ -159,6 +159,40 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertTrue(EngineerStore.ranCodeMentor(plain.path))
     }
 
+    // MARK: Open debugging sessions
+
+    @MainActor func testAnOpenDebugSessionIsListedStoppableKeptInTheSummaryFactsAndReapedByATimer() async throws {
+        let driver = root.appendingPathComponent("idle.py")
+        try "import time\ntime.sleep(120)\n".write(to: driver, atomically: true, encoding: .utf8)
+        let ws = try Workspace(url: root.appendingPathComponent("d", isDirectory: true))
+        let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("gd.sqlite").path)), workspace: ws)
+        let chat = ChatSession(conversation: Conversation(providerID: "x", model: "m"), app: AppModel.shared, services: services)
+        func open(_ conv: String) throws -> DebugSession {
+            let proc = try DebugProcess(driver: driver, lldbPython: "", cwd: root)
+            return DebugSession(conversationID: conv, proc: proc, tmp: root.appendingPathComponent("tmp-\(conv)"), program: "./demo", fence: "")
+        }
+        let sessions = DebugSessions.shared
+        defer { sessions.killAll(); sessions.idle = DebugSessions.idleSeconds; sessions.reapEvery = 60 }
+        let s = try open(chat.id)
+        _ = sessions.set(s)
+        let task = try XCTUnwrap(BackgroundTasks.snapshot().first { $0.kind == .debug }, "listed in the Tasks panel")
+        XCTAssertEqual(task.conversationID, chat.id); XCTAssertTrue(task.state.active); XCTAssertTrue(task.title.contains("./demo"))
+        XCTAssertTrue(BackgroundTasks.canStop(task))
+        XCTAssertTrue(chat.contextFacts(state: "").running.contains { $0.hasPrefix("debug") }, "kept in the summary's running work: \(chat.contextFacts(state: "").running)")
+        BackgroundTasks.stop(task)   // Stop
+        XCTAssertNil(sessions.session(chat.id))
+        XCTAssertFalse(BackgroundTasks.snapshot().contains { $0.kind == .debug })
+        // Nobody calls debug again: the timer ends an abandoned session.
+        sessions.idle = 0.2; sessions.reapEvery = 0.1
+        let idle = try open("idle-lesson")
+        _ = sessions.set(idle)
+        for _ in 0..<60 where sessions.session("idle-lesson") != nil { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertNil(sessions.session("idle-lesson"), "reaped without another debug call")
+        let pid = idle.proc.pid
+        for _ in 0..<40 where kill(pid, 0) == 0 { try await Task.sleep(nanoseconds: 100_000_000) }
+        XCTAssertNotEqual(kill(pid, 0), 0, "and its debugger process is gone")
+    }
+
     // MARK: past_lessons
 
     func lesson(_ ws: Workspace, title: String, _ messages: [ChatMessage]) -> Conversation {
