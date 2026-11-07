@@ -206,13 +206,22 @@ enum ReadOnlyShell {
             if i > 0 { p.standardInput = links[i - 1].fileHandleForReading }
             p.standardOutput = i < links.count ? links[i].fileHandleForWriting : outPipe.fileHandleForWriting
         }
+        var leaves: [@Sendable () -> Void] = []
         let parentEnds = [outPipe.fileHandleForWriting, errPipe.fileHandleForWriting] + links.flatMap { [$0.fileHandleForReading, $0.fileHandleForWriting] }
+        // A reader is done only at end of file. The last exit alone doesn't say it: a chunk can be read but not yet
+        // appended when the exit handler runs, and was then lost ("(no output)").
+        let closed = DispatchGroup()
         for (pipe, sink) in [(outPipe, out), (errPipe, err)] {
+            closed.enter()
+            let once = Locked(false)
+            let leave = { @Sendable in if once.mutate({ was in defer { was = true }; return !was }) { closed.leave() } }
             pipe.fileHandleForReading.readabilityHandler = { h in
                 let d = h.availableData
-                if d.isEmpty { h.readabilityHandler = nil } else { sink.append(d) }
+                if d.isEmpty { h.readabilityHandler = nil; leave() } else { sink.append(d) }
             }
+            leaves.append { pipe.fileHandleForReading.readabilityHandler = nil; leave() }
         }
+        let stopReading = leaves
         let timedOut = TimeoutFlag()
         let status: Int32 = await withTaskCancellationHandler {
             await withCheckedContinuation { (c: CheckedContinuation<Int32, Never>) in
@@ -220,10 +229,8 @@ enum ReadOnlyShell {
                 for p in procs {
                     p.terminationHandler = { _ in
                         guard left.mutate({ $0 -= 1; return $0 }) == 0 else { return }
-                        for (pipe, sink) in [(outPipe, out), (errPipe, err)] {
-                            pipe.fileHandleForReading.readabilityHandler = nil
-                            sink.append(pipe.fileHandleForReading.readDataToEndOfFile())
-                        }
+                        // A program it started and left running holds the pipes open: give up on them after a moment.
+                        if closed.wait(timeout: .now() + 1.5) == .timedOut { stopReading.forEach { $0() } }
                         c.resume(returning: procs[procs.count - 1].terminationStatus)
                     }
                 }
@@ -231,6 +238,7 @@ enum ReadOnlyShell {
                     do { try p.run() } catch {
                         procs.forEach { if $0.isRunning { $0.terminate() } }
                         left.mutate { $0 = -1 }
+                        stopReading.forEach { $0() }
                         parentEnds.forEach { try? $0.close() }
                         c.resume(returning: -1)
                         return

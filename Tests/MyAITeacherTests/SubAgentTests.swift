@@ -231,6 +231,24 @@ final class SubAgentTests: XCTestCase {
         XCTAssertEqual(AgentCatalog.parse("---\ndescription: d\n---\n", fileName: "My Helper")?.name, "my-helper")
     }
 
+    /// A program that printed must never read as having printed nothing: the last process's exit races the reader
+    /// of its pipe, which a busy machine makes common.
+    func testReadOnlyShellNeverLosesOutputThatWasPrinted() async {
+        let cwd: URL = dir
+        let lost = await withTaskGroup(of: Int.self) { g in
+            for _ in 0..<12 { g.addTask {
+                var bad = 0
+                for _ in 0..<60 {
+                    let r = await ReadOnlyShell.run("echo 'a|b' x", cwd: cwd, timeout: 20)
+                    if r.text != "a|b x\n" { bad += 1 }
+                }
+                return bad
+            } }
+            return await g.reduce(0, +)
+        }
+        XCTAssertEqual(lost, 0, "runs whose output was lost or cut")
+    }
+
     func testPolicyAndReadOnlyShell() async {
         for ok in ["git diff HEAD^", "git -C sub log --oneline | head -5", "rg -n 'a|b' src", "grep -o foo x", "find . -name x -type f", "ls -la",
                    "git log -5", "git status -sb", "sort -nr notes.txt", "head -n 3 notes.txt", "git --no-pager show --stat HEAD"] {
