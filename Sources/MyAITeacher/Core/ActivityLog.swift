@@ -40,7 +40,7 @@ enum ActivityLog {
             o["t"] = .string(stamps.string(from: now)); o["ev"] = .string(event)
             if let conv { o["conv"] = .string(conv) }
             // Full level keeps whole inputs and results: a key in one must not outlive the lesson in a log file.
-            write(Secrets.redact(JSON.object(o).compact).text, day: days.string(from: now))
+            write(Secrets.redact(json: .object(o)).compact, day: days.string(from: now))
         }
     }
 

@@ -67,6 +67,13 @@ final class ShellEnvironment: @unchecked Sendable {
         return nil
     }
 
+    /// Sets (or, with nil, removes) a variable in this snapshot, which is what the app and its commands read. For tests:
+    /// the real environment is read once from the login shell.
+    func inject(_ key: String, _ value: String?) {
+        lock.lock(); defer { lock.unlock() }
+        env[key] = value
+    }
+
     var all: [String: String] { lock.lock(); defer { lock.unlock() }; return env }
 
     /// Kick off background resolution. Safe to call multiple times.
@@ -169,7 +176,7 @@ final class KeyStore: ObservableObject {
         // Created 0600 and renamed into place: a plain atomic write leaves the new file readable until the chmod.
         let tmp = AppPaths.keys.appendingPathExtension("tmp")
         guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
-        _ = try? FileManager.default.replaceItemAt(AppPaths.keys, withItemAt: tmp)
+        _ = rename(tmp.path, AppPaths.keys.path)   // atomic, and works when keys.json does not exist yet
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: AppPaths.keys.path)
     }
 }

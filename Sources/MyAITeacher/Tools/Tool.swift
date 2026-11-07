@@ -91,15 +91,20 @@ extension Tool {
     func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let sp = Signposts.begin("tool", name); defer { Signposts.end("tool", sp) }
         let input = ToolArgs.coerce(input, schema: schema)   // "[…]" strings for arrays, "3" for numbers…
-        if let refused = Secrets.outbound(tool: name, input) { return .error(refused) }
+        if let refused = Secrets.outbound(tool: name, input) ?? Secrets.introducesMarker(tool: name, input, workspace: ctx.workspace) { return .error(refused) }
         let tool = self
-        let out: ToolOutput = try await Secrets.$agentCall.withValue(true) {
-            try await WriteFence.$profile.withValue(WriteFence.guarded(WriteFence.profile)) {
+        // A file tool that names a credential location got here only because the learner (or the lesson's grant) allowed
+        // it, so its own program (rg, grep) runs without the deny-read rules; no other call does.
+        let approved = Secrets.credentialPathNamed(by: name, input, workspace: ctx.workspace) != nil
+        let fence = approved ? WriteFence.profile : WriteFence.guarded(WriteFence.profile)
+        var out: ToolOutput = try await Secrets.$agentCall.withValue(true) {
+            try await WriteFence.$profile.withValue(fence) {
                 guard let limit = tool.timeout(input) else { return try await tool.run(input, ctx) }
                 return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
             }
         }
-        return Secrets.redacted(out)
+        if let hint = Secrets.hint(for: out.text) { out.text += "\n" + hint }
+        return Secrets.redacted(tool: name, out)
     }
     func summary(_ input: JSON) -> String {
         for k in ["command", "path", "file_path", "query", "url", "pattern", "title", "question", "concept", "action"] {
@@ -165,6 +170,9 @@ enum ProcessRunner {
                     stdin: String? = nil, timeout: TimeInterval = 120, outputLimit: Int = 2_000_000,
                     onOutput: (@Sendable (String) -> Void)? = nil) async -> ProcessResult {
         let p = Process()
+        var args = args
+        // A shell the model asked for: scrubbed names unset inside it too (zsh -c re-sources ~/.zshenv).
+        if Secrets.agentCall, args.count == 2, args[0] == "-c", ["zsh", "bash", "sh"].contains((executable as NSString).lastPathComponent) { args[1] = Secrets.shellScript(args[1]) }
         let (exe, argv) = WriteFence.wrap(executable, args)
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = argv

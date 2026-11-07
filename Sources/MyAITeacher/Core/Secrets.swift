@@ -52,7 +52,7 @@ enum Secrets {
     private static let shapes: [(kind: String, regex: NSRegularExpression)] = {
         func re(_ p: String) -> NSRegularExpression { try! NSRegularExpression(pattern: p) }
         return [
-            ("private key", re("-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----[\\s\\S]*?(-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|$)")),
+            ("private key", re("-----BEGIN [A-Z ]*PRIVATE KEY( BLOCK)?-----(?:[\\s\\S]*?-----END [A-Z ]*PRIVATE KEY( BLOCK)?-----|\\s*[A-Za-z0-9+/]{16,}={0,2}(?:\\r?\\n[A-Za-z0-9+/]{16,}={0,2})*)")),
             ("API key", re("\\bsk-(?=[A-Za-z0-9_-]*\\d)[A-Za-z0-9_-]{20,}")),
             ("GitHub token", re("\\b(?:gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{22,})")),
             ("AWS key", re("\\b(?:AKIA|ASIA)[0-9A-Z]{16}\\b")),
@@ -61,6 +61,11 @@ enum Secrets {
             ("NVIDIA API key", re("\\bnvapi-[A-Za-z0-9_-]{30,}")),
         ]
     }()
+
+    /// A dotenv-shaped line: `[export] UPPER_NAME_WITH_PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL = value`, at the start of a
+    /// line. The value is a quoted string or one whole unquoted word (so `API_KEY = os.environ["API_KEY"]` is left alone).
+    private static let dotenv = try! NSRegularExpression(
+        pattern: "(?m)^([ \\t]*(?:export[ \\t]+)?[A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL)[A-Z0-9_]*[ \\t]*=[ \\t]*)(?:\"[^\"\\n$]{4,}\"|'[^'\\n$]{4,}'|[A-Za-z0-9_.:/+@%~,=-]{4,}(?=[ \\t]*(?:#.*)?$))")
 
     struct Result: Sendable { var text: String; var kinds: [String] }
 
@@ -74,6 +79,11 @@ enum Secrets {
             out = out.replacingOccurrences(of: v, with: "[redacted: \(kind)]")
             if !kinds.contains(kind) { kinds.append(kind) }
         }
+        let envRange = NSRange(out.startIndex..., in: out)
+        if dotenv.firstMatch(in: out, range: envRange) != nil {
+            out = dotenv.stringByReplacingMatches(in: out, range: envRange, withTemplate: "$1[redacted: .env value]")
+            if !kinds.contains(".env value") { kinds.append(".env value") }
+        }
         for (kind, re) in shapes {
             let range = NSRange(out.startIndex..., in: out)
             guard re.firstMatch(in: out, range: range) != nil else { continue }
@@ -83,6 +93,26 @@ enum Secrets {
         return Result(text: out, kinds: kinds)
     }
 
+    /// `json` with every string inside redacted (a log line is redacted field by field, before it is serialized).
+    static func redact(json: JSON) -> JSON {
+        switch json {
+        case .string(let s): return .string(redact(s).text)
+        case .array(let a): return .array(a.map { redact(json: $0) })
+        case .object(let o): return .object(o.mapValues { redact(json: $0) })
+        default: return json
+        }
+    }
+
+    /// Every string inside `json`.
+    static func strings(in json: JSON) -> [String] {
+        switch json {
+        case .string(let s): return [s]
+        case .array(let a): return a.flatMap { strings(in: $0) }
+        case .object(let o): return o.values.flatMap { strings(in: $0) }
+        default: return []
+        }
+    }
+
     /// The kind of the first secret in `text`, or nil: for URLs and queries that must not carry one out.
     static func find(_ text: String) -> String? {
         let r = redact(text)
@@ -90,11 +120,12 @@ enum Secrets {
     }
 
     /// The tool's output with secrets redacted; `meta.redacted` lists what kind.
-    static func redacted(_ out: ToolOutput) -> ToolOutput {
+    static func redacted(tool: String = "", _ out: ToolOutput) -> ToolOutput {
         let r = redact(out.text)
         guard !r.kinds.isEmpty else { return out }
         var o = out
         o.text = r.text
+        if tool == "read" { o.text += "\n[Some values above were redacted. Never write a `[redacted: …]` marker into a file; edit around that line.]" }
         var meta = out.meta?.object ?? [:]
         meta["redacted"] = .array(r.kinds.map { .string($0) })
         o.meta = .object(meta)
@@ -103,17 +134,52 @@ enum Secrets {
 
     /// Why a call must not go out: a web address or search that contains a secret would deliver it to a server.
     static func outbound(tool: String, _ input: JSON) -> String? {
-        let fields: [String]
-        switch tool {
-        case "web_fetch", "browser": fields = ["url"]
-        case "web_search": fields = ["query"]
-        default: return nil
-        }
-        for f in fields {
-            guard let s = input[f]?.string, let kind = find(s) else { continue }
-            return "Refused: the \(f) contains what looks like a secret (\(kind)), and sending it to a website would leak it. Leave it out; the learner's keys are never needed in a request you make."
+        guard ["web_fetch", "web_search", "browser"].contains(tool) else { return nil }
+        // Every string of the call: `urls[]`, a browser step's url, the text typed into a page.
+        for s in strings(in: input) {
+            guard let kind = find(s) else { continue }
+            return "Refused: this \(tool) call contains what looks like a secret (\(kind)), and sending it to a website would leak it. Leave it out; the learner's keys are never needed in a request you make."
         }
         return nil
+    }
+
+    /// Refuses a `write`/`edit` whose new text holds a `[redacted: …]` marker the file doesn't already have: the model
+    /// saw a redacted `read` and would otherwise save the marker over the real value.
+    static func introducesMarker(tool: String, _ input: JSON, workspace: URL) -> String? {
+        guard tool == "write" || tool == "edit", let path = input["path"]?.string else { return nil }
+        var news = [input["content"]?.string, input["new_string"]?.string].compactMap { $0 }
+        news += (input["edits"]?.array ?? []).compactMap { $0["new_string"]?.string }
+        let marker = try! NSRegularExpression(pattern: "\\[redacted: [^\\]\\n]+\\]")
+        func markers(_ t: String) -> Set<String> {
+            Set(marker.matches(in: t, range: NSRange(t.startIndex..., in: t)).compactMap { Range($0.range, in: t).map { String(t[$0]) } })
+        }
+        let incoming = news.reduce(into: Set<String>()) { $0.formUnion(markers($1)) }
+        guard !incoming.isEmpty else { return nil }
+        let existing = (try? String(contentsOf: resolvePath(path, workspace: workspace), encoding: .utf8)).map(markers) ?? []
+        guard !incoming.subtracting(existing).isEmpty else { return nil }
+        return "Refused: the new text contains a `[redacted: …]` marker, which replaced a secret in what you read. Writing it would destroy the real value. Edit around that line and leave it as it is."
+    }
+
+    // MARK: Commands
+
+    /// A shell script for a command the model started: the scrubbed names unset first (a `~/.zshenv` re-exports them, since
+    /// `zsh -c` sources it), on the script's first line so line numbers stay; and, when the fence is on, `--disable-sandbox`
+    /// for `swift build|test|run`, whose own sandbox can't nest inside ours.
+    static func shellScript(_ script: String) -> String {
+        guard agentCall else { return script }
+        var out = script
+        if WriteFence.profile != nil, WriteFence.available {
+            out = out.replacingOccurrences(of: "\\bswift (build|test|run)\\b(?! --disable-sandbox)", with: "swift $1 --disable-sandbox", options: .regularExpression)
+        }
+        let c = current
+        let names = ShellEnvironment.shared.all.keys.filter { isSecretName($0, c) && !c.envAllow.contains($0) && $0.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil }.sorted()
+        return names.isEmpty ? out : "unset \(names.joined(separator: " ")) 2>/dev/null; " + out
+    }
+
+    /// A hint for the error a nested sandbox gives, appended to the command's output.
+    static func hint(for output: String) -> String? {
+        guard output.contains("sandbox_apply: Operation not permitted") || output.contains("sandbox-exec: sandbox_apply") else { return nil }
+        return "[Hint: this command runs inside the app's credential sandbox, and a tool that sandboxes itself can't nest in it. For SwiftPM pass `--disable-sandbox`; otherwise the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets.]"
     }
 
     // MARK: Credential files
@@ -150,7 +216,7 @@ enum Secrets {
             // A glob or a path with a wildcard: its fixed part is what is checked.
             let fixed = raw.split(separator: "/", omittingEmptySubsequences: false).prefix { !$0.contains(where: { "*?[{".contains($0) }) }.joined(separator: "/")
             let url = resolvePath(fixed.isEmpty ? "." : fixed, workspace: workspace)
-            if isCredentialPath(url) || (tool != "read" && containsCredentialPath(url) && url.path != workspace.standardizedFileURL.path) { return url.path }
+            if isCredentialPath(url) || (["grep", "glob", "symbols", "code"].contains(tool) && containsCredentialPath(url) && url.path != workspace.standardizedFileURL.path) { return url.path }
         }
         return nil
     }
