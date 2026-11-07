@@ -103,15 +103,6 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
     }
 
-    @MainActor func testTheSummarysFactsDoNotRepeatTheCourseStateTheSummariserWasGiven() throws {
-        let ws = try Workspace(url: root.appendingPathComponent("gs", isDirectory: true))
-        let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("gg.sqlite").path)), workspace: ws)
-        let chat = ChatSession(conversation: Conversation(providerID: "x", model: "m"), app: AppModel.shared, services: services)
-        let given = chat.contextFacts(state: "Course: Parsers. Focus: C2 recursive descent")
-        XCTAssertEqual(given.goal, "", "it is in the summary's own text already")
-        XCTAssertFalse(given.render(tokens: 500).contains("Parsers"))
-    }
-
     @MainActor func testStoppingACompactDoesNotEndTheLessonsDebugSessionButStoppingATurnDoes() async throws {
         let driver = root.appendingPathComponent("idle3.py")
         try "import time\ntime.sleep(120)\n".write(to: driver, atomically: true, encoding: .utf8)

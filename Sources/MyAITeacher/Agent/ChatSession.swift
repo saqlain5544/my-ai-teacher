@@ -1089,9 +1089,7 @@ final class ChatSession: ObservableObject, Identifiable {
         let ws = services.workspace
         absorbTouchedFiles()
         var f = ContextFacts()
-        // `state` is what the summariser was given (it is in the summary's text already): repeating it under "Kept by the app" would
-        // be the same course state twice. Without it (the context report, a caller with no summary), the facts hold it.
-        if state == nil { f.goal = MemoryText.clip(host.summaryContext(self).joined(separator: "\n\n"), 900) }
+        f.goal = MemoryText.clip(state ?? host.summaryContext(self).joined(separator: "\n\n"), 900)
         f.todos = todos.compactMap { t in t["content"]?.string.map { (t["status"]?.string ?? "pending", $0) } }
         if let p = ProjectStore.load(ws), p.title != nil || p.testCommand != nil {
             f.project = (p.title ?? "(untitled)", p.testCommand, p.lastRun.map { r in r.line + (r.failing.isEmpty ? "" : " — failing: " + r.failing.prefix(5).joined(separator: ", ")) })
