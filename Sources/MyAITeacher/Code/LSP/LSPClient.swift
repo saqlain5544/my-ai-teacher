@@ -374,11 +374,17 @@ final class LSPConnection: @unchecked Sendable {
                 }
             }
         case "textDocument/publishDiagnostics":
-            guard let uri = params["uri"]?.string else { return }
+            guard let raw = params["uri"]?.string else { return }
+            let uri = Self.normalized(raw)
             let items = params["diagnostics"]?.array ?? []
             state.mutate { s in
+                // A publish for text we've since replaced says nothing about the file now.
+                if let v = params["version"]?.int, let d = s.docs[uri], v < d.version { return }
                 let n = (s.published[uri]?.count ?? 0) + 1
                 s.published[uri] = Published(items: items, version: params["version"]?.int, at: Date(), count: n)
+                if s.published.count > Self.maxPublished {   // files never opened here (a project-wide check) must not pile up
+                    for k in s.published.sorted(by: { $0.value.at < $1.value.at }).prefix(s.published.count - Self.maxPublished).map(\.key) { s.published[k] = nil }
+                }
             }
         case "experimental/serverStatus":
             state.mutate { $0.quiescent = params["quiescent"]?.bool; $0.lastProgressAt = Date() }
@@ -484,14 +490,33 @@ final class LSPConnection: @unchecked Sendable {
 
     // MARK: Documents
 
-    static func uri(_ url: URL) -> String { url.standardizedFileURL.absoluteString }
+    static func uri(_ url: URL) -> String { normalized(url.standardizedFileURL.absoluteString) }
+
+    /// One spelling for a file's URI: servers built on vscode-uri encode `( ) + @` and friends differently from Foundation,
+    /// so both sides (what we send, what a publish names) go through the decoded path.
+    static func normalized(_ uri: String) -> String {
+        guard let u = URL(string: uri), u.isFileURL else { return uri }
+        return URL(fileURLWithPath: u.path).standardizedFileURL.absoluteString
+    }
+    /// Files over this size aren't opened in a server (memory; a generated file is not what the mentor asks about).
+    static let maxFileBytes = 2_000_000
+    static let maxPublished = 200
 
     /// Makes the server's copy of `url` what is on disk now: opened if new, `didChange` (and `didSave`, which is what
     /// triggers rust-analyzer's cargo check) when the text differs. Also re-syncs every other open document whose
     /// file stamp moved, and closes the ones that were deleted or are least recently used.
     @discardableResult
     func sync(_ url: URL, languageId: String) async throws -> Date {
+        try await syncResult(url, languageId: languageId).at
+    }
+
+    /// `at`: when the server's copy became the disk's; `sent`: whether it had to be told (nothing sent means a diagnostics
+    /// publish the server already made still describes this text).
+    func syncResult(_ url: URL, languageId: String) async throws -> (at: Date, sent: Bool) {
         let key = Self.uri(url)
+        if let size = FileViews.stamp(url)?.size, size > Self.maxFileBytes {
+            throw LSPError("\(url.lastPathComponent) is \(size / 1_000_000) MB, too large to analyse with a language server (the limit is \(Self.maxFileBytes / 1_000_000) MB).")
+        }
         guard let data = FileManager.default.contents(atPath: url.path) else { throw LSPError("\(url.lastPathComponent) can't be read.") }
         let text = String(decoding: data, as: UTF8.self)
         let stamp = FileViews.stamp(url)
@@ -523,7 +548,8 @@ final class LSPConnection: @unchecked Sendable {
         case .none: break
         }
         await resyncOthers(except: key)
-        return syncedAt
+        if case .none = action { return (syncedAt, false) }
+        return (syncedAt, true)
     }
 
     /// The other open documents, by file stamp (the cheap check): a changed one is sent again, a deleted one closed;
@@ -563,7 +589,7 @@ final class LSPConnection: @unchecked Sendable {
 
     // MARK: Diagnostics
 
-    func published(_ uri: String) -> Published? { state.get().published[uri] }
+    func published(_ uri: String) -> Published? { state.get().published[Self.normalized(uri)] }
     func allPublished() -> [String: Published] { state.get().published }
 
     /// Diagnostics for a document after a sync at `since`: waits (at most `seconds`) for the server to publish after it,
