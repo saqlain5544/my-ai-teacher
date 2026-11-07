@@ -150,6 +150,10 @@ struct PastLessonsTool: Tool {
                     let field = MessageIndex.ranTools[b.name ?? ""] ?? ["path", "url", "query"].first { b.input?[$0]?.string != nil }
                     let arg = field.flatMap { b.input?[$0]?.string } ?? ""
                     lines.append("[ran \(b.name ?? "tool")\(arg.isEmpty ? "" : ": " + PastLessons.scrub(clip(arg, 300)))]")
+                case .toolResult where fileReadingTools.contains(b.name ?? ""):
+                    // A read the learner approved in one lesson (~/.aws/credentials) must not be replayed to another lesson or a
+                    // sub-agent that was never asked: what these tools returned is not shown, only that they ran.
+                    lines.append("[result omitted]")
                 case .toolResult: lines.append("[result\(b.isError == true ? " (error)" : ""): \(PastLessons.scrub(clip((b.text ?? "").replacingOccurrences(of: "\n", with: " "), 240)))]")
                 case .image: lines.append("[image]")
                 case .file: lines.append("[file: \(b.name ?? "attachment")]")
@@ -164,6 +168,9 @@ struct PastLessonsTool: Tool {
         if next < w.total { out += "\nMore: ref \(ref):\(next + 2)" }
         return out
     }
+
+    /// Tools that read files and folders, which can reach a credential location after an approval; their results are not replayed.
+    static let fileReadingTools: Set<String> = ["read", "grep", "glob", "ls", "source", "symbols", "code", "lsp"]
 
     private static func clip(_ s: String, _ n: Int) -> String { s.count > n ? String(s.prefix(n)) + "…" : s }
 }
