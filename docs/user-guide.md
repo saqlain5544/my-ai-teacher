@@ -153,10 +153,28 @@ agents: [code-mentor]       # optional: code-mentor, language-mentor, teacher; d
 * **Yours, for every lesson:** `~/.teacher/skills/`, and the ones you already have in `~/.claude/skills/`,
   `~/.config/opencode/skills/` or `~/.agents/skills/`.
 * **A folder's own:** `.teacher/skills/`, `.claude/skills/`, `.opencode/skills/` or `.agents/skills/` in it; a folder's
-  skill replaces one of yours or the app's with the same name.
+  skill replaces one of yours or the app's with the same name. **They are used only once you approve them**, like a
+  folder's hooks: a cloned repository can't put its own instructions in front of the model. Until then the agent is told
+  only that this folder has some waiting; the first time it needs a folder skill (or in **Settings › Agents › Skills**)
+  a card lists the files and asks once. The approval is for those exact files: change one and you're asked again. This
+  covers the folder's `.teacher/agents`, `.claude/agents` and `commands` folders too.
 * A skill written for a coding agent (`agents: [code-agent]`) goes to the code mentor.
 * `disable-model-invocation: true` keeps a skill out of the agent's list.
 * **Settings › Agents › Skills** lists every agent's skills and where each comes from, and opens your skills folder.
+
+### Your own commands and plugins
+
+* **Commands.** A Markdown file in `~/.teacher/commands/` or `~/.claude/commands/` (or a folder's `.teacher/commands/` /
+  `.claude/commands/`, once approved) is a `/` command named after the file. Front matter `description` and
+  `argument-hint` show in the menu; `$ARGUMENTS` is everything you type after the command and `$1`…`$9` its words
+  (`"two words"` count as one). The result is sent as your message. A command file is only text: unlike Claude Code's,
+  `!` commands and `@` file inclusion are not run, so a command can never do anything by itself.
+* **Plugins**, in Claude Code's layout (a folder with `.claude-plugin/plugin.json`, and any of `skills/`, `agents/`,
+  `commands/`, `hooks/hooks.json`, `.mcp.json`). **Settings › Plugins** installs one from a folder or a git URL
+  (https or ssh), lists it with its contents, switches it on or off, updates it from where it came, or removes it.
+  Installing doesn't use anything: you review what it contains, with hook and MCP commands in full, and approve its exact
+  files. An update that changes a file asks again. Turning a plugin off removes all of it. `/plugin` in the message box
+  lists them. See `docs/plugins.md` to write one.
 
 Tools work the same way: each agent always has the few it uses most, and the rest are named in one line each and load
 the first time it reaches for one.
@@ -494,8 +512,9 @@ Stop the agent any time with ⌘. or Esc twice.
 | General | Your name and level, reasoning effort, show thinking, Python policy (run without asking / ask / off), the course board system for the teaching modes (book outlines, cards only, or off; each is explained under the picker), text size, an optional limit on tool steps per reply (none by default: the teacher works until the reply is done; ⌘. stops it), context budget, Insights telemetry |
 | Providers | Keys, where each comes from, model lists, custom providers |
 | Tools | Folder access grants, default folder, enabled tools, browser and Mac app permissions, always-allowed sites and apps |
-| Agents | Sub-agent defaults, limits and custom agent types; each agent's skills and where they come from |
+| Agents | Sub-agent defaults, limits and custom agent types; each agent's skills and where they come from; approve or revoke the open folder's own skills, agents and commands |
 | MCP | Your MCP servers for every agent (add, edit, import from JSON, switch off); the open folder's `.mcp.json` servers (approve, decline, revoke); each server's state, log and Start / Stop / Restart; "always allow" per server and folder |
+| Plugins | Install a plugin from a folder or git URL, review and approve its exact files, switch on or off, update, remove, and see what it contains |
 | Hooks | Your own hooks for every agent (Claude Code's JSON, checked as you type, with an example), and the folders whose own hooks you approved |
 | Instructions | Every agent's standing instructions — the teacher, each teaching mode, the course board, the app guide (shared by every agent), each branch's tools guide (teacher, code mentor) and the built-in sub-agents. Short by default; edit any of them, and **Reset to default** brings it back. Edits apply to lessons started afterwards. |
 | Memory | Automatic learning after lessons, the model used for memory, stored count |
