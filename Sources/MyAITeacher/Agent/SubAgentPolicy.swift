@@ -250,7 +250,8 @@ enum ReadOnlyShell {
     }
 
     /// git with nothing a repository's config could run: no fsmonitor, hooks, pager, external diff, text conversion,
-    /// signature checks, or the `filters` drivers (which a plain `git status` runs on a stale index).
+    /// signature checks, or the `filters` drivers (which a plain `git status` runs on a stale index). No optional
+    /// locks either: `status` would refresh and rewrite `.git/index`, and a read-only command writes nothing.
     static func hardened(_ args: [String], filters: [String] = []) -> [String] {
         let (head, rest) = globalOptions(args)
         guard let sub = rest.first else { return args }
@@ -259,7 +260,7 @@ enum ReadOnlyShell {
         let rev = sub == "shortlog" && !tail.contains(where: { !$0.hasPrefix("-") }) ? ["HEAD"] : []
         let noFilters = filters.flatMap { f in ["clean", "smudge", "process"].flatMap { ["-c", "filter.\(f).\($0)="] } + ["-c", "filter.\(f).required=false"] }
         return ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "log.showSignature=false"] + noFilters
-            + ["--no-pager"] + head + [sub] + extra + tail + rev
+            + ["--no-optional-locks", "--no-pager"] + head + [sub] + extra + tail + rev
     }
 
     /// git's options before the subcommand (`-C dir`, `--no-pager`), and the rest.
