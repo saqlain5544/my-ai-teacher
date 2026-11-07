@@ -68,6 +68,8 @@ actor Supervisor {
     private var stopping = false
     /// Specs not started yet while it boots (children start one after another): if it ends first they are still told.
     private var pending: [ChildSpec] = []
+    /// Starts in flight (a child's `start` has been called and has not returned), by child id.
+    private var starting: [String: Task<Proc, Never>] = [:]
     private(set) var restarts = 0
     /// The supervisor's own process (set while it boots, before anyone else sees the supervisor).
     nonisolated var process: ProcRef<Never> { box.get()! }
@@ -133,12 +135,21 @@ actor Supervisor {
     private func index(_ id: String) -> Int? { children.firstIndex { $0.spec.id == id } }
 
     private func launch(_ id: String) async {
-        guard let i = index(id) else { return }
+        guard !stopping, let i = index(id) else { return }
         let spec = children[i].spec, attempt = children[i].attempt
-        let proc = await spec.start(attempt)
-        // Removed, replaced or shutting down while it started: it isn't ours to keep.
-        guard !stopping, let j = index(id), children[j].proc == nil, children[j].attempt == attempt else {
-            proc.control.stop(.shutdown, grace: spec.shutdownGrace); return
+        // The start is a task the supervisor knows about: if it gives up or is stopped while this child is still starting,
+        // `terminateChildren` waits for it and ends it, so the supervisor's process never exits with a child alive.
+        let starter = Task { await spec.start(attempt) }
+        starting[id] = starter
+        let proc = await starter.value
+        // Shutting down while it started: `terminateChildren` holds this start and stops it.
+        guard !stopping else { return }
+        starting[id] = nil
+        // Removed or replaced while it started: it isn't ours to keep, and it is gone before this returns.
+        guard let j = index(id), children[j].proc == nil, children[j].attempt == attempt else {
+            proc.control.stop(.shutdown, grace: spec.shutdownGrace)
+            _ = await proc.wait()
+            return
         }
         children[j].proc = proc
         await process.proc.link(proc)
@@ -197,6 +208,8 @@ actor Supervisor {
     private func terminateChildren(_ reason: ExitReason) async {
         guard !stopping else { return }
         stopping = true
+        // Taken before anything is awaited: a start that finishes meanwhile leaves it to this method.
+        let inFlight = Array(starting.values); starting = [:]
         let unstarted = pending; pending = []
         for spec in unstarted.reversed() { spec.onExit?(reason.isCrash ? reason : .shutdown) }
         for c in children.reversed() {
@@ -204,6 +217,12 @@ actor Supervisor {
             c.spec.onExit?(reason.isCrash ? reason : .shutdown)
         }
         children = []
+        // Children that were still starting: awaited and stopped, so that when this supervisor's process ends none is alive.
+        for start in inFlight {
+            let p = await start.value
+            p.control.stop(.shutdown, grace: 2)
+            _ = await p.wait()
+        }
         Runtime.registry.removeSupervisor(self)
     }
 }

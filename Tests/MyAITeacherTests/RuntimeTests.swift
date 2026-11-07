@@ -108,13 +108,15 @@ final class RuntimeTests: XCTestCase {
     }
 
     func testGivingUpWhileBootingTellsTheChildrenNotStartedYet() async {
-        let exits = Log()
+        let exits = Log(), slowProc = Locked<Proc?>(nil)
         let sup = await Supervisor.start("rt.boot", intensity: Intensity(maxRestarts: 0, period: 10), backoff: .none, children: [
-            ChildSpec(id: "flaky", start: { _ in Proc.spawn("rt.boot.flaky", of: Never.self) { _ in throw Boom() }.proc },
+            ChildSpec(id: "flaky", start: { _ in Proc.spawn("rt.boot.flaky", of: Never.self) { _ in try await Task.sleep(nanoseconds: 100_000_000); throw Boom() }.proc },
                       onExit: { r in exits.add("flaky: \(r.isCrash)") }),
             ChildSpec(id: "slow", start: { _ in
                 try? await Task.sleep(nanoseconds: 400_000_000)   // flaky's give-up lands while this one starts
-                return Proc.spawn("rt.boot.slow", of: Never.self) { ctx in _ = await ctx.receive() }.proc
+                let p = Proc.spawn("rt.boot.slow", of: Never.self) { ctx in _ = await ctx.receive() }.proc
+                slowProc.mutate { $0 = p }
+                return p
             }, onExit: { r in exits.add("slow: \(r.isCrash)") }),
             ChildSpec(id: "later", start: { _ in Proc.spawn("rt.boot.later", of: Never.self) { ctx in _ = await ctx.receive() }.proc },
                       onExit: { r in exits.add("later: \(r.isCrash)") }),
@@ -123,6 +125,26 @@ final class RuntimeTests: XCTestCase {
         XCTAssertEqual(Set(exits.all), ["flaky: true", "slow: true", "later: true"], "\(exits.all)")
         XCTAssertNil(Runtime.registry.whereis("rt.boot.later"), "never started")
         XCTAssertNil(Runtime.registry.whereis("rt.boot.slow"))
+        // The start in flight when it gave up was awaited and its child stopped before the supervisor's process ended: nothing is
+        // alive once that process has ended, however busy the machine is.
+        // Flaky gives up 100 ms in, while slow's start (400 ms) is in flight: that start was awaited and its child stopped.
+        let started = slowProc.get()
+        XCTAssertNotNil(started, "its start was awaited, not abandoned")
+        if let started { let reason = await started.exitReason; XCTAssertNotNil(reason, "and its child had already ended") }
+    }
+
+    /// Not part of the suite (it takes a while and loads the machine): `MYAITEACHER_STRESS=40` repeats the test above that many
+    /// times with a CPU burner per core running, which is what made it fail before a start in flight was awaited. The burners are
+    /// killed afterwards.
+    func testGivingUpWhileBootingUnderLoad() async throws {
+        guard let n = ProcessInfo.processInfo.environment["MYAITEACHER_STRESS"].flatMap(Int.init), n > 0 else { throw XCTSkip("set MYAITEACHER_STRESS=<runs>") }
+        var burners: [Process] = []
+        defer { for b in burners { b.terminate() }; for b in burners { b.waitUntilExit() } }
+        for _ in 0..<(ProcessInfo.processInfo.activeProcessorCount * 2) {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/yes"); p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try p.run(); burners.append(p)
+        }
+        for _ in 0..<n { await testGivingUpWhileBootingTellsTheChildrenNotStartedYet() }
     }
 
     func testChildLimitGivesUpAloneWithBackoff() async {
