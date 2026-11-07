@@ -52,7 +52,7 @@ enum MessageIndex {
     /// trigger moves the FTS entry with it): a crash or a busy database stops it where it is and the next launch carries
     /// on from the cursor. Nothing but `text` changes, so there is nothing to back up. True when done.
     @discardableResult
-    static func upgrade(_ db: Database, batch: Int = 200, beat: () -> Void = {}) -> Bool {
+    static func upgrade(_ db: Database, batch: Int = 200, beat: () -> Void = {}, afterRead: () -> Void = {}) -> Bool {
         if isCurrent(db) { return true }
         var last = Int(meta(db, cursor) ?? "") ?? 0
         let dec = JSONDecoder(); dec.dateDecodingStrategy = .secondsSince1970
@@ -60,16 +60,19 @@ enum MessageIndex {
             if Task.isCancelled { return false }
             guard let rows = try? db.query("SELECT rowid AS r, id, data, text FROM messages WHERE rowid>? ORDER BY rowid LIMIT ?", last, batch) else { return false }
             if rows.isEmpty { break }
-            var changes: [(String, String)] = []
+            var changes: [(id: String, text: String, data: String)] = []
             for r in rows {
                 last = max(last, r.int("r") ?? last)
                 guard let id = r.string("id"), let d = r.data("data"), let m = try? dec.decode(ChatMessage.self, from: d) else { continue }
                 let new = text(of: m)
-                if new != (r.string("text") ?? "") { changes.append((id, new)) }
+                if new != (r.string("text") ?? ""), let raw = r.string("data") { changes.append((id, new, raw)) }
             }
+            afterRead()
             do {
                 try db.transaction {
-                    for (id, t) in changes { try db.execute("UPDATE messages SET text=? WHERE id=?", t, id) }
+                    // Only if the row is still what was read: the lesson may have saved a newer version meanwhile, whose own
+                    // text (written by `upsert`) is already right.
+                    for c in changes { try db.execute("UPDATE messages SET text=? WHERE id=? AND data=?", c.text, c.id, c.data) }
                     try db.execute("INSERT INTO store_meta(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", cursor, String(last))
                 }
             } catch { return false }
