@@ -34,7 +34,7 @@ enum AgentTree {
     static let nodes: [AgentNode] = [
         AgentNode(id: "root", parent: nil,
                   core: ["read", "write", "edit", "ls", "web_search", "web_fetch", "load_tools", "skill", "draw"],
-                  deferred: ["task", "agents", "code", "visual", "browser", "mac", "computer"],
+                  deferred: ["task", "agents", "code", "visual", "browser", "mac", "computer", "past_lessons"],
                   components: ["mermaid", "math", "chart", "plot", "timeline", "steps", "cards", "compare", "kv", "json", "csv", "visual"],
                   guide: Guides.root, mcp: true),
         AgentNode(id: "teacher", parent: "root",

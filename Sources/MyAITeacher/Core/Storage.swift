@@ -10,6 +10,7 @@ enum Schema_ {
     CREATE TABLE IF NOT EXISTS blob_refs(ref TEXT NOT NULL, message_id TEXT NOT NULL, conversation_id TEXT NOT NULL, PRIMARY KEY(ref, message_id));
     CREATE INDEX IF NOT EXISTS blob_refs_msg ON blob_refs(message_id);
     CREATE INDEX IF NOT EXISTS blob_refs_conv ON blob_refs(conversation_id);
+    CREATE TABLE IF NOT EXISTS store_meta(key TEXT PRIMARY KEY, value TEXT);
     CREATE VIRTUAL TABLE IF NOT EXISTS messages_fts USING fts5(text, conversation_id UNINDEXED, content='messages', content_rowid='rowid', tokenize='porter unicode61');
     CREATE TRIGGER IF NOT EXISTS messages_ai AFTER INSERT ON messages BEGIN
         INSERT INTO messages_fts(rowid, text, conversation_id) VALUES (new.rowid, new.text, new.conversation_id); END;
@@ -81,6 +82,7 @@ final class ConversationStore: @unchecked Sendable {
         blobs = BlobStore(databasePath: db.path)
         // Orphans (a crash between writing a blob and saving its message, a truncated turn) go at launch, off the main thread.
         Task.detached(priority: .background) { [self] in blobs.collect(blobs.all(), inUse: inUse) }
+        MessageIndex.upgradeInBackground(db)
     }
 
     /// A blob a message refers to; when the lookup fails it counts as in use (never delete on doubt).
@@ -138,9 +140,7 @@ final class ConversationStore: @unchecked Sendable {
     func upsert(_ m: ChatMessage, conversationID: String, seq: Int) {
         let sp = Signposts.begin("lesson.save"); defer { Signposts.end("lesson.save", sp) }
         guard let data = try? enc.encode(m) else { return }
-        let text = m.blocks.compactMap { b -> String? in
-            switch b.kind { case .text, .file: return b.text; default: return nil }
-        }.joined(separator: "\n")
+        let text = MessageIndex.text(of: m)
         // One transaction: the row and its blob references change together. Apart, a crash between the DELETE and the
         // re-INSERT of the references left the message's images unreferenced, and the launch-time sweep deleted them.
         db.write("message save") {

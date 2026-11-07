@@ -72,6 +72,10 @@ final class Database: @unchecked Sendable {
         Self.live.add(self)
     }
 
+    /// Ends the statement running on this connection (from any thread; a no-op when none runs): a search past its time
+    /// budget or whose task was cancelled stops reading instead of finishing for nobody.
+    func interrupt() { if let db { sqlite3_interrupt(db) } }
+
     private static let live = WeakRegistry<Database>()
     /// Returns every open database's page cache to the system (memory pressure: see MemoryGovernor).
     static func releaseAllMemory() { for d in live.all { d.run("PRAGMA shrink_memory") } }

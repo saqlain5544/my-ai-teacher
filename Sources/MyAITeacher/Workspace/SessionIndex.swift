@@ -10,6 +10,9 @@ enum SessionIndex {
         var folderName: String { WorkspaceRef(path: folder, lastOpened: .distantPast).name }
     }
 
+    /// The folders the learner works in (the app keeps this current), for searches that look across them.
+    static let known = Locked<[String]>([])
+
     /// The lessons in `folders` (paths), newest first. A folder that is gone or was never opened is skipped, and one
     /// spelled two ways (`/tmp/x` and `/private/tmp/x`, a symlink) is read once; so is a lesson.
     static func scan(_ folders: [String]) -> [Entry] {
