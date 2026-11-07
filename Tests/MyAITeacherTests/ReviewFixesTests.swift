@@ -103,6 +103,27 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
     }
 
+    // MARK: coverage
+
+    func testCoverageWithNoFilesSaysWhyAndSwiftCarriesTheSandboxFlagUnderAFence() {
+        var r = Coverage.Report(); r.tool = "swift test --enable-code-coverage"
+        r.note = "swift test produced no coverage JSON (the tests may not build)."
+        r.output = "error: sandbox_apply: Operation not permitted\nerror: manifest could not be loaded"
+        let text = Coverage.render(r)
+        XCTAssertTrue(text.contains("[Hint:") && text.contains("--disable-sandbox"), text)
+        XCTAssertTrue(text.contains("manifest could not be loaded"), "the end of the output too")
+        r.output = "error: cannot find 'foo' in scope"
+        XCTAssertTrue(Coverage.render(r).contains("cannot find 'foo' in scope"), "no hint: the output tail")
+        r.output = ""
+        XCTAssertEqual(Coverage.render(r), r.note, "nothing to add")
+        let fenced = Coverage.swiftCommands("swift test --filter CalcTests", fenced: true)
+        XCTAssertEqual(fenced.run, "swift test --enable-code-coverage --disable-sandbox --filter CalcTests")
+        XCTAssertEqual(fenced.path, "swift test --show-codecov-path --disable-sandbox")
+        XCTAssertEqual(Coverage.swiftCommands("swift test --disable-sandbox", fenced: true).run, "swift test --enable-code-coverage --disable-sandbox")
+        let open = Coverage.swiftCommands("swift test", fenced: false)
+        XCTAssertEqual(open.run, "swift test --enable-code-coverage"); XCTAssertEqual(open.path, "swift test --show-codecov-path")
+    }
+
     // MARK: past_lessons
 
     func lesson(_ ws: Workspace, title: String, _ messages: [ChatMessage]) -> Conversation {
