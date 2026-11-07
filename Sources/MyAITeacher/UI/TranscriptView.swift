@@ -16,6 +16,7 @@ struct TranscriptView: NSViewRepresentable {
         config.userContentController.add(WeakHandler(c), name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
         config.setURLSchemeHandler(BlobSchemeHandler(), forURLScheme: BlobSchemeHandler.scheme)
+        RemoteImageSchemeHandler.install(in: config)
         config.userContentController.addUserScript(WKUserScript(source: Self.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         if Telemetry.isEnabled { config.userContentController.addUserScript(WKUserScript(source: WebTelemetry.script, injectionTime: .atDocumentEnd, forMainFrameOnly: true)) }
         #if DEBUG

