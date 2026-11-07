@@ -106,7 +106,7 @@ class MemoryQualityTests: XCTestCase {
         }
         times.sort()
         print(String(format: "[memory] recall over 10k memories: median %.1f ms, max %.1f ms", times[times.count / 2], times.last!))
-        XCTAssertLessThan(times[times.count / 2], Self.scaleLimitMs)
+        XCTAssertLessThan(times[times.count / 2], MachineSpeed.scaled(Self.scaleLimitMs))
         var writes: [Double] = []
         for i in 0..<20 {
             let s = Date()
@@ -115,7 +115,7 @@ class MemoryQualityTests: XCTestCase {
         }
         writes.sort()
         print(String(format: "[memory] add with dedup at 10k: median %.1f ms", writes[writes.count / 2]))
-        XCTAssertLessThan(writes[writes.count / 2], Self.scaleLimitMs)
+        XCTAssertLessThan(writes[writes.count / 2], MachineSpeed.scaled(Self.scaleLimitMs))
     }
 }
 

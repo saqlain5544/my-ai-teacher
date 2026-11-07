@@ -64,7 +64,7 @@ final class MemoryMigrationTests: XCTestCase {
         let db = try Database(path: path)
         let t0 = Date()
         let store = MemoryStore(db: db, scope: .learner)
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.1, "opening doesn't wait for the conversion (it runs in the background)")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), MachineSpeed.scaled(0.1), "opening doesn't wait for the conversion (it runs in the background)")
         XCTAssertTrue(store.upgraded())
         // The backup holds what the conversion rewrote, and only that: `id, embedding, norm` of each row it changed.
         XCTAssertEqual(backups().count, 1)

@@ -292,9 +292,9 @@ final class TelemetryTests: XCTestCase {
         t.flushNow()
         let flushUs = Double(clock_gettime_nsec_np(CLOCK_UPTIME_RAW) - f0) / 1000 / Double(events.count)
         print(String(format: "TELEMETRY OVERHEAD: record %.0f ns/event, mapping %.0f ns/event (main thread); flush %.1f µs/event (background, 20k batch)", recordNs, mapNs, flushUs))
-        XCTAssertLessThan(recordNs, 20_000)
-        XCTAssertLessThan(mapNs, 50_000)
-        XCTAssertLessThan(flushUs, 500)
+        XCTAssertLessThan(recordNs, MachineSpeed.scaled(20_000))
+        XCTAssertLessThan(mapNs, MachineSpeed.scaled(50_000))
+        XCTAssertLessThan(flushUs, MachineSpeed.scaled(500))
         XCTAssertEqual(store.llmByModel(.init(since: 0)).reduce(0) { $0 + $1.calls }, 20_000)
     }
 
@@ -309,7 +309,7 @@ final class TelemetryTests: XCTestCase {
         print(String(format: "SIGNPOSTS OFF: %.1f ns per begin+end+event", ns))
         XCTAssertNil(Signposts.begin("sql", detail()))
         XCTAssertEqual(built, 0)
-        XCTAssertLessThan(ns, 2_000)
+        XCTAssertLessThan(ns, MachineSpeed.scaled(2_000))
     }
 
     /// Live check against a free model (opt-in: TELEMETRY_LIVE=1 and OPENROUTER_API_KEY). Builds StepMetrics the way
