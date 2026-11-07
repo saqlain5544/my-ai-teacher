@@ -527,6 +527,19 @@ Stop the agent any time with ⌘. or Esc twice.
   model and per tool, run `"/Applications/My AI Teacher.app/Contents/MacOS/MyAITeacher" --log-summary [YYYY-MM-DD]`.
 * **Network traffic.** Messages go only to the provider you choose. Web search and fetching are keyless (searches go to
   DuckDuckGo and Bing, paper searches to OpenAlex).
+* **Your secrets stay on this Mac.** What the teacher reads and runs goes to the model, so:
+  * Commands the teacher starts get your shell environment **without** the provider keys and anything named like
+    `API_KEY`, `SECRET`, `TOKEN`, `PASSWORD` or `CREDENTIAL`. Name the variables a command may keep (say `GITHUB_TOKEN`)
+    in **Settings › Tools › Secrets**. Hooks and MCP servers you set up yourself keep the full environment.
+  * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
+    replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
+  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.docker/config.json`, Keychains and the app's saved
+    keys: the file tools ask once per lesson, and commands can't read them at all (the macOS sandbox refuses), so
+    `git push` over SSH fails inside the teacher's shell. A switch in **Settings › Tools › Secrets** turns this off.
+    Project `.env` files are not blocked, since test runners need them; their values are redacted from output.
+  * A web address, search or browser address that contains a key is refused.
+  * Images in a reply that point to the web show as “Image from host (click to load)”. Nothing loads until you click.
+  * An MCP server whose tool list changes after you approved it (a new or rewritten tool) asks you again for that tool.
 * **Telemetry** for Insights is stored locally and can be turned off.
 * **Backups.** Copy the files above.
 * **Starting over.** Use **Forget everything** in Memory, or delete `teacher.sqlite` with the app closed.

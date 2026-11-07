@@ -272,6 +272,20 @@ struct ToolsSettings: View {
                 }
                 Text("Used when no other folder is open.").font(.caption).foregroundStyle(.secondary)
             }
+            Section("Secrets") {
+                Toggle("Commands can't read credential folders", isOn: $settings.value.protectCredentials)
+                Text("~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.docker/config.json, Keychains and this app's saved keys are refused to every command an agent starts (so `git push` over SSH fails; use a hook or run it yourself). Reading them with the file tools asks first.")
+                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Environment variables commands may keep").font(.callout)
+                    TextField("e.g. GITHUB_TOKEN, NPM_TOKEN", text: Binding(
+                        get: { settings.value.envAllow.joined(separator: ", ") },
+                        set: { settings.value.envAllow = $0.split(whereSeparator: { ", \n".contains($0) }).map(String.init).filter { !$0.isEmpty } }))
+                        .textFieldStyle(.roundedBorder).font(.body.monospaced())
+                    Text("Provider keys and any variable named like API_KEY, SECRET, TOKEN, PASSWORD or CREDENTIAL are removed from the environment of commands the agents start. Hooks and MCP servers you set up keep the full environment.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+            }
             Section("Enabled tools") {
                 ForEach(ToolRegistry.all, id: \.name) { t in
                     Toggle(isOn: Binding(get: { !settings.value.disabledTools.contains(t.name) },

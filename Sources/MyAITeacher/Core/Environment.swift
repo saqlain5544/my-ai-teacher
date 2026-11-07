@@ -134,6 +134,9 @@ final class KeyStore: ObservableObject {
            let dict = try? JSONDecoder().decode([String: String].self, from: data) {
             runtimeKeys = dict
         }
+        Secrets.update { $0.savedKeys = Array(self.runtimeKeys.values) }
+        // A file written by an older build may be readable by others.
+        try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: AppPaths.keys.path)
     }
 
     enum Source: String { case runtime = "Saved in app", env = "Environment", none = "Not set" }
@@ -160,8 +163,13 @@ final class KeyStore: ObservableObject {
     }
 
     private func persist() {
+        let keys = Array(runtimeKeys.values)
+        Secrets.update { $0.savedKeys = keys }
         guard let data = try? JSONEncoder().encode(runtimeKeys) else { return }
-        try? data.write(to: AppPaths.keys, options: [.atomic])
+        // Created 0600 and renamed into place: a plain atomic write leaves the new file readable until the chmod.
+        let tmp = AppPaths.keys.appendingPathExtension("tmp")
+        guard FileManager.default.createFile(atPath: tmp.path, contents: data, attributes: [.posixPermissions: 0o600]) else { return }
+        _ = try? FileManager.default.replaceItemAt(AppPaths.keys, withItemAt: tmp)
         try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: AppPaths.keys.path)
     }
 }
@@ -188,7 +196,7 @@ enum AppLog {
                 try? fm.removeItem(at: url.appendingPathExtension("1"))
                 try? fm.moveItem(at: url, to: url.appendingPathExtension("1"))
             }
-            let data = Data("\(stamp) \(line)\n".utf8)
+            let data = Data("\(stamp) \(Secrets.redact(line).text)\n".utf8)
             // Throwing calls: the old ones raise an exception on a full disk, which ends the app.
             if let h = try? FileHandle(forWritingTo: url) { _ = try? h.seekToEnd(); try? h.write(contentsOf: data); try? h.close() }
             else { try? data.write(to: url) }

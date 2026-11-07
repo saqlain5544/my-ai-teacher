@@ -952,8 +952,8 @@ enum SubAgent {
             do {
                 // A read-only agent's command never reaches a shell: its programs run directly (ReadOnlyShell).
                 let out = cfg.scope.readOnly && name == "bash"
-                    ? await ReadOnlyShell.run(input["command"]?.string ?? "", cwd: cfg.scope.root, timeout: Double(min(600, max(1, input["timeout"]?.int ?? 120))))
-                    : try await tool.runBounded(input, sub)
+                    ? Secrets.redacted(await ReadOnlyShell.run(input["command"]?.string ?? "", cwd: cfg.scope.root, timeout: Double(min(600, max(1, input["timeout"]?.int ?? 120)))))
+                    : try await tool.runBounded(input, sub)   // redacts too: this and the lesson's loop share it
                 block = .toolResult(id: callID, name: name, content: truncateMiddle(out.text, max: 40_000), isError: out.isError, images: out.images,
                                     meta: with(out.meta, ["ms": .number(Date().timeIntervalSince(t0) * 1000)]))
             } catch {

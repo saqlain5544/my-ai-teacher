@@ -84,13 +84,22 @@ extension Tool {
         case .execute: 330      // processes carry their own (shorter) timeouts; this is the backstop
         }
     }
-    /// Runs the tool under its timeout.
+    /// Runs the tool under its timeout. The one place every model-started call passes through (the lesson's loop and the
+    /// sub-agents' alike), so the learner's secrets are held back here: a URL or query that carries one is refused, the
+    /// commands it starts run without the secret environment and without reading the credential folders, and a secret
+    /// in the result is redacted before the model sees it (`meta.redacted` tells the card).
     func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let sp = Signposts.begin("tool", name); defer { Signposts.end("tool", sp) }
         let input = ToolArgs.coerce(input, schema: schema)   // "[…]" strings for arrays, "3" for numbers…
-        guard let limit = timeout(input) else { return try await run(input, ctx) }
+        if let refused = Secrets.outbound(tool: name, input) { return .error(refused) }
         let tool = self
-        return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+        let out: ToolOutput = try await Secrets.$agentCall.withValue(true) {
+            try await WriteFence.$profile.withValue(WriteFence.guarded(WriteFence.profile)) {
+                guard let limit = tool.timeout(input) else { return try await tool.run(input, ctx) }
+                return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+            }
+        }
+        return Secrets.redacted(out)
     }
     func summary(_ input: JSON) -> String {
         for k in ["command", "path", "file_path", "query", "url", "pattern", "title", "question", "concept", "action"] {
@@ -257,8 +266,11 @@ enum ProcessRunner {
     }
 
     /// The learner's shell environment, made for output read by a model: no colours, pagers or prompts.
-    static func environment(_ base: [String: String]? = nil) -> [String: String] {
+    /// Inside a tool call the model started, the login shell's variables come without the learner's secrets
+    /// (`Secrets.scrub`); a caller that passes its own `base` (hooks) or `scrub: false` (MCP servers) gets what it asks for.
+    static func environment(_ base: [String: String]? = nil, scrub: Bool? = nil) -> [String: String] {
         var e = base ?? ShellEnvironment.shared.all
+        if scrub ?? (base == nil && Secrets.agentCall) { e = Secrets.scrub(e) }
         e["TERM"] = "dumb"
         e["NO_COLOR"] = "1"
         e["FORCE_COLOR"] = "0"

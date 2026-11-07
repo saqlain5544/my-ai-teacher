@@ -1269,6 +1269,8 @@
       '<div class="head" data-act="toggle-tool" data-focus="tool-head" role="button" tabindex="0" aria-expanded="' + open + '"><span class="icon">' + R.icon(d.icon || 'wrench') + '</span><span class="name">' + esc(title) + '</span>' +
       '<span class="sum">' + esc(summary) + '</span>' + acts + '<span class="state">' + state + '</span>' + R.icon('chevron-right', 'chev') + '</div>' +
       (why ? '<div class="why">' + esc(why) + '</div>' : '') +
+      // A key or token in a result never reaches the model; the learner is told it was held back.
+      (r && r.meta && Array.isArray(r.meta.redacted) && r.meta.redacted.length ? '<div class="why redacted">' + R.icon('shield') + ' Redacted before the model saw it: ' + esc(r.meta.redacted.join(', ')) + '</div>' : '') +
       '<div class="body">' + (open ? guard(b.name, () => (d.body || R.tools.default.body)(tn, ctx)) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
     setHTML(node, html);
   }

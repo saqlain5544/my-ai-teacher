@@ -828,3 +828,4 @@ button:focus-visible, .btn:focus-visible, summary:focus-visible, a:focus-visible
 .remote-img { display: inline-block; padding: 6px 10px; border: 1px dashed var(--border); border-radius: 8px; color: var(--muted); font-size: 12.5px; cursor: pointer; }
 .remote-img:not([data-act="remote-img"]) { cursor: default; }
 .remote-img[data-act="remote-img"]:hover { color: var(--fg); border-color: var(--accent); }
+.tool > .why.redacted { color: var(--muted); }

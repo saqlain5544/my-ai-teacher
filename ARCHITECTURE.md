@@ -28,7 +28,7 @@ Resources/drawing/ The drawing set's references (`draw`), one file per kind, by 
 * **Folders.** The teacher works inside a loaded folder. Its state lives in `<folder>/.teacher/`
   (`state.sqlite` = lessons + folder memory, `outputs/`, `attachments/`). Learner‑wide state (profile memory,
   flashcards, mastery, plans, usage) lives in `~/Library/Application Support/MyAITeacher/teacher.sqlite`.
-* **Access.** Reading is allowed anywhere. Every folder starts **read‑only**; the learner grants **write** or **full**
+* **Access.** Reading is allowed anywhere (except the credential locations, see "Secrets"). Every folder starts **read‑only**; the learner grants **write** or **full**
   per folder (Settings → Tools, the sidebar folder menu, or an approval card). Grants are stored in the app's settings,
   never in the folder. Writes outside the folder are always asked. Tools never write into `.teacher/`.
 * **Cache‑stable prompts.** The system prompt is built once per lesson and frozen (prompt caching + thinking
@@ -379,6 +379,35 @@ approvals, hooks and MCP cover every agent.
     lesson, or `AppSettings.mcpAlwaysAllow[folder]`). Sub-agents don't get MCP tools.
 * **Instruction files** (`InstructionFiles.nested`): a subfolder's own CLAUDE.md / AGENTS.md rides on the code
   mentor's first `read` of a file under it. The prompt carries no CLAUDE.md / AGENTS.md block.
+
+## Secrets (`Core/Secrets.swift`)
+Secrets and data leaving the Mac, with the choke points that make each rule one place:
+* **`Tool.runBounded`** is where every model-started call passes (`ChatSession.execute` and the sub-agent loop alike; sub-agents
+  skip the extension host, this doesn't). It refuses `web_fetch`/`browser` URLs and `web_search` queries holding a secret
+  (`Secrets.outbound`), runs the tool with `Secrets.$agentCall` set and the `WriteFence` profile composed with the credential
+  deny-reads (`WriteFence.guarded`, over a mentor's write fence), and redacts the result (`Secrets.redacted`; `meta.redacted`
+  lists the kinds and the card says so). `ReadOnlyShell.run` (sub-agents' direct path) redacts and sandboxes itself.
+* **Environment.** `ProcessRunner.environment()` drops provider `envKeys` and names containing API_KEY, SECRET, TOKEN, PASSWORD
+  or CREDENTIAL when `Secrets.agentCall` (allow list: `AppSettings.envAllow`). A caller that passes its own base (hooks) or
+  `scrub: false` (MCP servers) is the user's own configuration and keeps the full environment.
+* **Detection** (`Secrets.redact`): exact matches on saved keys (`KeyStore` mirrors them) and secret-named environment
+  values (≥ 10 characters, no whitespace), plus shapes (`sk-` with a digit, `gh[pousr]_`, `github_pat_`, `AKIA`/`ASIA`, `xox?-`,
+  `AIza`, `nvapi-`, PEM private key blocks). Also applied to every activity-log line and the plain log.
+* **Credential files.** `Secrets.credentialPaths` (~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.docker/config.json,
+  Library/Keychains, `keys.json`). `read`/`grep`/`glob`/`ls`/`symbols`/`code`/`source` naming one (or a folder that holds one) ask
+  once per lesson in `PermissionExtension` (`credential-read` grant; sub-agents are denied unless the lesson granted it).
+  `ReadOnlyShell.allows` is false for a command naming one, so it asks. Commands are covered by `sandbox-exec` deny-read rules
+  (Settings › Tools › Secrets turns it off). Project `.env` files stay readable. A program that itself applies a sandbox
+  (SwiftPM manifests) fails under a nested one: pass its `--disable-sandbox`.
+* **Transcript images.** The page's CSP has no `http(s)` in `img-src`. DOMPurify's `afterSanitizeAttributes` moves any remote
+  `<img src>` to `data-remote` (and drops `srcset`, svg `image`/`use` external hrefs); a processor shows “Image from host”; a
+  click loads it through `RemoteImageSchemeHandler` (`teacher-remote://img/?k=<per-process key>&u=<https url>`, https only,
+  images ≤ 8 MB, no cookies). The key is injected into the page, so model markup can't name the scheme.
+* **MCP text.** Tool descriptions are one clamped sentence, server `instructions` 600 characters quoted on one line, at most 60
+  tool lines, all labelled as the server's text. `MCPHub.remember` hashes each tool; one that is new or changed since the
+  config last listed is `changedTools` until the user allows a call (`PermissionExtension.mcpGate` asks even under a
+  lesson or folder grant, and the prompt says so).
+* **Saved keys at rest**: `keys.json` is created 0600 and renamed into place (not chmod-ed after a default-mode write).
 
 ## Browser and computer use
 `browser`, `mac` and `computer` are deferred tools of the `root` node, so every agent can load them; their usage line
