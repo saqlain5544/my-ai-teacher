@@ -689,6 +689,15 @@
   function remoteHost(url) {
     try { const u = new URL(url, 'https://x.invalid/'); return { u, host: u.host, secure: u.protocol === 'https:' && u.host !== 'x.invalid' }; } catch (e) { return null; }
   }
+  // Images the learner chose to load this session: a re-render (streaming, paging, a theme change) shows them again.
+  const loadedRemote = new Set();
+  function remoteImg(h, alt, placeholder) {
+    const img = document.createElement('img');
+    img.alt = alt || '';
+    img.src = 'teacher-remote://img/?k=' + encodeURIComponent(window.__remoteKey) + '&u=' + encodeURIComponent(h.u.href);
+    if (placeholder) img.onerror = () => { placeholder.textContent = 'Image could not be loaded from ' + h.host; placeholder.removeAttribute('data-act'); img.replaceWith(placeholder); };
+    return img;
+  }
   R.registerProcessor((root) => {
     const list = Array.from(root.querySelectorAll ? root.querySelectorAll('img[data-remote]') : []);
     if (root.matches && root.matches('img[data-remote]')) list.unshift(root);
@@ -701,17 +710,18 @@
       b.title = url.slice(0, 300);
       b.textContent = h ? (h.secure ? 'Image from ' + h.host + ' (click to load)' : 'Image not loaded (' + (h.host === 'x.invalid' ? 'not a web address' : 'not https: ' + h.host) + ')') : 'Image not loaded';
       const alt = img.getAttribute('alt'); if (alt) b.setAttribute('aria-label', alt.slice(0, 200));
-      img.replaceWith(b);
+      img.replaceWith(h && h.secure && window.__remoteKey && loadedRemote.has(h.u.href) ? remoteImg(h, alt, b) : b);
     }
   });
   R.registerAction('remote-img', (el) => {
     const url = el.getAttribute('data-url'), h = remoteHost(url);
     if (!h || !h.secure || !window.__remoteKey) return;
-    const img = document.createElement('img');
-    img.alt = el.getAttribute('aria-label') || '';
-    img.src = 'teacher-remote://img/?k=' + encodeURIComponent(window.__remoteKey) + '&u=' + encodeURIComponent(h.u.href);
-    img.onerror = () => { el.textContent = 'Image could not be loaded from ' + h.host; el.removeAttribute('data-act'); img.replaceWith(el); };
-    el.replaceWith(img);
+    loadedRemote.add(h.u.href);
+    el.replaceWith(remoteImg(h, el.getAttribute('aria-label'), el));
+  });
+  document.addEventListener('keydown', (e) => {
+    const el = e.target.closest && e.target.closest('.remote-img[data-act]');
+    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); el.click(); }
   });
   // Finished markdown is cached by content, so re-rendering a lesson (paging, a theme change, a card refresh) parses each
   // block once. The key carries the run outputs' count: a block's HTML gains its output when the learner runs it.

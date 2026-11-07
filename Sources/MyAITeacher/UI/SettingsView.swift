@@ -220,6 +220,28 @@ struct AddProviderSheet: View {
     }
 }
 
+/// The names a command may keep, edited as text and committed on return or when the field loses focus (committing on every
+/// keystroke erased the comma being typed).
+struct EnvAllowField: View {
+    @EnvironmentObject var settings: SettingsStore
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("e.g. GITHUB_TOKEN, NPM_TOKEN", text: $text)
+            .textFieldStyle(.roundedBorder).font(.body.monospaced())
+            .focused($focused)
+            .onAppear { text = settings.value.envAllow.joined(separator: ", ") }
+            .onSubmit(commit)
+            .onChange(of: focused) { _, now in if !now { commit() } }
+    }
+    private func commit() {
+        let names = text.split(whereSeparator: { ", \n".contains($0) }).map(String.init).filter { !$0.isEmpty }
+        if names != settings.value.envAllow { settings.value.envAllow = names }
+        text = names.joined(separator: ", ")
+    }
+}
+
 struct ToolsSettings: View {
     @EnvironmentObject var settings: SettingsStore
     var body: some View {
@@ -278,11 +300,8 @@ struct ToolsSettings: View {
                     .font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Environment variables commands may keep").font(.callout)
-                    TextField("e.g. GITHUB_TOKEN, NPM_TOKEN", text: Binding(
-                        get: { settings.value.envAllow.joined(separator: ", ") },
-                        set: { settings.value.envAllow = $0.split(whereSeparator: { ", \n".contains($0) }).map(String.init).filter { !$0.isEmpty } }))
-                        .textFieldStyle(.roundedBorder).font(.body.monospaced())
-                    Text("Provider keys and any variable named like API_KEY, SECRET, TOKEN, PASSWORD or CREDENTIAL are removed from the environment of commands the agents start. Hooks and MCP servers you set up keep the full environment.")
+                    EnvAllowField()
+                    Text("Provider keys and any variable named like API_KEY, APIKEY, SECRET, TOKEN, PASSWORD, PASSWD or CREDENTIAL are removed from the environment of commands the agents start. Hooks and MCP servers you set up keep the full environment.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }

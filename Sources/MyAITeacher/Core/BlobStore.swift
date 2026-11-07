@@ -151,42 +151,62 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
     static let scheme = "teacher-remote"
     static let key = UUID().uuidString
     static let maxBytes = 8_000_000
+    /// Refuses a redirect to anything `target` would refuse (a public image host must not lead to localhost or the LAN).
+    private final class RedirectGuard: NSObject, URLSessionTaskDelegate {
+        func urlSession(_ session: URLSession, task: URLSessionTask, willPerformHTTPRedirection response: HTTPURLResponse,
+                        newRequest request: URLRequest, completionHandler: @escaping (URLRequest?) -> Void) {
+            completionHandler(request.url.flatMap(RemoteImageSchemeHandler.allowed) == nil ? nil : request)
+        }
+    }
     private static let session: URLSession = {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 15; c.httpCookieStorage = nil; c.urlCache = nil
-        return URLSession(configuration: c)
+        return URLSession(configuration: c, delegate: RedirectGuard(), delegateQueue: nil)
     }()
+    private struct Entry { var task: URLSessionTask? }
     /// Live page requests (main thread only). `stop` removes one; a completion that finds its entry gone says nothing,
     /// since a stopped WKURLSchemeTask raises an exception on any further call.
-    private var tasks: [ObjectIdentifier: URLSessionTask] = [:]
+    private var tasks: [ObjectIdentifier: Entry] = [:]
 
-    /// The https URL a request asks for, or nil when the key is wrong or the URL is not a plain https one.
+    /// An https URL to a public host that carries no secret, or nil.
+    static func allowed(_ t: URL) -> URL? {
+        guard t.scheme?.lowercased() == "https", let host = t.host, !host.isEmpty, !LocalNetwork.isLocal(host), Secrets.find(t.absoluteString) == nil else { return nil }
+        return t
+    }
+
+    /// The URL a request asks for, or nil when the key is wrong or the URL is not an allowed one.
     static func target(_ url: URL) -> URL? {
         guard let items = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems,
               items.first(where: { $0.name == "k" })?.value == key,
-              let u = items.first(where: { $0.name == "u" })?.value, let t = URL(string: u),
-              t.scheme?.lowercased() == "https", t.host?.isEmpty == false else { return nil }
-        return t
+              let u = items.first(where: { $0.name == "u" })?.value, let t = URL(string: u) else { return nil }
+        return allowed(t)
     }
 
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url, let target = Self.target(url) else { task.didFailWithError(URLError(.badURL)); return }
-        var req = URLRequest(url: target); req.setValue("image/*", forHTTPHeaderField: "Accept")
         let id = ObjectIdentifier(task)
-        let t = Self.session.dataTask(with: req) { [weak self] data, resp, error in
-            DispatchQueue.main.async {
-                guard let self, self.tasks.removeValue(forKey: id) != nil else { return }   // stopped meanwhile: the task is dead
-                if (error as? URLError)?.code == .cancelled { return }
-                guard let data, data.count <= Self.maxBytes, let http = resp as? HTTPURLResponse, http.statusCode == 200,
-                      (http.mimeType ?? "").hasPrefix("image/") else { task.didFailWithError(URLError(.cannotLoadFromNetwork)); return }
-                task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": http.mimeType ?? "image/png"])!)
-                task.didReceive(data); task.didFinish()
+        tasks[id] = Entry(task: nil)
+        Task { @MainActor [weak self] in
+            // A public name that resolves to a local address is a local fetch too.
+            let local = await LocalNetwork.resolvesLocal(target.host ?? "")
+            guard let self, self.tasks[id] != nil else { return }   // stopped meanwhile: the task is dead
+            if local { self.tasks[id] = nil; task.didFailWithError(URLError(.cannotConnectToHost)); return }
+            var req = URLRequest(url: target); req.setValue("image/*", forHTTPHeaderField: "Accept")
+            let t = Self.session.dataTask(with: req) { [weak self] data, resp, error in
+                DispatchQueue.main.async {
+                    guard let self, self.tasks.removeValue(forKey: id) != nil else { return }
+                    if (error as? URLError)?.code == .cancelled { return }
+                    guard let data, data.count <= Self.maxBytes, let http = resp as? HTTPURLResponse, http.statusCode == 200,
+                          (http.mimeType ?? "").hasPrefix("image/") else { task.didFailWithError(URLError(.cannotLoadFromNetwork)); return }
+                    task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": http.mimeType ?? "image/png"])!)
+                    task.didReceive(data); task.didFinish()
+                }
             }
+            self.tasks[id] = Entry(task: t); t.resume()
         }
-        tasks[id] = t; t.resume()
     }
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        tasks.removeValue(forKey: ObjectIdentifier(task))?.cancel()
+        tasks.removeValue(forKey: ObjectIdentifier(task))?.task?.cancel()
     }
 
     /// Registers this scheme and gives the page its key.
