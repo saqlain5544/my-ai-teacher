@@ -227,7 +227,7 @@ enum DebugDriver {
             for i in range(min(n, 200)):
                 cu = m.GetCompileUnitAtIndex(i)
                 f = cu.GetFileSpec()
-                if f.IsValid() and user_path(f.fullpath): user_cus += 1
+                if f.IsValid() and user_path(f.fullpath.split('/@/')[0]): user_cus += 1   # Rust names a unit `file.rs/@/crate.cgu`
         return cus, user_cus
 
     def cmd_inspect(c):

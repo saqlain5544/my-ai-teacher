@@ -149,14 +149,14 @@ final class DebugSession: @unchecked Sendable {
     }
 
     /// One command and its reply. `seconds` is the program's wall-time budget; the driver gets a few more to answer.
-    func request(_ cmd: [String: JSON], seconds: Double) async -> JSON {
+    func request(_ cmd: [String: JSON], seconds: Double, grace: Double = 8) async -> JSON {
         guard !busy else { return ["ok": false, "error": "the debugger is still working on the previous command"] }
         busy = true; defer { busy = false; lastUsed = Date() }
         var c = cmd
         c["seconds"] = .number(seconds)
         proc.send(.object(c))
-        guard let r = await proc.next(timeout: seconds + 8) else {
-            let why = proc.isRunning ? "did not answer within \(Int(seconds) + 8) s" : "ended unexpectedly"
+        guard let r = await proc.next(timeout: seconds + grace) else {
+            let why = proc.isRunning ? "did not answer within \(Int(seconds + grace)) s" : "ended unexpectedly"
             let tail = proc.stderrTail.trimmingCharacters(in: .whitespacesAndNewlines)
             proc.killNow()
             return ["ok": false, "dead": true, "error": .string("The debugger \(why); it was stopped with the program." + (tail.isEmpty ? "" : "\n" + truncateMiddle(tail, max: 800)))]

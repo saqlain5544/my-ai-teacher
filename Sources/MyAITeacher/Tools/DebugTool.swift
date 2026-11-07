@@ -77,21 +77,27 @@ enum DebugSupport {
         return p
     }
 
-    /// A reason the debugger can't start, or nil. With Developer Mode off, macOS asks for an administrator's password each time a
-    /// debugger takes control of a process; that dialog would stall the lesson with the program half started, so the tool declines.
+    /// A reason the debugger can't start, or nil.
     static func problem() async -> String? {
-        if driverOverride == nil {
-            guard await lldbPython() != nil else {
-                return "lldb (with its Python module) isn't available: it comes with the Xcode command line tools (`xcode-select --install`)."
-            }
-        }
-        if skipDeveloperCheck { return nil }
-        let r = await ProcessRunner.run("/usr/sbin/DevToolsSecurity", ["-status"], timeout: 10)
-        if r.combined.localizedCaseInsensitiveContains("disabled") {
-            return "Debugging needs Developer Mode, which is off on this Mac: macOS would ask for an administrator's password every time a debugger attaches, and the program would sit half started behind that dialog. The learner enables it once, in Terminal: `sudo DevToolsSecurity -enable`. The app doesn't change system settings. Until then, reason from the source, `run_code` with prints, or a hand-made ```trace."
+        if driverOverride == nil, await lldbPython() == nil {
+            return "lldb (with its Python module) isn't available: it comes with the Xcode command line tools (`xcode-select --install`)."
         }
         return nil
     }
+
+    /// Whether Developer Mode is off. Then macOS asks an administrator to approve the debugger taking control of the program
+    /// (a system dialog, remembered for a while); the tool waits longer for the first stop and, if nobody approves, says why.
+    static func developerModeOff() async -> Bool {
+        if let o = developerModeOverride { return o }
+        if skipDeveloperCheck { return false }
+        let r = await ProcessRunner.run("/usr/sbin/DevToolsSecurity", ["-status"], timeout: 10)
+        return r.combined.localizedCaseInsensitiveContains("disabled")
+    }
+    nonisolated(unsafe) static var developerModeOverride: Bool?
+    /// Seconds beyond the budget the first stop may take while an administrator's approval is awaited.
+    nonisolated(unsafe) static var launchGrace = 75.0
+
+    static let approvalNote = "Developer Mode is off on this Mac, so macOS asks an administrator to approve a debugger taking control of a program, in a dialog that may be waiting on the learner's screen. Approve it and try again, or enable Developer Mode once in Terminal: `sudo DevToolsSecurity -enable` (the app doesn't change system settings). Until then, reason from the source, `run_code` with prints, or a hand-made ```trace."
 }
 
 /// A debugger for compiled programs, driven through lldb's Python API: the learner gets the stepper they know from `trace`
@@ -100,8 +106,8 @@ enum DebugSupport {
 struct DebugTool: Tool {
     let name = "debug"
     let description = """
-    Show what a compiled program (C, C++, Rust, Swift, Zig; Go through dlv) actually does, with a real debugger: the learner gets \
-    a stepper (source, current line, every frame's locals, call stack); you get the stops. The program needs debug symbols: \
+    Debug a compiled program with lldb (Go: dlv): breakpoints, stepping, crashes. The learner gets a stepper (source, current \
+    line, every frame's locals, call stack); you get the stops. The program needs debug symbols: \
     give `build` (e.g. `cargo build`, `swift build`, `clang -g -O0 -o prog main.c`) or a single source file as `program` (built \
     with debug flags). `run`: run to breakpoints (`file:line`, or a function, with optional ` if <condition>`), reporting up to \
     `max_stops` stops; with none, stops at main. `crash`: run until it crashes and explain the signal, the faulting line, the \
@@ -130,7 +136,7 @@ struct DebugTool: Tool {
     }
     func timeout(_ input: JSON) -> Double? {
         let seconds = Double(Self.seconds(input))
-        return ["start", "run", "crash"].contains(input["action"]?.string ?? "") ? seconds + 240 : seconds + 40
+        return ["start", "run", "crash"].contains(input["action"]?.string ?? "") ? seconds + 320 : seconds + 40
     }
     static func seconds(_ input: JSON) -> Int { min(60, max(1, input["seconds"]?.int ?? 20)) }
 
@@ -201,11 +207,13 @@ struct DebugTool: Tool {
                                        "breakpoints": .array(bps), "entry": .bool(entry), "deep": .bool(action == "crash"), "tmp": .string(tmp.path)]
             if let s = stdinPath { cmd["stdin"] = .string(s) }
             let started = Date()
-            var r = await session.request(cmd, seconds: seconds)
+            let offMode = await DebugSupport.developerModeOff()
+            var r = await session.request(cmd, seconds: seconds, grace: offMode ? DebugSupport.launchGrace : 8)
             if r["ok"]?.bool != true {
                 if keep { DebugSessions.shared.remove(session) }
                 await session.end()
                 if r["nodebug"]?.bool == true { return .error(Self.noDebugInfo(target)) }
+                if r["dead"]?.bool == true && offMode { return .error((r["error"]?.string ?? "") + "\n" + DebugSupport.approvalNote) }
                 return .error(Self.launchError(r["error"]?.string ?? "launch failed"))
             }
             session.breakpoints = r["breakpoints"]?.array ?? []

@@ -516,6 +516,46 @@ approvals, hooks and MCP cover every agent.
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the coding tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
+* **The debugger** (`Tools/DebugTool.swift`, `DebugSession.swift`, `DebugBuild.swift`, `DebugDriver.swift`; `debug`, deferred on
+  `code-mentor`, `execute` risk). Chosen after trying the three ways of driving lldb from a child process on this Mac:
+  `lldb --batch -o …` prints text to scrape, cannot interrupt a running program and ends with its commands; a long-lived
+  `lldb` on stdin needs a sentinel and the same scraping; **lldb's Python API** (`/usr/bin/python3 -I driver.py
+  <lldb -P>`, which imports `lldb` with the system Python) gives typed values (children, pointers, line entries,
+  frames), a second thread that can `SendAsyncInterrupt` a runaway loop, and lets the program's stdio go to files. The
+  driver reads one JSON command per line and answers `@@DBG@@{json}`; every bound (24 variables a frame, 8 children, depth
+  2, 100-character strings, 12 frames, 3,000 backtrace depth) is applied there. One driver per session; a one-shot `run` or
+  `crash` is a private session. No launch ever needs a task-port prompt **when Developer Mode is on**
+  (`DevToolsSecurity -status`). When it is off, macOS shows an administrator-approval dialog the first time
+  (remembered for a while); the tool then waits 75 s longer for the first stop and, if nobody approved, ends the
+  session and says so, naming `sudo DevToolsSecurity -enable` (the app never changes system settings). Programs launch
+  stopped at entry, so the wall-time timer (`seconds`, default 20, max 60) covers a loop that never reaches a breakpoint:
+  the program is interrupted where it spins and reported there. Core dumps are not an option (`/cores` is root-only).
+  * *Actions*: `run` (breakpoints `file:line` or function, ` if <condition>`, `max_stops` ≤ 50, stops at `main` with none),
+    `crash` (run to the crash: the signal in plain words — `DebugWords`, which says what happened and never the fix — the
+    faulting frame, locals of the learner's frames up the stack; library frames are hidden, the count shown), and a stateful
+    session: `start`, `step`, `next`, `finish`, `continue`, `print` (a variable path is read without running code; other
+    expressions are evaluated in the program with a 3 s limit), `frame`, `stop`. One session per lesson (`DebugSessions`): `start`
+    replaces it; Stop (`ChatSession.stop`), a deleted lesson and app quit kill the driver, debugserver and the program
+    (descendants found with `pgrep -P`, SIGKILL, plus the program's pid); a session idle 15 minutes is reaped at the next
+    use; 500 stops at most. A write-fence change since `start` ends the session (the program keeps the fence it started under).
+  * *Building*: `build` runs through `ProcessRunner` (the call's `WriteFence` applies; package installs are refused as in
+    `bash`), then `program` is the executable; omitted, Cargo's `target/debug/<package>`, SwiftPM's `.build/debug/<product>` or
+    `zig-out/bin/*`; not yet built, the project profile's build command runs once. A source file as `program` (c, cpp, rs,
+    swift, zig, m) is compiled to a scratch folder with `-g -O0` (Swift in two steps so its object file keeps the debug info;
+    Rust packed). A binary whose compile units name no readable source (stripped, `-O2`, `--release`) is reported before
+    anything runs, with the commands that give symbols. Go uses `dlv debug` scripted once (breakpoints, `continue`, `locals`,
+    `stack`), text only; without `dlv` it says what is available instead of pretending.
+  * *Guardrails*: `PermissionExtension` treats `debug` as a `bash`-class command (the same lesson grant; the approval card
+    shows the build command and program), `MentorGuard.commands` includes it so the driver runs under the project's
+    `WriteFence` (`sandbox-exec` is inherited by debugserver and the program, so a debugged program can't write what `bash`
+    couldn't), hooks see it, and `subAgentVariant` is nil: sub-agents get no debugger. The build string is checked for package
+    installs. `print` can call functions in the program, which stays inside that fence.
+  * *The card*: the result's `meta` is the `trace` card's shape (`files`, `steps`: `f l e s o note exc`, `output`,
+    `language`), `TeacherUI.defineTool({name: 'debug'})` in `codelab.js` renders the same stepper; a session's card shows the
+    whole history (80 steps), a crash ends in an `exception` step. Program output goes to a file and is shown when the program
+    flushes it (usually at exit; C buffers a pipe). `DebugToolTests` check the protocol, bounds and clean-up against a
+    stand-in driver, and C, Rust and Swift programs (breakpoint with locals, stepping, null dereference, stack overflow, bad
+    address, runaway loop, the fence) against real lldb, skipping when none can be launched.
 * **Learning a language or library from its source** (`Tools/SourceTool.swift`): `source` resolves a library by name
   to where it lives on this Mac — Zig's std (`zig env`, via `Toolchains`), Rust's std/core/alloc (`rustc --print
   sysroot` + rust-src), Go's GOROOT/src and module cache, Python's stdlib and any importable module (`importlib`;
@@ -1037,6 +1077,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | — (extra) | `draw` | the drawing set's formats on demand: a kind's fence format, example and limits; the catalog with no kinds |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
+| — (extra) | `debug` | lldb through its Python API for C, C++, Rust, Swift, Zig (Delve for Go): breakpoints with conditions, a crash explained, a stepping session; the `trace` stepper as its card; bash's approvals and write fence; deferred on the code mentor, no sub-agents |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
 | /command | `ProjectCommands` | a lesson's own commands only: the follow-ups (`/simpler`, `/quiz`…) and mode switches (`/socratic`…); no project or user command files |

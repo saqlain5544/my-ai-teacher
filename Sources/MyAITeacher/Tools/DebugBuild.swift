@@ -96,15 +96,20 @@ extension DebugTool {
         case "cc", "cpp", "cxx": (tool, args) = ("clang++", ["-g", "-O0", source.path, "-o", out.path])
         case "m": (tool, args) = ("clang", ["-g", "-O0", "-framework", "Foundation", source.path, "-o", out.path])
         case "rs": (tool, args) = ("rustc", ["-g", "-C", "opt-level=0", "-C", "split-debuginfo=packed", source.path, "-o", out.path])
-        case "swift": (tool, args) = ("swiftc", ["-Onone", "-g", source.path, "-o", out.path])
+        case "swift": (tool, args) = ("swiftc", ["-Onone", "-g", "-c", source.path, "-o", dir.appendingPathComponent("prog.o").path])
         default: (tool, args) = ("zig", ["build-exe", "-O", "Debug", source.path, "-femit-bin=" + out.path])
         }
         guard let exe = ProcessRunner.which(tool) else { return .failure(.error("`\(tool)` isn't installed on this Mac, so \(source.lastPathComponent) can't be built.")) }
         let r = await ProcessRunner.run(exe, args, cwd: dir, timeout: 180, outputLimit: 400_000)
-        if r.exitCode != 0 || !FileManager.default.fileExists(atPath: out.path) {
+        if r.exitCode != 0 || !FileManager.default.fileExists(atPath: ext == "swift" ? dir.appendingPathComponent("prog.o").path : out.path) {
             return .failure(.error("\(source.lastPathComponent) didn't compile (`\(tool) \(args.dropLast(2).joined(separator: " "))`):\n" + truncateMiddle(r.combined, max: 3000)))
         }
-        if ext == "swift" || ext == "zig", let d = ProcessRunner.which("dsymutil") { _ = await ProcessRunner.run(d, [out.path], cwd: dir, timeout: 60) }
+        if ext == "swift" {
+            // One step would leave the debug info in an object file swiftc deletes; linking the kept one lets lldb find it.
+            let link = await ProcessRunner.run(exe, [dir.appendingPathComponent("prog.o").path, "-o", out.path], cwd: dir, timeout: 120, outputLimit: 400_000)
+            if link.exitCode != 0 { return .failure(.error("Linking \(source.lastPathComponent) failed:\n" + truncateMiddle(link.combined, max: 3000))) }
+        }
+        if ext == "zig", let d = ProcessRunner.which("dsymutil") { _ = await ProcessRunner.run(d, [out.path], cwd: dir, timeout: 60) }
         return .success(out)
     }
 

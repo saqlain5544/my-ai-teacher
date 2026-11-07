@@ -107,6 +107,9 @@ first program to research-level work — by understanding it and building with i
   file and line, `must` / `should` / `nit`, fixed ones struck through, the verdict. Like a demanding senior engineer:
   correctness and the failing tests first, then design, naming, edge cases, complexity, the tests you should add, with
   questions and hints rather than code. A pass with green tests records the project's concept as mastered.
+* **A real debugger.** For C, C++, Rust, Swift and Zig the mentor can run your program under lldb and show you a
+  stepper (your source, the current line, every frame's variables, the call stack): to a breakpoint, step by step, or
+  until it crashes, with the crash explained in plain words. It asks what you expect before it shows you.
 * **An engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files, the project
   profile (how your project builds, checks and tests) and an index of the project (definitions, uses and callers,
   imports, search by meaning), so it reads your code precisely and builds its examples against your real toolchain.

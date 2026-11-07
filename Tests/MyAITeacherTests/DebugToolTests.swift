@@ -17,6 +17,7 @@ final class DebugToolTests: XCTestCase {
     override func tearDown() {
         DebugSupport.driverOverride = nil
         DebugSupport.skipDeveloperCheck = false
+        DebugSupport.launchGrace = 75
         DebugSessions.shared.killAll()
         try? FileManager.default.removeItem(at: dir)
     }
@@ -28,12 +29,20 @@ final class DebugToolTests: XCTestCase {
     }
     func need(_ tool: String) throws { if ProcessRunner.which(tool) == nil { throw XCTSkip("\(tool) is not installed") } }
 
-    /// Whether programs can be launched under a debugger here without a password prompt.
-    func needLive() async throws {
+    nonisolated(unsafe) static var liveProbe: String??
+
+    /// Skips unless a program can be launched under lldb here now: with Developer Mode off, macOS asks an administrator to
+    /// approve, and without that approval (or on a machine with no lldb) the live cases have nothing to run on.
+    @MainActor func needLive() async throws {
         try need("clang")
         if await DebugSupport.lldbPython() == nil { throw XCTSkip("lldb's Python module is not available") }
-        let r = await ProcessRunner.run("/usr/sbin/DevToolsSecurity", ["-status"], timeout: 10)
-        if r.combined.localizedCaseInsensitiveContains("disabled") { throw XCTSkip("Developer Mode is off: launching under lldb would wait for an administrator's password") }
+        if Self.liveProbe == nil {
+            DebugSupport.launchGrace = 5
+            try writeC("probe.c", "int main(void) { return 0; }\n")
+            let r = try await DebugTool().run(["action": "run", "program": "probe.c", "seconds": 5], ctx("probe"))
+            Self.liveProbe = .some(r.isError ? r.text : nil)
+        }
+        if let why = Self.liveProbe!, !why.isEmpty { throw XCTSkip("no live debugging here: " + String(why.prefix(200))) }
     }
 
     func alive(_ pid: Int32) -> Bool { pid > 0 && kill(pid, 0) == 0 }
@@ -221,13 +230,15 @@ final class DebugToolTests: XCTestCase {
         XCTAssertEqual(steps.first?["s"]?.array?.first?["fn"]?.string, "main", "outermost frame first, as the stepper wants")
     }
 
-    @MainActor func testWithoutDeveloperModeItSaysSoInsteadOfHanging() async throws {
-        DebugSupport.skipDeveloperCheck = false
-        let status = await ProcessRunner.run("/usr/sbin/DevToolsSecurity", ["-status"], timeout: 10)
-        guard status.combined.localizedCaseInsensitiveContains("disabled") else { throw XCTSkip("Developer Mode is on here") }
+    @MainActor func testAnUnapprovedLaunchIsBoundedAndExplained() async throws {
         try useFake()
-        let r = try await DebugTool().run(["action": "run", "program": "prog"], ctx("S7"))
-        XCTAssertTrue(r.isError && r.text.contains("DevToolsSecurity -enable"), r.text)
+        DebugSupport.developerModeOverride = true
+        DebugSupport.launchGrace = 1
+        defer { DebugSupport.developerModeOverride = nil; DebugSupport.launchGrace = 75 }
+        let t0 = Date()
+        let r = try await DebugTool().run(["action": "run", "program": "hang", "seconds": 1], ctx("S7"))
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 15)
+        XCTAssertTrue(r.isError && r.text.contains("DevToolsSecurity -enable") && r.text.contains("administrator"), r.text)
         XCTAssertEqual(DebugSessions.shared.count, 0)
     }
 

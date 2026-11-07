@@ -1643,6 +1643,24 @@
     eq($$('.tr-frame tr.chg', tr).map(r => r.cells[1].textContent), ['2'], 'x changed by the last line');
   });
 
+  test('debug card: a compiled program\'s stops are the stepper, with the call stack, and a crash ends on its banner', async () => {
+    const src = 'int last(Node *n) {\n  return n->value;\n}\nint main(void) {\n  return last(0);\n}\n';
+    const fr = (fn, l, v) => ({ fn, f: 'null.c', l, v });
+    const meta = { files: { 'null.c': src }, output: '', language: 'c', debug: true,
+      steps: [{ f: 'null.c', l: 5, e: 'line', s: [fr('main', 5, {})], o: 0, note: 'Breakpoint hit' },
+              { f: 'null.c', l: 2, e: 'exception', exc: 'Null pointer dereference', s: [fr('main', 5, {}), fr('last', 2, { n: { v: '0x0', t: 'Node *' } })], o: 0 }] };
+    const a = A([{ kind: 'toolUse', id: 'dg1', name: 'debug', input: { action: 'crash', program: 'null' } }]);
+    T.reset([U('q'), a, R('dg1', 'debug', 'Stop 1: CRASH', { meta })], {});
+    const card = $('[data-tool-id="dg1"]');
+    const tr = await until(() => $('.comp.trace', card), 'stepper in the debug card');
+    ok(/2 stops/.test(card.textContent) && /Step 1 of 2/.test(tr.textContent), 'summary and position');
+    click($('[data-to="last"]', tr));
+    ok($('.cl-line[data-l="2"]', tr).classList.contains('cur'), 'the faulting line is the current one');
+    ok($('.tr-banner', tr).textContent.includes('Null pointer dereference') && $('.tr-banner', tr).classList.contains('bad'), $('.tr-banner', tr).textContent);
+    eq($$('.tr-fn', tr).map(f => f.textContent.replace(/\s+/g, ' ')), ['last()null.c:2', 'main()null.c:5'], 'innermost frame first, the stack below it');
+    eq($$('.tr-frame', tr)[0].querySelector('td code').textContent, '0x0', 'the pointer\'s value');
+  });
+
   test('annotate: numbered notes pin to their lines; picking one lights its lines', async () => {
     const spec = { title: 'total', file: 'shop.py', language: 'python', code: 'def total(xs):\n    s = 0\n    for x in xs:\n        s += x\n    return s',
       notes: [{ lines: '3-4', text: 'the loop **accumulates**' }, { line: 1, text: 'one parameter' }] };
