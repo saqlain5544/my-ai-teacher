@@ -227,12 +227,12 @@ final class LSPHub: @unchecked Sendable {
         return p.contains(Self.key(folder, id)) || p.contains(Self.key(folder, "*"))
     }
 
-    func isApproved(_ id: String, folder: URL, conversationID: String) async -> Bool {
+    func isApproved(_ id: String, folder: URL, conversationID: String, interactions: InteractionCenter? = nil) async -> Bool {
         let k = Self.key(folder, id)
         if processApprovals.get().contains(k) || processApprovals.get().contains(Self.key(folder, "*")) { return true }
         return await MainActor.run {
             let app = AppModel.shared
-            return (app.settings.value.lspApproved[folder.path] ?? []).contains(id) || app.interactions.isGranted(Self.grant(id), conversationID: conversationID)
+            return (app.settings.value.lspApproved[folder.path] ?? []).contains(id) || (interactions ?? app.interactions).isGranted(Self.grant(id), conversationID: conversationID)
         }
     }
     static func grant(_ id: String) -> String { "lsp:" + id }

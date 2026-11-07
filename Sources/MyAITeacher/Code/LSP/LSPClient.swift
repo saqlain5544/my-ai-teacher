@@ -511,6 +511,10 @@ final class LSPConnection: @unchecked Sendable {
         }
         switch action {
         case .open(let v):
+            // A file made after the server started (the mentor writes new files) isn't in the project the server loaded: say so.
+            if let born = stamp?.modified, let up = state.get().initializedAt, born > up {
+                await notify("workspace/didChangeWatchedFiles", ["changes": [["uri": .string(key), "type": 1]]])
+            }
             await notify("textDocument/didOpen", ["textDocument": ["uri": .string(key), "languageId": .string(languageId), "version": .number(Double(v)), "text": .string(text)]])
             await notify("textDocument/didSave", ["textDocument": ["uri": .string(key)]])
         case .change(let v):
@@ -566,11 +570,12 @@ final class LSPConnection: @unchecked Sendable {
     /// then a moment more for a second publish (syntax first, types after). nil: nothing was published in time.
     func awaitDiagnostics(_ uri: String, since: Date, seconds: TimeInterval) async -> Published? {
         let deadline = Date().addingTimeInterval(seconds)
-        var firstSeen: Date?
         while true {
             if let p = published(uri), p.at >= since {
-                firstSeen = firstSeen ?? Date()
-                if p.at.timeIntervalSinceNow < -0.7 || Date() >= deadline { return p }
+                // An empty first publish is often the syntax pass (sourcekit-lsp, clangd): wait longer before believing it,
+                // and while the server is still loading the project.
+                let settle = p.items.isEmpty ? 1.5 : 0.7
+                if (p.at.timeIntervalSinceNow < -settle && activity == nil) || Date() >= deadline { return p }
             } else if Date() >= deadline { return nil }
             if closedReason != nil || Task.isCancelled { return published(uri) }
             try? await Task.sleep(nanoseconds: 80_000_000)

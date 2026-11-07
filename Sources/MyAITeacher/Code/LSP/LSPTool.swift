@@ -93,7 +93,7 @@ struct LSPTool: Tool {
         }
         // The learner's yes, once per folder and server. The permission gate asks before this runs; a sub-agent can't be
         // asked, and a headless run has no gate, so both are told where the question gets answered.
-        guard await hub.isApproved(spec.id, folder: folder, conversationID: ctx.conversationID) else {
+        guard await hub.isApproved(spec.id, folder: folder, conversationID: ctx.conversationID, interactions: ctx.interactions) else {
             let declined = await MainActor.run { ctx.interactions.isGranted(LSPHub.declined(spec.id), conversationID: ctx.conversationID) }
             return .error(declined ? "The learner declined starting \(spec.title) in this folder. Use `symbols`, `code` and `grep` instead."
                 : ctx.agentDepth > 0
