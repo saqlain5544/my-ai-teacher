@@ -65,6 +65,34 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
    brief), except when signed thinking is in the history; they keep thinking signatures so reasoning replays with tool calls.
 5. **Budget** = min(Settings → Context budget, half the model's context window from provider metadata).
 
+7. **The summary keeps what the app knows.** `ContextFacts` is appended to every summary after the model's text, under
+   "Kept by the app": the course state (goal), the todo list, the mentor project's test command and last result, files
+   written or edited this lesson (`Conversation.touchedFiles`, newest first), background jobs of this lesson, the files
+   read last. It is cut by whole lines to 4% of the budget (200–1,200 tokens), holds no clocks, and is built once per
+   compaction and stored with the summary, so the prefix is byte-stable until the next one. A rolling summary strips the
+   old section before merging, so it is replaced, never stacked. The summary prompt asks for goal, decisions and why,
+   open tasks, misconceptions, errors and fixes, test status and exact paths.
+8. **`/compact [focus]` and `/context`** are commands on the lesson, not turns (`ContextCommand`, handled in
+   `ChatSession.send`). `/compact` keeps the last tenth of the budget verbatim (automatic compaction keeps 30%), summarises,
+   and reports tokens before → after; a short lesson says there is nothing to compact. `/context` counts, with the budget's
+   own estimate, the system prompt, memory, deferred-tool list, tool definitions, then messages, tool results, images and
+   reasoning of the next request, what microcompaction saves, the summary, the cache hit rate, and names the biggest.
+9. **Repeat reads.** `read` of the same range of an unchanged file (`FileViews` stamp, taken before the read) returns a
+   one-line note with `meta.sameAs` = the earlier call, only when that result is in `ContextPolicy.liveResults` (after the
+   compaction point and the trim epoch, lesson inside its budget, not cut by `StepCap`; never for adaptive Claude, whose
+   history the API edits, nor sub-agents, which pass no live set). The epoch can still jump past the earlier result later,
+   so `ContextPolicy.expandRepeats` runs first in `prepare`: a note whose earlier result is stubbed or summarised becomes
+   the file again from the stored transcript, or says to read it again when that is paged out. The model never holds a
+   pointer to content it no longer has.
+10. **One step is bounded.** `StepCap`: a step's tool results (parallel tools, a sub-agent's report) may add about a sixth
+   of the budget (40k–160k characters); the largest keep 5k head + 1.5k tail and the full text goes to `.teacher/outputs`
+   with its path. Results under 12k characters are never cut.
+
+| Scripted 30-turn lesson (4 files read every turn, 3 parallel 45k-char greps, budget 24k tokens; `ContextManagementTests`) | Before | After |
+|---|---|---|
+| Tokens sent over all requests | 8.00M | **3.52M** (−56%) |
+| Fixed prefix (`--cli --measure --no-memory`) | ~6.4k tok | ~6.4k tok (unchanged) |
+
 Model metadata (context window, max output, reasoning, vision, tools, free/pricing) comes from each provider's
 `/models` (OpenRouter, Anthropic, Gemini, Groq, Mistral, OpenAI-compatible shapes), cached on disk for 24 h. It sets
 `max_tokens`, hides thinking options for non-reasoning models and shows badges in the model picker. OpenRouter needs
@@ -1019,7 +1047,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 |---|---|---|
 | Bash | `bash` | zsh, persistent cwd per lesson, timeout (≤600 s), 30k-char head/tail truncation, huge output spilled to `.teacher/outputs` |
 | Background jobs | `bash_jobs` | each command runs in its own process group (`ShellJob`); a server or watcher (a known command, or a printed localhost URL), a `cmd &`, or `background: true` moves to the background as B1… and the call returns; list, read new output, stop (the whole group); stopped when the lesson is deleted or the app quits |
-| Read | `read` | `cat -n` lines, offset/limit, images (sent to the model), PDFs with page ranges, binary detection |
+| Read | `read` | `cat -n` lines, offset/limit, images (sent to the model), PDFs with page ranges, binary detection; the same range of an unchanged file answers "unchanged" while the earlier result is still sent whole (teacher only) |
 | Write | `write` | creates parents; permission-gated by folder access; refuses a file not read, or changed since (`FileViews`) |
 | Edit | `edit` | exact unique match or `replace_all`, helpful errors; notes a file changed since it was read |
 | Glob | `glob` | `**` globs, newest first; `rg --files` (honours .gitignore), the folder walk when that finds nothing |
@@ -1039,6 +1067,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
+| /compact, /context | `ContextCommand`, `ContextReport` | `/compact [focus]` summarises now (focus to `Compaction.summarise`), says tokens before → after; `/context` opens the lesson info on the breakdown, no model call |
 | /command | `ProjectCommands` | a lesson's own commands only: the follow-ups (`/simpler`, `/quiz`…) and mode switches (`/socratic`…); no project or user command files |
 | MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every agent; every call asked (per-server "always allow" per folder); supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
