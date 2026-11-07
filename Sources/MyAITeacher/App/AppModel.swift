@@ -119,6 +119,11 @@ final class AppModel: ObservableObject {
             await withCheckedContinuation { c in DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up"); c.resume() } }
         } }
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
+        // Reviews from before the engineer profile existed: read once from the folders the app knows.
+        let engineer = services.study.engineer, folders = knownFolders + [ws.url.path]
+        Task { await Runtime.job("engineer.backfill", restart: .temporary) { _ in
+            if engineer.backfill(folders: folders) > 0 { EventBus.publish(.studyDataChanged) }
+        } }
     }
 
     /// Neither the last folder nor the default one can hold `.teacher/` (a full disk, a read-only or unmounted volume):
@@ -379,8 +384,11 @@ final class AppModel: ObservableObject {
 
     /// Re-reads every folder's lessons, off the main thread (each folder is its own database). The open folder's come
     /// from memory, and a lesson working in the background shows its live title.
+    /// The folders the app knows from settings: recent ones, the default and the quick-question folder.
+    var knownFolders: [String] { settings.value.recentFolders.map(\.path) + [settings.defaultFolder.path, AppPaths.quickFolder.path] }
+
     func refreshSessions() {
-        var folders = settings.value.recentFolders.map(\.path) + [settings.defaultFolder.path, AppPaths.quickFolder.path]
+        var folders = knownFolders
         folders += sessions.values.map(\.services.workspace.url.path)
         let current = workspace.url.path, here = workspace.url.canonicalPath
         folders = folders.filter { URL(fileURLWithPath: $0).canonicalPath != here }

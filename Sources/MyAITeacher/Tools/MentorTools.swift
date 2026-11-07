@@ -206,6 +206,7 @@ struct ProjectReviewTool: Tool {
                 "severity": Schema.string("must (blocks a pass), should, nit.", enum: ["must", "should", "nit"]),
                 "text": Schema.string("What is wrong or weak and a question or hint toward the fix — not the fix."),
                 "concept": Schema.string("The concept this finding is about."),
+                "area": Schema.string("What kind of mistake: error-handling, edge-cases, testing, naming, design, performance, concurrency, memory, security or tooling.", enum: EngineerArea.allCases.map(\.rawValue)),
                 "hints": Schema.array(Schema.string("One rung"), "A hint ladder (2–3 rungs, each more specific), never the code."),
             ], required: ["file", "severity", "text"]), "findings: the findings of this round."),
             "resolved": Schema.array(Schema.integer("Finding id"), "findings: ids of open findings from earlier rounds that are now fixed."),
@@ -287,6 +288,7 @@ struct ProjectReviewTool: Tool {
                 let sev = ["must", "should", "nit"].contains(f["severity"]?.string ?? "") ? f["severity"]!.string! : "should"
                 let hints = (f["hints"]?.array ?? []).compactMap(\.string).filter { !$0.isEmpty }.prefix(3)
                 findings.append(MentorProject.Finding(id: next, file: file, line: f["line"]?.int, severity: sev, text: text, concept: f["concept"]?.string,
+                                                      area: EngineerArea.parse(f["area"]?.string)?.rawValue,
                                                       hints: hints.isEmpty ? nil : Array(hints)))
                 next += 1
             }
@@ -336,6 +338,8 @@ struct ProjectReviewTool: Tool {
                 }
             }
             ProjectStore.snapshot(ws, why: "review \(round.number)")
+            // The learner-wide record of how they work: this project's rounds, rewritten whole (re-recording is harmless).
+            if let rec = ProjectStore.load(ws) { ctx.services.study.engineer.record(rec, folder: ws.url.canonicalPath); EventBus.publish(.studyDataChanged) }
             var text = "Round \(round.number) recorded: \(verdict), \(findings.count) new finding\(findings.count == 1 ? "" : "s"), \(carried.count) carried over, \(resolvedCount) resolved."
             if !kept.isEmpty { text += " Still open: \(kept.map { "[\($0)]" }.joined(separator: ", ")) — a `must` is resolved when its file has changed, and it hasn't." }
             if findings.contains(where: { $0.hints == nil }) { text += " Give each finding a hint ladder (`hints`) next time: the learner reveals one rung at a time instead of being handed the answer." }
