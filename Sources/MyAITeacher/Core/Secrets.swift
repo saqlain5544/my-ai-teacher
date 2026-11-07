@@ -164,15 +164,14 @@ enum Secrets {
         return nil
     }
 
-    /// Paths a `read`/`grep` of which came back redacted, per agent: ("agent\npath"). A `write`/`edit` of such a path that
-    /// puts a `[redacted: …]` marker in is refused, since the model would save the marker over the real value.
-    nonisolated(unsafe) private static let redactedReads = Locked(Set<String>())
-    static func noteRedactedRead(agent: String, path: URL) { redactedReads.mutate { _ = $0.insert(agent + "\n" + path.standardizedFileURL.path) } }
-
-    static func introducesMarker(tool: String, _ input: JSON, workspace: URL, agent: String) -> String? {
+    /// A `write`/`edit` of an existing file that puts in a `[redacted: …]` marker the file's current content doesn't hold is
+    /// refused, whatever was read before: the model would save the marker over the real value, and a value it saw through
+    /// `bash` (`cat`, `head`: not redacted by shape alone) or another agent's read gets the same protection. A file that is
+    /// new, or that already holds the marker (documentation about it), is fine.
+    static func introducesMarker(tool: String, _ input: JSON, workspace: URL) -> String? {
         guard tool == "write" || tool == "edit", let path = input["path"]?.string else { return nil }
         let url = resolvePath(path, workspace: workspace)
-        guard redactedReads.get().contains(agent + "\n" + url.standardizedFileURL.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         var news = [input["content"]?.string, input["new_string"]?.string].compactMap { $0 }
         news += (input["edits"]?.array ?? []).compactMap { $0["new_string"]?.string }
         let marker = try! NSRegularExpression(pattern: "\\[redacted: [^\\]\\n]+\\]")
@@ -183,7 +182,7 @@ enum Secrets {
         guard !incoming.isEmpty else { return nil }
         let existing = (try? String(contentsOf: url, encoding: .utf8)).map(markers) ?? []
         guard !incoming.subtracting(existing).isEmpty else { return nil }
-        return "Refused: you read \(url.path) and values in it were replaced by `[redacted: …]` markers; the new text still holds one. Saving it would destroy the real value. Edit around those lines and leave them as they are. (A new file that only mentions the marker is fine.)"
+        return "Refused: \(url.path) exists and its text doesn't hold the `[redacted: …]` marker the new text does. A marker stands for a value that was hidden from you; saving it would destroy the real value. Edit around those lines and leave them as they are. (A new file that only mentions the marker is fine.)"
     }
 
     // MARK: Commands

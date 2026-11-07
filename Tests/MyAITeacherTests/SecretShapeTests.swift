@@ -88,16 +88,18 @@ final class SecretShapeTests: XCTestCase {
         await MainActor.run { let s = SettingsStore(); s.value.mcpServers = [] }
     }
 
-    func testAMarkerIsRefusedOnlyForAFileThisAgentReadRedacted() async throws {
+    func testAMarkerIsRefusedForAnExistingFileThatLacksItWhateverWasRead() async throws {
         let c = try await ctx()
         let f = c.workspace.appendingPathComponent("a.txt")
         try "key = real\n".write(to: f, atomically: true, encoding: .utf8)
         let input: JSON = ["path": "a.txt", "content": "key = [redacted: API key]\n"]
-        XCTAssertNil(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace, agent: "A"), "never read: a file about the marker is fine")
-        Secrets.noteRedactedRead(agent: "A", path: f)
-        XCTAssertNotNil(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace, agent: "A"))
-        XCTAssertNil(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace, agent: "B"), "another agent did not read it")
-        XCTAssertTrue(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace, agent: "A")?.contains(f.path) == true, "the message names the file")
+        // No read history needed: the value may have been seen through `bash`, or by another agent.
+        XCTAssertNotNil(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace))
+        XCTAssertTrue(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace)?.contains(f.path) == true, "the message names the file")
+        XCTAssertNotNil(Secrets.introducesMarker(tool: "edit", ["path": "a.txt", "new_string": "[redacted: API key]"], workspace: c.workspace))
+        XCTAssertNil(Secrets.introducesMarker(tool: "write", ["path": "new.md", "content": "[redacted: API key] in docs"], workspace: c.workspace), "a new file may mention it")
+        try "docs: [redacted: API key]\n".write(to: f, atomically: true, encoding: .utf8)
+        XCTAssertNil(Secrets.introducesMarker(tool: "write", input, workspace: c.workspace), "a file that already holds the marker keeps it")
     }
 
     func testBackgroundOutputIsRedactedBeforeItIsDelivered() async throws {
