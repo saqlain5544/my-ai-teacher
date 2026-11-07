@@ -201,9 +201,14 @@ enum Secrets {
     }
 
     /// A hint for the error a nested sandbox gives, appended to the command's output.
-    static func hint(for output: String) -> String? {
+    /// The wording follows which fence is on: the credential rules (a Settings switch turns them off), a code-mentor project's
+    /// write fence in `folder` (no switch), or both (the switch alone would not help). With neither known, the mentor's.
+    static func hint(for output: String, folder: URL? = nil) -> String? {
         guard output.contains("sandbox_apply: Operation not permitted") || output.contains("sandbox-exec: sandbox_apply") else { return nil }
-        let toggle = current.protectCredentials
+        let credentials = fenceActive, mentor = folder.map(ProjectProfile.mentorFenceOpen) ?? false
+        let toggle = credentials && mentor
+            ? "the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets, but the code mentor's write fence is on for this folder too, so the tool has to run without its own sandbox either way"
+            : credentials
             ? "otherwise the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets"
             : "the code mentor's write fence is on for this command, so the tool has to run without its own sandbox"
         return "[Hint: this command runs inside a sandbox the app set up, and a tool that sandboxes itself can't nest in it. For SwiftPM pass `--disable-sandbox`; \(toggle).]"

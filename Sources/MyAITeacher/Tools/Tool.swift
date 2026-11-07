@@ -118,7 +118,7 @@ extension Tool {
             if r.kinds.isEmpty { throw error }
             throw ToolError(r.text)
         }
-        if let hint = Secrets.hint(for: out.text), !out.text.contains(hint) { out.text += "\n" + hint }
+        if let hint = Secrets.hint(for: out.text, folder: ctx.workspace), !out.text.contains(hint) { out.text += "\n" + hint }
         return Secrets.redacted(tool: name, out)
     }
     func summary(_ input: JSON) -> String {

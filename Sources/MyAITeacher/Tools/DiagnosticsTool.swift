@@ -194,7 +194,7 @@ struct DiagnosticsTool: Tool {
             let tail = r.combined.split(separator: "\n").suffix(4).joined(separator: "\n")
             if !tail.isEmpty { text += "\n" + tail }
         }
-        if let hint = Secrets.hint(for: r.combined), !text.contains(hint) { text += "\n" + hint }   // the raw error may not have parsed into the summary
+        if let hint = Secrets.hint(for: r.combined, folder: ctx.workspace), !text.contains(hint) { text += "\n" + hint }   // the raw error may not have parsed into the summary
         return ToolOutput(text: text, isError: r.exitCode != 0 || errors > 0,
                           meta: ["exit": .number(Double(r.exitCode)), "errors": .number(Double(errors)), "warnings": .number(Double(items.count - errors)), "command": .string(cmd)])
     }

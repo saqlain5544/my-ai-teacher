@@ -259,16 +259,16 @@ enum Coverage {
     }
 
     /// Why a run reported nothing: the sandbox hint when the output has that error, else the end of the output.
-    static func cause(_ output: String) -> String {
+    static func cause(_ output: String, folder: URL? = nil) -> String {
         let tail = output.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !tail.isEmpty else { return "" }
-        return "\n" + (Secrets.hint(for: tail).map { "\($0)\n" } ?? "") + "Output (end):\n" + String(tail.suffix(800))
+        return "\n" + (Secrets.hint(for: tail, folder: folder).map { "\($0)\n" } ?? "") + "Output (end):\n" + String(tail.suffix(800))
     }
 
     static func render(_ r: Report, ws: Workspace? = nil) -> String {
         if let n = r.note, r.files.isEmpty {
             // The notes that already quote the output (no coverage for the source files) are not given it twice.
-            return r.output.isEmpty || n.contains(r.output) ? n : n + cause(r.output)
+            return r.output.isEmpty || n.contains(r.output) ? n : n + cause(r.output, folder: ws?.url)
         }
         let n = "\(r.files.count) source file\(r.files.count == 1 ? "" : "s")"
         var s = r.exact ? "Coverage by \(r.tool): \(String(format: "%.0f", r.percent))% of the lines in \(n) ran (tests excluded).\n"

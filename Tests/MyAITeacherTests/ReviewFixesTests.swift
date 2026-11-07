@@ -103,6 +103,41 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
     }
 
+    // MARK: The sandbox hint
+
+    func testTheHintFollowsWhichFenceIsOnAndSwiftCommandsAreFlaggedForEither() async throws {
+        try XCTSkipUnless(WriteFence.available, "no sandbox-exec")
+        let saved = Secrets.current.protectCredentials
+        defer { Secrets.update { $0.protectCredentials = saved } }
+        let err = "error: sandbox_apply: Operation not permitted"
+        let plain = root.appendingPathComponent("plain", isDirectory: true), project = root.appendingPathComponent("proj", isDirectory: true)
+        try FileManager.default.createDirectory(at: plain, withIntermediateDirectories: true)
+        let ws = try Workspace(url: project)
+        try "// swift-tools-version:5.9\nimport PackageDescription\nlet package = Package(name: \"x\")\n".write(to: project.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        var p = MentorProject(); p.title = "t"; p.concept = "c"; p.testCommand = "true"
+        ProjectStore.save(p, ws); ProjectStore.snapshot(ws, why: "baseline")
+        XCTAssertTrue(ProjectProfile.mentorFenceOpen(project)); XCTAssertFalse(ProjectProfile.mentorFenceOpen(plain))
+        Secrets.update { $0.protectCredentials = true }
+        let credentialsOnly = try XCTUnwrap(Secrets.hint(for: err, folder: plain))
+        XCTAssertTrue(credentialsOnly.contains("Settings") && !credentialsOnly.contains("mentor"), credentialsOnly)
+        let both = try XCTUnwrap(Secrets.hint(for: err, folder: project))
+        XCTAssertTrue(both.contains("Settings") && both.contains("mentor's write fence is on for this folder too"), both)
+        Secrets.update { $0.protectCredentials = false }
+        let mentorOnly = try XCTUnwrap(Secrets.hint(for: err, folder: project))
+        XCTAssertTrue(mentorOnly.contains("mentor's write fence") && !mentorOnly.contains("Settings"), "the switch is off: it must not be blamed: " + mentorOnly)
+        // Swift commands carry the flag for either fence.
+        let mentorProfile = await ProjectProfile.detect(project)
+        XCTAssertEqual(mentorProfile.commands.test.first, "swift test --disable-sandbox", "a mentor project's fence alone needs it")
+        let none = await ProjectProfile.detect(plain.appendingPathComponent("."))
+        XCTAssertNotEqual(none.commands.test.first, "swift test --disable-sandbox")
+        // A background job's report carries it too.
+        let job = try ShellJob(command: "swift build", title: "t", conversationID: "c", shell: "/bin/sh", script: "echo '\(err)'", cwd: project, env: ["PATH": "/usr/bin:/bin"])
+        for _ in 0..<100 where job.isRunning { try await Task.sleep(for: .milliseconds(50)) }
+        try await Task.sleep(for: .milliseconds(200))
+        let report = ShellJobs.finishedMessage(job, handle: "B1").blocks.first?.text ?? ""
+        XCTAssertTrue(report.contains("[Hint:") && report.contains("--disable-sandbox"), report)
+    }
+
     // MARK: coverage
 
     func testCoverageWithNoFilesSaysWhyAndSwiftCarriesTheSandboxFlagUnderAFence() {
