@@ -22,6 +22,9 @@ final class LSPInstance: @unchecked Sendable {
     let executable: String
     /// The `WriteFence` profile it runs under (the code mentor's, while a project is open); nil: unfenced.
     let fence: String?
+    /// The environment the server starts with, captured in the tool call that created the instance (scrubbed of secrets
+    /// there: a supervisor's child runs in a detached task where `Secrets.agentCall` is false). Restarts reuse it.
+    let env: [String: String]
     let folder: URL
     let log = MCPLog()
     private struct State {
@@ -48,9 +51,9 @@ final class LSPInstance: @unchecked Sendable {
     private let backoff: Backoff
     let idleSeconds: TimeInterval
 
-    init(spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil, hub: LSPHub?, idleSeconds: TimeInterval = LSPHub.idleSeconds,
+    init(spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil, env: [String: String] = ProcessRunner.environment(), hub: LSPHub?, idleSeconds: TimeInterval = LSPHub.idleSeconds,
          backoff: Backoff = Backoff(initial: 1, max: 8)) {
-        self.spec = spec; self.executable = executable; self.folder = folder; self.fence = fence; self.hub = hub
+        self.spec = spec; self.executable = executable; self.folder = folder; self.fence = fence; self.env = env; self.hub = hub
         self.idleSeconds = idleSeconds; self.backoff = backoff
     }
 
@@ -90,11 +93,11 @@ final class LSPInstance: @unchecked Sendable {
             state.mutate { $0.phase = .restarting; $0.restarts = attempt }
             log.note("restarting (\(attempt) of 3)")
         }
-        var env = ProcessRunner.environment()
+        // The scrubbed environment and the fence (the mentor's write fence, plus the credential deny rules) were captured in the
+        // tool call; this runs in the supervisor's task, which has neither, and again for every restart.
+        var env = self.env
         env["MYAITEACHER_LSP"] = "1"
-        // Under the mentor's write fence while a project is open: build scripts, `cargo check` or `go list` run by the server
-        // can't change the learner's files or the locked tests. (Set here, not inherited: this runs in the supervisor's task.)
-        let (exe, args) = WriteFence.$profile.withValue(fence) { WriteFence.wrap(executable, spec.args) }
+        let (exe, args) = WriteFence.wrap(executable, spec.args, profile: fence)
         let transport = LSPStdioTransport(executable: exe, args: args, env: env, cwd: folder, log: log)
         let conn = LSPConnection(transport: transport, root: folder)
         if state.get().quitting { return }
@@ -226,12 +229,12 @@ final class LSPHub: @unchecked Sendable {
 
     /// The instance for `folder` and `spec`. A different `fence` (a project opened, passed, or its tests unlocked) replaces
     /// it: the running server was started under the old protection, so it is stopped and the next use starts one under the new.
-    func instance(_ spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil) -> LSPInstance {
+    func instance(_ spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil, env: [String: String] = ProcessRunner.environment()) -> LSPInstance {
         let k = Self.key(folder, spec.id)
         return instances.mutate { all in
             if let i = all[k], i.executable == executable, i.fence == fence { return i }
             if let old = all[k] { Task { await old.stop(.fenced) } }
-            let i = LSPInstance(spec: spec, executable: executable, folder: folder, fence: fence, hub: self, idleSeconds: idleSeconds, backoff: backoff)
+            let i = LSPInstance(spec: spec, executable: executable, folder: folder, fence: fence, env: env, hub: self, idleSeconds: idleSeconds, backoff: backoff)
             all[k] = i
             return i
         }
@@ -276,6 +279,11 @@ final class LSPHub: @unchecked Sendable {
     static func declined(_ id: String) -> String { "lsp-declined:" + id }
 
     /// The question, for the permission gate: nil when this folder already approved the server.
+    /// The limit of a server that can't run in `sandbox-exec` (sourcekit-lsp), said in its approval card.
+    static func unsandboxedNote(_ spec: LSPServerSpec) -> String {
+        "Limit: \(spec.title) cannot run inside the macOS sandbox the app puts commands in, so it runs without the credential-folder protection and without the code mentor's write protection of your files and tests. It still starts without your API keys and other secret environment variables."
+    }
+
     @MainActor static func approvalRequest(_ spec: LSPServerSpec, executable: String, ws: Workspace) -> ApprovalRequest {
         ApprovalRequest(
             title: "Allow Teacher to start the \(spec.title) language server in “\(ws.name)”?",
@@ -284,7 +292,7 @@ final class LSPHub: @unchecked Sendable {
 
                 It gives Teacher the compiler's view of this code (definitions, types, errors). A language server reads this folder's \
                 project files and can run its code while it analyses them: \(spec.id == "rust-analyzer" ? "rust-analyzer runs build scripts and procedural macros" : spec.id == "gopls" ? "gopls runs `go list`" : "it follows the project's configuration"). \
-                Allow it only for code you trust.
+                Allow it only for code you trust.\(spec.sandboxable ? "" : "\n\n" + unsandboxedNote(spec))
                 """,
             options: [ApprovalOption(id: "folder", label: "Allow \(spec.title) in this folder", style: .primary),
                       ApprovalOption(id: "lesson", label: "Allow for this lesson only"),
