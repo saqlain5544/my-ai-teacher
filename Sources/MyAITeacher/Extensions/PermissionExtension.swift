@@ -59,6 +59,17 @@ final class PermissionExtension: AgentExtension {
                 }
             }
         }
+        // Other folders' lessons are the learner's words from elsewhere, and a search sends what it finds to the model: asked once per lesson.
+        if tool.name == "past_lessons", input["scope"]?.string == "all", !app.interactions.isGranted(Self.otherFolders, conversationID: conv) {
+            return .ask(ApprovalRequest(
+                title: "Allow Teacher to search your lessons in other folders?",
+                detail: "Matching passages from lessons in your other folders (\(SessionIndex.known.get().count) known) would be sent to the model. Nothing is changed.",
+                options: [ApprovalOption(id: "lesson", label: "Allow for this lesson", style: .primary),
+                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { [weak self] choice in
+                if choice == "lesson" { self?.app.interactions.grant(Self.otherFolders, conversationID: conv); return .allow }
+                return .deny("The learner declined searching their other folders. Search this folder's lessons (without scope \"all\").")
+            }
+        }
         switch tool.risk {
         case .readOnly, .network, .interactive, .control:   // .control: sites and apps are gated by ComputerUseExtension
             return .allow
@@ -198,6 +209,7 @@ final class PermissionExtension: AgentExtension {
 
     /// The lesson grant for `web_fetch` on this Mac or the local network.
     nonisolated static let localFetch = "local-fetch"
+    nonisolated static let otherFolders = "past-lessons-all"
 
     /// The tools that run a snippet of the model's code: one lesson grant covers them all.
     nonisolated static func runsSnippets(_ tool: Tool) -> Bool { ["run_code", "trace", "bench"].contains(tool.name) }

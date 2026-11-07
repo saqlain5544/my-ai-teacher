@@ -204,6 +204,8 @@ final class MemoryHub: @unchecked Sendable {
         guard !mems.isEmpty || !cards.isEmpty else { return Recall(memories: [], concepts: [], note: "") }
         var lines = mems.map { "- [#\($0.id)] (\($0.kind.rawValue)) \(MemoryText.clip($0.content, 220))" }
         lines += cards.map { "- " + conceptLine($0, detail: true) }
+        // An episode is a summary; when they point back at earlier work, the transcript is one call away.
+        if past, mems.contains(where: { $0.kind == .episode }) { lines.append("(Summaries only: `past_lessons` has what was actually said.)") }
         return Recall(memories: mems, concepts: cards, note: "<context>\nRelevant memory:\n" + lines.joined(separator: "\n") + "\n</context>")
     }
 

@@ -362,6 +362,18 @@ After lessons, a background pass picks out durable facts (goals, preferences, sk
 merges duplicates. Turn it off in **Settings › Memory**, where you can also choose a different model for it.
 **Tidy up memory** merges and cleans; **Forget everything** wipes the learner model.
 
+### Finding what was said before
+
+Memory keeps short summaries; your lessons keep everything. Say "what did we decide last time" or "that command you
+showed me" and the teacher can search the real transcript of your earlier lessons (the `past_lessons` tool), in this
+folder. If the answer may be in a lesson from another folder it asks once, for that lesson, before it looks there;
+sub-agents never search other folders. The search only reads: it never opens a folder you haven't worked in, and
+nothing is changed. Commands the teacher ran and the first lines of a failed run are searchable; pages and files it
+only read are not.
+
+The **All Sessions** page searches the text of every lesson in every folder as you type (the title filter still works):
+matches appear under **In the conversations** with the matching words in bold, and a click opens that lesson.
+
 ## Progress
 
 **Progress** (⌥⌘2) shows:

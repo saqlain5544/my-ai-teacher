@@ -1,4 +1,4 @@
-// Tool cards for the learner-model and housekeeping tools: memory, project_memory, load_tools, skill, draw. All compact: one line
+// Tool cards for the learner-model and housekeeping tools: memory, past_lessons, project_memory, load_tools, skill, draw. All compact: one line
 // when closed, so a reply that remembers something does not grow a box.
 (function () {
   'use strict';
@@ -19,6 +19,9 @@
   R.defineTool({ name: 'memory_forget', icon: 'brain', tone: 'purple', title: 'Forget', compact: true, summary: n => '#' + (input(n).id || '') });
   R.defineTool({ name: 'project_memory', icon: 'bookmark', tone: 'purple', title: 'Project memory', compact: true,
     summary: n => { const i = input(n); return (i.action === 'add' ? (i.section ? i.section + ': ' : '') : (i.action || 'view') + ' ') + (i.text || ''); } });
+  R.defineTool({ name: 'past_lessons', icon: 'clock', tone: 'purple', compact: true,
+    title: n => ({ read: 'Read an earlier lesson', recent: 'Recent lessons' })[input(n).action] || (input(n).ref && !input(n).query ? 'Read an earlier lesson' : input(n).query ? 'Search earlier lessons' : 'Recent lessons'),
+    summary: n => (input(n).scope === 'all' ? '[all folders] ' : '') + (input(n).query || input(n).ref || '') });
   R.defineTool({ name: 'load_tools', icon: 'toolbox', tone: 'grey', title: 'Load tools', compact: true, summary: n => (input(n).names || []).join(', ') });
   R.defineTool({ name: 'skill', icon: 'sparkles', tone: 'grey', title: 'Skill', compact: true,
     summary: n => input(n).name || (input(n).query ? 'search: ' + input(n).query : '') });

@@ -252,6 +252,7 @@ final class AppModel: ObservableObject {
         var r = settings.value.recentFolders.filter { $0.path != ws.url.path }
         r.insert(WorkspaceRef(path: ws.url.path, lastOpened: Date()), at: 0)
         settings.value.recentFolders = Array(r.prefix(12))
+        SessionIndex.known.mutate { $0 = settings.value.recentFolders.map(\.path) + [settings.defaultFolder.path, AppPaths.quickFolder.path] }
     }
 
     // MARK: Lessons
