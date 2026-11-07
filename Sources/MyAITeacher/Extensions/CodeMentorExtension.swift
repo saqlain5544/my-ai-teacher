@@ -6,19 +6,25 @@ import Foundation
 final class CodeMentorExtension: AgentExtension {
     let id = "code-mentor"
 
+    /// Lessons whose idle (no open project) stretch already carried the note: once per stretch, not on every request.
+    private var designNoted: Set<String> = []
+
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
         guard session.conversation.mode == .code else { return }
         let ws = session.services.workspace
         let p = ProjectStore.load(ws)
         if let p { Self.inject(Self.stateLine(p, changed: ProjectStore.changedCount(ws)), into: &request) }
-        if let note = Self.engineerNote(session.services.study.engineer, project: p, request: request) { Self.inject(note, key: "engineerNote", into: &request) }
+        // A project about to be designed gets the note once; it is offered again after a project opens and finishes.
+        let design = p?.isOpen != true ? designNoted.insert(session.conversation.id).inserted : { designNoted.remove(session.conversation.id); return false }()
+        if let note = Self.engineerNote(session.services.study.engineer, project: p, request: request, design: design) { Self.inject(note, key: "engineerNote", into: &request) }
     }
 
-    /// What the learner's earlier reviews say, when it helps now: at a lesson's start, when a project is about to be
-    /// designed (none open) and while a review is open. Hidden and per request, never in the frozen prompt; nil is silence.
-    nonisolated static func engineerNote(_ store: EngineerStore, project p: MentorProject?, request: LLMRequest) -> String? {
+    /// What the learner's earlier reviews say, when it helps now: through a lesson's first turn, the first request after
+    /// no project is open (`design`: one is about to be designed) and while a review is open. Hidden and per request,
+    /// never in the frozen prompt; nil is silence.
+    nonisolated static func engineerNote(_ store: EngineerStore, project p: MentorProject?, request: LLMRequest, design: Bool = false) -> String? {
         let turns = request.messages.filter { $0.role == .user && $0.blocks.contains { $0.kind == .text && $0.meta == nil } }.count
-        guard turns <= 1 || p?.isOpen != true || p?.openReview != nil else { return nil }
+        guard turns <= 1 || design || p?.openReview != nil else { return nil }
         return store.profile().note(language: EngineerLanguage.of(subject: p?.subject))
     }
 
