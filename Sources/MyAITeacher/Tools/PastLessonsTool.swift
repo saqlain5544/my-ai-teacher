@@ -13,7 +13,7 @@ struct PastLessonsTool: Tool {
 
     var description: String {
         """
-        Search or read the learner's earlier lessons — the real transcript, not memory's summaries. Use when they refer to \
+        Search or read what was said in earlier lessons (the real transcript, not memory's summaries). Use when they refer to \
         earlier work ("last time", "as we discussed", "the fix from before", "that command you showed me"). `search` (query; \
         optional mode, since/until as YYYY-MM-DD\(folderOnly ? "" : "; scope \"all\" also searches their other folders")) returns lesson, date, \
         role, snippet and a `ref`; `read` takes a `ref` and returns the messages around it; `recent` lists the latest lessons \
