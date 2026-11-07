@@ -6,6 +6,9 @@ struct SessionsView: View {
     @EnvironmentObject var app: AppModel
     @State private var query = ""
     @State private var scope: Scope = .all
+    /// Matches inside lessons' text for the query (all folders), and whether a search is in flight.
+    @State private var hits: [PastLessons.Hit] = []
+    @State private var searching = false
 
     enum Scope: String, CaseIterable, Identifiable {
         case all = "All", active = "Working", here = "This folder"
@@ -17,14 +20,15 @@ struct SessionsView: View {
             HStack(spacing: 10) {
                 Picker("", selection: $scope) { ForEach(Scope.allCases) { Text($0.rawValue).tag($0) } }
                     .pickerStyle(.segmented).labelsHidden().frame(maxWidth: 300)
-                TextField("Filter sessions", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 260)
+                TextField("Search sessions and what was said", text: $query).textFieldStyle(.roundedBorder).frame(maxWidth: 300)
+                if searching { ProgressView().controlSize(.small) }
                 Spacer()
                 Button { app.refreshSessions() } label: { Image(systemName: "arrow.clockwise") }
                     .buttonStyle(.borderless).help("Reload the list")
             }
             .padding(.horizontal, 16).padding(.vertical, 10)
             Divider()
-            if groups.isEmpty {
+            if groups.isEmpty && hits.isEmpty {
                 ContentUnavailableView(scope == .active ? "Nothing is working right now" : "No sessions",
                                        systemImage: "rectangle.stack",
                                        description: Text(scope == .active ? "A lesson that is replying or waiting for you shows up here, in any folder." : "Lessons you start in any folder show up here."))
@@ -42,12 +46,62 @@ struct SessionsView: View {
                             .help(folder)
                         }
                     }
+                    if !hits.isEmpty {
+                        Section {
+                            ForEach(hits, id: \.messageID) { h in hitRow(h) }
+                        } header: {
+                            HStack(spacing: 6) { Image(systemName: "text.magnifyingglass"); Text("In the conversations") }
+                        }
+                    }
                 }
                 .listStyle(.inset)
             }
         }
         .navigationTitle("All Sessions")
         .onAppear { app.refreshSessions() }
+        // Typing waits a moment, then searches every folder's lessons off the main actor; a newer query (or leaving)
+        // cancels the one in flight, which interrupts its SQLite statements.
+        .task(id: query) { await search() }
+    }
+
+    private func search() async {
+        let q = query.trimmingCharacters(in: .whitespaces)
+        guard q.count >= 3, !FTS.terms(q).isEmpty else { hits = []; searching = false; return }
+        searching = true
+        defer { if !Task.isCancelled { searching = false } }
+        do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
+        let folders = PastLessons.databases(current: app.workspace.url.path, others: app.allSessions.map(\.folder) + SessionIndex.known.get())
+        let results = await PastLessons.searchFolders(folders, query: q, filter: .init(), limit: 30)
+        guard !Task.isCancelled else { return }
+        hits = PastLessons.merge(results, limit: 30)
+    }
+
+    private func hitRow(_ h: PastLessons.Hit) -> some View {
+        Button { app.openSession(h.conversationID, folder: h.folder) } label: {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(h.title).lineLimit(1)
+                Text(Self.highlighted(h.snippet)).font(.callout).foregroundStyle(.secondary).lineLimit(2)
+                Text("\(h.folderName) · \(h.role) · \(h.date.formatted(date: .abbreviated, time: .omitted))").font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(.vertical, 3)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("\(h.title), in \(h.folderName): \(h.snippet.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: ""))")
+    }
+
+    /// The matched words (marked « » by the search) in bold.
+    static func highlighted(_ s: String) -> AttributedString {
+        var out = AttributedString()
+        for (i, part) in s.components(separatedBy: "«").enumerated() {
+            let pieces = part.components(separatedBy: "»")
+            if i == 0 { out += AttributedString(pieces.joined()); continue }
+            var hit = AttributedString(pieces[0]); hit.font = .callout.bold(); hit.foregroundColor = .primary
+            out += hit
+            out += AttributedString(pieces.dropFirst().joined())
+        }
+        return out
     }
 
     private func row(_ e: SessionIndex.Entry) -> some View {
