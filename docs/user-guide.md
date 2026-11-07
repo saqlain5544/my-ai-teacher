@@ -135,7 +135,7 @@ shows when it does), so its instructions stay short. They come in a tree, like t
 | Every agent | web-research, read-long-documents |
 | Every teaching mode | lesson-design, quiz-writing, feedback-on-answers |
 | Language mentor | conversation-practice, grammar-drills, pronunciation-coaching |
-| Code mentor | debugging-coaching, code-review-feedback, project-scaffolding |
+| Code mentor | debugging-coaching, code-review-feedback, project-scaffolding, tdd-coaching, reading-unfamiliar-code, refactoring-safely, performance-investigation, concurrency-bugs, secure-code-review, system-design-practice, technical-interview-practice |
 
 **Add your own** in the same format as Claude Code and OpenCode: a folder with a `SKILL.md`, whose front matter has a
 `name` and a `description` (what it's for: the agent chooses by it), then the instructions in Markdown, beside any
@@ -369,6 +369,11 @@ merges duplicates. Turn it off in **Settings › Memory**, where you can also ch
 * concept mastery, which fades without practice;
 * **Confidence check**: how often you're right when you're guessing, unsure or sure, and the hints and solutions you've
   used;
+* **How you work as an engineer**: what the code mentor's reviews show across projects. A habit is named only when it
+  came up in at least three of your last five reviews, in more than one project, and the evidence is listed with a link
+  to each finding (opens in your editor). It tells fixes you made on your own from fixes after hints, and shows
+  whether the habit is fading. **Dismiss** a pattern that isn't yours, or **Reset** the profile; the mentor then stops
+  using it. It lives on this Mac, never in a project folder;
 * **Coming back to**: the re-checks and transfer checks that are scheduled;
 * course boards, recent quizzes and model usage.
 
