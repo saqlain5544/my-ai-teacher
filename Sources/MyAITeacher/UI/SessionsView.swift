@@ -61,7 +61,7 @@ struct SessionsView: View {
         .onAppear { app.refreshSessions() }
         // Typing waits a moment, then searches every folder's lessons off the main actor; a newer query (or leaving)
         // cancels the one in flight, which interrupts its SQLite statements.
-        .task(id: query) { await search() }
+        .task(id: "\(scope.rawValue)|\(query)") { await search() }
     }
 
     private func search() async {
@@ -70,10 +70,15 @@ struct SessionsView: View {
         searching = true
         defer { if !Task.isCancelled { searching = false } }
         do { try await Task.sleep(nanoseconds: 300_000_000) } catch { return }
-        let folders = PastLessons.databases(current: app.workspace.url.path, others: app.allSessions.map(\.folder) + SessionIndex.known.get())
-        let results = await PastLessons.searchFolders(folders, query: q, filter: .init(), limit: 30)
+        // The picker applies to what was said too: this folder only, or only the lessons working right now.
+        let here = app.workspace.url.path
+        let others = scope == .here ? [] : app.allSessions.map(\.folder) + SessionIndex.known.get()
+        let folders = await PastLessons.databases(current: here, others: others, budget: PastLessons.folderBudget)
+        let results = await PastLessons.searchFolders(scope == .here ? [here] : folders, query: q, filter: .init(), limit: scope == .active ? 200 : 30)
         guard !Task.isCancelled else { return }
-        hits = PastLessons.merge(results, limit: 30)
+        hits = PastLessons.merge(results, limit: scope == .active ? 200 : 30).filter { h in
+            scope != .active || [.running, .waiting].contains(app.activity(h.conversationID))
+        }.prefix(30).map { $0 }
     }
 
     private func hitRow(_ h: PastLessons.Hit) -> some View {
