@@ -107,12 +107,15 @@ struct LSPTool: Tool {
             let u = Self.canonical(resolvePath(f, workspace: ctx.workspace))
             guard FileManager.default.fileExists(atPath: u.path) else { return .error("\(f) doesn't exist.") }
             guard u.isInside(folder) else { return .error("lsp works on files inside the folder; \(f) is outside it (use `read`).") }
+            if let size = FileViews.stamp(u)?.size, size > LSPConnection.maxFileBytes {
+                return .error("\(f) is \(size / 1_000_000) MB, too large to analyse with a language server (the limit is \(LSPConnection.maxFileBytes / 1_000_000) MB). `grep` and `read` with offsets still work.")
+            }
             url = u
         }
         let needsFile = action != "workspace_symbols"
         if needsFile && url == nil && !(action == "diagnostics") { return .error("`file` is required for \(action).") }
         let lang = LSPServers.languageID(spec, ext: ext)
-        let instance = hub.instance(spec, executable: exe, folder: folder)
+        let instance = hub.instance(spec, executable: exe, folder: folder, fence: Self.fence(for: ctx.services.workspace))
         let fmt = LSPFormat(folder: folder, limit: limit)
         let t0 = Date()
         do {
@@ -135,6 +138,13 @@ struct LSPTool: Tool {
         } catch let e as LSPError {
             return .error("\(spec.title): \(e.message)")
         }
+    }
+
+    /// The write fence the server runs under: the code mentor's while a learner's project is open (the same profile its
+    /// commands get), else none. Decided from the folder, so a sub-agent's call gets the same as the main agent's.
+    static func fence(for ws: Workspace) -> String? {
+        guard ProjectStore.load(ws)?.isOpen == true else { return nil }
+        return MentorGuard.fence(ws)
     }
 
     /// Absolute path with symlinks resolved (/tmp → /private/tmp), so what the server sends back matches.
@@ -167,8 +177,9 @@ struct LSPTool: Tool {
             return fmt.documentSymbols(r, file: u)
         case "diagnostics":
             guard let u = url else { return fmt.allDiagnostics(conn.allPublished()) }
-            let since = try await conn.sync(u, languageId: lang)
-            let p = await conn.awaitDiagnostics(LSPConnection.uri(u), since: since, seconds: 10)
+            // Nothing sent (the file is as the server has it): what it already published still stands, so no waiting for another.
+            let synced = try await conn.syncResult(u, languageId: lang)
+            let p = await conn.awaitDiagnostics(LSPConnection.uri(u), since: synced.sent ? synced.at : .distantPast, seconds: 10)
             guard let p else {
                 return ToolOutput(text: "The server published no diagnostics for \(fmt.rel(u)) in time. It may still be loading the project; try again.", meta: ["count": 0])
             }
@@ -486,7 +497,7 @@ struct LSPFormat {
             else if let kind = dc["kind"]?.string { extra.append("\(kind) \(dc["uri"]?.string ?? dc["oldUri"]?.string ?? "")") }
         }
         guard !perFile.isEmpty else { return ToolOutput(text: prefix + "The server would make no edits for renaming `\(from)` to `\(to)`.", meta: ["count": 0]) }
-        var lines: [String] = [], total = 0
+        var lines: [String] = [], total = 0, shown = 0
         for uri in perFile.keys.sorted() {
             guard let url = URL(string: uri), url.isFileURL else { continue }
             let src = sourceLines(url)
@@ -495,7 +506,8 @@ struct LSPFormat {
             var byLine: [Int: [JSON]] = [:]
             for e in edits { byLine[e["range"]?["start"]?["line"]?.int ?? 0, default: []].append(e) }
             for l in byLine.keys.sorted() {
-                guard lines.count < limit * 2 else { break }
+                guard lines.count < limit else { continue }
+                shown += byLine[l]!.count
                 let old = l < src.count ? src[l] : ""
                 var new = old as NSString
                 for e in byLine[l]!.reversed() {
@@ -510,7 +522,7 @@ struct LSPFormat {
             }
         }
         return ToolOutput(text: prefix + "Renaming `\(from)` to `\(to)` would make \(total) edit\(total == 1 ? "" : "s") in \(perFile.count) file\(perFile.count == 1 ? "" : "s") (nothing was applied):\n"
-                          + lines.joined(separator: "\n") + (extra.isEmpty ? "" : "\nAlso: " + extra.joined(separator: ", ")),
+                          + lines.joined(separator: "\n") + (shown < total ? "\n… and \(total - shown) more edits (raise `limit`)" : "") + (extra.isEmpty ? "" : "\nAlso: " + extra.joined(separator: ", ")),
                           meta: ["count": .number(Double(total)), "files": .number(Double(perFile.count))])
     }
 }

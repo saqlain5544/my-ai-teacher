@@ -40,9 +40,13 @@ final class LSPTests: XCTestCase {
         time.sleep(0.5)
         send({"jsonrpc": "2.0", "method": "$/progress", "params": {"token": "idx", "value": {"kind": "end"}}})
     docs = {}
-    def diag(uri):
-        text, version = docs[uri]
-        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": uri, "version": version,
+    def enc(uri):
+        if os.environ.get("FAKE_ENCODE") == "1": return uri.replace("(", "%28").replace(")", "%29").replace("+", "%2B").replace("@", "%40")
+        return uri
+    def diag(uri, version=None):
+        text, doc_version = docs[uri]
+        version = doc_version if version is None else version
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": enc(uri), "version": version,
               "diagnostics": [{"range": {"start": {"line": 0, "character": 1}, "end": {"line": 0, "character": 2}}, "severity": 1,
                                "message": "v%d:%d" % (version, len(text)), "source": "fake"}]}})
     shut = False
@@ -52,6 +56,8 @@ final class LSPTests: XCTestCase {
         note({"in": m.get("method") or "reply", "id": m.get("id"), "result": m.get("result")})
         meth = m.get("method"); p = m.get("params") or {}
         if meth == "initialize":
+            for a in sys.argv:
+                if a.startswith("--init-delay="): time.sleep(float(a.split("=")[1]))
             send({"jsonrpc": "2.0", "id": m["id"], "result": {"capabilities": {"definitionProvider": True, "hoverProvider": True}, "serverInfo": {"name": "fake-ls", "version": "1"}}})
         elif meth == "initialized":
             if os.environ.get("FAKE_PROGRESS") == "1": threading.Thread(target=progress, daemon=True).start()
@@ -59,6 +65,7 @@ final class LSPTests: XCTestCase {
             d = p["textDocument"]; docs[d["uri"]] = (d["text"], d["version"]); diag(d["uri"])
         elif meth == "textDocument/didChange":
             d = p["textDocument"]; docs[d["uri"]] = (p["contentChanges"][0]["text"], d["version"]); diag(d["uri"])
+            if os.environ.get("FAKE_STALE") == "1": diag(d["uri"], d["version"] - 1)   # a late publish for the text before this one
         elif meth == "textDocument/definition":
             uri = p["textDocument"]["uri"]
             send({"jsonrpc": "2.0", "id": m["id"], "result": [{"targetUri": uri, "targetRange": {"start": {"line": 0, "character": 0}, "end": {"line": 1, "character": 0}},
@@ -67,6 +74,14 @@ final class LSPTests: XCTestCase {
         elif meth == "textDocument/hover":
             send({"jsonrpc": "2.0", "id": m["id"], "result": {"contents": {"kind": "markdown", "value": "**pos** %d:%d" % (p["position"]["line"], p["position"]["character"])}}})
         elif meth == "test/slow": pass
+        elif meth == "test/write":
+            try:
+                open(p["path"], "w").write("changed"); send({"jsonrpc": "2.0", "id": m["id"], "result": "wrote"})
+            except Exception as e: send({"jsonrpc": "2.0", "id": m["id"], "result": "denied: %s" % e})
+        elif meth == "test/flood":
+            for i in range(250):
+                send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": "file:///flood/f%d.fk" % i, "diagnostics": []}})
+            send({"jsonrpc": "2.0", "id": m["id"], "result": "done"})
         elif meth == "test/crash": os._exit(3)
         elif meth == "test/big": send({"jsonrpc": "2.0", "id": m["id"], "result": "x" * 300000}, chunks=4)
         elif meth == "test/split": send({"jsonrpc": "2.0", "id": m["id"], "result": {"ok": True}}, chunks=5)
@@ -88,10 +103,11 @@ final class LSPTests: XCTestCase {
 
     // MARK: Helpers
 
-    func connection(progress: Bool = false) throws -> LSPConnection {
+    func connection(progress: Bool = false, extra: [String: String] = [:]) throws -> LSPConnection {
         var env = ProcessInfo.processInfo.environment
         env["FAKE_LOG"] = logFile.path
         if progress { env["FAKE_PROGRESS"] = "1" }
+        for (k, v) in extra { env[k] = v }
         let t = LSPStdioTransport(executable: "/usr/bin/python3", args: ["-I", script.path], env: env, cwd: dir, log: MCPLog())
         let c = LSPConnection(transport: t, root: dir)
         try c.start()
@@ -396,6 +412,194 @@ final class LSPTests: XCTestCase {
         let b = try await tool.run(["action": "diagnostics", "file": "y.fk"], try await ctx())
         XCTAssertTrue(b.text.contains("v2:11"), b.text)
         _ = before
+    }
+
+
+    // MARK: Review findings
+
+    func testDiagnosticsOnAnUnchangedOpenFileAnswerAtOnceAndKeepTheirErrors() async throws {
+        _ = try write("u.fk", "def foo\n")
+        let hub = LSPHub(specs: [spec()])
+        hub.approveForProcess(folder: dir)
+        defer { Task { for i in hub.all { await i.stop() } } }
+        let tool = LSPTool(hub: hub)
+        // A hover opens the file (the server publishes then); diagnostics on the unchanged file is not "nothing published".
+        _ = try await tool.run(["action": "hover", "file": "u.fk", "line": 1, "symbol": "foo"], try await ctx())
+        try await Task.sleep(nanoseconds: 300_000_000)
+        for n in 1...2 {   // twice in a row: the second is unchanged too
+            let t0 = Date()
+            let d = try await tool.run(["action": "diagnostics", "file": "u.fk"], try await ctx())
+            XCTAssertLessThan(Date().timeIntervalSince(t0), 4, "call \(n) must not wait out the 10 s for a publish that already happened")
+            XCTAssertTrue(d.text.contains("1 error") && d.text.contains("v1:8"), d.text)
+        }
+    }
+
+    func testPublishesAreFoundWhateverWayTheServerEncodesThePath() async throws {
+        let odd = dir.appendingPathComponent("p(1)+x@y", isDirectory: true)
+        try FileManager.default.createDirectory(at: odd, withIntermediateDirectories: true)
+        let f = odd.appendingPathComponent("a.fk")
+        try "x\n".write(to: f, atomically: true, encoding: .utf8)
+        let c = try connection(extra: ["FAKE_ENCODE": "1"])
+        defer { c.close() }
+        try await c.initialize(timeout: 10)
+        let since = try await c.sync(f, languageId: "fake")
+        let p = await c.awaitDiagnostics(LSPConnection.uri(f), since: since, seconds: 5)
+        XCTAssertEqual(p?.items.first?["message"]?.string, "v1:2", "the server wrote %28 %29 %2B %40; we look up the same file")
+        XCTAssertEqual(LSPConnection.normalized(f.absoluteString.replacingOccurrences(of: "(", with: "%28")), LSPConnection.uri(f))
+    }
+
+    func testALatePublishForOlderTextIsIgnored() async throws {
+        let c = try connection(extra: ["FAKE_STALE": "1"])
+        defer { c.close() }
+        try await c.initialize(timeout: 10)
+        let f = try write("s.fk", "one\n")
+        var since = try await c.sync(f, languageId: "fake")
+        _ = await c.awaitDiagnostics(LSPConnection.uri(f), since: since, seconds: 5)
+        try "one\ntwo\n".write(to: f, atomically: true, encoding: .utf8)
+        since = try await c.sync(f, languageId: "fake")
+        let p = await c.awaitDiagnostics(LSPConnection.uri(f), since: since, seconds: 5)
+        try await Task.sleep(nanoseconds: 400_000_000)   // the stale one has certainly arrived
+        XCTAssertEqual(c.published(LSPConnection.uri(f))?.items.first?["message"]?.string, "v2:8", "kept the publish for the current text")
+        XCTAssertEqual(p?.version, 2)
+    }
+
+    func testStopPressedDuringACallEndsItAndStaysStopped() async throws {
+        let hub = LSPHub(specs: [spec()], backoff: Backoff(initial: 0.1, max: 0.2))
+        let inst = hub.instance(spec(), executable: "/usr/bin/python3", folder: dir)
+        _ = try await inst.connection()
+        let call = Task { () -> String in
+            do { _ = try await inst.perform { c in try await c.request("test/slow", timeout: 30) }; return "finished" }
+            catch { return error.localizedDescription }
+        }
+        try await Task.sleep(nanoseconds: 400_000_000)
+        await inst.stop()   // the Tasks panel's Stop
+        let outcome = await call.value
+        XCTAssertTrue(outcome.contains("was stopped") && outcome.contains("Stop"), outcome)
+        try await Task.sleep(nanoseconds: 1_500_000_000)
+        XCTAssertEqual(inst.status.phase, .stopped, "not started again behind the learner's back")
+        XCTAssertFalse(inst.isRunning)
+        // A later call is a new use: it starts it.
+        let c = try await inst.connection()
+        XCTAssertNil(c.closedReason)
+        await inst.stop()
+    }
+
+    func testQuittingWhileAServerIsStillStartingEndsItsProcess() async throws {
+        let slow = LSPServerSpec(id: "slow", title: "Slow LS", binaries: [], args: ["-I", script.path, "--init-delay=30"], languages: ["fk": "fake"], extraDirs: [], install: "n/a", executable: "/usr/bin/python3")
+        let hub = LSPHub(specs: [slow])
+        let inst = hub.instance(slow, executable: "/usr/bin/python3", folder: dir)
+        let starting = Task { try? await inst.connection(timeout: 20) }
+        var pid: Int32?
+        for _ in 0..<60 where pid == nil { try await Task.sleep(nanoseconds: 100_000_000); pid = inst.status.pid }
+        let p = try XCTUnwrap(pid, "the child is known from launch, not only once initialize answers")
+        XCTAssertEqual(kill(p, 0), 0)
+        hub.shutdownNow()
+        try await Task.sleep(nanoseconds: 800_000_000)
+        XCTAssertNotEqual(kill(p, 0), 0, "quitting ended the child while it was initialising")
+        starting.cancel()
+    }
+
+    func testTheServerRunsUnderTheMentorsWriteFence() async throws {
+        try XCTSkipUnless(WriteFence.available, "no sandbox-exec")
+        let learner = try write("learner.txt", "mine\n")
+        let fence = WriteFence.profile(files: [learner], locked: [], open: [])
+        let hub = LSPHub(specs: [spec()])
+        let inst = hub.instance(spec(), executable: "/usr/bin/python3", folder: dir, fence: fence)
+        defer { Task { await inst.stop() } }
+        let denied: String = try await inst.perform { c in try await c.request("test/write", ["path": .string(learner.path)], timeout: 10).string ?? "" }
+        XCTAssertTrue(denied.hasPrefix("denied"), denied)
+        XCTAssertEqual(try String(contentsOf: learner, encoding: .utf8), "mine\n")
+        let fresh = dir.appendingPathComponent("build-output.txt")
+        let ok: String = try await inst.perform { c in try await c.request("test/write", ["path": .string(fresh.path)], timeout: 10).string ?? "" }
+        XCTAssertEqual(ok, "wrote", "everything the fence doesn't name stays writable")
+        // The fence changing (the project passed, its tests unlocked) replaces the server instead of leaving the old protection running.
+        let other = hub.instance(spec(), executable: "/usr/bin/python3", folder: dir, fence: nil)
+        XCTAssertFalse(other === inst)
+        for _ in 0..<60 where inst.isRunning { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertFalse(inst.isRunning)
+        await other.stop()
+    }
+
+    func testTheToolFencesAServerOnlyWhileAProjectIsOpen() async throws {
+        let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g2.sqlite").path)), workspace: try Workspace(url: dir))
+        XCTAssertNil(LSPTool.fence(for: services.workspace), "no project: unfenced")
+        _ = try write("app.py", "x = 1\n")
+        var p = MentorProject(); p.title = "t"; p.concept = "c"; p.testCommand = "true"
+        ProjectStore.save(p, services.workspace); ProjectStore.snapshot(services.workspace, why: "baseline")
+        let fence = try XCTUnwrap(LSPTool.fence(for: services.workspace), "a project is open")
+        XCTAssertEqual(fence, MentorGuard.fence(services.workspace), "the profile the mentor's own commands get")
+        XCTAssertTrue(fence.contains("app.py"))
+    }
+
+    func testBigFilesAreRefusedAndPublishedDiagnosticsAreBounded() async throws {
+        let big = try write("big.fk", String(repeating: "x", count: LSPConnection.maxFileBytes + 10))
+        let hub = LSPHub(specs: [spec()])
+        hub.approveForProcess(folder: dir)
+        defer { Task { for i in hub.all { await i.stop() } } }
+        let r = try await LSPTool(hub: hub).run(["action": "hover", "file": "big.fk", "line": 1, "symbol": "x"], try await ctx())
+        XCTAssertTrue(r.isError && r.text.contains("too large"), r.text)
+        _ = big
+        let c = try connection()
+        defer { c.close() }
+        try await c.initialize(timeout: 10)
+        _ = try await c.request("test/flood", timeout: 20)
+        XCTAssertLessThanOrEqual(c.allPublished().count, LSPConnection.maxPublished)
+    }
+
+    func testRenamePreviewSaysWhenItStoppedListing() throws {
+        let f = try write("many.fk", (0..<30).map { "foo \($0)" }.joined(separator: "\n"))
+        let edits: [JSON] = (0..<30).map { ["range": ["start": ["line": .number(Double($0)), "character": 0], "end": ["line": .number(Double($0)), "character": 3]], "newText": "bar"] }
+        let out = LSPFormat(folder: dir, limit: 5).renamePreview(["changes": [f.absoluteString: .array(edits)]], from: "foo", to: "bar", prefix: "")
+        XCTAssertTrue(out.text.contains("30 edits"), out.text)
+        XCTAssertTrue(out.text.contains("… and 25 more edits"), out.text)
+    }
+
+    // The permission gate: no approval asks; the answers store what they say.
+    @MainActor func testTheGateAsksOnceStoresTheAnswerAndRemembersADecline() async throws {
+        _ = try write("g.fk", "x\n")
+        let hub = LSPHub(specs: [spec()])
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g3.sqlite").path)), workspace: try Workspace(url: dir))
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        let gate = PermissionExtension(app: AppModel.shared)
+        gate.lspHub = hub
+        let tool = LSPTool(hub: hub)
+        let call = Block.toolUse(id: "g1", name: "lsp", input: ["action": "hover", "file": "g.fk", "line": 1, "symbol": "x"])
+        func decide() async -> ToolDecision {
+            let d = gate.shouldRun(call, tool: tool, session: session)
+            if case .pending(let f) = d { return await f() }
+            return d
+        }
+        AppModel.shared.settings.value.lspApproved = [:]
+        let folder = LSPTool.canonical(dir).path
+        guard case .ask(let req, let resolve) = await decide() else { return XCTFail("the first use in a folder asks") }
+        XCTAssertTrue(req.title.contains("Fake LS") && req.title.contains("language server"), req.title)
+        XCTAssertEqual(req.options.map(\.id), ["folder", "lesson", "deny"])
+        guard case .allow = resolve("lesson") else { return XCTFail() }
+        XCTAssertNil(AppModel.shared.settings.value.lspApproved[folder], "a lesson grant isn't stored in the settings")
+        guard case .allow = await decide() else { return XCTFail("allowed for this lesson") }
+        // A different lesson isn't covered by it.
+        var other = Conversation(providerID: "x", model: "m"); other.mode = .code
+        let session2 = ChatSession(conversation: other, app: AppModel.shared, services: services)
+        let d2 = gate.shouldRun(call, tool: tool, session: session2)
+        guard case .pending(let f2) = d2, case .ask(_, let resolve2) = await f2() else { return XCTFail("another lesson asks again") }
+        guard case .allow = resolve2("folder") else { return XCTFail() }
+        XCTAssertEqual(AppModel.shared.settings.value.lspApproved[folder], ["fake"], "stored in the app's settings, not the folder")
+        guard case .allow = await decide() else { return XCTFail("approved for the folder") }
+        XCTAssertFalse(FileManager.default.fileExists(atPath: dir.appendingPathComponent(".teacher/lsp").path))
+        // A decline holds for the lesson.
+        AppModel.shared.settings.value.lspApproved = [:]
+        var third = Conversation(providerID: "x", model: "m"); third.mode = .code
+        let session3 = ChatSession(conversation: third, app: AppModel.shared, services: services)
+        func decide3() async -> ToolDecision { if case .pending(let f) = gate.shouldRun(call, tool: tool, session: session3) { return await f() } else { return .allow } }
+        guard case .ask(_, let resolve3) = await decide3() else { return XCTFail() }
+        guard case .deny = resolve3("deny") else { return XCTFail("declined") }
+        guard case .deny(let why) = await decide3() else { return XCTFail("a decline holds for the lesson") }
+        XCTAssertTrue(why.contains("symbols"), why)
+        // The sub-agent: the tool itself refuses without an approval, and takes the folder's stored one.
+        let sub = try await tool.run(["action": "hover", "file": "g.fk", "line": 1, "symbol": "x"], try await ctx(depth: 1, conv: "sub-no"))
+        XCTAssertTrue(sub.isError && sub.text.contains("sub-agent can't ask"), sub.text)
+        AppModel.shared.settings.value.lspApproved = [:]
     }
 
     // MARK: Positions and output
