@@ -297,7 +297,7 @@ struct ToolsSettings: View {
             }
             Section("Secrets") {
                 Toggle("Commands can't read credential folders", isOn: $settings.value.protectCredentials)
-                Text("~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.docker/config.json, Keychains and this app's saved keys are refused to every command an agent starts. This breaks, in the agent's shell: git over SSH, gh, docker logins, aws, Keychain access, Homebrew credentials, and tools that sandbox themselves (SwiftPM gets --disable-sandbox added). It is a guard rail, not a wall. Reading them with the file tools asks first.")
+                Text("~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.config/gcloud, ~/.kube, ~/.npmrc, ~/.git-credentials, ~/.docker/config.json, Keychains and this app's saved keys are refused to every command an agent starts. This breaks, in the agent's shell: git over SSH and its credential store, gh, docker logins, aws, gcloud, kubectl, npm auth (private registries, publishing), Keychain access, Homebrew credentials, and tools that sandbox themselves (SwiftPM gets --disable-sandbox added). It is a guard rail, not a wall. Reading them with the file tools asks first.")
                     .font(.caption).foregroundStyle(.secondary)
                 VStack(alignment: .leading, spacing: 4) {
                     Text("Environment variables commands may keep").font(.callout)

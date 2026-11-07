@@ -215,9 +215,12 @@ enum Secrets {
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
     /// Directories and files whose contents are credentials: the usual places under the home folder, and the app's own
     /// keys file and settings (MCP tokens live in them).
+    /// The one list: the read gate, the deny rules, `ReadOnlyShell`, `namesCredential` and `TreeDigest`'s link check all read
+    /// it. Under the home folder, whole trees and single files.
+    static let credentialFolders = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".kube", "Library/Keychains"]
+    static let credentialFiles = [".netrc", ".docker/config.json", ".npmrc", ".git-credentials"]
     static var credentialPaths: [String] {
-        let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains"]
-        return rel.map { home + "/" + $0 } + [AppPaths.keys.path, AppPaths.settings.path]
+        (credentialFolders + credentialFiles).map { home + "/" + $0 } + [AppPaths.keys.path, AppPaths.settings.path]
     }
 
     /// Whether `url` is, or is inside, a credential location (case-insensitively: the disk is; and through symlinks).
@@ -240,13 +243,15 @@ enum Secrets {
     /// `..` after a wildcard (`*/../../.ssh`) is asked about whatever it reaches. A search that starts above a credential
     /// folder (grep, glob, symbols, code) is asked about too; `ls` of the home folder is not.
     static func credentialPathNamed(by tool: String, _ input: JSON, workspace: URL) -> String? {
-        guard ["read", "grep", "glob", "ls", "symbols", "code", "source"].contains(tool) else { return nil }
+        // Every tool that takes a path to read: `lsp` names its file in `file`. (`debug`'s `program` and the test tools' paths
+        // are run, not read, under the credential deny rules.)
+        guard ["read", "grep", "glob", "ls", "symbols", "code", "source", "lsp"].contains(tool) else { return nil }
         let ws = workspace.standardizedFileURL
         let walks = ["grep", "glob", "symbols", "code"].contains(tool)
         func hit(_ u: URL) -> Bool { isCredentialPath(u) || (walks && containsCredentialPath(u) && u.path != ws.path) }
         var candidates: [(raw: String, base: URL)] = []
         var baseDir = ws
-        for k in ["path", "file_path", "dir", "directory", "root"] {
+        for k in ["path", "file_path", "file", "dir", "directory", "root"] {
             guard let s = input[k]?.string, !s.isEmpty else { continue }
             candidates.append((s, ws))
             if tool == "glob", k == "path" { baseDir = resolvePath(s, workspace: ws) }
@@ -267,7 +272,8 @@ enum Secrets {
 
     /// A word in a command that names a credential location (for `ReadOnlyShell`, whose commands never ask).
     static func namesCredential(_ command: String) -> Bool {
-        let hints = ["/.ssh", "/.aws", "/.gnupg", "/.netrc", "/.config/gh", "/.docker/config", "/Keychains", AppPaths.keys.path, AppPaths.settings.path, ".ssh/", ".aws/", ".gnupg/", ".netrc"]
+        let hints = (credentialFolders + credentialFiles).map { "/" + $0 } + credentialFolders.map { $0 + "/" } + credentialFiles
+            + ["/.docker/config", "/Keychains", AppPaths.keys.path, AppPaths.settings.path]
         return hints.contains { command.contains($0) }
     }
 }
@@ -283,20 +289,24 @@ extension WriteFence {
     /// The rules, built once: paths the kernel sees (`real`).
     static let denyReads: String = {
         let home = Secrets.home
-        let dirs = [".ssh", ".aws", ".gnupg", ".config/gh", "Library/Keychains"].map { real(URL(fileURLWithPath: home + "/" + $0)) }
-        let files = [".netrc", ".docker/config.json"].map { real(URL(fileURLWithPath: home + "/" + $0)) } + [real(AppPaths.keys), real(AppPaths.settings)]
+        let dirs = Secrets.credentialFolders.map { real(URL(fileURLWithPath: home + "/" + $0)) }
+        let files = Secrets.credentialFiles.map { real(URL(fileURLWithPath: home + "/" + $0)) } + [real(AppPaths.keys), real(AppPaths.settings)]
         let parents = [home, home + "/.config", home + "/.docker", home + "/Library", AppPaths.support.path, AppPaths.support.deletingLastPathComponent().path].map { real(URL(fileURLWithPath: $0)) }
-        return denyRules(dirs: dirs, files: files, parents: parents)
+        // Approved plugin files live here and are read by the app as the learner approved them: a command may read them, not change them.
+        return denyRules(dirs: dirs, files: files, parents: parents, writeOnly: [real(Plugins.root)])
     }()
 
     /// Read and write refusals for `dirs` (whole trees) and `files`, and refusal to move or delete the `parents` that hold
     /// them (`mv ~/.config /tmp/c` would carry `gh` away from its rule). Writing includes renaming, unlinking and linking
     /// the credential paths themselves, so `mv ~/.ssh /tmp/s && cat /tmp/s/id_rsa` fails. A write the learner approved goes
     /// through the file tools, which run in the app and are not under this profile.
-    static func denyRules(dirs: [String], files: [String], parents: [String]) -> String {
+    /// `writeOnly` trees (the approved plugins) can be read but not written, renamed or deleted.
+    static func denyRules(dirs: [String], files: [String], parents: [String], writeOnly: [String] = []) -> String {
         func lit(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         let paths = dirs.map { "(subpath \(lit($0)))" } + files.map { "(literal \(lit($0)))" }
-        return "(deny file-read* file-write* " + paths.joined(separator: " ") + ")\n"
+        // (An empty filter list would deny everything.)
+        return (paths.isEmpty ? "" : "(deny file-read* file-write* " + paths.joined(separator: " ") + ")\n")
+            + (writeOnly.isEmpty ? "" : "(deny file-write* " + writeOnly.map { "(subpath \(lit($0)))" }.joined(separator: " ") + ")\n")
             + "(deny file-write-unlink " + parents.map { "(literal \(lit($0)))" }.joined(separator: " ") + ")\n"
     }
 }

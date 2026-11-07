@@ -614,9 +614,9 @@ Stop the agent any time with ⌘. or Esc twice.
     in **Settings › Tools › Secrets**. Hooks and MCP servers you set up yourself keep the full environment.
   * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
     replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
-  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.docker/config.json`, Keychains and the app's saved
+  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.config/gcloud`, `~/.kube`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, Keychains and the app's saved
     keys: the file tools ask once per lesson, and commands the teacher starts can't read them (the macOS sandbox refuses).
-    **That breaks, inside the teacher's shell:** `git` over SSH, `gh`, `docker` logins, `aws`, anything that needs your
+    **That breaks, inside the teacher's shell:** `git` over SSH and git's credential store, `gh`, `docker` logins, `aws`, `gcloud`, `kubectl`, npm auth (private registries, publishing), anything that needs your
     Keychain, Homebrew when it reads your credentials, and tools that apply a sandbox of their own (SwiftPM without
     `--disable-sandbox`). The `swift build` and `swift test` commands the teacher suggests for a Swift package carry that
     flag; a command the model types itself is never changed, and if it fails with a sandbox error the output says to add
