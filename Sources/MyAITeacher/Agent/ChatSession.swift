@@ -214,6 +214,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func stop() {
         runTask?.cancel()
+        DebugSessions.shared.end(id)   // a stopped turn leaves no program held at a breakpoint
         app.interactions.cancelAll(conversationID: id)
     }
 
@@ -1092,6 +1093,7 @@ final class ChatSession: ObservableObject, Identifiable {
         case "web_search": "Searching the web…"
         case "web_fetch": "Reading a web page…"
         case "bash": "Running a command…"
+        case "debug": "Debugging…"
         case "run_code": "Running code…"
         case "math": "Calculating…"
         case "read", "ls", "glob", "grep": "Looking at files…"

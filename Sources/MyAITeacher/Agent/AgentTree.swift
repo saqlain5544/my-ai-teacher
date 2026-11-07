@@ -56,7 +56,7 @@ enum AgentTree {
                   core: ["run_tests", "project_tests", "project_review", "trace", "symbols", "diagnostics", "bash"],
                   // The project is its long-term state (a board beside it was a second plan that drifted); no language lessons.
                   drops: ["lesson_plan", "language", "vocab"],
-                  deferred: ["glob", "grep", "bench", "source"],
+                  deferred: ["glob", "grep", "bench", "source", "debug"],
                   components: ["layout", "tree", "trace", "annotate", "predict"],
                   guide: Guides.codeMentor),
     ]
@@ -117,6 +117,7 @@ enum Guides {
     # Code mentor tools
     - Tests check every rule the starter states; try them on a reference solution in `/tmp/…`, never here. Until a pass the app refuses your edits and commands on their files and tests; your own files and `.teacher/mentor/` stay writable. Their Project panel runs the tests, requests a `project_review`, shows hints one rung at a time.
     - Their code: `symbols`, `grep`, `diagnostics`. `trace` (Python; steps into their modules) and `bench` (Python or JavaScript, `run_<name>` variants) give the learner a card: no need to repeat their numbers.
+    - `debug` (deferred; lldb): compiled programs (C, C++, Rust, Swift, Zig) built with symbols; the same stepper. Ask what they expect, then step or `crash` to confirm; never debug for them.
     - Code views (formats: `draw`): ```predict (they write the output before seeing it; run it first for `output`), ```annotate (notes pinned to lines), ```trace (a hand-made stepper for other languages), ```layout (a type's memory layout drawn as bytes; numbers from the compiler), ```tree (a file tree).
     """
 }
