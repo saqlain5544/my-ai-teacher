@@ -79,8 +79,6 @@ final class ChatSession: ObservableObject, Identifiable {
     }
     private var runTask: Task<Void, Never>?
     private var pendingModeNote: String?
-    /// What the prompt's lesson-time view of folder and plugin content was (`contentChangeNote`).
-    private var contentSeen: Set<String>?
     private var turn = TurnMetrics()
     /// The app let go of this lesson (its folder was closed): a turn still finishing writes to its own folder's
     /// database but no longer reports to the app, so it can't reappear in another folder's sidebar.
@@ -205,7 +203,6 @@ final class ChatSession: ObservableObject, Identifiable {
         trimWindow()
         var blocks: [Block] = []
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
-        if let note = contentChangeNote() { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])) }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
         var msg = ChatMessage(role: .user, blocks: blocks)
@@ -373,6 +370,9 @@ final class ChatSession: ObservableObject, Identifiable {
         guard let i = messages.lastIndex(where: { $0.role == .user && !$0.isToolResultOnly }) else { return true }
         var m = messages[i]
         let why = await host.willStartTurn(&m, self)
+        if why == nil, let note = await contentChangeNote() {
+            m.blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true]))
+        }
         guard i < messages.count, messages[i].id == m.id else { return true }
         if let why {
             let text = m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
@@ -937,23 +937,14 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: What the frozen prompt doesn't know
 
-    /// What the lesson can use that comes from a folder or a plugin: skills, agent types and commands, by name.
-    private func usableContent() -> Set<String> {
-        let folder = services.workspace.url
-        var out = Set(Skills.available(node: AgentTree.node(for: conversation.mode), folder: ProjectTrust.approved(folder, settings), plugins: Plugins.active(settings))
-            .filter { !$0.hidden && $0.source != .app("root") }.map { "skill " + $0.name })
-        out.formUnion(AgentCatalog.all(settings: settings, folder: folder).filter { $0.source == .project || $0.source == .plugin }.map { "agent " + $0.name })
-        out.formUnion(CustomCommands.available(folder: folder, settings: settings).map { "command /" + $0.name })
-        return out
-    }
-
     /// The system prompt is frozen for the lesson (caching), so an approval, a plugin switched off or an update after it was
-    /// written is told once, in a hidden note on the next turn. Nil when nothing changed.
-    func contentChangeNote() -> String? {
-        let now = usableContent()
-        defer { contentSeen = now }
-        guard let before = contentSeen, before != now else { return nil }
-        let added = now.subtracting(before).sorted(), gone = before.subtracting(now).sorted()
+    /// written (also one made while the app was closed) is told once, in a hidden note on the turn's message. Nil when nothing
+    /// changed. The folders are read off the main actor.
+    func contentChangeNote() async -> String? {
+        let now = await ContentScan.usable(node: AgentTree.node(for: conversation.mode), folder: services.workspace.url, settings: settings)
+        defer { conversation.contentSeen = now }
+        guard let before = conversation.contentSeen.map(Set.init), before != Set(now) else { return nil }
+        let added = Set(now).subtracting(before).sorted(), gone = before.subtracting(now).sorted()
         var note = "[Since your instructions were written, what this folder and the user's plugins supply has changed."
         if !added.isEmpty { note += " Now available: " + added.joined(separator: ", ") + "." }
         if !gone.isEmpty { note += " No longer available: " + gone.joined(separator: ", ") + "." }
@@ -961,8 +952,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func buildSystemPrompt(model: String) async -> String {
-        await ProjectTrust.warm(services.workspace.url)
-        defer { contentSeen = usableContent() }
+        // The baseline for `contentChangeNote` is what the folder and plugins offer as this prompt is written.
+        conversation.contentSeen = await ContentScan.usable(node: AgentTree.node(for: conversation.mode), folder: services.workspace.url, settings: settings)
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
                                    folder: services.workspace.url)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }

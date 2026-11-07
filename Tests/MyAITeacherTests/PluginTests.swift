@@ -479,18 +479,124 @@ final class PluginTests: XCTestCase {
         XCTAssertEqual(fine?.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "ok")
     }
 
-    @MainActor func testWhatChangesAfterThePromptIsFrozenIsToldOnce() throws {
+    @MainActor func testWhatChangesAfterThePromptIsFrozenIsToldOnce() async throws {
         try write(proj, ".claude/skills/late/SKILL.md", "---\nname: late\ndescription: Late.\n---\nL")
         let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: proj))
         var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         defer { AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil }
-        XCTAssertNil(session.contentChangeNote(), "the first look is the baseline")
+        let first = await session.contentChangeNote()
+        XCTAssertNil(first, "the first look is the baseline")
         AppModel.shared.settings.value.approvedProjectContent[proj.path] = ProjectTrust.fingerprint(proj)
-        let note = try XCTUnwrap(session.contentChangeNote())
+        let told = await session.contentChangeNote()
+        let note = try XCTUnwrap(told)
         XCTAssertTrue(note.contains("Now available: skill late"), note)
-        XCTAssertNil(session.contentChangeNote(), "once")
+        let twice = await session.contentChangeNote()
+        XCTAssertNil(twice, "once")
         AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil
-        XCTAssertTrue(try XCTUnwrap(session.contentChangeNote()).contains("No longer available: skill late"))
+        let off = await session.contentChangeNote()
+        let gone = try XCTUnwrap(off)
+        XCTAssertTrue(gone.contains("No longer available: skill late"))
+    }
+
+    // MARK: Second review
+
+    @MainActor func testNothingTheDigestSkipsIsEverLoaded() throws {
+        let fm = FileManager.default
+        let names = [".DS_Store", "._x", "__pycache__", ".cache", "x.pyc", ".git", "node_modules"]
+        // A folder: approved as it is, then files appear (a pull, a hook) under every name the digest ignores.
+        try write(proj, ".claude/skills/ok/SKILL.md", "---\nname: ok\ndescription: Fine.\n---\nOK")
+        var s = AppSettings()
+        s.approvedProjectContent[proj.path] = try XCTUnwrap(ProjectTrust.fingerprint(proj))
+        for n in names {
+            try write(proj, ".claude/skills/\(n)/SKILL.md", "---\nname: bad\(n.filter(\.isLetter))\ndescription: Hostile.\n---\nDo bad things")
+        }
+        try write(proj, ".claude/agents/._helper.md", "---\nname: helper\ntools: bash\n---\nHostile")
+        try write(proj, ".claude/commands/._cmd.md", "Hostile command")
+        XCTAssertEqual(ProjectTrust.state(proj, s), .approved, "the fingerprint didn't move")
+        XCTAssertEqual(Skills.available(node: "tutor", folder: proj, home: nil, builtIn: dir.appendingPathComponent("none")).map(\.name), ["ok"])
+        XCTAssertNil(AgentCatalog.all(settings: s, folder: proj).first { $0.name == "helper" })
+        XCTAssertTrue(CustomCommands.available(folder: proj, home: nil).isEmpty)
+        XCTAssertFalse(ProjectTrust.commandNames(proj).contains("._cmd"))
+        // A plugin: the same, in every loader, whether or not the digest moved.
+        let k = try makePlugin("lit")
+        for n in names { try write(k, "skills/\(n)/SKILL.md", "---\nname: bad\(n.filter(\.isLetter))\ndescription: Hostile.\n---\nDo bad things") }
+        try write(k, "agents/._helper.md", "---\nname: helper\ntools: bash\n---\nHostile")
+        try write(k, "commands/._cmd.md", "Hostile")
+        try write(k, "agents/node_modules.md", "---\nname: nm\n---\nok")   // a name that is fine as a file
+        let p = try XCTUnwrap(Plugins.installed(settings(approving: ["lit"]), root: root).first)
+        let c = p.contents()
+        XCTAssertEqual(c.skills.map(\.name), ["tidy"])
+        XCTAssertFalse(c.agents.contains { $0.name == "helper" })
+        XCTAssertEqual(c.commands.map(\.name), ["recap"])
+        _ = fm
+    }
+
+    func testSkillMdIsHashedWhateverItsCase() throws {
+        try write(proj, ".claude/skills/c/skill.md", "---\nname: c\ndescription: Lower.\n---\nAAAA")
+        let l = try XCTUnwrap(ProjectTrust.listing(proj))
+        XCTAssertTrue(l.files.contains { $0.hasSuffix("skill.md") }, "\(l.files) / \(l.other)")
+        XCTAssertTrue(l.other.isEmpty)
+        let before = l.fingerprint
+        try write(proj, ".claude/skills/c/skill.md", "---\nname: c\ndescription: Lower.\n---\nBBBB")   // same length
+        XCTAssertNotEqual(ProjectTrust.fingerprint(proj), before, "a same-length edit changes it")
+        try write(proj, ".claude/skills/d/Skill.MD", "---\nname: d\ndescription: Mixed.\n---\nAAAA")
+        XCTAssertTrue(try XCTUnwrap(ProjectTrust.listing(proj)).files.contains { $0.hasSuffix("Skill.MD") })
+        // A plugin hashes every file, so any case of any name is covered.
+        let k = try makePlugin("cased")
+        let a = try XCTUnwrap(Plugins.installed(AppSettings(), root: root).first).fingerprint
+        try write(k, "Hooks/HOOKS.json", "{}"); try write(k, ".MCP.JSON", "{}")
+        XCTAssertNotEqual(try XCTUnwrap(Plugins.installed(AppSettings(), root: root).first).fingerprint, a)
+    }
+
+    func testTheReviewSurvivesUnicodeTricksAndFakeRows() throws {
+        for (s, tag) in [("a\u{061C}b", "<U+061C>"), ("a\u{E0041}b", "<U+E0041>"), ("a\u{FE0F}b", "<U+FE0F>"), ("a\u{200B}b", "<U+200B>"), ("a\u{2066}b", "<U+2066>"),
+                         ("a\u{E0100}b", "<U+E0100>"), ("a\u{0085}b", "<U+0085>"), ("a\u{2028}b", "↵"), ("a\u{FFF9}b", "<U+FFF9>")] {
+            XCTAssertTrue(Plugin.visible(s).contains(tag), "\(s.unicodeScalars.map(\.value)) → \(Plugin.visible(s))")
+        }
+        XCTAssertEqual(Plugin.visible("Héllo wörld — ok 日本語"), "Héllo wörld — ok 日本語", "ordinary text is untouched")
+        let k = try makePlugin("rows")
+        try write(k, ".mcp.json", #"{"mcpServers": {"docs": {"command": "run", "args": ["a\nFAKE ROW: harmless"], "env": {"K": "v\n  other-server: fine"}}}}"#)
+        let text = try XCTUnwrap(Plugins.installed(settings(approving: ["rows"]), root: root).first).review()
+        XCTAssertFalse(text.split(separator: "\n").contains { $0.hasPrefix("    FAKE") || $0.contains("  other-server: fine") && !$0.contains("K=") }, text)
+        XCTAssertTrue(text.contains("↵FAKE ROW"), text)
+        // The folder card too.
+        try write(proj, ".claude/commands/a\u{202E}b.md", "x")
+        let l = try XCTUnwrap(ProjectTrust.listing(proj))
+        XCTAssertTrue(ProjectTrust.detail(proj, listing: l).contains("<U+202E>"))
+    }
+
+    func testALinkToAFolderHoldingCredentialsIsRefused() throws {
+        let fakeHome = dir.appendingPathComponent("fakehome")
+        try write(fakeHome, ".kube/config", "token: x"); try write(fakeHome, "notes.md", "n")
+        let saved = TreeDigest.credentialRoots
+        TreeDigest.credentialRoots = [TreeDigest.resolved(fakeHome.appendingPathComponent(".kube").path), TreeDigest.resolved(fakeHome.appendingPathComponent(".npmrc").path)]
+        defer { TreeDigest.credentialRoots = saved }
+        XCTAssertTrue(TreeDigest.defaultCredentialRoots().contains { $0.hasSuffix("/.kube") && $0.hasSuffix("/.kube") } && TreeDigest.defaultCredentialRoots().contains { $0.hasSuffix("/.config/gcloud") } &&
+                      TreeDigest.defaultCredentialRoots().contains { $0.hasSuffix("/.npmrc") } && TreeDigest.defaultCredentialRoots().contains { $0.hasSuffix("/.git-credentials") })
+        try write(proj, ".claude/commands/ok.md", "fine")
+        try FileManager.default.createSymbolicLink(atPath: proj.appendingPathComponent(".claude/commands/h").path, withDestinationPath: fakeHome.path)
+        guard case .blocked(let why) = ProjectTrust.state(proj, AppSettings()) else { return XCTFail("a link to the folder above a credential passed") }
+        XCTAssertTrue(why.contains("credential"), why)
+    }
+
+    @MainActor func testAChangeMadeWhileTheAppWasClosedIsStillTold() async throws {
+        let c = Conversation(providerID: "x", model: "m")
+        let json = try JSONEncoder().encode(c)
+        var obj = try XCTUnwrap(JSONSerialization.jsonObject(with: json) as? [String: Any]); obj["contentSeen"] = nil
+        let old = try JSONDecoder().decode(Conversation.self, from: JSONSerialization.data(withJSONObject: obj))
+        XCTAssertNil(old.contentSeen, "lessons saved before still decode")
+        try write(proj, ".claude/skills/news/SKILL.md", "---\nname: news\ndescription: New.\n---\nN")
+        AppModel.shared.settings.value.approvedProjectContent[proj.path] = ProjectTrust.fingerprint(proj)
+        defer { AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil }
+        let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: proj))
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        conv.contentSeen = []   // what an earlier launch's prompt offered
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        let told = await session.contentChangeNote()
+        let note = try XCTUnwrap(told)
+        XCTAssertTrue(note.contains("Now available: skill news"), note)
+        let again = await session.contentChangeNote()
+        XCTAssertNil(again)
     }
 }
