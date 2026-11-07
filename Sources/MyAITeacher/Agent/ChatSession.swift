@@ -242,7 +242,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func stop() {
         runTask?.cancel()
-        DebugSessions.shared.end(id)   // a stopped turn leaves no program held at a breakpoint
+        if !compacting { DebugSessions.shared.end(id) }   // a stopped turn leaves no program held at a breakpoint; stopping a /compact is not a turn
         app.interactions.cancelAll(conversationID: id)
     }
 
@@ -1134,7 +1134,9 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     /// Tests: mark the lesson busy as a running turn or `/compact` would, without a model.
-    func holdBusyForTests(_ on: Bool) { isRunning = on }
+    func holdBusyForTests(_ on: Bool, compacting: Bool = false) { isRunning = on; self.compacting = on && compacting }
+    /// True while `/compact` (not a turn) is what is running: Stop then ends the summary, not a debugging session the lesson holds.
+    private(set) var compacting = false
     var queuedReports: Int { inbox.count }
 
     @Published var lastCompaction: String?
@@ -1155,12 +1157,14 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         let client = provider.client(apiKey: key)
         isRunning = true
+        compacting = true
         beginActivity()
         setStatus("Summarising the lesson…")
         runTask = Task { [weak self] in
             guard let self else { return }
             let done = await self.summarise(range, focus: focus, client: client, budget: budget)
             self.isRunning = false
+            self.compacting = false
             self.endActivity()
             self.setStatus(nil)
             self.adoptInbox(wake: done)

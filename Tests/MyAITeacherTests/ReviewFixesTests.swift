@@ -103,6 +103,24 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
     }
 
+    @MainActor func testStoppingACompactDoesNotEndTheLessonsDebugSessionButStoppingATurnDoes() async throws {
+        let driver = root.appendingPathComponent("idle3.py")
+        try "import time\ntime.sleep(120)\n".write(to: driver, atomically: true, encoding: .utf8)
+        let ws = try Workspace(url: root.appendingPathComponent("dc", isDirectory: true))
+        let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("gc.sqlite").path)), workspace: ws)
+        let chat = ChatSession(conversation: Conversation(providerID: "x", model: "m"), app: AppModel.shared, services: services)
+        let proc = try DebugProcess(driver: driver, lldbPython: "", cwd: root)
+        _ = DebugSessions.shared.set(DebugSession(conversationID: chat.id, proc: proc, tmp: root.appendingPathComponent("tmp-c"), program: "./demo", fence: ""))
+        defer { DebugSessions.shared.killAll() }
+        chat.holdBusyForTests(true, compacting: true)   // /compact is running
+        chat.stop()
+        XCTAssertNotNil(DebugSessions.shared.session(chat.id), "Stop on a summary leaves the debugger alone")
+        chat.holdBusyForTests(true)   // a turn
+        chat.stop()
+        XCTAssertNil(DebugSessions.shared.session(chat.id), "Stop on a turn ends it")
+        chat.holdBusyForTests(false)
+    }
+
     @MainActor func testADebugSessionEndedByTheFenceGrowingNamesTheCredentialSetting() async throws {
         try XCTSkipUnless(WriteFence.available, "no sandbox-exec")
         let driver = root.appendingPathComponent("idle2.py")
