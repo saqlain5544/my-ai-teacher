@@ -156,7 +156,9 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
         c.timeoutIntervalForRequest = 15; c.httpCookieStorage = nil; c.urlCache = nil
         return URLSession(configuration: c)
     }()
-    private let tasks = NSMapTable<AnyObject, URLSessionTask>.strongToStrongObjects()
+    /// Live page requests (main thread only). `stop` removes one; a completion that finds its entry gone says nothing,
+    /// since a stopped WKURLSchemeTask raises an exception on any further call.
+    private var tasks: [ObjectIdentifier: URLSessionTask] = [:]
 
     /// The https URL a request asks for, or nil when the key is wrong or the URL is not a plain https one.
     static func target(_ url: URL) -> URL? {
@@ -170,18 +172,21 @@ final class RemoteImageSchemeHandler: NSObject, WKURLSchemeHandler {
     func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
         guard let url = task.request.url, let target = Self.target(url) else { task.didFailWithError(URLError(.badURL)); return }
         var req = URLRequest(url: target); req.setValue("image/*", forHTTPHeaderField: "Accept")
-        let t = Self.session.dataTask(with: req) { data, resp, _ in
+        let id = ObjectIdentifier(task)
+        let t = Self.session.dataTask(with: req) { [weak self] data, resp, error in
             DispatchQueue.main.async {
+                guard let self, self.tasks.removeValue(forKey: id) != nil else { return }   // stopped meanwhile: the task is dead
+                if (error as? URLError)?.code == .cancelled { return }
                 guard let data, data.count <= Self.maxBytes, let http = resp as? HTTPURLResponse, http.statusCode == 200,
                       (http.mimeType ?? "").hasPrefix("image/") else { task.didFailWithError(URLError(.cannotLoadFromNetwork)); return }
                 task.didReceive(HTTPURLResponse(url: url, statusCode: 200, httpVersion: "HTTP/1.1", headerFields: ["Content-Type": http.mimeType ?? "image/png"])!)
                 task.didReceive(data); task.didFinish()
             }
         }
-        tasks.setObject(t, forKey: task as AnyObject); t.resume()
+        tasks[id] = t; t.resume()
     }
     func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {
-        tasks.object(forKey: task as AnyObject)?.cancel(); tasks.removeObject(forKey: task as AnyObject)
+        tasks.removeValue(forKey: ObjectIdentifier(task))?.cancel()
     }
 
     /// Registers this scheme and gives the page its key.
