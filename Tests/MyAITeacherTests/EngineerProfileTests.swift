@@ -6,7 +6,7 @@ import XCTest
 final class EngineerProfileTests: XCTestCase {
     var store: EngineerStore!
     let day: TimeInterval = 86400
-    let now = Date(timeIntervalSince1970: 1_800_000_000)
+    let now = Date()
 
     override func setUp() {
         store = EngineerStore(db: try! Database(path: ":memory:"))
@@ -24,17 +24,17 @@ final class EngineerProfileTests: XCTestCase {
         p.createdAt = Date(timeIntervalSince1970: 1_700_000_000 + Double(n)); p.rounds = rounds
         return p
     }
-    /// Four projects, each missing empty input in its first review.
-    func recordHabit(projects n: Int = 4) {
+    /// Four projects, each missing empty input in its first review (and, if `fixed`, fixing it by the next).
+    func recordHabit(projects n: Int = 4, fixed: Bool = false) {
         for i in 1...n {
-            store.record(project(i, [round(1, daysAgo: Double(n - i) * 3 + 1, [finding(1, "What happens when the list is empty?")])]), folder: "/f/\(i)")
+            store.record(project(i, [round(1, daysAgo: Double(n - i) * 3 + 1, [finding(1, "What happens when the list is empty?", resolved: fixed)])]), folder: "/f/\(i)")
         }
     }
 
     func testAreasAreClassifiedByWordsWhenTheModelOmitsThem() {
         XCTAssertEqual(EngineerArea.classify(text: "What happens when the list is empty?", concept: nil), .edgeCases)
         XCTAssertEqual(EngineerArea.classify(text: "This swallows the exception; who finds out it failed?", concept: nil), .errorHandling)
-        XCTAssertEqual(EngineerArea.classify(text: "The file is never closed", concept: "resource handling"), .memory)
+        XCTAssertEqual(EngineerArea.classify(text: "The file handle is never closed", concept: nil), .memory)
         XCTAssertNil(EngineerArea.classify(text: "Nice work", concept: nil), "no keyword, no guess")
         XCTAssertEqual(EngineerArea.parse("Edge cases"), .edgeCases)
         XCTAssertEqual(EngineerArea.parse("error_handling"), .errorHandling)
@@ -98,7 +98,7 @@ final class EngineerProfileTests: XCTestCase {
     }
 
     func testAHabitFadesAndImprovementShows() {
-        recordHabit()
+        recordHabit(fixed: true)
         // Two clean reviews since (in other projects): the habit is no longer named, the note goes quiet.
         for i in 5...6 { store.record(project(i, [round(1, daysAgo: Double(7 - i) * 0.5, [], verdict: "pass")]), folder: "/f/\(i)") }
         let p = store.profile(now: now)
@@ -163,9 +163,9 @@ final class EngineerProfileTests: XCTestCase {
         let enc = JSONEncoder(); enc.dateEncodingStrategy = .secondsSince1970
         try enc.encode(project(1, [round(1, daysAgo: 3, [finding(1, "empty list?")])])).write(to: dir.appendingPathComponent(".teacher/project.json"))
         try enc.encode(project(2, [round(1, daysAgo: 9, [finding(1, "empty list?")])])).write(to: teacher.appendingPathComponent("1.json"))
-        XCTAssertEqual(store.backfill(folders: [dir.path, dir.path]), 2, "each project once, a folder listed twice read once")
+        XCTAssertEqual(store.backfill(folders: [dir.path, dir.path], isMentorFolder: { _ in true }), 2, "each project once, a folder listed twice read once")
         XCTAssertEqual(store.reviews().count, 2)
-        XCTAssertEqual(store.backfill(folders: [dir.path]), 0, "only once")
+        XCTAssertEqual(store.backfill(folders: [dir.path], isMentorFolder: { _ in true }), 0, "a folder is read once")
     }
 
     /// The mentor's added skills: each parses, is short, has a description to choose it by, is for the code mentor only,
