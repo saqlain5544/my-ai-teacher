@@ -322,10 +322,16 @@
       }
       const log = !!st.log;
       const verdict = claimed.map(x => '<div class="bench-fit ' + ctx.esc(x.confidence || '') + '">' + ctx.esc(x.claim || '') + '</div>').join('');
-      const you = st.guess && claimed.length ? '<div class="bench-you">You guessed <b>' + ctx.esc(st.guess) + '</b>' + (claimed[0].fit === st.guess ? ': the measurements agree.' : '; the measurements say <b>' + ctx.esc(claimed[0].fit) + '</b>. What in the code makes the work grow like that?') + '</div>' : '';
+      // Only a firm, untied fit can say the learner was wrong; otherwise the data can't separate the candidates.
+      const c0 = claimed[0] || {}, tied = [c0.fit].concat(c0.alsoFits || []);
+      const you = st.guess && claimed.length ? '<div class="bench-you">You guessed <b>' + ctx.esc(st.guess) + '</b>' + (c0.fit === st.guess ? (c0.confidence === 'low' ? ': the closest fit, though these timings are too rough to be sure.' : ': the measurements agree.')
+        : tied.indexOf(st.guess) >= 0 || c0.confidence === 'low' ? ': the data can\'t separate it from <b>' + ctx.esc(c0.fit) + '</b> (' + ctx.esc(c0.confidence === 'low' ? 'low confidence' : 'they fit about equally') + '). What in the code would make the work grow like each?'
+        : '; the measurements say <b>' + ctx.esc(c0.fit) + '</b>. What in the code makes the work grow like that?') + '</div>' : '';
+      // A refused fit has no claim to hide: show the curve and why nothing is claimed.
+      const refused = m.series.filter(x => !x.fit && x.claim).map(x => '<div class="bench-fit none">' + ctx.esc(x.name) + ': ' + ctx.esc(x.claim) + '</div>').join('');
       return '<div class="bench" data-key="' + key + '"><div class="bench-legend">' + m.series.map((s, i) => '<span><i data-c="' + COLORS[i % COLORS.length] + '"></i>' + ctx.esc(s.name) +
         (s.fit ? ' <b>' + ctx.esc(s.fit) + '</b>' : '') + '</span>').join('') +
-        '<button class="btn link" data-act="bench-log">' + (log ? 'Linear scale' : 'Log scale') + '</button></div>' + benchChart(m, log) + you + verdict + '</div>';
+        '<button class="btn link" data-act="bench-log">' + (log ? 'Linear scale' : 'Log scale') + '</button></div>' + benchChart(m, log) + you + verdict + refused + '</div>';
     } });
   R.registerAction('bench-guess', (b, e, ctx) => {
     const box = b.closest('.bench'); const s = S(box.getAttribute('data-key'), { log: false }); s.guess = b.getAttribute('data-guess') || null; s.shown = true;

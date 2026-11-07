@@ -19,7 +19,8 @@
       if (m.score == null) return n.props.output ? ctx.pre(n.props.output) : '';
       const judged = m.killed + m.timedOut + m.survived, caught = m.killed + m.timedOut;
       let h = '<div class="tests-bar ' + (m.survived ? 'red' : 'green') + '"><div class="tb-fill" style="width:' + Math.round(m.score * 100) + '%"></div><span>' + caught + ' of ' + judged + ' changes caught by a test' +
-        (m.timedOut ? ' (' + m.timedOut + ' by timeout)' : '') + (m.invalid ? ' · ' + m.invalid + ' did not build' : '') + '</span></div>';
+        (m.timedOut ? ' (' + m.timedOut + ' by timeout)' : '') + (m.invalid ? ' · ' + m.invalid + ' did not build' : '') + (m.errored ? ' · ' + m.errored + ' errored (not counted)' : '') + '</span></div>';
+      if (m.left) h += '<div class="q-help">Left out of the scratch copy: ' + ctx.esc(m.left) + '</div>';
       if (m.note) h += '<div class="q-help">' + ctx.esc(m.note) + '</div>';
       (m.survivors || []).forEach(s => {
         h += '<div class="survivor"><div class="sv-head"><code>' + ctx.esc(s.file) + ':' + s.line + '</code>' + (s.function ? ' <span class="sv-fn">in ' + ctx.esc(s.function) + '</span>' : '') + ' <span class="sv-kind">' + ctx.esc(s.kind) + '</span></div>' +
@@ -31,7 +32,7 @@
     } });
 
   R.defineTool({ name: 'coverage', icon: 'activity', tone: 'green', title: 'Test coverage',
-    summary: n => { const m = meta(n); return !done(n) ? 'running the tests with coverage…' : m.files && m.files.length ? Math.round(m.percent) + '% of lines run · ' + m.tool : (m.note || 'no result').slice(0, 90); },
+    summary: n => { const m = meta(n); return !done(n) ? 'running the tests with coverage…' : m.files && m.files.length ? (m.exact === false ? 'files average ' + Math.round(m.percent) + '%' : Math.round(m.percent) + '% of lines run') + ' · ' + m.tool : (m.note || 'no result').slice(0, 90); },
     open: n => done(n) && !!(meta(n).files || []).length,
     body(n, ctx) {
       const m = meta(n);

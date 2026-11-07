@@ -413,12 +413,12 @@ enum CodeLab {
             text += pad(String(n), 10) + series.map { pad(ms($0.seconds[safe: i] ?? nil), width) }.joined() + "\n"
         }
         text += "Growth: " + zip(series, fits).map { "\($0.name): \($1.claim)" }.joined(separator: "; ")
-            + ". Timings are noisy below ~0.01 ms. The learner has the chart (they guess the growth before it shows): it is the evidence, explain what it shows, and say \"looks like\", never \"is\"."
+            + ". Timings are noisy below ~0.01 ms. The card asks the learner to guess the growth before it shows the curve: don't state the growth class or Big-O (not even \"looks like\") until they have guessed; ask for their prediction, then discuss the evidence."
         let meta: JSON = ["sizes": .array(sizes.map { .number(Double($0)) }),
                           "series": .array(zip(series, fits).map { s, g in
                               ["name": .string(s.name), "times": .array(s.seconds.map { $0.map(JSON.number) ?? .null }),
                                "fit": g.model.map { .string($0) } ?? .null, "slope": g.slope.map { .number(($0 * 100).rounded() / 100) } ?? .null,
-                               "confidence": .string(g.confidence), "claim": .string(g.claim)]
+                               "confidence": .string(g.confidence), "claim": .string(g.claim), "alsoFits": .array(g.alsoFits.map { .string($0) })]
                           })]
         return ToolOutput(text: text, meta: meta)
     }

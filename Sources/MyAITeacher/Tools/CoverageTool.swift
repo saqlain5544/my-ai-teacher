@@ -9,6 +9,8 @@ enum Coverage {
         var path: String
         var covered: Int, total: Int
         var missing: [ClosedRange<Int>]
+        /// `covered`/`total` are real line (or statement) counts; false when a runner printed only a percentage.
+        var counts = true
         var percent: Double { total == 0 ? 100 : Double(covered) / Double(total) * 100 }
     }
     struct Report: Sendable {
@@ -16,9 +18,12 @@ enum Coverage {
         var files: [File] = []
         var note: String? = nil
         var output = ""
+        var left: String? = nil
         var covered: Int { files.reduce(0) { $0 + $1.covered } }
         var total: Int { files.reduce(0) { $0 + $1.total } }
-        var percent: Double { total == 0 ? 0 : Double(covered) / Double(total) * 100 }
+        /// Real counts only when every file has them; otherwise the mean of the files' percentages.
+        var exact: Bool { files.allSatisfy(\.counts) }
+        var percent: Double { files.isEmpty ? 0 : exact ? (total == 0 ? 0 : Double(covered) / Double(total) * 100) : files.map(\.percent).reduce(0, +) / Double(files.count) }
     }
 
     /// Consecutive line numbers as ranges.
@@ -89,7 +94,8 @@ enum Coverage {
     /// jest's, vitest's and c8's ("File | % Stmts | … | % Lines | Uncovered Line #s"). Percent only: line counts aren't printed,
     /// so `covered`/`total` stand for the percent of 100.
     static func table(_ text: String) -> [File] {
-        var out: [File] = [], pctCol: Int?, missCol: Int?, dirs: [String] = []
+        var out: [File] = [], pctCol: Int?, missCol: Int?
+        var dirs: [(indent: Int, name: String)] = []
         for raw in text.split(separator: "\n") {
             var line = String(raw)
             if line.hasPrefix("ℹ ") || line.hasPrefix("# ") { line = String(line.dropFirst(2)) }
@@ -99,20 +105,25 @@ enum Coverage {
             if low[0] == "file" || low[0] == "files" {
                 pctCol = low.firstIndex { $0.contains("line") && $0.contains("%") } ?? low.firstIndex { $0.contains("stmts") }
                 missCol = low.firstIndex { $0.contains("uncovered") }
+                dirs = []
                 continue
             }
-            guard let pc = pctCol, let mc = missCol, pc < cells.count, mc < cells.count, let pct = Double(cells[pc]) else { continue }
-            let name = cells[0]
-            if name == "All files" || name == "all files" { continue }
-            let isFile = name.range(of: #"\.\w{1,5}$"#, options: .regularExpression) != nil
-            if !isFile { dirs = [name]; continue }
+            guard let pc = pctCol, let mc = missCol, pc < cells.count, mc < cells.count else { continue }
+            let name = cells[0], indent = line.prefix { $0 == " " }.count
+            if name.isEmpty || name.lowercased() == "all files" || name.hasPrefix("---") || name.hasPrefix("===") { continue }
+            while let top = dirs.last, top.indent >= indent { dirs.removeLast() }
+            // A row with a file extension is a file; any other row is a folder that the indented rows below it belong to.
+            guard name.range(of: #"\.\w{1,5}$"#, options: .regularExpression) != nil else { dirs.append((indent, name)); continue }
+            guard let pct = Double(cells[pc]) else { continue }
             var miss: [Int] = []
             for part in cells[mc].split(whereSeparator: { $0 == "," || $0 == " " }) {
                 let ends = part.split(separator: "-").compactMap { Int($0) }
                 if ends.count == 2, ends[0] <= ends[1] { miss += Array(ends[0]...ends[1]) } else if ends.count == 1 { miss.append(ends[0]) }
             }
-            let path = (dirs.first.map { $0.hasPrefix("src") || $0 == "." ? $0 + "/" : "" } ?? "") + name
-            out.append(File(path: path.hasPrefix("./") ? String(path.dropFirst(2)) : path, covered: Int((pct).rounded()), total: 100, missing: ranges(miss)))
+            // Node prints a file's whole relative path; jest and c8 print the folder row above and the bare name.
+            var path = name.contains("/") ? name : (dirs.map(\.name).filter { $0 != "." } + [name]).joined(separator: "/")
+            if path.hasPrefix("./") { path = String(path.dropFirst(2)) }
+            out.append(File(path: path, covered: Int(pct.rounded()), total: 100, missing: ranges(miss), counts: false))
         }
         return out
     }
@@ -164,7 +175,7 @@ enum Coverage {
         let root: URL
         do { root = try Scratch.make() } catch { r.note = "Could not make a scratch folder: \(error.localizedDescription)"; return r }
         defer { try? FileManager.default.removeItem(at: root) }
-        do { try Scratch.populate(root, from: ws, files: await Scratch.listing(ws)) } catch { r.note = "Could not copy the project: \(error.localizedDescription)"; return r }
+        do { let list = await Scratch.listing(ws); r.left = list.leftOut; try Scratch.populate(root, from: ws, files: list.files) } catch { r.note = "Could not copy the project: \(error.localizedDescription)"; return r }
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
         let cmd = Scratch.command(c, from: ws, to: root)
         func sh(_ s: String) async -> ProcessResult { await ProcessRunner.run(shell, ["-c", s], cwd: root, timeout: seconds) }
@@ -174,7 +185,7 @@ enum Coverage {
         case .go:
             guard need("go", "go") else { return r }
             r.tool = "go test -coverprofile"
-            let out = await sh(cmd.replacingOccurrences(of: "go test", with: "go test -coverprofile=cover.out", options: [], range: cmd.range(of: "go test")))
+            let out = await sh(cmd.replacingOccurrences(of: "go test", with: "go test -coverprofile=cover.out\(cmd.contains("-coverpkg") ? "" : " -coverpkg=./...")", options: [], range: cmd.range(of: "go test")))
             r.output = String(out.combined.suffix(1500))
             guard let prof = try? String(contentsOf: root.appendingPathComponent("cover.out"), encoding: .utf8) else { r.note = "No cover profile came out (the tests may not build)."; return r }
             let mod = (try? String(contentsOf: root.appendingPathComponent("go.mod"), encoding: .utf8))?.split(separator: "\n").first { $0.hasPrefix("module ") }.map { $0.dropFirst(7).trimmingCharacters(in: .whitespaces) }
@@ -236,9 +247,12 @@ enum Coverage {
 
     static func render(_ r: Report, ws: Workspace? = nil) -> String {
         if let n = r.note, r.files.isEmpty { return n }
-        var s = "Coverage by \(r.tool): \(String(format: "%.0f", r.percent))% of the lines in \(r.files.count) source file\(r.files.count == 1 ? "" : "s") ran (tests excluded).\n"
+        let n = "\(r.files.count) source file\(r.files.count == 1 ? "" : "s")"
+        var s = r.exact ? "Coverage by \(r.tool): \(String(format: "%.0f", r.percent))% of the lines in \(n) ran (tests excluded).\n"
+            : "Coverage by \(r.tool): the \(n) average \(String(format: "%.0f", r.percent))% each (the runner prints percentages per file, not line counts; tests excluded).\n"
+        if let l = r.left { s += "Left out of the scratch copy: \(l).\n" }
         for f in r.files {
-            s += "\(f.path)  \(String(format: "%.0f", f.percent))%" + (f.total == 100 && f.covered <= 100 ? "" : " (\(f.covered)/\(f.total))")
+            s += "\(f.path)  \(String(format: "%.0f", f.percent))%" + (f.counts ? " (\(f.covered)/\(f.total))" : "")
             if !f.missing.isEmpty {
                 let names = ws.flatMap { w in (try? String(contentsOf: w.url.appendingPathComponent(f.path), encoding: .utf8)).map { SymbolsTool.outline($0, ext: (f.path as NSString).pathExtension.lowercased()).filter { $0.kind == "function" } } } ?? []
                 func inFn(_ r: ClosedRange<Int>) -> String { names.last { $0.line <= r.lowerBound }.map { " (in \($0.name))" } ?? "" }
@@ -251,8 +265,8 @@ enum Coverage {
     }
 
     static func meta(_ r: Report) -> JSON {
-        ["tool": .string(r.tool), "percent": .number((r.percent * 10).rounded() / 10), "note": r.note.map { .string($0) } ?? .null,
-         "files": .array(r.files.map { f in ["path": .string(f.path), "percent": .number((f.percent * 10).rounded() / 10), "covered": .number(Double(f.covered)), "total": .number(Double(f.total)),
+        ["tool": .string(r.tool), "exact": .bool(r.exact), "percent": .number((r.percent * 10).rounded() / 10), "note": r.note.map { .string($0) } ?? .null,
+         "files": .array(r.files.map { f in ["path": .string(f.path), "percent": .number((f.percent * 10).rounded() / 10), "counts": .bool(f.counts), "covered": .number(Double(f.covered)), "total": .number(Double(f.total)),
                                               "missing": .array(f.missing.prefix(40).map { .array([.number(Double($0.lowerBound)), .number(Double($0.upperBound))]) })] })]
     }
 }

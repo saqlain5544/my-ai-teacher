@@ -290,7 +290,176 @@ final class MutationTests: XCTestCase {
         let code = "def setup(n): return list(range(n))\ndef run_pairs(xs):\n    c = 0\n    for a in xs:\n        for b in xs:\n            c += 1\n    return c\ndef run_scan(xs): return sum(xs)\n"
         let out = try await BenchTool().run(["language": "python", "code": .string(code), "sizes": [100, 300, 1000, 2000, 4000]], ctx)
         XCTAssertFalse(out.isError, out.text)
-        XCTAssertEqual(out.meta?["series"]?[0]?["fit"]?.string, "O(n²)", out.text)
+        // On a loaded machine the tool may refuse (too noisy); it must never claim anything but quadratic.
+        let fit = out.meta?["series"]?[0]?["fit"]?.string
+        XCTAssertTrue(fit == "O(n²)" || (fit == nil && out.text.contains("no growth claim")), out.text)
         XCTAssertNotEqual(out.meta?["series"]?[1]?["fit"]?.string, "O(n²)", "a single pass is never called quadratic (it may be refused as too fast to time): \(out.text)")
+    }
+
+    // MARK: Review fixes
+
+    func testAFailureCountsAsKilledOnlyWithEvidenceOfAFailingTest() {
+        func c(_ exit: Int32, _ out: String, timedOut: Bool = false) -> String { Mutation.classify(exit: exit, timedOut: timedOut, output: out) }
+        XCTAssertEqual(c(1, "Traceback...\nAssertionError"), "killed")
+        XCTAssertEqual(c(1, "--- FAIL: TestX (0.00s)\nFAIL"), "killed")
+        XCTAssertEqual(c(1, "Tests:       1 failed, 2 passed, 3 total"), "killed")
+        XCTAssertEqual(c(0, ""), "survived"); XCTAssertEqual(c(1, "", timedOut: true), "timeout")
+        for build in ["FAIL\tdemo [build failed]", "./a.go:3:2: \"os\" imported and not used", "a.go:4:2: declared and not used: x", "src/a.ts(3,1): error TS2304: Cannot find name",
+                      "Test suite failed to run\n\n  Cannot find module './x'", "  File \"a.py\", line 3\nSyntaxError: invalid syntax"] {
+            XCTAssertEqual(c(1, build), "invalid", build)
+        }
+        for odd: (Int32, String) in [(127, "zsh: command not found: pytest"), (137, ""), (139, "Segmentation fault"), (1, "Error: listen EADDRINUSE: address already in use :::3000"), (1, "something went wrong")] {
+            XCTAssertEqual(c(odd.0, odd.1), "errored", odd.1)
+        }
+        var r = Mutation.Report()
+        r.outcomes = [Mutation.Outcome(mutant: Mutant(file: "a", line: 1, kind: "k", original: "", mutated: "", newLine: ""), status: "errored", seconds: 0)]
+        XCTAssertNil(r.score, "an errored run is left out of the score")
+    }
+
+    func testMutantsOfTheSameSizeAreNotJudgedOnStaleBytecode() async throws {
+        try need("python3")
+        try put("calc.py", "def f(x):\n    a = x + 1\n    b = x + 2\n    c = x + 3\n    return a + b + c\n")
+        try put(".teacher/tests/t.py", "import sys; sys.path.insert(0, '.')\nfrom calc import f\nassert f(1) == 9\n")
+        let ws = try Workspace(url: dir)
+        // The command fails with 9 if any bytecode was written: with PYTHONDONTWRITEBYTECODE none is.
+        let cmd = "python3 .teacher/tests/t.py; rc=$?; if find . -name '*.pyc' | grep -q .; then exit 9; fi; exit $rc"
+        let r = await Mutation.run(ws: ws, command: cmd, only: [], limit: 60, budget: 120, progress: { _ in })
+        XCTAssertNil(r.note, r.note ?? "")
+        XCTAssertEqual(r.errored, 0, "no run saw bytecode: \(Mutation.render(r))")
+        XCTAssertGreaterThan(r.killed, 3)
+        XCTAssertEqual(Mutation.environment()["PYTHONDONTWRITEBYTECODE"], "1")
+    }
+
+    func testAMutantIsNeverStartedWithoutTimeForItsFullLimit() async throws {
+        try need("python3")
+        let ws = try python(tests: "import time\ntime.sleep(1)\n" + Self.pyWeak)
+        let r = await Mutation.run(ws: ws, command: pyCommand, only: [], limit: 60, budget: 12, progress: { _ in })
+        XCTAssertEqual(r.timedOut, 0, "the budget never turns a slow run into a caught mutant: \(Mutation.render(r))")
+        XCTAssertLessThan(r.outcomes.count, r.planned)
+        XCTAssertTrue(r.note?.contains("were not started") == true, r.note ?? "")
+    }
+
+    func testAnEditDuringTheRunMakesTheStoredSummaryStale() async throws {
+        try need("python3")
+        let ws = try python(tests: "import time\ntime.sleep(0.5)\n" + Self.pyWeak)
+        let task = Task { await Mutation.run(ws: ws, command: self.pyCommand, only: [], limit: 6, budget: 120, progress: { _ in }) }
+        try await Task.sleep(nanoseconds: 1_200_000_000)
+        try (try String(contentsOf: dir.appendingPathComponent("calc.py"), encoding: .utf8) + "\n# edited\n").write(to: dir.appendingPathComponent("calc.py"), atomically: true, encoding: .utf8)
+        let r = await task.value
+        Mutation.save(r, ws: ws)
+        XCTAssertNil(Mutation.summaryLine(ws: ws), "the result describes the files as the run began")
+    }
+
+    func testAPartialRunSaysWhatItSampled() async throws {
+        try need("python3")
+        let ws = try python(tests: Self.pyWeak)
+        let r = await Mutation.run(ws: ws, command: pyCommand, only: ["calc.py"], limit: 3, budget: 120, progress: { _ in })
+        Mutation.save(r, ws: ws)
+        let line = try XCTUnwrap(Mutation.summaryLine(ws: ws))
+        XCTAssertTrue(line.contains("a sample of 3 of") && line.contains("possible") && line.contains("calc.py"), line)
+        XCTAssertTrue(Mutation.render(r).contains("only in files matching calc.py"))
+    }
+
+    func testNodeModulesLinksOutsideItStopTheRun() async throws {
+        try put("packages/dep/index.js", "module.exports = 1\n")
+        try put("app.js", "const d = require('dep'); module.exports = d > 0\n")
+        try FileManager.default.createDirectory(at: dir.appendingPathComponent("node_modules"), withIntermediateDirectories: true)
+        try FileManager.default.createSymbolicLink(at: dir.appendingPathComponent("node_modules/dep"), withDestinationURL: dir.appendingPathComponent("packages/dep"))
+        try put("node_modules/plain/index.js", "module.exports = 2\n")
+        let ws = try Workspace(url: dir)
+        XCTAssertEqual(Scratch.linksOutside(ws), ["dep"])
+        let r = await Mutation.run(ws: ws, command: "true", only: [], limit: 5, budget: 60, progress: { _ in })
+        XCTAssertTrue(r.outcomes.isEmpty && r.note?.contains("node_modules links to code outside it (dep)") == true && r.note?.contains("falsely survive") == true, r.note ?? "")
+    }
+
+    func testFilesLeftOutOfTheCopyAreNamedWhenTheBaselineIsRed() async throws {
+        try need("python3")
+        try put("build/helper.py", "def h(): return 1\n")
+        try put("calc.py", "import sys; sys.path.insert(0, 'build')\nimport helper\ndef f(x):\n    return x + helper.h()\n")
+        try put(".teacher/tests/t.py", "import sys; sys.path.insert(0, '.')\nfrom calc import f\nassert f(1) == 2\n")
+        let ws = try Workspace(url: dir)
+        let l = await Scratch.listing(ws)
+        XCTAssertEqual(l.leftOut, "1 files under a folder named build")
+        let r = await Mutation.run(ws: ws, command: "python3 .teacher/tests/t.py", only: [], limit: 5, budget: 60, progress: { _ in })
+        XCTAssertTrue(r.note?.contains("baseline is red") == true && r.note?.contains("left out") == true && r.note?.contains("files under a folder named build") == true, r.note ?? "")
+        XCTAssertTrue(Mutation.render(r).contains("Left out of the copy"))
+    }
+
+    func testTheListingRunsTheVersionControlToolWithoutAnythingTheRepositoryConfigStarts() async throws {
+        let vc = Worktree.git
+        guard FileManager.default.isExecutableFile(atPath: vc) else { throw XCTSkip("not installed") }
+        let marker = dir.appendingPathComponent("monitor-ran")
+        try put("hook.sh", "#!/bin/sh\ntouch '\(marker.path)'\n")
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: dir.appendingPathComponent("hook.sh").path)
+        try put("a.py", "x = 1\n")
+        _ = await ProcessRunner.run(vc, ["init", "-q"], cwd: dir, timeout: 20)
+        _ = await ProcessRunner.run(vc, ["config", "core.fsmonitor", dir.appendingPathComponent("hook.sh").path], cwd: dir, timeout: 20)
+        let l = await Scratch.listing(try Workspace(url: dir))
+        XCTAssertTrue(l.files.contains("a.py"))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "core.fsmonitor from the repository's config did not run")
+    }
+
+    func testCodeMaskReadsNestedCommentsHeredocsRawStringsAndTemplates() {
+        func lines(_ ext: String, _ src: String) -> Set<Int> { Set(Mutator.mutants(file: "a.\(ext)", text: src).map(\.line)) }
+        XCTAssertEqual(lines("rs", "/* a /* b == c */ still a == b */\nlet x = a == b;\n"), [2], "nested block comment")
+        XCTAssertEqual(lines("swift", "/* a /* b */ x == y */\nlet ok = a == b\n"), [2])
+        XCTAssertEqual(lines("kt", "/* /* */ p == q */\nval ok = a == b\n"), [2])
+        XCTAssertEqual(lines("rb", "x = <<~TEXT\n  a == b\n  c < d\nTEXT\ny = a == b\n"), [5], "heredoc body is text")
+        XCTAssertEqual(lines("rb", "=begin\na == b\n=end\nz = a == b\n"), [4])
+        XCTAssertEqual(lines("php", "<?php\n$s = <<<EOT\nif ($a == $b)\nEOT;\n$t = $a == $b;\n"), [5])
+        XCTAssertEqual(lines("rs", "let s = \"line one\n a == b\";\nlet t = a == b;\n"), [3], "multi-line string")
+        XCTAssertEqual(lines("rb", "s = \"a\n b == c\"\nt = a == b\n"), [3])
+        XCTAssertEqual(lines("rs", "let r = r#\"a == \"b\" == c\"#;\nlet t = a == b;\n"), [2], "raw string")
+        XCTAssertEqual(lines("swift", "let r = #\"a == \"b\" == c\"#\nlet t = a == b\n"), [2])
+        XCTAssertEqual(lines("js", "const t = `a == ${ `b == ${c} ` } d == e`;\nlet ok = a == b;\n"), [2], "nested template")
+        XCTAssertEqual(lines("rs", "let s = \"never closed;\nlet t = a == b;\n"), [], "an unterminated string: the file is not mutated at all")
+        XCTAssertEqual(lines("rs", "/* never closed\nlet t = a == b;\n"), [])
+        XCTAssertEqual(lines("cpp", "auto s = R\"(a == b)\";\nint t = a == b;\n"), [], "a raw string it doesn't read: skip the file")
+    }
+
+    func testCoverageTablePathsKeepTheirFolders() {
+        let jest = """
+        File         | % Stmts | % Branch | % Funcs | % Lines | Uncovered Line #s
+        All files    |      50 |        0 |      50 |      50 |
+         lib         |      50 |        0 |      50 |      50 |
+          util.js    |      50 |        0 |      50 |      50 | 3-4
+         src         |      80 |        0 |      50 |      80 |
+          util.js    |      80 |        0 |      50 |      80 | 9
+         top.js      |     100 |      100 |     100 |     100 |
+        """
+        let f = Coverage.table(jest)
+        XCTAssertEqual(f.map(\.path), ["lib/util.js", "src/util.js", "top.js"], "same-named files stay apart, a root file has no folder")
+        XCTAssertEqual(f.first?.missing, [3...4])
+        let node = "ℹ file             | line % | branch % | funcs % | uncovered lines\nℹ lib/util.js      |  50.00 |   100.00 |   50.00 | 3-4\nℹ src/util.js      |  80.00 |   100.00 |   50.00 | 9\n"
+        XCTAssertEqual(Coverage.table(node).map(\.path), ["lib/util.js", "src/util.js"])
+    }
+
+    func testPercentagesWithoutLineCountsAreNotCalledAShareOfLines() {
+        var r = Coverage.Report(); r.tool = "jest"
+        r.files = [Coverage.File(path: "a.js", covered: 50, total: 100, missing: [], counts: false), Coverage.File(path: "b.js", covered: 100, total: 100, missing: [], counts: false)]
+        XCTAssertFalse(r.exact); XCTAssertEqual(r.percent, 75, accuracy: 0.01)
+        let text = Coverage.render(r)
+        XCTAssertTrue(text.contains("average 75% each") && !text.contains("of the lines in"), text)
+        r.files = [Coverage.File(path: "a.go", covered: 3, total: 4, missing: [])]
+        XCTAssertTrue(Coverage.render(r).contains("75% of the lines in 1 source file"))
+    }
+
+    func testGoCoverageCountsCodeExercisedFromAnotherPackage() async throws {
+        try need("go")
+        try put("go.mod", "module demo\n\ngo 1.20\n")
+        try put("util/util.go", "package util\n\nfunc Double(x int) int {\n\treturn x * 2\n}\n")
+        try put("demo.go", "package demo\n\nimport \"demo/util\"\n\nfunc Run(x int) int { return util.Double(x) }\n")
+        try put("demo_test.go", "package demo\n\nimport \"testing\"\n\nfunc TestRun(t *testing.T) { if Run(2) != 4 { t.Fatal(\"x\") } }\n")
+        let r = await Coverage.run(ws: try Workspace(url: dir), command: "go test ./...", seconds: 180, progress: { _ in })
+        let u = r.files.first { $0.path == "util/util.go" }
+        XCTAssertNotNil(u, "\(r.note ?? "") \(r.output)")
+        XCTAssertEqual(u?.missing.count, 0, "util is run by the test in another package: it is not 'never run'")
+    }
+
+    func testBenchTextTellsTheModelNotToStateTheClassBeforeTheGuess() {
+        let sizes = [100, 300, 1000, 3000, 10000]
+        let out = CodeLab.benchOutput(sizes: sizes, series: [CodeLab.Series(name: "pairs", seconds: sizes.map { 1e-9 * Double($0) * Double($0) })])
+        XCTAssertTrue(out.text.contains("until they have guessed"), out.text)
+        XCTAssertEqual(out.meta?["series"]?[0]?["alsoFits"], .array([]))
     }
 }

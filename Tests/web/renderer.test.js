@@ -1692,6 +1692,19 @@
     ok($$('.bench-svg path', card()).length === 1 && card().textContent.includes('You guessed') && card().textContent.includes('looks like O(n²)'), 'curve, their guess against the measurement, and the evidence');
   });
 
+  test('bench card: a tied or low-confidence fit never tells the learner they were wrong; a refused fit shows its reason', async () => {
+    const mk = (id, series) => A([{ kind: 'toolUse', id, name: 'bench', input: { language: 'python', code: '…' } }]);
+    const base = { sizes: [100, 1000, 10000], times: [1e-5, 1e-3, 0.1] };
+    const tied = Object.assign({ name: 'sorted', fit: 'O(n log n)', slope: 1.1, confidence: 'medium', claim: 'looks like O(n log n) (medium…; O(n) fits about as well)', alsoFits: ['O(n)'] }, { times: base.times });
+    T.reset([U('q'), mk('bt1'), R('bt1', 'bench', 'Timings…', { meta: { sizes: base.sizes, series: [tied] } })], {});
+    const card = () => $('[data-tool-id="bt1"]');
+    click($$('[data-act="bench-guess"]', card()).find(b => b.getAttribute('data-guess') === 'O(n)'));
+    ok(card().textContent.includes('can\'t separate') && !card().textContent.includes('What in the code makes the work grow like that'), 'a tied guess is not called wrong: ' + card().textContent.slice(0, 260));
+    const refused = { name: 'x', times: [1e-3, null, null], fit: null, slope: null, confidence: 'none', claim: 'too few sizes timed (1 of the 4 a fit needs); no growth claim' };
+    T.reset([U('q'), mk('bt2'), R('bt2', 'bench', 'Timings…', { meta: { sizes: base.sizes, series: [refused] } })], {});
+    ok($('[data-tool-id="bt2"]').textContent.includes('too few sizes timed') && $$('.bench-svg', $('[data-tool-id="bt2"]')).length === 1, 'the reason shows beside the curve, with no guess gate');
+  });
+
   test('mutation card: survivors name the line, show was/now and ask a question; coverage card lists never-run ranges', async () => {
     const meta = { score: 0.5, killed: 3, timedOut: 0, survived: 1, invalid: 0, tried: 4, available: 9, survivors: [{ file: 'calc.py', line: 12, function: 'is_adult', kind: '>= → >', was: 'return age >= 18', now: 'return age > 18', status: 'survived' }] };
     const a = A([{ kind: 'toolUse', id: 'mu1', name: 'mutate', input: {} }, { kind: 'toolUse', id: 'cv1', name: 'coverage', input: {} }]);

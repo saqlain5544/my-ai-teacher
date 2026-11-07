@@ -1,50 +1,148 @@
 import Foundation
 
 /// Source with its comments and strings blanked, byte for byte (newlines kept), so a scan for operators never lands in
-/// text: `"a < b"` and `# x == y` are not code. Unlike `CodeImpact.code` it reads across lines (docstrings, block
-/// comments, template literals), which a mutant that changes a string's meaning would otherwise corrupt.
+/// text: `"a < b"` and `# x == y` are not code. Unlike `CodeImpact.code` it reads across lines (docstrings, nested block
+/// comments, heredocs, raw strings, template literals). It returns nil for a file it can't read with confidence (an
+/// unterminated string or comment, a C++ raw string): mutating text it misread would test nothing real.
 enum CodeMask {
     struct Syntax {
-        var line: [String] = ["//"], block = true
-        var quotes: [UInt8] = [34], triple = false, backtick = false, charLiteral = false, regex = false
+        var line: [String] = ["//"], block = true, nested = false
+        var quotes: [UInt8] = [34], multiline: Set<UInt8> = [], triple = false, backtick = false, charLiteral = false, regex = false
+        var rawRust = false, rawSwift = false, rubyDocs = false, heredoc: String? = nil   // "rb" | "php"
     }
 
     static func syntax(_ ext: String) -> Syntax? {
         switch ext {
         case "py": return Syntax(line: ["#"], block: false, quotes: [34, 39], triple: true)
-        case "rb": return Syntax(line: ["#"], block: false, quotes: [34, 39], backtick: true)
+        case "rb": return Syntax(line: ["#"], block: false, quotes: [34, 39], multiline: [34, 39], backtick: true, rubyDocs: true, heredoc: "rb")
         case "js", "jsx", "ts", "tsx", "mjs", "cjs": return Syntax(quotes: [34, 39], backtick: true, regex: true)
         case "go": return Syntax(quotes: [34, 39], backtick: true)
-        case "rs": return Syntax(quotes: [34], charLiteral: true)
-        case "swift": return Syntax(quotes: [34], triple: true)
-        case "java", "kt", "cs", "scala": return Syntax(quotes: [34, 39], triple: true)
+        case "rs": return Syntax(nested: true, quotes: [34], multiline: [34], charLiteral: true, rawRust: true)
+        case "swift": return Syntax(nested: true, quotes: [34], triple: true, rawSwift: true)
+        case "kt", "scala": return Syntax(nested: true, quotes: [34, 39], triple: true)
+        case "java", "cs": return Syntax(quotes: [34, 39], triple: true)
         case "c", "h", "cpp", "cc", "cxx", "hpp": return Syntax(quotes: [34, 39])
-        case "php": return Syntax(line: ["//", "#"], quotes: [34, 39])
+        case "php": return Syntax(line: ["//", "#"], quotes: [34, 39], multiline: [34, 39], heredoc: "php")
         case "zig": return Syntax(block: false, quotes: [34, 39])
         default: return nil
         }
     }
 
-    static func mask(_ src: [UInt8], ext: String) -> [UInt8] {
+    private static func isWord(_ c: UInt8) -> Bool { (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95 }
+
+    /// After the opening backtick of a JS template literal at `start`: the index past its closing one, `${ }` nesting included.
+    private static func skipTemplate(_ src: [UInt8], _ start: Int) -> Int? {
+        var j = start + 1
+        while j < src.count {
+            if src[j] == 92 { j += 2; continue }
+            if src[j] == 96 { return j + 1 }
+            if src[j] == 36, j + 1 < src.count, src[j + 1] == 123 { guard let e = skipExpr(src, j + 2) else { return nil }; j = e; continue }
+            j += 1
+        }
+        return nil
+    }
+    private static func skipExpr(_ src: [UInt8], _ start: Int) -> Int? {
+        var j = start, depth = 1
+        while j < src.count {
+            let c = src[j]
+            if c == 96 { guard let e = skipTemplate(src, j) else { return nil }; j = e; continue }
+            if c == 34 || c == 39 { j += 1; while j < src.count, src[j] != c, src[j] != 10 { if src[j] == 92 { j += 1 }; j += 1 }; j += 1; continue }
+            if c == 123 { depth += 1 } else if c == 125 { depth -= 1; if depth == 0 { return j + 1 } }
+            j += 1
+        }
+        return nil
+    }
+
+    static func mask(_ src: [UInt8], ext: String) -> [UInt8]? {
         guard let s = syntax(ext) else { return src }
-        var out = src
         let n = src.count
+        if ["c", "h", "cpp", "cc", "cxx", "hpp"].contains(ext) {
+            for i in 0..<max(0, n - 1) where src[i] == 82 && src[i + 1] == 34 && (i == 0 || !isWord(src[i - 1])) { return nil }   // C++ raw strings
+        }
+        var out = src
         func blank(_ a: Int, _ b: Int) { var k = a; while k < min(b, n) { if out[k] != 10 { out[k] = 32 }; k += 1 } }
-        func starts(_ at: Int, _ t: String) -> Bool { let u = Array(t.utf8); return at + u.count <= n && Array(src[at..<at + u.count]) == u }
+        func starts(_ at: Int, _ t: String) -> Bool { let u = Array(t.utf8); return at >= 0 && at + u.count <= n && Array(src[at..<at + u.count]) == u }
+        func lineEnd(_ from: Int) -> Int { var j = from; while j < n, src[j] != 10 { j += 1 }; return j }
         var i = 0, lastSignificant: UInt8 = 10
+        var heredocs: [String] = []          // bodies that begin on the next line
         while i < n {
             let c = src[i]
-            if let lc = s.line.first(where: { starts(i, $0) }), !(lc == "#" && ext == "php" && starts(i, "#[")) {
-                var j = i; while j < n, src[j] != 10 { j += 1 }
+            if c == 10 {
+                for id in heredocs {          // blank the body up to its terminator line
+                    var j = i + 1, closed = false
+                    while j < n {
+                        let e = lineEnd(j), t = String(decoding: src[j..<e], as: UTF8.self).trimmingCharacters(in: .whitespaces)
+                        blank(j, e)
+                        j = e + 1
+                        if t == id || (t.hasPrefix(id) && t.count > id.count && !isWord(Array(t.utf8)[id.utf8.count])) { closed = true; break }
+                    }
+                    if !closed { return nil }
+                    i = min(j - 1, n - 1)
+                }
+                heredocs = []
+                lastSignificant = 10; i += 1; continue
+            }
+            if s.rubyDocs, starts(i, "=begin"), i == 0 || src[i - 1] == 10 {
+                var j = lineEnd(i), closed = false
+                while j < n { j += 1; if starts(j, "=end") { j = lineEnd(j); closed = true; break }; j = lineEnd(j) }
+                if !closed { return nil }
                 blank(i, j); i = j; continue
             }
-            if s.block, starts(i, "/*") {
-                var j = i + 2; while j < n, !starts(j, "*/") { j += 1 }
-                blank(i, j + 2); i = j + 2; continue
+            if let lc = s.line.first(where: { starts(i, $0) }), !(lc == "#" && ext == "php" && starts(i, "#[")) {
+                let j = lineEnd(i); blank(i, j); i = j; continue
             }
-            if s.triple, (c == 34 || c == 39), starts(i, String(UnicodeScalar(c)) + String(UnicodeScalar(c)) + String(UnicodeScalar(c))) {
+            if s.block, starts(i, "/*") {
+                var j = i + 2, depth = 1
+                while j < n, depth > 0 {
+                    if s.nested, starts(j, "/*") { depth += 1; j += 2 } else if starts(j, "*/") { depth -= 1; j += 2 } else { j += 1 }
+                }
+                if depth > 0 { return nil }
+                blank(i, j); i = j; continue
+            }
+            if let kind = s.heredoc {
+                let lead = kind == "php" ? "<<<" : "<<"
+                if starts(i, lead), !starts(i + lead.utf8.count, "<") {
+                    var j = i + lead.utf8.count
+                    if kind == "rb", j < n, src[j] == 126 || src[j] == 45 { j += 1 }
+                    var q: UInt8? = nil
+                    if j < n, src[j] == 34 || src[j] == 39 { q = src[j]; j += 1 }
+                    let st = j
+                    while j < n, isWord(src[j]) { j += 1 }
+                    let id = String(decoding: src[st..<j], as: UTF8.self)
+                    if !id.isEmpty, kind == "php" || id.allSatisfy({ $0.isUppercase || $0.isNumber || $0 == "_" }), !(id.first!.isNumber), q == nil || (j < n && src[j] == q!) {
+                        if q != nil { j += 1 }
+                        heredocs.append(id); i = j; continue
+                    }
+                }
+            }
+            if s.rawRust, c == 114 || (c == 98 && i + 1 < n && src[i + 1] == 114), i == 0 || !isWord(src[i - 1]) {
+                var j = i + (c == 98 ? 2 : 1), h = 0
+                while j < n, src[j] == 35 { h += 1; j += 1 }
+                if j < n, src[j] == 34 {
+                    let close = "\"" + String(repeating: "#", count: h)
+                    j += 1
+                    while j < n, !starts(j, close) { j += 1 }
+                    if j >= n { return nil }
+                    blank(i, j + close.utf8.count); i = j + close.utf8.count; lastSignificant = 34; continue
+                }
+            }
+            if s.rawSwift, c == 35, i == 0 || !isWord(src[i - 1]) {
+                var j = i, h = 0
+                while j < n, src[j] == 35 { h += 1; j += 1 }
+                if j < n, src[j] == 34 {
+                    let triple = starts(j, "\"\"\"")
+                    let close = (triple ? "\"\"\"" : "\"") + String(repeating: "#", count: h)
+                    j += triple ? 3 : 1
+                    while j < n, !starts(j, close), triple || src[j] != 10 { j += 1 }
+                    if j >= n || !starts(j, close) { return nil }
+                    blank(i, j + close.utf8.count); i = j + close.utf8.count; lastSignificant = 34; continue
+                }
+            }
+            if s.triple, c == 34 || c == 39, starts(i, String(repeating: String(UnicodeScalar(c)), count: 3)) {
                 let close = String(repeating: String(UnicodeScalar(c)), count: 3)
-                var j = i + 3; while j < n, !starts(j, close) { if src[j] == 92 { j += 1 }; j += 1 }
+                var j = i + 3
+                while j < n, !starts(j, close) { if src[j] == 92 { j += 1 }; j += 1 }
+                if j >= n { return nil }
                 blank(i, j + 3); i = j + 3; lastSignificant = 34; continue
             }
             if s.quotes.contains(c) || (s.backtick && c == 96) {
@@ -54,12 +152,17 @@ enum CodeMask {
                     if i + 1 < n, src[i + 1] == 92 { var j = i + 2; while j < n, src[j] != 39, src[j] != 10 { j += 1 }; blank(i, j + 1); i = j + 1; continue }
                     i += 1; continue
                 }
-                let multiline = c == 96
+                if c == 96, ext != "ts", s.regex {      // a JS template literal, with nesting
+                    guard let e = skipTemplate(src, i) else { return nil }
+                    blank(i, e); i = e; lastSignificant = 34; continue
+                }
+                let multi = c == 96 || s.multiline.contains(c)
                 var j = i + 1
-                while j < n, src[j] != c, multiline || src[j] != 10 { if src[j] == 92, j + 1 < n, src[j + 1] != 10 { j += 1 }; j += 1 }
+                while j < n, src[j] != c, multi || src[j] != 10 { if src[j] == 92, j + 1 < n { j += 1 }; j += 1 }
+                if j >= n || src[j] != c { return nil }
                 blank(i, j + 1); i = j + 1; lastSignificant = 34; continue
             }
-            if s.regex, c == 47, i + 1 < n, src[i + 1] != 47, src[i + 1] != 42, i + 1 < n, src[i + 1] != 32 || lastSignificant == 10,
+            if s.regex, c == 47, i + 1 < n, src[i + 1] != 47, src[i + 1] != 42, src[i + 1] != 32 || lastSignificant == 10,
                "(,=:[!&|?{};\n".utf8.contains(lastSignificant) {
                 var j = i + 1, inClass = false
                 while j < n, src[j] != 10 {
@@ -72,7 +175,7 @@ enum CodeMask {
             if c != 32 && c != 9 && c != 13 { lastSignificant = c }
             i += 1
         }
-        return out
+        return heredocs.isEmpty ? out : nil
     }
 }
 
@@ -108,7 +211,7 @@ enum Mutator {
     static func mutants(file: String, text: String, changed: [ClosedRange<Int>] = []) -> [Mutant] {
         let ext = (file as NSString).pathExtension.lowercased()
         guard sourceExtensions.contains(ext), text.utf8.count < 400_000 else { return [] }
-        let masked = CodeMask.mask(Array(text.utf8), ext: ext)
+        guard let masked = CodeMask.mask(Array(text.utf8), ext: ext) else { return [] }   // not read with confidence: not mutated
         let origLines = text.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         let maskLines = String(decoding: masked, as: UTF8.self).split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
         guard origLines.count == maskLines.count else { return [] }

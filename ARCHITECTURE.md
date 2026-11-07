@@ -529,7 +529,7 @@ approvals, hooks and MCP cover every agent.
     interleaved), the learner's changed lines first (`CodeImpact.parse` of the review diff). The baseline runs first in the copy
     and must be green. Each mutant runs the registered command (the learner's folder path swapped for the copy's) with a timeout
     from the baseline (3× + 5 s, 10–120 s) and the whole run a budget (300 s, max 900). Exit 0 survives, a timeout counts as caught,
-    and a failure that is only a syntax or build error (no assertion output) is `invalid` and left out of the score. It joins
+    and a failure counts as killed only on positive evidence of a failing test: a build or syntax error is `invalid`, a crash, exit 127/137/139 or a port clash (`EADDRINUSE`) is `errored`, and both are left out of the score. Python runs with `PYTHONDONTWRITEBYTECODE=1` (a `.pyc` keyed on whole-second mtime and size would judge a same-size mutant on its predecessor's code); a mutant starts only with time for its full limit; the digest is taken before the copy; a `node_modules` with links resolving outside it, files the copy left out (listed by reason) and a 50 MB cap are reported, not blamed on the learner. `CodeMask` returns nil for a file it can't read confidently (unterminated string, C++ raw string). It joins
     `MentorGuard.commands` (the same `WriteFence`) and the `tests` grant (`PermissionExtension.runsTests`). Stop cancels the task
     group: `ProcessRunner` ends each process tree and the scratch folder goes in a `defer`.
   * `coverage`: the same scratch copy, the toolchain's own numbers and nothing installed: `go test -coverprofile`, `swift test
