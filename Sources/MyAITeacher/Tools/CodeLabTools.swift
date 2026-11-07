@@ -181,25 +181,33 @@ struct BenchTool: Tool {
     input, untimed (`setup_<name>(n)` for one variant's own input: the set for run_set); each `run_<name>(x)` is timed \
     and charted on its own line, so a comparison is one function per variant (`run_list(x)`, `run_set(x)`), never both \
     in one; a single `run(x)` when there is nothing to compare. Imports from the lesson's folder work. Optional `sizes` (default \
-    [1000, 3000, 10000, 30000, 100000]).
+    [1000, 3000, 10000, 30000, 100000]) or `scale` (the largest n: seven sizes up to it, a thousandfold range). The fit says \
+    "looks like O(n²)" with its evidence and confidence, or refuses (too few sizes, too narrow a range, too noisy). Ask the \
+    learner to predict the growth first; the card makes them guess before it shows the curve.
     """
     let risk = ToolRisk.execute
     var schema: JSON {
         Schema.object([
             "language": Schema.string("python or javascript."),
             "code": Schema.string("e.g. `def setup(n): return list(range(n))` · `def setup_set(n): return set(range(n))` · `def run_list(xs): return -1 in xs` · `def run_set(s): return -1 in s`: inputs are built in setup, only the work is in run."),
-            "sizes": Schema.array(Schema.integer("n"), "Input sizes, ascending (3–8 of them)."),
+            "sizes": Schema.array(Schema.integer("n"), "Input sizes, ascending (4–8 of them; at least a tenfold span)."),
+            "scale": Schema.integer("Instead of sizes: the largest n; runs seven sizes from n/1000 up to it."),
         ], required: ["language", "code"])
     }
     func summary(_ input: JSON) -> String { "\(input["language"]?.string ?? "code") timings" }
     func timeout(_ input: JSON) -> Double? { 150 }
     /// A hundredfold range: over less, a log factor and timing noise look alike.
     static let defaultSizes = [1000, 3000, 10000, 30000, 100000]
+    /// Seven sizes, half a decade apart, the largest `top`.
+    static func scaled(_ top: Int) -> [Int] {
+        Array(Set((0...6).map { max(1, Int((Double(top) * pow(10, -3 + 0.5 * Double($0))).rounded())) })).sorted()
+    }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let (code, _) = HeredocSlip.strip(try input.req("code"))
         let lang = RunCodeTool.normalize(try input.req("language"))
         var sizes = Array(Set((input["sizes"]?.array ?? []).compactMap(\.int).filter { $0 > 0 })).sorted()
+        if let top = input["scale"]?.int, top >= 1000, sizes.count < 3 { sizes = Self.scaled(top) }
         if sizes.count < 3 { sizes = Self.defaultSizes }
         sizes = Array(sizes.prefix(8))
         let r: ProcessResult
@@ -345,6 +353,51 @@ enum CodeLab {
         return d.map { ($0 - c) * ($0 - c) }.reduce(0, +)
     }
 
+    /// What the timings of one variant support saying about its growth. `model` is nil when they support no claim.
+    struct Growth: Sendable, Equatable {
+        var model: String?
+        var slope: Double?
+        var confidence: String        // high | medium | low | none
+        var claim: String             // the sentence for the learner and the model, with its evidence
+        var alsoFits: [String] = []
+    }
+
+    /// `fit` with its evidence, and a refusal when there is little: under four timed sizes, a span under tenfold (a log
+    /// factor and noise look alike), timings all under 20 µs (the timer's noise), or points scattering more than about
+    /// ±35% around the best curve. Medium when another model fits as well (n and n log n over a short span); high needs
+    /// five sizes over a hundredfold span with a tight fit.
+    static func assess(sizes: [Int], seconds: [Double?]) -> Growth {
+        let pts = zip(sizes, seconds).compactMap { n, t in t.map { (n: n, t: $0) } }
+        func none(_ why: String) -> Growth { Growth(model: nil, slope: nil, confidence: "none", claim: "\(why); no growth claim") }
+        guard pts.count >= 4 else { return none("too few sizes timed (\(pts.count) of the 4 a fit needs)") }
+        guard let f = fit(sizes: sizes, seconds: seconds) else { return none("too few sizes timed") }
+        let lo = pts.map(\.n).min()!, hi = pts.map(\.n).max()!, span = Double(hi) / Double(max(1, lo))
+        if f.model != "O(2ⁿ)", span < 10 { return none("the sizes span only \(String(format: "%.0f", span))×; over less than 10× a log factor and timing noise look alike") }
+        // Flat and tiny is a fair "constant" (a set lookup); anything else under 20 µs is the timer, not the code.
+        let tiny = pts.map(\.t).max()! < 2e-5
+        if tiny, f.model != "O(1)" { return none("every timing is under 0.02 ms, which is timer noise; use larger sizes") }
+        let lp = pts.map { (log(Double(max($0.n, 2))), Double(max($0.n, 2)), log(max($0.t, 1e-6))) }
+        guard let gm = models.first(where: { $0.0 == f.model })?.1 else { return none("no model") }
+        let d = lp.map { $0.2 - gm($0.1) }, c = d.reduce(0, +) / Double(d.count)
+        let rms = (d.map { ($0 - c) * ($0 - c) }.reduce(0, +) / Double(d.count)).squareRoot()
+        let tolerance = 0.02 * Double(lp.count), r = models.map { residual(lp, $0.1) }
+        let also = models.enumerated().filter { r[$0.offset] <= r.min()! + tolerance && $0.element.0 != f.model }.map(\.element.0)
+        if rms > 0.35 { return none("the timings scatter about ±\(Int(((exp(rms) - 1) * 100).rounded()))% around the best curve, too noisy to tell growth classes apart; run again or use larger sizes") }
+        // The slope's standard error.
+        let mx = lp.map(\.0).reduce(0, +) / Double(lp.count), my = lp.map(\.2).reduce(0, +) / Double(lp.count)
+        let sxx = lp.map { ($0.0 - mx) * ($0.0 - mx) }.reduce(0, +)
+        let sres = lp.map { p -> Double in let e = p.2 - (my + f.exponent * (p.0 - mx)); return e * e }.reduce(0, +)
+        let se = lp.count > 2 && sxx > 0 ? (sres / Double(lp.count - 2) / sxx).squareRoot() : 0
+        var conf = "high"
+        if pts.count < 5 || span < 100 || rms > 0.08 { conf = "medium" }
+        if !also.isEmpty { conf = conf == "high" ? "medium" : conf }
+        if rms > 0.2 { conf = "low" }
+        if tiny { conf = "low" }
+        let evidence = "\(pts.count) sizes over \(String(format: "%.0f", span))×, log-log slope \(String(format: "%.2f", f.exponent)) ± \(String(format: "%.2f", se)), scatter ±\(Int(((exp(rms) - 1) * 100).rounded()))%"
+        let ties = (also.isEmpty ? "" : "; \(also.joined(separator: ", ")) fit about as well, so the sizes can't tell them apart") + (tiny ? "; timings this small are mostly timer resolution" : "")
+        return Growth(model: f.model, slope: f.exponent, confidence: conf, claim: "looks like \(f.model) (\(conf) confidence: \(evidence)\(ties))", alsoFits: also)
+    }
+
     static func ms(_ s: Double?) -> String {
         guard let s else { return "—" }
         let v = s * 1000
@@ -352,20 +405,20 @@ enum CodeLab {
     }
 
     static func benchOutput(sizes: [Int], series: [Series]) -> ToolOutput {
-        let fits = series.map { fit(sizes: sizes, seconds: $0.seconds) }
+        let fits = series.map { assess(sizes: sizes, seconds: $0.seconds) }
         let width = max(8, series.map(\.name.count).max() ?? 0) + 2
         func pad(_ s: String, _ w: Int) -> String { s.count >= w ? s + " " : s + String(repeating: " ", count: w - s.count) }
         var text = "Timings (best of up to 5 runs, ms; — = skipped after a slow size):\n" + pad("n", 10) + series.map { pad($0.name, width) }.joined() + "\n"
         for (i, n) in sizes.enumerated() {
             text += pad(String(n), 10) + series.map { pad(ms($0.seconds[safe: i] ?? nil), width) }.joined() + "\n"
         }
-        text += "Growth: " + zip(series, fits).map { s, f in
-            f.map { "\(s.name) ≈ \($0.model) (log-log slope \(String(format: "%.2f", $0.exponent)))" } ?? "\(s.name): too few sizes timed"
-        }.joined(separator: "; ") + ". Timings are noisy below ~0.01 ms. The learner has the chart: it is the evidence, explain what it shows."
+        text += "Growth: " + zip(series, fits).map { "\($0.name): \($1.claim)" }.joined(separator: "; ")
+            + ". Timings are noisy below ~0.01 ms. The learner has the chart (they guess the growth before it shows): it is the evidence, explain what it shows, and say \"looks like\", never \"is\"."
         let meta: JSON = ["sizes": .array(sizes.map { .number(Double($0)) }),
-                          "series": .array(zip(series, fits).map { s, f in
+                          "series": .array(zip(series, fits).map { s, g in
                               ["name": .string(s.name), "times": .array(s.seconds.map { $0.map(JSON.number) ?? .null }),
-                               "fit": f.map { .string($0.model) } ?? .null, "slope": f.map { .number(($0.exponent * 100).rounded() / 100) } ?? .null]
+                               "fit": g.model.map { .string($0) } ?? .null, "slope": g.slope.map { .number(($0 * 100).rounded() / 100) } ?? .null,
+                               "confidence": .string(g.confidence), "claim": .string(g.claim)]
                           })]
         return ToolOutput(text: text, meta: meta)
     }
