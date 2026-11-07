@@ -59,7 +59,7 @@ enum CustomCommands {
 
     /// The `*.md` files of one directory.
     static func scan(_ dir: URL, origin: String) -> [CustomCommand] {
-        let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".md") }.sorted()
+        let names = ((try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []).filter { $0.hasSuffix(".md") && !TreeDigest.neverLoaded($0) }.sorted()
         return names.compactMap { n in
             guard let text = try? String(contentsOf: dir.appendingPathComponent(n), encoding: .utf8) else { return nil }
             return parse(text, fileName: String(n.dropLast(3)), origin: origin)

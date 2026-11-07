@@ -31,12 +31,19 @@ enum TreeDigest {
     /// Finder's and other tools' litter never counts: it changes by itself and means nothing.
     static func isLitter(_ name: String) -> Bool { name == ".DS_Store" || name.hasPrefix("._") }
     static func isCache(_ name: String) -> Bool { name == "__pycache__" || name == ".cache" || name.hasSuffix(".pyc") }
+    /// What a folder's digest leaves out, always: litter and caches.
+    static func isSkipped(_ name: String) -> Bool { isLitter(name) || isCache(name) }
+    /// Vendored trees a folder's own digest leaves out too.
+    static let vendored: Set<String> = [".git", "node_modules"]
+    /// The one rule for what a loader (skills, agents, commands, plugin parts) may read: nothing the digest leaves out. Every
+    /// loader asks this, so what reaches a prompt or the agent catalog can never be outside the fingerprint.
+    static func neverLoaded(_ name: String) -> Bool { isSkipped(name) || vendored.contains(name) }
 
     /// Where a link may never lead in a folder's own content: credentials, which a command file linked to would send to the model.
     nonisolated(unsafe) static var credentialRoots: [String] = defaultCredentialRoots()
     static func defaultCredentialRoots() -> [String] {
         let home = NSHomeDirectory()
-        let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains"]
+        let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains", ".kube", ".npmrc", ".git-credentials", ".config/gcloud"]
         return (rel.map { home + "/" + $0 } + [AppPaths.keys.path]).map(resolved)
     }
 
@@ -69,6 +76,8 @@ enum TreeDigest {
                 if isCache(n) { r.caches.append(path); continue }
                 var type = (try? fm.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType) ?? nil
                 var real = url.path
+                // Followed content: whatever a path really resolves to may not be a credential, however it was reached.
+                if followLinks, type != .typeSymbolicLink, creds.contains(where: { inside(resolved(url.path), $0) }) { r.forbidden.append(path); continue }
                 if type == .typeSymbolicLink {
                     real = resolved(url.path)
                     let exists = realpath(url.path, nil).map { free($0); return true } ?? false
@@ -81,7 +90,8 @@ enum TreeDigest {
                     }
                     guard exists else { continue }
                     r.links[path] = real
-                    if creds.contains(where: { inside(real, $0) }) { r.forbidden.append(path); continue }
+                    // A link to a credential, or to a folder that holds one (`~`): everything under it would be walked.
+                    if creds.contains(where: { inside(real, $0) || inside($0, real) }) { r.forbidden.append(path); continue }
                     type = (try? fm.attributesOfItem(atPath: real)[.type] as? FileAttributeType) ?? nil
                 }
                 switch type {

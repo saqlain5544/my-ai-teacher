@@ -78,7 +78,7 @@ struct Plugin: Sendable, Identifiable {
 
     private func markdown(_ d: URL) -> [URL] {
         ((try? FileManager.default.contentsOfDirectory(at: d, includingPropertiesForKeys: nil)) ?? [])
-            .filter { $0.pathExtension.lowercased() == "md" }.sorted { $0.path < $1.path }
+            .filter { $0.pathExtension.lowercased() == "md" && !TreeDigest.neverLoaded($0.lastPathComponent) }.sorted { $0.path < $1.path }
     }
 
     /// Text for a review, made harmless to read: a line break shows as ↵ (a command can't fake a row or push the rest off
@@ -87,13 +87,18 @@ struct Plugin: Sendable, Identifiable {
     static func visible(_ text: String, max: Int = 2_000) -> String {
         var out = ""
         for u in text.unicodeScalars {
-            switch u.value {
-            case 0x0A, 0x2028, 0x2029: out += "↵"
-            case 0x0D: out += "↵"
-            case 0x09: out += " "
-            case 0x00...0x1F, 0x7F...0x9F, 0x200B...0x200F, 0x202A...0x202E, 0x2060...0x2064, 0x2066...0x2069, 0xFEFF:
-                out += String(format: "<U+%04X>", u.value)
-            default: out.unicodeScalars.append(u)
+            let v = u.value
+            if v == 0x09 { out += " "; continue }
+            if v == 0x0A || v == 0x0D { out += "↵"; continue }
+            switch u.properties.generalCategory {
+            case .lineSeparator, .paragraphSeparator: out += "↵"
+            // Controls, formatting characters (bidi marks, zero-width, tags), unassigned and private ones can hide or reorder
+            // text; variation selectors change how a character looks. All shown as their code points.
+            case .control, .format, .unassigned, .privateUse, .surrogate:
+                out += String(format: "<U+%04X>", v)
+            default:
+                if (0xFE00...0xFE0F).contains(v) || (0xE0100...0xE01EF).contains(v) || (0xE0000...0xE007F).contains(v) { out += String(format: "<U+%04X>", v) }
+                else { out.unicodeScalars.append(u) }
             }
         }
         return out.count > max ? String(out.prefix(max)) + "… (\(out.count - max) more characters not shown)" : out
@@ -111,7 +116,7 @@ struct Plugin: Sendable, Identifiable {
             s += "MCP SERVERS: programs that run as you when the agent uses them\n"
             s += c.servers.map { sv in
                 (taken.contains(sv.name) ? "  \(Self.visible(sv.name, max: 100)) (not used: you or this folder already have a server by that name)\n" : "  \(Self.visible(sv.name, max: 100))\n")
-                    + sv.approvalDetail.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + Self.visible(String($0)) }.joined(separator: "\n")
+                    + sv.approvalLines.map { "    " + Self.visible($0) }.joined(separator: "\n")
             }.joined(separator: "\n") + "\n\n"
         }
         if !c.skills.isEmpty { s += "Skills (their instructions go to the model when used): " + c.skills.map(\.name).joined(separator: ", ") + "\n" }

@@ -40,8 +40,11 @@ enum ProjectTrust {
             let dir = folder.appendingPathComponent(d)
             guard FileManager.default.fileExists(atPath: dir.path) else { continue }
             let isSkills = skillDirs.contains(d)
-            let r = TreeDigest.scan(dir, limits: limits, followLinks: true, skip: ["node_modules", ".git"],
-                                    hashes: { isSkills ? ($0 as NSString).lastPathComponent == "SKILL.md" : $0.lowercased().hasSuffix(".md") })
+            let r = TreeDigest.scan(dir, limits: limits, followLinks: true, skip: TreeDigest.vendored,
+                                    // Case-insensitively, as the loader's open finds `skill.md` for `SKILL.md` on APFS.
+                                    hashes: { isSkills ? ($0 as NSString).lastPathComponent.lowercased() == "skill.md" : $0.lowercased().hasSuffix(".md") })
+            // A folder holding nothing that counts (only litter and caches) is as if it weren't there.
+            guard !(r.files + r.listed).isEmpty || !r.links.isEmpty || r.overLimit || !r.forbidden.isEmpty else { continue }
             if r.overLimit {
                 l.blocked = "“\(d)” is larger than a skills, agents or commands folder can be (\(limits.files) hashed files, \(limits.perFile / 1_000_000) MB each, \(limits.listed) files in all)."
             }
@@ -83,7 +86,7 @@ enum ProjectTrust {
     /// Names of the folder's commands (files in its commands folders), for telling the user one awaits approval.
     static func commandNames(_ folder: URL) -> [String] {
         commandDirs.flatMap { d in ((try? FileManager.default.contentsOfDirectory(atPath: folder.appendingPathComponent(d).path)) ?? [])
-            .filter { $0.hasSuffix(".md") }.map { String($0.dropLast(3)).lowercased() } }
+            .filter { $0.hasSuffix(".md") && !TreeDigest.neverLoaded($0) }.map { String($0.dropLast(3)).lowercased() } }
     }
 
     /// The one neutral line the prompt carries until the user decides.
@@ -93,10 +96,10 @@ enum ProjectTrust {
     /// and the other files only by name.
     static func detail(_ folder: URL, listing l: Listing) -> String {
         var s = "“\(folder.lastPathComponent)” supplies instructions for the agent: skills, sub-agent definitions or commands. They go into what the model "
-            + "reads and may tell it to run things (each call is still asked).\n\n" + l.files.prefix(40).joined(separator: "\n")
+            + "reads and may tell it to run things (each call is still asked).\n\n" + l.files.prefix(40).map { Plugin.visible($0, max: 160) }.joined(separator: "\n")
         if l.files.count > 40 { s += "\n… and \(l.files.count - 40) more files" }
-        if !l.links.isEmpty { s += "\n\nSymlinks (their content is part of this approval):\n" + l.links.prefix(20).joined(separator: "\n") }
-        if !l.other.isEmpty { s += "\n\n\(l.other.count) other files alongside (scripts, assets), not part of the fingerprint: " + l.other.prefix(8).joined(separator: ", ") + (l.other.count > 8 ? "…" : "") }
+        if !l.links.isEmpty { s += "\n\nSymlinks (their content is part of this approval):\n" + l.links.prefix(20).map { Plugin.visible($0, max: 300) }.joined(separator: "\n") }
+        if !l.other.isEmpty { s += "\n\n\(l.other.count) other files alongside (scripts, assets), not part of the fingerprint: " + l.other.prefix(8).map { Plugin.visible($0, max: 100) }.joined(separator: ", ") + (l.other.count > 8 ? "…" : "") }
         return s + "\n\nAllowed, they apply in every lesson in this folder until one of those files changes. Approve only a folder you trust."
     }
 
@@ -133,5 +136,17 @@ enum ProjectTrust {
         if allowed { await MainActor.run { AppModel.shared.settings.value.approvedProjectContent[folder.path] = listing.fingerprint } }
         else if reply["cancelled"]?.bool != true { declined.mutate { _ = $0.insert(key) } }
         return allowed
+    }
+}
+
+/// What a folder and the user's plugins supply that a lesson can use, by name: skills, agent types and commands. Read off the
+/// main actor (it walks and parses files).
+enum ContentScan {
+    nonisolated static func usable(node: String, folder: URL, settings: AppSettings) async -> [String] {
+        var out = Set(Skills.available(node: node, folder: ProjectTrust.approved(folder, settings), plugins: Plugins.active(settings))
+            .filter { s in if case .app = s.source { return false }; return !s.hidden }.map { "skill " + $0.name })
+        out.formUnion(AgentCatalog.all(settings: settings, folder: folder).filter { $0.source == .project || $0.source == .plugin }.map { "agent " + $0.name })
+        out.formUnion(CustomCommands.available(folder: folder, settings: settings).map { "command /" + $0.name })
+        return out.sorted()
     }
 }

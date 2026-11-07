@@ -61,7 +61,10 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
 
     /// Everything an approval is for: the command line, and the environment it sets (`NODE_OPTIONS` or
     /// `DYLD_INSERT_LIBRARIES` would run other code under an innocent command), or the URL and which headers it sends.
-    var approvalDetail: String {
+    var approvalDetail: String { approvalLines.joined(separator: "\n") }
+
+    /// The parts of `approvalDetail`, one each (a part may itself hold a line break: a reviewer shows it safely).
+    var approvalLines: [String] {
         var lines = [summary]
         if isHTTP || type == "sse" {
             // A literal value may be a secret, so only its name shows; a `${VAR}` template isn't one, and says which of
@@ -72,7 +75,7 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
         } else {
             lines += env.keys.sorted().map { "\($0)=\(env[$0]!)" }
         }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
     /// What "allow for this lesson" and "always allow in this folder" are stored under: a folder's own server by what it

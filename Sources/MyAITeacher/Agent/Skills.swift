@@ -88,6 +88,7 @@ enum Skills {
         let fm = FileManager.default
         guard let names = try? fm.contentsOfDirectory(atPath: dir.path) else { return [] }
         return names.sorted().compactMap { n in
+            guard !TreeDigest.neverLoaded(n) else { return nil }
             let folder = dir.appendingPathComponent(n)
             guard let text = try? String(contentsOf: folder.appendingPathComponent("SKILL.md"), encoding: .utf8) else { return nil }
             return parse(text, dir: folder, source: source)

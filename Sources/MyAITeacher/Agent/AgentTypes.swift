@@ -147,7 +147,7 @@ enum AgentCatalog {
         var out: [AgentDefinition] = []
         for dir in [folder.appendingPathComponent(Workspace.stateDirName).appendingPathComponent("agents"), folder.appendingPathComponent(".claude/agents")] {
             let files = (try? FileManager.default.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? []
-            for url in files.filter({ $0.pathExtension.lowercased() == "md" }).sorted(by: { $0.path < $1.path }) {
+            for url in files.filter({ $0.pathExtension.lowercased() == "md" && !TreeDigest.neverLoaded($0.lastPathComponent) }).sorted(by: { $0.path < $1.path }) {
                 guard let d = (try? String(contentsOf: url, encoding: .utf8)).flatMap({ parse($0, fileName: url.deletingPathExtension().lastPathComponent) }),
                       !out.contains(where: { $0.name == d.name }) else { continue }
                 out.append(d)
