@@ -168,6 +168,30 @@ final class EngineerProfileTests: XCTestCase {
         XCTAssertEqual(store.backfill(folders: [dir.path]), 0, "only once")
     }
 
+    /// The mentor's added skills: each parses, is short, has a description to choose it by, is for the code mentor only,
+    /// and names only tools that exist (or the ones other branches add, said to be "when available").
+    func testTheMentorsNewSkillsAreItsOwnAndNameRealTools() throws {
+        let real = AppPaths.skillResources
+        let names = ["tdd-coaching", "reading-unfamiliar-code", "refactoring-safely", "performance-investigation", "concurrency-bugs",
+                     "secure-code-review", "system-design-practice", "technical-interview-practice"]
+        let mentor = Skills.available(node: "code-mentor", folder: nil, home: nil, builtIn: real)
+        let tutor = Set(Skills.available(node: "tutor", folder: nil, home: nil, builtIn: real).map(\.name))
+        let planned: Set<String> = ["lsp", "debug", "mutate", "coverage", "past_lessons"]
+        let known = Set(ToolRegistry.all.map(\.name))
+        for n in names {
+            let s = try XCTUnwrap(mentor.first { $0.name == n }, n)
+            XCTAssertFalse(tutor.contains(n), "\(n) is the code mentor's")
+            XCTAssertLessThanOrEqual(s.description.count, 165, n)
+            let text = try String(contentsOf: s.dir.appendingPathComponent("SKILL.md"), encoding: .utf8)
+            XCTAssertLessThanOrEqual(text.split(separator: "\n", omittingEmptySubsequences: false).count, 60, n)
+            let words = Set(text.components(separatedBy: "`").enumerated().filter { $0.offset % 2 == 1 }.map(\.element))
+            for w in words.intersection(planned) { XCTAssertTrue(text.contains("available"), "\(n) mentions \(w) without saying when available") }
+            for w in ["run_tests", "project_tests", "project_review", "symbols", "grep", "diagnostics", "trace", "bench", "source", "bash", "run_code", "memory", "math", "read", "web_search"] where words.contains(w) {
+                XCTAssertTrue(known.contains(w), "\(n) names a tool that doesn't exist: \(w)")
+            }
+        }
+    }
+
     @MainActor func testTheReviewToolTakesAnAreaAndTheNoteReachesTheMentor() {
         XCTAssertTrue(ProjectReviewTool().schema.compact.contains("\"area\""))
         recordHabit()
