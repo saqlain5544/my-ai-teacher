@@ -503,6 +503,11 @@ the app is now a separate project, a Rust command-line tool at `~/coding-agent`.
   * **It asks first.** A language server can run a project's code while it analyses it (rust-analyzer runs build scripts
     and macros, gopls runs `go list`), so the first use of a server in a folder asks you: allow in this folder, allow for
     this lesson, or don't. Allow it only for code you trust. A sub-agent can't ask; it tells the mentor to.
+  * **What protects you.** Like the teacher's commands, a language server starts without your API keys and other secret
+    environment variables, and (unless you turned the protection off in **Settings › Tools › Secrets**) can't read your
+    credential folders; with a code-mentor project open it can't change your files or the locked tests either. **sourcekit-lsp
+    is the exception**: it crashes inside the macOS sandbox, so it runs without the credential-folder and project write
+    protection (it still gets no secret environment variables). Its approval card says so.
   * **Memory-hungry, so lazy.** A server starts only when it's needed, at most three run at once, and one unused for 10
     minutes stops. They appear in the Tasks panel (with what they are indexing), where Stop works, and they end with the
     app. While a big project indexes, the answer says "still indexing" and may be partial; ask again a little later.
