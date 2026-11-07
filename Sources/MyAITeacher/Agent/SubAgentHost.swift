@@ -120,7 +120,7 @@ extension ChatSession {
     /// The sub-agent host for this lesson's tool calls.
     var agentHost: AppAgentHost {
         // TaskTool.timeout reads the limits and the types' budgets before the call runs.
-        SubAgent.remember(settings.agents, types: AgentCatalog.all(app: settings.agents.definitions, folder: services.workspace.url, instructions: settings.instructions))
+        SubAgent.remember(settings.agents, types: AgentCatalog.all(settings: settings, folder: services.workspace.url))
         let info = app.modelInfo(conversation.providerID, conversation.model)
         return AppAgentHost(conversationID: id, lessonProvider: conversation.providerID,
                             lessonFree: info?.free == true || conversation.model.hasSuffix(":free"),
@@ -133,7 +133,7 @@ extension ChatSession {
         let limits = settings.agents
         let others = limits.otherProviders ? app.availableProviders.filter { $0.id != conversation.providerID }.map(\.id) : []
         return TaskTool.spec(models: subAgentModels(), current: conversation.model, provider: conversation.providerID, others: others,
-                             types: AgentCatalog.all(app: limits.definitions, folder: services.workspace.url, instructions: settings.instructions), limits: limits,
+                             types: AgentCatalog.all(settings: settings, folder: services.workspace.url), limits: limits,
                              codeMode: false)
     }
 }

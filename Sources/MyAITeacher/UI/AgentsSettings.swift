@@ -46,7 +46,23 @@ struct AgentsSettings: View {
                     Text("Language mentor").tag("language")
                     Text("Code mentor").tag("code-mentor")
                 }
-                let skills = Skills.available(node: skillsFor, folder: AppModel.shared.workspace.url)
+                let folder = AppModel.shared.workspace.url
+                let skills = Skills.available(node: skillsFor, folder: ProjectTrust.approved(folder, settings.value), plugins: Plugins.active(settings.value))
+                switch ProjectTrust.state(folder, settings.value) {
+                case .none: EmptyView()
+                case .approved:
+                    HStack {
+                        Label("This folder's skills, agents and commands are approved.", systemImage: "checkmark.shield").font(.caption)
+                        Spacer()
+                        Button("Revoke") { settings.value.approvedProjectContent[folder.path] = nil }.controlSize(.small)
+                    }
+                case .unasked, .declined:
+                    HStack {
+                        Label("This folder has skills, agents or commands of its own. They stay out of the model's instructions until you approve them.", systemImage: "exclamationmark.shield").font(.caption)
+                        Spacer()
+                        Button("Approve…") { approveFolder(folder) }.controlSize(.small)
+                    }
+                }
                 ForEach(skills, id: \.name) { s in
                     HStack(alignment: .firstTextBaseline) {
                         Text(s.name).font(.body.monospaced())
@@ -71,6 +87,17 @@ struct AgentsSettings: View {
 
     private var a: SubAgentSettings { settings.value.agents }
     @State private var skillsFor = "code-mentor"
+
+    /// Shows what the folder supplies and records the approval for those exact files.
+    private func approveFolder(_ folder: URL) {
+        guard let l = ProjectTrust.listing(folder) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Use the skills, agents and commands in this folder?"
+        alert.informativeText = ProjectTrust.detail(folder, files: l.files)
+        alert.addButton(withTitle: "Use this folder's")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn { settings.value.approvedProjectContent[folder.path] = l.fingerprint }
+    }
 
     /// ~/.teacher/skills, made on first use so the button always opens something.
     private static func userSkills() -> URL {

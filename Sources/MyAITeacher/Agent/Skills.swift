@@ -18,8 +18,10 @@ struct Skill: Equatable, Sendable {
     enum Source: Equatable, Sendable {
         case app(String)   // the agent tree node it belongs to
         case user, project
+        case plugin(String)
         var label: String {
             switch self {
+            case .plugin(let p): "plugin \(p)"
             case .app(let n): n == "root" ? "built in" : "built in (\(Instructions.nodeTitle(n)))"
             case .user: "yours"
             case .project: "this folder's"
@@ -55,7 +57,10 @@ enum Skills {
     ]
 
     /// Every skill the agent at `node` has in `folder`, by name (later sources win), sorted by name.
-    static func available(node: String, folder: URL?, home: URL? = defaultHome, builtIn: URL = AppPaths.skillResources) -> [Skill] {
+    /// `folder` is the folder whose skills may be used: callers pass it only once the user approved them (`ProjectTrust`).
+    /// `plugins` are the enabled, approved plugins; their skills keep their name unless something else has it, then
+    /// they are `plugin:skill`.
+    static func available(node: String, folder: URL?, home: URL? = defaultHome, builtIn: URL = AppPaths.skillResources, plugins: [Plugin] = []) -> [Skill] {
         var byName: [String: Skill] = [:]
         for n in AgentTree.path(node) {
             for s in scan(builtIn.appendingPathComponent(n.id), source: .app(n.id)) { byName[s.name] = s }
@@ -68,6 +73,13 @@ enum Skills {
         // Within one level the first folder wins (.teacher before .claude), so scan them last to first.
         if let home { for d in userDirs.reversed() { for s in scan(home.appendingPathComponent(d), source: .user) where mine(s) { byName[s.name] = s } } }
         if let folder { for d in projectDirs.reversed() { for s in scan(folder.appendingPathComponent(d), source: .project) where mine(s) { byName[s.name] = s } } }
+        // A plugin never shadows anything: a taken name makes its skill `plugin:skill`.
+        for p in plugins {
+            for s in scan(p.dir.appendingPathComponent("skills"), source: .plugin(p.name)) where mine(s) {
+                let key = byName[s.name] == nil ? s.name : "\(p.name):\(s.name)"
+                if byName[key] == nil { byName[key] = Skill(name: key, description: s.description, body: s.body, dir: s.dir, source: s.source, agents: s.agents, hidden: s.hidden) }
+            }
+        }
         return byName.values.sorted { $0.name < $1.name }
     }
 
@@ -115,11 +127,13 @@ enum Skills {
     }
 
     /// The prompt's list: one line per skill, the agent's own first.
-    static func promptSection(node: String, folder: URL?, home: URL? = defaultHome, builtIn: URL = AppPaths.skillResources) -> String? {
-        let all = available(node: node, folder: folder, home: home, builtIn: builtIn).filter { !$0.hidden }
-        guard !all.isEmpty else { return nil }
+    /// `awaiting`: the folder has skills of its own that the user hasn't approved: one neutral line says so, nothing more.
+    static func promptSection(node: String, folder: URL?, home: URL? = defaultHome, builtIn: URL = AppPaths.skillResources, plugins: [Plugin] = [], awaiting: Bool = false) -> String? {
+        let all = available(node: node, folder: folder, home: home, builtIn: builtIn, plugins: plugins).filter { !$0.hidden }
+        guard !all.isEmpty || awaiting else { return nil }
         let shown = all.prefix(listed)
         var s = "# Skills\nKnow-how you load when a task matches: `skill` with its name returns the instructions (follow them). Don't load one for a task it doesn't fit.\n"
+        if awaiting { s += ProjectTrust.awaitingLine + "\n" }
         s += shown.map { "- \($0.name): \(String($0.description.prefix(160)))" }.joined(separator: "\n")
         if all.count > shown.count { s += "\n- …and \(all.count - shown.count) more: `skill` with `query` searches them." }
         return s
@@ -148,7 +162,18 @@ struct SkillTool: Tool {
     func summary(_ input: JSON) -> String { input["name"]?.string ?? input["query"]?.string ?? "" }
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
-        let skills = Skills.available(node: ctx.agentNode, folder: ctx.workspace)
+        // The folder's own skills count only once approved; the first call that needs them asks (one card per fingerprint).
+        var settings = await MainActor.run { AppModel.shared.settings.value }
+        func all() -> [Skill] {
+            Skills.available(node: ctx.agentNode, folder: ProjectTrust.approved(ctx.workspace, settings), plugins: Plugins.active(settings))
+        }
+        var skills = all()
+        let asked = (input["name"]?.string ?? "").lowercased().trimmingCharacters(in: CharacterSet(charactersIn: "/ "))
+        if input["name"]?.string == nil || !skills.contains(where: { $0.name == asked }),
+           ProjectTrust.state(ctx.workspace, settings, lesson: ctx.conversationID) == .unasked, await ProjectTrust.resolve(ctx) {
+            settings = await MainActor.run { AppModel.shared.settings.value }
+            skills = all()
+        }
         if let q = input["query"]?.string, input["name"]?.string == nil {
             let hits = Skills.search(q, in: skills.filter { !$0.hidden }).prefix(10)
             return ToolOutput(text: hits.isEmpty ? "No skill matches “\(q)”." : hits.map { "- \($0.name): \($0.description)" }.joined(separator: "\n"))

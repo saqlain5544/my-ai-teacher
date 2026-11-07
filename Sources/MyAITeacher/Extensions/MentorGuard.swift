@@ -49,7 +49,7 @@ final class MentorGuard: AgentExtension {
             log(ws, "refused", "a \(tool.name) of \(url.lastPathComponent), the learner's file")
             return .deny("\(url.lastPathComponent) is the learner's file while their project is open: you don't change it. Teach toward the change with questions, hints and the concept; show an idea on a separate example (a new file, or run_code).")
         case "task":
-            let types = AgentCatalog.all(app: session.settings.agents.definitions, folder: ws.url, instructions: session.settings.instructions)
+            let types = AgentCatalog.all(settings: session.settings, folder: ws.url)
             let word = { (k: String) -> String? in
                 guard let s = call.input?[k]?.string?.trimmingCharacters(in: .whitespaces), !s.isEmpty else { return nil }
                 return s
@@ -62,7 +62,7 @@ final class MentorGuard: AgentExtension {
             log(ws, "refused", "a `\(name)` sub-agent (it can write)")
             return .deny("While the learner's project is open only read-only sub-agents run (explore, reviewer): a `\(name)` agent could change the learner's files.")
         case "agents" where call.input?["action"]?.string == "resume":
-            let types = AgentCatalog.all(app: session.settings.agents.definitions, folder: ws.url, instructions: session.settings.instructions)
+            let types = AgentCatalog.all(settings: session.settings, folder: ws.url)
             let key = call.input?["id"]?.string ?? call.input?["handle"]?.string ?? ""
             let name = SubAgentCenter.shared.run(key)?.typeName ?? ""
             if AgentCatalog.find(name, in: types)?.readOnly == true { return .allow }

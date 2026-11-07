@@ -89,6 +89,10 @@ final class SkillsTests: XCTestCase {
                               client: ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m").client(apiKey: nil),
                               model: "m", progress: { _ in })
         ctx.agentNode = "code-mentor"
+        // A folder's own skills need the user's approval of their exact files (ProjectTrust); this is it.
+        let proj = dir.appendingPathComponent("proj")
+        AppModel.shared.settings.value.approvedProjectContent[proj.path] = ProjectTrust.fingerprint(proj)
+        defer { AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil }
         let out = try await SkillTool().run(["name": "release"], ctx)
         XCTAssertTrue(out.text.contains("Run the release script.") && out.text.contains("release.sh") && out.text.contains("this folder's"), out.text)
         let found = try await SkillTool().run(["query": "release notes"], ctx)

@@ -23,7 +23,7 @@ struct AgentBudget: Codable, Sendable, Hashable {
 /// A kind of sub-agent, like Claude Code's subagent definitions: a system prompt, the tools it may use, and optional
 /// model, effort and budget defaults. Built in, app-level (Settings → Agents) or the folder's `.teacher/agents/*.md`.
 struct AgentDefinition: Codable, Sendable, Equatable, Identifiable, Hashable {
-    enum Source: String, Codable, Sendable { case builtIn, app, project }
+    enum Source: String, Codable, Sendable { case builtIn, app, project, plugin }
     var name: String
     var description: String
     var prompt: String
@@ -39,6 +39,8 @@ struct AgentDefinition: Codable, Sendable, Equatable, Identifiable, Hashable {
     /// May work in a git worktree (`isolation: "worktree"`, code mode).
     var canIsolate = false
     var source: Source = .app
+    /// A plugin's agent: the plugin.
+    var plugin: String?
     var id: String { name }
 
     init(name: String, description: String, prompt: String, tools: [String]? = nil, deny: [String] = [], readOnly: Bool = false,
@@ -110,7 +112,9 @@ enum AgentCatalog {
 
     /// Built-ins, then app-level definitions, then the folder's. A name belongs to the first that defines it, so a
     /// project can't turn `explore` into a writer.
-    static func all(app: [AgentDefinition], folder: URL?, instructions: [String: String] = [:]) -> [AgentDefinition] {
+    /// `folder` is the folder whose agents may be used (callers pass it once the user approved them: `ProjectTrust`); a
+    /// plugin's agent keeps its name unless it is taken, then it is `plugin-name`.
+    static func all(app: [AgentDefinition], folder: URL?, instructions: [String: String] = [:], plugins: [Plugin] = []) -> [AgentDefinition] {
         // A built-in's instructions can be edited in Settings → Instructions (its tools and limits stay the app's).
         var out = builtIns.map { d -> AgentDefinition in
             var d = d
@@ -119,7 +123,17 @@ enum AgentCatalog {
         }
         for d in app.map({ var d = $0; d.source = .app; return d }) + (folder.map(project) ?? [])
         where !d.name.isEmpty && !out.contains(where: { $0.name == d.name }) { out.append(d) }
+        for d in Plugins.agents(plugins) {
+            var d = d
+            if out.contains(where: { $0.name == d.name }) { d.name = AgentDefinition.normalized("\(d.plugin ?? "plugin")-\(d.name)") }
+            if !out.contains(where: { $0.name == d.name }) { out.append(d) }
+        }
         return out
+    }
+
+    /// The types this lesson has under these settings: the folder's own only once approved, plugins' once approved.
+    static func all(settings: AppSettings, folder: URL?) -> [AgentDefinition] {
+        all(app: settings.agents.definitions, folder: ProjectTrust.approved(folder, settings), instructions: settings.instructions, plugins: Plugins.active(settings))
     }
 
     static func find(_ name: String, in list: [AgentDefinition]) -> AgentDefinition? {

@@ -172,8 +172,19 @@ final class ChatSession: ObservableObject, Identifiable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
-        if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
+        let custom = trimmed.hasPrefix("/") ? CustomCommands.available(folder: services.workspace.url, settings: settings) : []
+        if !isRunning, trimmed.hasPrefix("/"), ProjectCommands.lessonCommand(trimmed, custom: custom) == nil, let word = trimmed.dropFirst().split(whereSeparator: \.isWhitespace).first?.lowercased(),
+           ProjectTrust.state(services.workspace.url, settings, lesson: id) != .approved, ProjectTrust.commandNames(services.workspace.url).contains(word) {
+            // Its file is the folder's, and the folder's commands wait for the user's approval (never sent to the model as typed).
+            sink?.notice("/\(word) is one of this folder's own commands, which waits for your approval: the agent asks the first time it needs a folder skill, or approve it in Settings → Agents.")
+            return
+        }
+        if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed, custom: custom) {
             switch cmd {
+            case .plugins:
+                let list = Plugins.installed(settings).map { "\($0.name) (\($0.standing == .active ? "on" : $0.standing == .disabled ? "off" : "needs approval"))" }
+                sink?.notice(list.isEmpty ? "No plugins installed. Settings → Plugins installs one from a folder or a git URL." : "Plugins: " + list.joined(separator: ", ") + ". Settings → Plugins manages them.")
+                Plugins.openSettings()
             case .prompt(let p): send(p, attachments: attachments)
             case .mode(let m, let then):
                 setMode(m)

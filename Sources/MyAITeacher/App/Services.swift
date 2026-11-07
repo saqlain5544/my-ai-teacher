@@ -68,6 +68,11 @@ struct AppSettings: Codable, Sendable, Equatable {
     /// Folders whose own hooks (`.claude/settings.json`) the user approved: folder path → the approved configuration's
     /// fingerprint. Stored in the app, never in the folder, so a cloned repo can't approve itself, and a change asks again.
     var approvedHooks: [String: String] = [:]
+    /// Folders whose own skills, agents and commands the user approved: folder path → the approved files' fingerprint
+    /// (`ProjectTrust`). Stored in the app, never in the folder; a changed file asks again.
+    var approvedProjectContent: [String: String] = [:]
+    /// Installed plugins' state (`Plugins`): enabled, and the exact fingerprint the user approved.
+    var plugins: [String: PluginRecord] = [:]
     /// The build that last had Screen Recording + Accessibility: macOS resets both when an ad-hoc signed app is rebuilt.
     var computerPermissionBuild: String?
     /// How much the activity log keeps (`ActivityLog`): summaries by default.
@@ -118,6 +123,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         mcpAlwaysAllow = (try? c.decode([String: [String]].self, forKey: .mcpAlwaysAllow)) ?? [:]
         hooks = (try? c.decode(String.self, forKey: .hooks)) ?? ""
         approvedHooks = (try? c.decode([String: String].self, forKey: .approvedHooks)) ?? [:]
+        approvedProjectContent = (try? c.decode([String: String].self, forKey: .approvedProjectContent)) ?? [:]
+        plugins = (try? c.decode([String: PluginRecord].self, forKey: .plugins)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         activityLog = (try? c.decode(ActivityLog.Level.self, forKey: .activityLog)) ?? d.activityLog
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]

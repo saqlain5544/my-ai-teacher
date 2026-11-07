@@ -27,22 +27,27 @@ enum ProjectCommands {
 
     /// A teaching lesson's command: a follow-up's prompt, or a mode to switch to (with any text after it to send). Nil
     /// when the message isn't one.
-    enum LessonCommand: Equatable { case prompt(String), mode(TeachingMode, then: String) }
-    static func lessonCommand(_ text: String) -> LessonCommand? {
+    enum LessonCommand: Equatable { case prompt(String), mode(TeachingMode, then: String), plugins }
+    /// `custom`: the user's own commands (`CustomCommands`); a built-in's name always wins over them.
+    static func lessonCommand(_ text: String, custom: [CustomCommand] = []) -> LessonCommand? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.hasPrefix("/"), let name = t.dropFirst().split(whereSeparator: \.isWhitespace).first.map({ $0.lowercased() }) else { return nil }
         let rest = t.dropFirst(name.count + 1).trimmingCharacters(in: .whitespacesAndNewlines)
         if let q = quickPrompts.first(where: { $0.name == name }) { return .prompt(rest.isEmpty ? q.prompt : q.prompt + " " + rest) }
         if let m = modeCommands.first(where: { $0.name == name }) { return .mode(m.mode, then: rest) }
         if name == "review" { return .prompt(reviewPrompt(rest)) }
+        if name == "plugin" || name == "plugins" { return .plugins }
+        if let c = custom.first(where: { $0.name == name }) { return .prompt(c.expand(rest)) }
         return nil
     }
 
     /// The `/` menu of a teaching lesson.
-    static func lessonSuggestions(current: TeachingMode) -> [Suggestion] {
+    static func lessonSuggestions(current: TeachingMode, custom: [CustomCommand] = []) -> [Suggestion] {
         quickPrompts.map { Suggestion(name: $0.name, detail: $0.detail, source: "follow-up") }
             + modeCommands.filter { $0.mode != current }.map { Suggestion(name: $0.name, detail: "Switch to \($0.mode.title) mode", source: "mode") }
-            + [Suggestion(name: "review", detail: "Review the uncommitted changes (or `/review <branch>`) with what they reach", source: "work")]
+            + [Suggestion(name: "review", detail: "Review the uncommitted changes (or `/review <branch>`) with what they reach", source: "work"),
+               Suggestion(name: "plugin", detail: "Installed plugins; Settings → Plugins to install, approve or remove", source: "app")]
+            + CustomCommands.suggestions(custom)
     }
 
     /// A command in the composer's `/` menu.

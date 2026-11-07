@@ -43,7 +43,9 @@ enum SystemPrompt {
         - Today is \(today()). Model: \(model).
         - The learner can attach images, PDFs and files; they review flashcards and see progress\(BoardSystem.applies(to: mode) ? ", boards" : "") and memory in the app.
         """
-        if let skills = Skills.promptSection(node: AgentTree.node(for: mode), folder: folder) { s += "\n\n" + skills }
+        // The folder's own skills only once approved (`ProjectTrust`); until then one neutral line. Plugins' once approved.
+        if let skills = Skills.promptSection(node: AgentTree.node(for: mode), folder: ProjectTrust.approved(folder, settings), plugins: Plugins.active(settings),
+                                             awaiting: ProjectTrust.state(folder, settings) == .unasked) { s += "\n\n" + skills }
         if !settings.learnerName.isEmpty || !settings.learnerLevel.isEmpty {
             s += "\n\n# Learner\n"
             if !settings.learnerName.isEmpty { s += "- Name: \(settings.learnerName)\n" }

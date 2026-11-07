@@ -255,6 +255,15 @@ final class MCPHub: @unchecked Sendable {
         }
     }
     func existing(_ name: String, folder: URL) -> MCPInstance? { instances.get()[folder.path + "\n" + name] }
+
+    /// A plugin switched off, updated or removed: its servers end now and are forgotten.
+    func stopPlugin(_ plugin: String) async {
+        let doomed = instances.mutate { all -> [MCPInstance] in
+            let keys = all.filter { $0.value.config.plugin == plugin }.map(\.key)
+            return keys.compactMap { all.removeValue(forKey: $0) }
+        }
+        for i in doomed { await i.stop() }
+    }
     var all: [MCPInstance] { Array(instances.get().values) }
 
     // MARK: Remembered tool lists

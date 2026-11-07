@@ -540,7 +540,8 @@ enum SubAgent {
     private static func resolve(_ q: TaskRequest, previous: SubAgentConfig?, limits: SubAgentSettings, host: AgentHost,
                                 ctx: ToolContext) async throws -> (SubAgentConfig, LLMClient, [String]) {
         var notes: [String] = []
-        let types = AgentCatalog.all(app: limits.definitions, folder: host.folder, instructions: await host.instructions())
+        let appSettings = await MainActor.run { AppModel.shared.settings.value }
+        let types = AgentCatalog.all(app: limits.definitions, folder: ProjectTrust.approved(host.folder, appSettings), instructions: await host.instructions(), plugins: Plugins.active(appSettings))
         let typeName = previous?.type.name ?? q.type ?? "explore"
         // A type named loosely ("general-purpose", Claude Code's name) resolves like a model when one clearly fits.
         var named = AgentCatalog.find(typeName, in: types)
