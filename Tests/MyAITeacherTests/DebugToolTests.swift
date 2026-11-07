@@ -503,7 +503,7 @@ final class DebugToolTests: XCTestCase {
         _ = try await DebugTool().run(["action": "stop"], c)
         _ = try await DebugTool().run(["action": "start", "program": "prog"], c)
         let denied = try await WriteFence.$profile.withValue(fenceAtStart) { try await DebugTool().run(["action": "next"], c) }
-        XCTAssertTrue(denied.isError && denied.text.contains("write protection"), denied.text)
+        XCTAssertTrue(denied.isError && denied.text.contains("protection now covers"), denied.text)
         XCTAssertNil(DebugSessions.shared.session("W1"))
     }
 

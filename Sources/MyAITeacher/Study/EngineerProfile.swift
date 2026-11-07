@@ -304,18 +304,18 @@ final class EngineerStore: @unchecked Sendable {
     /// Whether the learner has run the code mentor in this folder: a code-mode lesson in its own `state.sqlite`. A project
     /// record in any other folder (a cloned repository's `.teacher/`) is not theirs and never seeds the profile.
     /// A cloned repository can carry its own `.teacher/state.sqlite` with a code-mode lesson in it, so a folder whose `.teacher`
-    /// git tracks (the learner's state is never committed by the app) is not trusted.
+    /// git tracks is not trusted: `.teacher/.gitignore` keeps `state.sqlite` out, while `tests/` and `mentor/` are meant to be committed.
     static func ranCodeMentor(_ folder: String) -> Bool {
         guard !stateIsTracked(folder) else { return false }
         return SessionIndex.scan([folder]).contains { $0.conversation.mode == .code }
     }
 
-    /// Whether git tracks anything under the folder's `.teacher`. git runs with nothing a repository's config could start
+    /// Whether git tracks the folder's `.teacher/state.sqlite`. git runs with nothing a repository's config could start
     /// (no fsmonitor, hooks, external diff or pager, no user or system config) and without taking the index lock.
     static func stateIsTracked(_ folder: String) -> Bool {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: Worktree.git)
-        p.arguments = Worktree.safe + ["--no-optional-locks", "--no-pager", "--literal-pathspecs", "-C", folder, "ls-files", "-z", "--", Workspace.stateDirName]
+        p.arguments = Worktree.safe + ["--no-optional-locks", "--no-pager", "--literal-pathspecs", "-C", folder, "ls-files", "-z", "--", Workspace.stateDirName + "/state.sqlite"]
         var env = ProcessInfo.processInfo.environment
         env["GIT_CONFIG_GLOBAL"] = "/dev/null"; env["GIT_CONFIG_NOSYSTEM"] = "1"; env["GIT_TERMINAL_PROMPT"] = "0"
         for k in env.keys where k.hasPrefix("GIT_DIR") || k == "GIT_WORK_TREE" || k == "GIT_INDEX_FILE" { env[k] = nil }

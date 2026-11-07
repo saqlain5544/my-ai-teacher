@@ -72,6 +72,8 @@ final class ReviewFixesTests: XCTestCase {
     @MainActor func testOnlyARefusalOfAFencedPathIsBlamedOnTheMentorAndLogged() throws {
         let ws = try Workspace(url: root.appendingPathComponent("m", isDirectory: true))
         try "x = 1\n".write(to: ws.url.appendingPathComponent("app.py"), atomically: true, encoding: .utf8)
+        try FileManager.default.createDirectory(at: ws.url.appendingPathComponent("src"), withIntermediateDirectories: true)
+        try "y = 1\n".write(to: ws.url.appendingPathComponent("src/lib.py"), atomically: true, encoding: .utf8)
         var p = MentorProject(); p.title = "t"; p.concept = "c"; p.testCommand = "true"
         ProjectStore.save(p, ws); ProjectStore.snapshot(ws, why: "baseline")
         let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("g.sqlite").path)), workspace: ws)
@@ -101,6 +103,9 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertTrue(absolute.text.contains("write fence"), "the record is fenced too")
         let mentor = after("tee: \(ws.url.path)/.teacher/mentor/notes.md: Operation not permitted")
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
+        for spelled in ["rm: src: Operation not permitted", "mv: rename src to lib: Operation not permitted", "zsh: operation not permitted: ./app.py", "touch: lib.py: Operation not permitted", "rm: .teacher: Operation not permitted"] {
+            XCTAssertTrue(after(spelled).text.contains("write fence"), "a fenced folder named relatively: \(spelled)")
+        }
     }
 
     @MainActor func testStoppingACompactDoesNotEndTheLessonsDebugSessionButStoppingATurnDoes() async throws {
@@ -278,6 +283,13 @@ final class ReviewFixesTests: XCTestCase {
             ws.conversations.upsert(m, conversationID: c.id, seq: i)
         }
         return c
+    }
+
+    func testASnippetCutInsideAKeyDropsThePieceItCantRecognise() {
+        let tail = "Xk29fj3kd9sl2ka8dj3kfs0dk3Qw"
+        XCTAssertFalse(PastLessons.safeSnippet("…\(tail) w1 w2 «zebra» tail", terms: ["zebra"]).contains(tail))
+        XCTAssertFalse(PastLessons.safeSnippet("start «zebra» w1 sk-ant-api03…", terms: ["zebra"]).contains("api03"))
+        XCTAssertEqual(PastLessons.safeSnippet("…a short «zebra» line…", terms: ["zebra"]), "…a short «zebra» line…")
     }
 
     func testASnippetRedactsAKeyTheMatchMarkersSplit() throws {

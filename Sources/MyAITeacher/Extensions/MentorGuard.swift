@@ -122,16 +122,16 @@ final class MentorGuard: AgentExtension {
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {
         guard let id = call.id, fenced.remove(id) != nil, let t = result.text else { return }
         let ws = session.services.workspace
-        // Only a refusal of a path the fence guards is the mentor's: a credential folder's refusal or a nested sandbox's
-        // ("sandbox_apply: Operation not permitted", `Secrets.hint`) says the same words and must not be blamed on it or logged.
+        // A credential folder's refusal or a nested sandbox's ("sandbox_apply: Operation not permitted", `Secrets.hint`) says
+        // the same words as the fence's and must not be blamed on it or logged.
         guard Secrets.hint(for: t) == nil, Self.fencedRefusal(in: t, ws: ws) != nil else { return }
         result.text = t + "\n[The app's write fence refused a write: the learner's files, the project's tests and its record can't be changed by your commands. Teach toward the change instead; scratch files go in .teacher/mentor/ or a new file.]"
         log(ws, "refused", "a command's write into the project (\(call.name ?? "command"))")
     }
 
-    /// The fenced path an "Operation not permitted" line names, or nil: the line must name a learner's file or the folder
-    /// holding it (absolute, or relative to the project) or something under `.teacher/` other than the mentor's own folder
-    /// (and the tests while unlocked, which the fence opens).
+    /// The fenced path an "Operation not permitted" line names, or nil: a learner's file or the folder holding it (absolute,
+    /// relative to the project, `./`-prefixed, or by its name when a command ran from a subfolder), or something under
+    /// `.teacher` other than the mentor's own folder (and the tests while unlocked, which the fence opens).
     nonisolated static func fencedRefusal(in text: String, ws: Workspace) -> String? {
         let lines = text.split(whereSeparator: \.isNewline).map(String.init).filter { $0.range(of: "operation not permitted", options: .caseInsensitive) != nil }
         guard !lines.isEmpty else { return nil }
@@ -142,17 +142,18 @@ final class MentorGuard: AgentExtension {
         let files = ProjectStore.projectFiles(ws).filter { !mine.contains($0) }
         let state = [root + "/.teacher", real + "/.teacher"], open = [ws.mentorDir.path, WriteFence.real(ws.mentorDir)] + (unlocked ? [ws.testsDir.path, WriteFence.real(ws.testsDir)] : [])
         for line in lines {
-            for f in files where line.contains(root + "/" + f) || line.contains(real + "/" + f) || mentions(line, f) { return f }
+            for f in files where line.contains(root + "/" + f) || line.contains(real + "/" + f) || mentions(line, f) || mentions(line, "./" + f) || mentions(line, (f as NSString).lastPathComponent) { return f }
             for s in state where line.contains(s) {
                 // `.teacher/mentor/...` is writable; the rest of `.teacher` is the record.
                 if !open.contains(where: { line.contains($0) }) { return s }
             }
             if line.contains(".teacher/"), !line.contains(".teacher/mentor"), !(unlocked && line.contains(".teacher/tests")) { return ".teacher" }
+            if mentions(line, ".teacher") { return ".teacher" }
             // A folder that holds fenced files: named in full, so `src` in another word doesn't count.
             for f in files {
                 var d = (f as NSString).deletingLastPathComponent
                 while !d.isEmpty && d != "." {
-                    if line.contains(root + "/" + d) || line.contains(real + "/" + d) { return d }
+                    if line.contains(root + "/" + d) || line.contains(real + "/" + d) || mentions(line, d) || mentions(line, "./" + d) { return d }
                     d = (d as NSString).deletingLastPathComponent
                 }
             }

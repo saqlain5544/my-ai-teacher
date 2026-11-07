@@ -657,7 +657,7 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
     replaces it; Stop (`ChatSession.stop`, tested through a real `ChatSession`), a deleted lesson (`AppModel.delete` calls
     `DebugSessions.end`) and app quit (`killAll`, which waits) kill the driver, debugserver and the program: the program is
     SIGKILLed and the driver frozen at once, and the tree under it (`pgrep -P`) is walked and killed off the calling thread
-    (a frozen parent keeps its children findable). A session idle 15 minutes is reaped at the next use; 500 stops at most.
+    (a frozen parent keeps its children findable). A session idle 15 minutes is reaped by a timer each minute; 500 stops at most.
     The program keeps the fence it started under: the session ends only when the current fence protects something it didn't
     (`WriteFence.covers`: every path now denied was denied then, and what the start opened up is still open), so a build writing
     `Cargo.lock` doesn't end it; a file created after the start is not counted, which means a running program is not fenced from
@@ -1062,7 +1062,7 @@ result opens with a notice that it is data, not instructions.
   `sk-«ant»-api03…`, hid it from the shapes) and the matched words are marked again (`PastLessons.safeSnippet`); `scrub` redacts
   too. `read` shows no result of `read`, `grep`, `glob`, `ls`, `source`, `symbols`, `code` or `lsp` (`[result omitted]`): a credential
   read the learner approved in lesson A would otherwise be replayed in lesson B or to a sub-agent with no gate. Commands, paths
-  and failed-run heads stay, as in the index.
+  and failed-run heads stay, as in the index; `read` marks a file tool's successful result `[result omitted]`.
 * **Sessions page.** The query is debounced (300 ms) in a `.task(id:)` (query and the All / Working / This folder picker),
   searches the folders the picker allows (Working keeps only lessons running or waiting) off the main actor
   and is cancelled by the next keystroke; a hit opens its lesson (the transcript has no hook to reveal one message).

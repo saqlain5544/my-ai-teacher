@@ -308,7 +308,8 @@ enum PastLessons {
 
     /// An index snippet (the matched words wrapped in « »). A secret is redacted from the text without the markers, because a
     /// marker inside a key (`sk-«ant»-api03…`) hides it from the shapes; the matched words are then marked again.
-    static func safeSnippet(_ snippet: String, terms: [String]) -> String {
+    static func safeSnippet(_ raw: String, terms: [String]) -> String {
+        let snippet = cutEdges(raw)
         let plain = snippet.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
         let redacted = Secrets.redact(plain)
         guard !redacted.kinds.isEmpty else { return scrub(snippet) }
@@ -318,6 +319,16 @@ enum PastLessons {
             out = out.replacingOccurrences(of: "(?<![\\p{L}\\p{N}«])(\(word)[\\p{L}\\p{N}_]*)", with: "«$1»", options: [.regularExpression, .caseInsensitive])
         }
         return out
+    }
+
+    /// FTS cuts its window between tokens, and a key is several tokens: the piece left at a cut edge has lost the prefix
+    /// that identifies it, so no shape can catch it. A long unbroken run at a cut edge is dropped rather than guessed at.
+    static func cutEdges(_ s: String) -> String {
+        var words = s.components(separatedBy: " ")
+        func long(_ w: String) -> Bool { w.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "").replacingOccurrences(of: "…", with: "").count >= 12 }
+        if s.hasPrefix("…"), let w = words.first, long(w) { words[0] = "…" }
+        if s.hasSuffix("…"), words.count > 1, let w = words.last, long(w) { words[words.count - 1] = "…" }
+        return words.joined(separator: " ")
     }
 
     /// Long runs of base64-like characters and data URLs never leave the database, and a secret in the text is redacted.

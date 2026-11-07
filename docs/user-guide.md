@@ -420,7 +420,7 @@ showed me" and the teacher can search the real transcript of your earlier lesson
 folder. If the answer may be in a lesson from another folder it asks once, for that lesson, before it looks there;
 sub-agents never search other folders. The search only reads: it never opens a folder you haven't worked in, and
 nothing is changed. Commands the teacher ran and the first lines of a failed run are searchable; pages and files it
-only read are not.
+only read are not, and reading an old lesson shows that a file was read, not what it said.
 
 The **All Sessions** page searches the text of every lesson in every folder as you type (the title filter still works):
 matches appear under **In the conversations** with the matching words in bold, and a click opens that lesson.
