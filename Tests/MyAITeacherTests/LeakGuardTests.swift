@@ -64,6 +64,11 @@ final class LeakGuardTests: XCTestCase {
         let c = try await ctx(dir)
         let f = dir.appendingPathComponent("config.txt")
         try "name = x\nkey = real-value\n".write(to: f, atomically: true, encoding: .utf8)
+        // Nothing was read yet: a new text that mentions the marker is simply text.
+        let free = try await WriteTool().runBounded(["path": "redaction-notes.md", "content": "Secrets show as [redacted: API key].\n"], c)
+        XCTAssertFalse(free.isError, free.text)
+        // After a read of this file came back redacted, the marker may not be saved back.
+        Secrets.noteRedactedRead(agent: FileViews.agent(c), path: f)
         let w = try await WriteTool().runBounded(["path": "config.txt", "content": "name = x\nkey = [redacted: API key]\n"], c)
         XCTAssertTrue(w.isError && w.text.hasPrefix("Refused"), w.text)
         let e = try await EditTool().runBounded(["path": "config.txt", "edits": [["old_string": "real-value", "new_string": "[redacted: API key]"]]], c)
@@ -93,9 +98,16 @@ final class LeakGuardTests: XCTestCase {
         XCTAssertTrue(script.contains("LG_TEST_TOKEN"), script)
         XCTAssertTrue(script.hasSuffix("; swift build\nls"), "the model's text is untouched: " + script)
         XCTAssertEqual(script.components(separatedBy: "\n").count, 2, "the unset shares the first line")
-        // A shell the model starts through ProcessRunner: a ~/.zshenv that re-exports a secret does not get it through.
+        // A shell the model starts: a .zshenv that re-exports the secret must not get it through (zsh -c sources it).
+        let zdot = FileManager.default.temporaryDirectory.appendingPathComponent("zd-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: zdot, withIntermediateDirectories: true)
+        try "export LG_TEST_TOKEN=tokentokentoken1\n".write(to: zdot.appendingPathComponent(".zshenv"), atomically: true, encoding: .utf8)
+        let control = await ProcessRunner.run("/bin/zsh", ["-c", "echo \"[$LG_TEST_TOKEN]\""], env: ["ZDOTDIR": zdot.path, "PATH": "/usr/bin:/bin"], timeout: 10)
+        XCTAssertEqual(control.stdout.trimmingCharacters(in: .whitespacesAndNewlines), "[tokentokentoken1]", "the .zshenv does re-export it")
+        ShellEnvironment.shared.inject("ZDOTDIR", zdot.path)
+        defer { ShellEnvironment.shared.inject("ZDOTDIR", nil) }
         let out = try await Fake { _ in
-            let r = await ProcessRunner.run("/bin/sh", ["-c", "echo \"[$LG_TEST_TOKEN]\""], timeout: 10)
+            let r = await ProcessRunner.run("/bin/zsh", ["-c", "echo \"[$LG_TEST_TOKEN]\""], timeout: 10)
             return ToolOutput(text: r.stdout)
         }.runBounded([:], c)
         XCTAssertEqual(out.text.trimmingCharacters(in: .whitespacesAndNewlines), "[]")
@@ -108,7 +120,7 @@ final class LeakGuardTests: XCTestCase {
 
     func testAnApprovedCredentialSearchWorksButACommandStillCannotReadIt() async throws {
         try XCTSkipUnless(WriteFence.available)
-        _ = try XCTUnwrap(AppPaths.testHome, "never touch the real keys file")
+        try XCTSkipUnless(AppPaths.keys.standardizedFileURL.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path), "never touch a keys file outside the temporary folder")
         let keys = AppPaths.keys
         try "findme-marker-line\n".write(to: keys, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: keys) }

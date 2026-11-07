@@ -17,6 +17,8 @@ enum Secrets {
         var protectCredentials = true
         var providerEnvNames: Set<String> = Set(ProviderCatalog.presets.flatMap(\.envKeys))
         var savedKeys: [String] = []
+        /// Tokens and header values of the user's MCP servers (settings.json), matched exactly like the saved keys.
+        var mcpSecrets: [String] = []
     }
     nonisolated(unsafe) private static let config = Locked(Config())
     static func update(_ f: (inout Config) -> Void) { config.mutate(f) }
@@ -62,10 +64,30 @@ enum Secrets {
         ]
     }()
 
-    /// A dotenv-shaped line: `[export] UPPER_NAME_WITH_PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL = value`, at the start of a
-    /// line. The value is a quoted string or one whole unquoted word (so `API_KEY = os.environ["API_KEY"]` is left alone).
+    /// A dotenv-shaped line: `[export] UPPER_NAME_WITH_PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL=value` with no space around
+    /// `=`, at the start of a line or after the row prefix `read` (`   2\t`) or `grep -n` (`.env:3:`, `3:`) adds. Group 1 is
+    /// the prefix and name, group 2 the value: a quoted string or one whole unquoted word.
     private static let dotenv = try! NSRegularExpression(
-        pattern: "(?m)^([ \\t]*(?:export[ \\t]+)?[A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL)[A-Z0-9_]*[ \\t]*=[ \\t]*)(?:\"[^\"\\n$]{4,}\"|'[^'\\n$]{4,}'|[A-Za-z0-9_.:/+@%~,=-]{4,}(?=[ \\t]*(?:#.*)?$))")
+        pattern: "(?m)^((?:[ \\t]*\\d+\\t|[^\\s:]+:\\d+:|\\d+:)?[ \\t]*(?:export[ \\t]+)?[A-Z0-9_]*(?:PASSWORD|PASSWD|SECRET|TOKEN|API_?KEY|CREDENTIAL)[A-Z0-9_]*=)(\"[^\"\\n$]*\"|'[^'\\n$]*'|[A-Za-z0-9_.:/+@%~,=-]+)(?=[ \\t]*(?:#.*)?$)")
+
+    /// Whether a dotenv value looks like a secret: at least 8 characters, not just digits, not a short plain word
+    /// (`MAX_TOKENS=4096`, `PASSWORD_FIELD=password`). A real `.env` is covered only where it has this shape; its other
+    /// lines reach the model.
+    static func looksLikeSecretValue(_ raw: String) -> Bool {
+        let v = raw.count >= 2 && ["\"", "'"].contains(raw.first!) ? String(raw.dropFirst().dropLast()) : raw
+        let plainURL = (v.hasPrefix("http://") || v.hasPrefix("https://")) && !v.contains("@")   // an address, not a credential
+        return v.count >= 8 && !plainURL && !v.allSatisfy(\.isNumber) && !(v.count < 16 && v.allSatisfy(\.isLetter))
+    }
+
+    /// `text` with the values of dotenv-shaped secret lines replaced, or nil when there are none.
+    static func redactDotenv(_ text: String) -> String? {
+        let ns = text as NSString
+        let hits = dotenv.matches(in: text, range: NSRange(location: 0, length: ns.length)).filter { looksLikeSecretValue(ns.substring(with: $0.range(at: 2))) }
+        guard !hits.isEmpty else { return nil }
+        var out = text
+        for m in hits.reversed() { out = (out as NSString).replacingCharacters(in: m.range(at: 2), with: "[redacted: .env value]") }
+        return out
+    }
 
     struct Result: Sendable { var text: String; var kinds: [String] }
 
@@ -74,14 +96,13 @@ enum Secrets {
         guard text.count >= minLength else { return Result(text: text, kinds: []) }
         var out = text, kinds: [String] = []
         let c = current
-        for v in Set(c.savedKeys).union(environmentSecrets(c)) where v.count >= minLength && out.contains(v) {
-            let kind = c.savedKeys.contains(v) ? "saved API key" : "environment secret"
+        for v in Set(c.savedKeys).union(c.mcpSecrets).union(environmentSecrets(c)) where v.count >= minLength && out.contains(v) {
+            let kind = c.savedKeys.contains(v) ? "saved API key" : c.mcpSecrets.contains(v) ? "MCP server secret" : "environment secret"
             out = out.replacingOccurrences(of: v, with: "[redacted: \(kind)]")
             if !kinds.contains(kind) { kinds.append(kind) }
         }
-        let envRange = NSRange(out.startIndex..., in: out)
-        if dotenv.firstMatch(in: out, range: envRange) != nil {
-            out = dotenv.stringByReplacingMatches(in: out, range: envRange, withTemplate: "$1[redacted: .env value]")
+        if let env = redactDotenv(out) {
+            out = env
             if !kinds.contains(".env value") { kinds.append(".env value") }
         }
         for (kind, re) in shapes {
@@ -143,10 +164,15 @@ enum Secrets {
         return nil
     }
 
-    /// Refuses a `write`/`edit` whose new text holds a `[redacted: …]` marker the file doesn't already have: the model
-    /// saw a redacted `read` and would otherwise save the marker over the real value.
-    static func introducesMarker(tool: String, _ input: JSON, workspace: URL) -> String? {
+    /// Paths a `read`/`grep` of which came back redacted, per agent: ("agent\npath"). A `write`/`edit` of such a path that
+    /// puts a `[redacted: …]` marker in is refused, since the model would save the marker over the real value.
+    nonisolated(unsafe) private static let redactedReads = Locked(Set<String>())
+    static func noteRedactedRead(agent: String, path: URL) { redactedReads.mutate { _ = $0.insert(agent + "\n" + path.standardizedFileURL.path) } }
+
+    static func introducesMarker(tool: String, _ input: JSON, workspace: URL, agent: String) -> String? {
         guard tool == "write" || tool == "edit", let path = input["path"]?.string else { return nil }
+        let url = resolvePath(path, workspace: workspace)
+        guard redactedReads.get().contains(agent + "\n" + url.standardizedFileURL.path) else { return nil }
         var news = [input["content"]?.string, input["new_string"]?.string].compactMap { $0 }
         news += (input["edits"]?.array ?? []).compactMap { $0["new_string"]?.string }
         let marker = try! NSRegularExpression(pattern: "\\[redacted: [^\\]\\n]+\\]")
@@ -155,9 +181,9 @@ enum Secrets {
         }
         let incoming = news.reduce(into: Set<String>()) { $0.formUnion(markers($1)) }
         guard !incoming.isEmpty else { return nil }
-        let existing = (try? String(contentsOf: resolvePath(path, workspace: workspace), encoding: .utf8)).map(markers) ?? []
+        let existing = (try? String(contentsOf: url, encoding: .utf8)).map(markers) ?? []
         guard !incoming.subtracting(existing).isEmpty else { return nil }
-        return "Refused: the new text contains a `[redacted: …]` marker, which replaced a secret in what you read. Writing it would destroy the real value. Edit around that line and leave it as it is."
+        return "Refused: you read \(url.path) and values in it were replaced by `[redacted: …]` markers; the new text still holds one. Saving it would destroy the real value. Edit around those lines and leave them as they are. (A new file that only mentions the marker is fine.)"
     }
 
     // MARK: Commands
@@ -178,51 +204,70 @@ enum Secrets {
     /// A hint for the error a nested sandbox gives, appended to the command's output.
     static func hint(for output: String) -> String? {
         guard output.contains("sandbox_apply: Operation not permitted") || output.contains("sandbox-exec: sandbox_apply") else { return nil }
-        return "[Hint: this command runs inside the app's credential sandbox, and a tool that sandboxes itself can't nest in it. For SwiftPM pass `--disable-sandbox`; otherwise the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets.]"
+        let toggle = current.protectCredentials
+            ? "otherwise the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets"
+            : "the code mentor's write fence is on for this command, so the tool has to run without its own sandbox"
+        return "[Hint: this command runs inside a sandbox the app set up, and a tool that sandboxes itself can't nest in it. For SwiftPM pass `--disable-sandbox`; \(toggle).]"
     }
 
     // MARK: Credential files
 
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
-    /// Directories and files whose contents are credentials. Relative to the home folder, except the app's own keys file.
+    /// Directories and files whose contents are credentials: the usual places under the home folder, and the app's own
+    /// keys file and settings (MCP tokens live in them).
     static var credentialPaths: [String] {
         let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains"]
-        return rel.map { home + "/" + $0 } + [AppPaths.keys.path]
+        return rel.map { home + "/" + $0 } + [AppPaths.keys.path, AppPaths.settings.path]
     }
 
-    /// Whether `url` is, or is inside, a credential location.
+    /// Whether `url` is, or is inside, a credential location (case-insensitively: the disk is; and through symlinks).
     static func isCredentialPath(_ url: URL) -> Bool {
-        let paths = [url.standardizedFileURL.path, WriteFence.real(url)]
+        let paths = [url.standardizedFileURL.path, WriteFence.real(url)].map { $0.lowercased() }
         return credentialPaths.contains { c in
-            let rc = WriteFence.real(URL(fileURLWithPath: c))
-            return paths.contains { $0 == c || $0.hasPrefix(c + "/") || $0 == rc || $0.hasPrefix(rc + "/") }
+            let cs = [c, WriteFence.real(URL(fileURLWithPath: c))].map { $0.lowercased() }
+            return paths.contains { p in cs.contains { p == $0 || p.hasPrefix($0 + "/") } }
         }
     }
 
     /// A folder that holds a credential location (the home folder, `~/.config`): a search from there would walk into it.
     static func containsCredentialPath(_ url: URL) -> Bool {
-        let p = url.standardizedFileURL.path
-        return credentialPaths.contains { $0.hasPrefix(p == "/" ? "/" : p + "/") }
+        let p = url.standardizedFileURL.path.lowercased()
+        return credentialPaths.contains { $0.lowercased().hasPrefix(p == "/" ? "/" : p + "/") }
     }
 
-    /// The first credential location a tool call names in its path-like arguments, as the model wrote it.
+    /// The first credential location a tool call names in its path-like arguments. Every path is resolved the way the tools
+    /// resolve it (`..` removed lexically, `~` expanded) and checked in full. `glob` also has its fixed prefix checked, and a
+    /// `..` after a wildcard (`*/../../.ssh`) is asked about whatever it reaches. A search that starts above a credential
+    /// folder (grep, glob, symbols, code) is asked about too; `ls` of the home folder is not.
     static func credentialPathNamed(by tool: String, _ input: JSON, workspace: URL) -> String? {
         guard ["read", "grep", "glob", "ls", "symbols", "code", "source"].contains(tool) else { return nil }
-        var raws: [String] = []
-        for k in ["path", "file_path", "dir", "directory", "root"] { if let s = input[k]?.string, !s.isEmpty { raws.append(s) } }
-        if tool == "glob", let pat = input["pattern"]?.string, pat.hasPrefix("/") || pat.hasPrefix("~") { raws.append(pat) }
-        for raw in raws {
-            // A glob or a path with a wildcard: its fixed part is what is checked.
-            let fixed = raw.split(separator: "/", omittingEmptySubsequences: false).prefix { !$0.contains(where: { "*?[{".contains($0) }) }.joined(separator: "/")
-            let url = resolvePath(fixed.isEmpty ? "." : fixed, workspace: workspace)
-            if isCredentialPath(url) || (["grep", "glob", "symbols", "code"].contains(tool) && containsCredentialPath(url) && url.path != workspace.standardizedFileURL.path) { return url.path }
+        let ws = workspace.standardizedFileURL
+        let walks = ["grep", "glob", "symbols", "code"].contains(tool)
+        func hit(_ u: URL) -> Bool { isCredentialPath(u) || (walks && containsCredentialPath(u) && u.path != ws.path) }
+        var candidates: [(raw: String, base: URL)] = []
+        var baseDir = ws
+        for k in ["path", "file_path", "dir", "directory", "root"] {
+            guard let s = input[k]?.string, !s.isEmpty else { continue }
+            candidates.append((s, ws))
+            if tool == "glob", k == "path" { baseDir = resolvePath(s, workspace: ws) }
+        }
+        if tool == "glob", let pat = input["pattern"]?.string, !pat.isEmpty { candidates.append((pat, baseDir)) }
+        for (raw, base) in candidates {
+            let full = resolvePath(raw, workspace: base)
+            if hit(full) { return full.path }
+            guard tool == "glob" else { continue }
+            let parts = raw.split(separator: "/", omittingEmptySubsequences: false).map(String.init)
+            guard let w = parts.firstIndex(where: { $0.contains(where: { "*?[{".contains($0) }) }) else { continue }
+            let prefix = resolvePath(parts[..<w].joined(separator: "/").isEmpty ? "." : parts[..<w].joined(separator: "/"), workspace: base)
+            if hit(prefix) { return prefix.path }
+            if parts[w...].contains("..") { return full.path }
         }
         return nil
     }
 
     /// A word in a command that names a credential location (for `ReadOnlyShell`, whose commands never ask).
     static func namesCredential(_ command: String) -> Bool {
-        let hints = ["/.ssh", "/.aws", "/.gnupg", "/.netrc", "/.config/gh", "/.docker/config", "/Keychains", "keys.json", ".ssh/", ".aws/", ".gnupg/", ".netrc"]
+        let hints = ["/.ssh", "/.aws", "/.gnupg", "/.netrc", "/.config/gh", "/.docker/config", "/Keychains", AppPaths.keys.path, AppPaths.settings.path, ".ssh/", ".aws/", ".gnupg/", ".netrc"]
         return hints.contains { command.contains($0) }
     }
 }
@@ -235,11 +280,23 @@ extension WriteFence {
         return (profile ?? "(version 1)\n(allow default)\n") + denyReads
     }
 
-    /// The rules, built once: paths the kernel sees (`real`), quoted.
+    /// The rules, built once: paths the kernel sees (`real`).
     static let denyReads: String = {
-        func lit(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
-        let dirs = [".ssh", ".aws", ".gnupg", ".config/gh", "Library/Keychains"].map { real(URL(fileURLWithPath: Secrets.home + "/" + $0)) }
-        let files = [".netrc", ".docker/config.json"].map { real(URL(fileURLWithPath: Secrets.home + "/" + $0)) } + [real(AppPaths.keys)]
-        return "(deny file-read* " + dirs.map { "(subpath \(lit($0)))" }.joined(separator: " ") + " " + files.map { "(literal \(lit($0)))" }.joined(separator: " ") + ")\n"
+        let home = Secrets.home
+        let dirs = [".ssh", ".aws", ".gnupg", ".config/gh", "Library/Keychains"].map { real(URL(fileURLWithPath: home + "/" + $0)) }
+        let files = [".netrc", ".docker/config.json"].map { real(URL(fileURLWithPath: home + "/" + $0)) } + [real(AppPaths.keys), real(AppPaths.settings)]
+        let parents = [home, home + "/.config", home + "/.docker", home + "/Library", AppPaths.support.path, AppPaths.support.deletingLastPathComponent().path].map { real(URL(fileURLWithPath: $0)) }
+        return denyRules(dirs: dirs, files: files, parents: parents)
     }()
+
+    /// Read and write refusals for `dirs` (whole trees) and `files`, and refusal to move or delete the `parents` that hold
+    /// them (`mv ~/.config /tmp/c` would carry `gh` away from its rule). Writing includes renaming, unlinking and linking
+    /// the credential paths themselves, so `mv ~/.ssh /tmp/s && cat /tmp/s/id_rsa` fails. A write the learner approved goes
+    /// through the file tools, which run in the app and are not under this profile.
+    static func denyRules(dirs: [String], files: [String], parents: [String]) -> String {
+        func lit(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
+        let paths = dirs.map { "(subpath \(lit($0)))" } + files.map { "(literal \(lit($0)))" }
+        return "(deny file-read* file-write* " + paths.joined(separator: " ") + ")\n"
+            + "(deny file-write-unlink " + parents.map { "(literal \(lit($0)))" }.joined(separator: " ") + ")\n"
+    }
 }

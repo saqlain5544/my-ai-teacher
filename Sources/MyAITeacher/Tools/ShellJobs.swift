@@ -259,7 +259,7 @@ final class ShellJobs: @unchecked Sendable {
     /// The report of a background job that ended by itself: its exit, how long it ran, and what it printed since the
     /// agent last looked (the end of it, when long).
     static func finishedMessage(_ job: ShellJob, handle: String) -> ChatMessage {
-        var out = job.readNew()
+        var out = Secrets.redact(job.readNew()).text   // delivered to the model without passing runBounded
         if out.count > 12_000 { out = truncateMiddle(out, max: 12_000) }
         if out.isEmpty { out = "(nothing new since you last looked)" }
         let code = job.exitCode ?? -1, secs = job.seconds

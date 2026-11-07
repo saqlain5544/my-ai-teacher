@@ -91,20 +91,36 @@ extension Tool {
     func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let sp = Signposts.begin("tool", name); defer { Signposts.end("tool", sp) }
         let input = ToolArgs.coerce(input, schema: schema)   // "[…]" strings for arrays, "3" for numbers…
-        if let refused = Secrets.outbound(tool: name, input) ?? Secrets.introducesMarker(tool: name, input, workspace: ctx.workspace) { return .error(refused) }
+        if let refused = Secrets.outbound(tool: name, input) ?? Secrets.introducesMarker(tool: name, input, workspace: ctx.workspace, agent: FileViews.agent(ctx)) { return .error(refused) }
         let tool = self
         // A file tool that names a credential location got here only because the learner (or the lesson's grant) allowed
         // it, so its own program (rg, grep) runs without the deny-read rules; no other call does.
         let approved = Secrets.credentialPathNamed(by: name, input, workspace: ctx.workspace) != nil
         let fence = approved ? WriteFence.profile : WriteFence.guarded(WriteFence.profile)
-        var out: ToolOutput = try await Secrets.$agentCall.withValue(true) {
-            try await WriteFence.$profile.withValue(fence) {
-                guard let limit = tool.timeout(input) else { return try await tool.run(input, ctx) }
-                return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+        var out: ToolOutput
+        do {
+            out = try await Secrets.$agentCall.withValue(true) {
+                try await WriteFence.$profile.withValue(fence) {
+                    guard let limit = tool.timeout(input) else { return try await tool.run(input, ctx) }
+                    return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+                }
             }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let e as TimeoutError {
+            throw e
+        } catch {
+            // An error message can echo what it was given (an MCP server repeating a key): the model reads it, so it is redacted.
+            let message = error.localizedDescription, r = Secrets.redact(message)
+            if r.kinds.isEmpty { throw error }
+            throw ToolError(r.text)
         }
         if let hint = Secrets.hint(for: out.text), !out.text.contains(hint) { out.text += "\n" + hint }
-        return Secrets.redacted(tool: name, out)
+        let result = Secrets.redacted(tool: name, out)
+        if (name == "read" || name == "grep"), result.meta?["redacted"] != nil, let p = input["path"]?.string ?? input["file_path"]?.string {
+            Secrets.noteRedactedRead(agent: FileViews.agent(ctx), path: resolvePath(p, workspace: ctx.workspace))
+        }
+        return result
     }
     func summary(_ input: JSON) -> String {
         for k in ["command", "path", "file_path", "query", "url", "pattern", "title", "question", "concept", "action"] {

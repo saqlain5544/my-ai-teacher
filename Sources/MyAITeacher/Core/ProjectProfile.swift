@@ -260,6 +260,7 @@ struct ProjectProfile: Sendable, Equatable {
         var p = self
         let f = { (c: String) in c == "swift build" || c == "swift test" ? c + " --disable-sandbox" : c }
         p.commands.build = commands.build.map(f); p.commands.check = commands.check.map(f); p.commands.test = commands.test.map(f)
+        p.notes = notes.map { $0.replacingOccurrences(of: "`swift test --filter", with: "`swift test --disable-sandbox --filter") }
         return p
     }
 

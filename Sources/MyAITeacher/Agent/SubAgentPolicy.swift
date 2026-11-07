@@ -185,7 +185,10 @@ enum ReadOnlyShell {
     /// Runs an allowed pipeline without a shell: each program directly, connected by pipes as a shell would (so a
     /// reader that stops early, like `head`, ends its writer the usual way).
     static func run(_ command: String, cwd: URL, timeout: TimeInterval) async -> ToolOutput {
-        guard let pipeline = parse(command) else { return .error("Not a read-only command this agent may run.") }
+        guard let pipeline = parse(command) else {
+            if Secrets.namesCredential(command) { return .error("That command names a credential location (~/.ssh, ~/.aws, ~/.gnupg, the app's keys…), which a read-only agent may not open. Ask the teacher; the learner decides.") }
+            return .error("Not a read-only command this agent may run.")
+        }
         var env = Secrets.scrub(ShellEnvironment.shared.all)
         env.merge(["TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat", "GIT_PAGER": "cat"]) { $1 }
         var built: [Process] = []

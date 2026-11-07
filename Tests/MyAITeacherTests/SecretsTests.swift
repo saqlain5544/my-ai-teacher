@@ -110,7 +110,7 @@ final class SecretsTests: XCTestCase {
 
     func testCommandsCannotReadCredentialFilesButProjectEnvStays() async throws {
         try XCTSkipUnless(WriteFence.available)
-        _ = try XCTUnwrap(AppPaths.testHome, "never touch the real keys file")
+        try XCTSkipUnless(AppPaths.keys.standardizedFileURL.path.hasPrefix(FileManager.default.temporaryDirectory.standardizedFileURL.path), "never touch a keys file outside the temporary folder")
         let keys = AppPaths.keys
         try #"{"x":"hunter2-hunter2"}"#.write(to: keys, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: keys) }

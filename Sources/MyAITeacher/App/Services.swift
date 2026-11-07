@@ -151,7 +151,9 @@ final class SettingsStore: ObservableObject {
     /// What `Secrets` needs from the settings, readable from any thread.
     private func mirror() {
         let allow = Set(value.envAllow), protect = value.protectCredentials, names = Set((ProviderCatalog.presets + value.customProviders).flatMap(\.envKeys))
-        Secrets.update { $0.envAllow = allow; $0.protectCredentials = protect; $0.providerEnvNames = names }
+        // MCP tokens and headers live in settings.json, which the model could read: their values are matched exactly.
+        let mcp = (value.mcpServers.flatMap { Array($0.env.values) + Array($0.headers.values) }).filter { $0.count >= Secrets.minLength }
+        Secrets.update { $0.envAllow = allow; $0.protectCredentials = protect; $0.providerEnvNames = names; $0.mcpSecrets = mcp }
     }
     private var saveWork: DispatchWorkItem?
 

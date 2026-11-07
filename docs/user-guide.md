@@ -529,7 +529,7 @@ Stop the agent any time with ⌘. or Esc twice.
   DuckDuckGo and Bing, paper searches to OpenAlex).
 * **Your secrets stay on this Mac.** What the teacher reads and runs goes to the model, so:
   * Commands the teacher starts get your shell environment **without** the provider keys and anything named like
-    `API_KEY`, `SECRET`, `TOKEN`, `PASSWORD` or `CREDENTIAL`. Name the variables a command may keep (say `GITHUB_TOKEN`)
+    `API_KEY`, `APIKEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD` or `CREDENTIAL`. Name the variables a command may keep (say `GITHUB_TOKEN`)
     in **Settings › Tools › Secrets**. Hooks and MCP servers you set up yourself keep the full environment.
   * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
     replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
@@ -543,10 +543,13 @@ Stop the agent any time with ⌘. or Esc twice.
     app's credential sandbox, which allows far more than SwiftPM's, stays on. A switch in
     **Settings › Tools › Secrets** turns the protection off. It is a guard rail, not a wall: a command can still ask
     another program (`open`, `osascript`) to do what it can't.
-  * What `.env` files get: project `.env` files are **not** blocked, since test runners need them. In what the model
-    reads, only lines shaped like `NAME_WITH_PASSWORD/SECRET/TOKEN/API_KEY/CREDENTIAL=value` (upper-case name, at the start
-    of a line, optional `export`) have the value replaced, plus values that look like keys (`sk-…`, `ghp_…`, …). Every
-    other line of a `.env` (database URLs, usernames, hosts, anything else) **does** reach the model.
+  * What `.env` files get: project `.env` files are **not** blocked, since test runners need them. In what the model reads,
+    only lines shaped like `NAME_WITH_PASSWORD/SECRET/TOKEN/API_KEY/CREDENTIAL=value` (upper-case name, no spaces around
+    the `=`, a value of at least 8 characters that is not just digits or a short plain word) have the value replaced, plus
+    values that look like keys (`sk-…`, `ghp_…`, …). Every other line of a `.env` (database URLs, usernames, hosts, a
+    short or word-like password) **does** reach the model.
+  * The app's own `settings.json` (MCP server tokens and headers) is treated like the saved keys: the file tools ask, commands
+    can't read it, and those values are redacted.
   * A web address, search, browser address or text typed into a page that contains a key is refused.
   * Images in a reply that point to the web show as “Image from host (click to load)”. Nothing loads until you click.
   * An MCP server whose tool list changes after you approved it (a new or rewritten tool) asks you again for that tool.

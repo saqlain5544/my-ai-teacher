@@ -401,7 +401,10 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   once per lesson in `PermissionExtension` (`credential-read` grant; sub-agents are denied unless the lesson granted it).
   `ReadOnlyShell.allows` is false for a command naming one, so it asks. Commands are covered by `sandbox-exec` deny-read rules
   (Settings › Tools › Secrets turns it off). Project `.env` files stay readable; only dotenv-shaped secret lines are redacted
-  (`NAME…PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL=value`), other contents reach the model. A file tool that names a credential
+  (`NAME…PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL=value`: no spaces around `=`, ≥ 8 characters, not numeric, not a short plain
+  word; also after `read`'s row numbers and `grep -n`'s `file:line:`), other contents reach the model. `settings.json` (MCP
+  tokens) is a credential path and its env/header values are exact-match secrets. Deny rules also cover writing, renaming and
+  unlinking the credential paths and unlinking the folders that hold them (`mv ~/.ssh /tmp/s` fails). A file tool that names a credential
   location got there by approval, so `runBounded` runs it without the deny-reads (`rg` would otherwise be refused). The
   fence is a guard rail, not a hard boundary: the profile is `(allow default)` plus denies, and another process (`open`,
   `osascript`, a launchd job) is outside it. It breaks git over SSH, gh, docker, aws, and programs that sandbox themselves:
