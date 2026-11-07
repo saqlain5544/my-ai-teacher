@@ -67,6 +67,42 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertEqual(try String(contentsOf: dest.appendingPathComponent("demo/README.md"), encoding: .utf8), "hello\n", "the app, not under the profile, updates it")
     }
 
+    // MARK: The mentor's note
+
+    @MainActor func testOnlyARefusalOfAFencedPathIsBlamedOnTheMentorAndLogged() throws {
+        let ws = try Workspace(url: root.appendingPathComponent("m", isDirectory: true))
+        try "x = 1\n".write(to: ws.url.appendingPathComponent("app.py"), atomically: true, encoding: .utf8)
+        var p = MentorProject(); p.title = "t"; p.concept = "c"; p.testCommand = "true"
+        ProjectStore.save(p, ws); ProjectStore.snapshot(ws, why: "baseline")
+        let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("g.sqlite").path)), workspace: ws)
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        let guardExt = MentorGuard()
+        func after(_ output: String) -> (text: String, logged: Int) {
+            let call = Block.toolUse(id: UUID().uuidString, name: "bash", input: ["command": "x"])
+            _ = guardExt.shouldRun(call, tool: BashTool(), session: session)
+            var res = Block.toolResult(id: call.id ?? "", name: "bash", content: output, isError: true)
+            guardExt.didRun(call, result: &res, session: session)
+            return (res.text ?? "", ProjectStore.load(ws)?.guardLog?.filter { $0.kind == "refused" }.count ?? 0)
+        }
+        let credential = after("cat: \(Secrets.home)/.aws/credentials: Operation not permitted")
+        XCTAssertFalse(credential.text.contains("write fence"), credential.text)
+        XCTAssertEqual(credential.logged, 0, "a credential refusal is not the mentor's")
+        let nested = after("error: sandbox_apply: Operation not permitted")
+        XCTAssertFalse(nested.text.contains("write fence") || nested.logged > 0, nested.text)
+        let bare = after("Operation not permitted")
+        XCTAssertFalse(bare.text.contains("write fence"), "the bare phrase is not enough")
+        let other = after("touch: other-app.py.bak: Operation not permitted")
+        XCTAssertFalse(other.text.contains("write fence"), "a path that isn't fenced")
+        let fenced = after("zsh: operation not permitted: app.py")
+        XCTAssertTrue(fenced.text.contains("write fence"), fenced.text)
+        XCTAssertEqual(fenced.logged, 1)
+        let absolute = after("tee: \(ws.url.path)/.teacher/state.sqlite: Operation not permitted")
+        XCTAssertTrue(absolute.text.contains("write fence"), "the record is fenced too")
+        let mentor = after("tee: \(ws.url.path)/.teacher/mentor/notes.md: Operation not permitted")
+        XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
+    }
+
     // MARK: past_lessons
 
     func lesson(_ ws: Workspace, title: String, _ messages: [ChatMessage]) -> Conversation {
