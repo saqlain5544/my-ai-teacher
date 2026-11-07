@@ -119,8 +119,13 @@ final class AppModel: ObservableObject {
             await withCheckedContinuation { c in DispatchQueue.global(qos: .utility).async { _ = Embedder.shared.vector("warm up"); c.resume() } }
         } }
         Task { await ShellEnvironment.shared.waitUntilLoaded(); objectWillChange.send() }
-        // Reviews from before the engineer profile existed: read once from the folders the app knows.
-        let engineer = services.study.engineer, folders = knownFolders + [ws.url.path]
+        backfillEngineer(knownFolders + [ws.url.path])
+    }
+
+    /// Reviews from before the engineer profile existed, or in a folder opened for the first time: each folder is read once
+    /// (and only if the code mentor ran there), off the main actor.
+    private func backfillEngineer(_ folders: [String]) {
+        let engineer = services.study.engineer
         Task { await Runtime.job("engineer.backfill", restart: .temporary) { _ in
             if engineer.backfill(folders: folders) > 0 { EventBus.publish(.studyDataChanged) }
         } }
@@ -233,6 +238,7 @@ final class AppModel: ObservableObject {
         services = next
         settings.value.lastFolder = ws.url.path
         touchRecent(ws)
+        backfillEngineer([ws.url.path])
         conversations = services.conversations.all()
         searchResults = nil
         refreshCounts()

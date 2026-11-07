@@ -28,31 +28,52 @@ enum EngineerArea: String, CaseIterable, Sendable {
         return allCases.first { $0.rawValue == k } ?? (k == "error" ? .errorHandling : k == "edge" ? .edgeCases : k == "resources" ? .memory : nil)
     }
 
-    private var keywords: [String] {
+    /// Words that say what a finding is about: strong ones (worth two) rarely mean anything else, weak ones (one) are
+    /// hints. A trailing `*` lets the word continue (`validat*` = validate, validation); otherwise it must be the whole
+    /// word, or its plural, so "block" is not "lock" and "praise" is not "raise".
+    private var keywords: (strong: [String], weak: [String]) {
         switch self {
-        case .errorHandling: ["exception", "error handling", "raise", "throw", "catch", "failure", "fail gracefully", "invalid input", "validat", "unhandled", "error message", "panic", "unwrap", "swallow"]
-        case .edgeCases: ["empty", "edge case", "corner case", "boundary", "off-by-one", "off by one", "zero", "negative", "null", "none", "nil", "duplicate", "single element", "overflow", "first or last", "very large", "missing key"]
-        case .testing: ["unit test", "add a test", "tests for", "missing test", "test case", "assertion", "coverage", "mock", "fixture", "untested", "regression test"]
-        case .naming: ["naming", "variable name", "rename", "readab", "unclear", "confusing", "comment", "docstring", "convention", "magic number", "clarity", "misleading name"]
-        case .design: ["design", "abstraction", "coupling", "cohesion", "responsibilit", "copy-paste", "repeated code", "duplicated code", "separate", "refactor", "encapsulat", "global state", "shared state", "structure"]
-        case .performance: ["complexity", "o(n", "quadratic", "slow", "performance", "efficien", "cache", "nested loop", "big-o", "redundant", "repeated work", "memoiz"]
-        case .concurrency: ["thread", "race", "deadlock", "async", "await", "concurren", "atomic", "mutex", "lock", "parallel", "goroutine", "actor"]
-        case .memory: ["leak", "memory", "close the file", "file handle", "resource", "dispose", "retain cycle", "use after", "dangling", "buffer", "allocat", "ownership", "lifetime", "context manager"]
-        case .security: ["security", "injection", "sanitiz", "escape", "password", "secret", "credential", "xss", "csrf", "untrusted", "path traversal", "hardcoded", "encrypt", "eval("]
-        case .tooling: ["linter", "lint", "formatter", "dependenc", "version control", "debugger", "compiler warning", "makefile", "type check", "mypy", "logging", "build"]
+        case .errorHandling: (["exception*", "error handling", "unhandled", "fail gracefully", "invalid input", "swallow*", "panic*", "error message*"],
+                              ["validat*", "catch*", "throw*", "failure*", "raise"])
+        case .edgeCases: (["edge case*", "corner case*", "empty", "off-by-one", "off by one", "boundary", "single element", "overflow", "missing key"],
+                          ["zero", "negative", "null", "none", "nil", "duplicate*", "first or last", "very large"])
+        case .testing: (["unit test*", "add a test", "missing test*", "test case*", "assertion*", "coverage", "untested", "regression test*", "tests for"],
+                        ["mock*", "fixture*"])
+        case .naming: (["naming", "variable name*", "rename*", "readability", "readable", "misleading name*", "magic number*"],
+                       ["unclear", "confusing", "comment*", "docstring*", "convention*", "clarity"])
+        case .design: (["abstraction*", "coupling", "cohesion", "single responsibility", "copy-paste", "duplicated code", "repeated code", "encapsulat*", "global state", "shared state"],
+                       ["design", "responsibilit*", "refactor*", "structure", "separate"])
+        case .performance: (["complexity", "big-o", "quadratic", "o(n", "nested loop*", "performance", "memoiz*", "inefficien*", "slow"],
+                            ["efficien*", "cache*", "redundant", "repeated work"])
+        case .concurrency: (["race condition*", "data race*", "deadlock*", "thread*", "mutex*", "goroutine*", "concurren*", "atomic*"],
+                            ["race", "lock*", "async*", "await*", "parallel*", "actor*"])
+        case .memory: (["memory leak*", "leak*", "dangling", "use after free", "retain cycle*", "file handle*", "close the file", "context manager", "dispose*"],
+                       ["memory", "resource*", "buffer*", "allocat*", "ownership", "lifetime"])
+        case .security: (["security", "injection", "sanitiz*", "xss", "csrf", "path traversal", "untrusted", "hardcoded", "credential*", "password*", "encrypt*", "eval("],
+                         ["escape*", "secret*", "token*"])
+        case .tooling: (["linter", "lint", "formatter", "compiler warning*", "makefile", "type check*", "mypy", "version control", "debugger"],
+                        ["dependenc*", "logging", "build", "git"])
         }
     }
 
-    /// The area an old finding (or one the model didn't tag) is about, by the words it uses; nil when none fits, and then
-    /// it is left out of the profile rather than guessed. The first area wins a tie.
+    private static let patterns: [EngineerArea: [(NSRegularExpression, Int)]] = Dictionary(uniqueKeysWithValues: allCases.map { a in
+        func rx(_ k: String) -> NSRegularExpression? {
+            let open = k.hasSuffix("*"), word = open ? String(k.dropLast()) : k
+            return try? NSRegularExpression(pattern: "(?<![a-z0-9])" + NSRegularExpression.escapedPattern(for: word) + (open ? "[a-z]*" : "s?") + "(?![a-z0-9])")
+        }
+        return (a, a.keywords.strong.compactMap { rx($0).map { ($0, 2) } } + a.keywords.weak.compactMap { rx($0).map { ($0, 1) } })
+    })
+
+    /// The area an old finding (or one the model didn't tag) is about, by the words it uses; nil unless it is clear: at
+    /// least two points and a lead of two over the next area. An unknown area is better than a wrong claim about the
+    /// learner, and then the finding is left out of the profile.
     static func classify(text: String, concept: String?) -> EngineerArea? {
         let t = (text + " " + (concept ?? "")).lowercased()
-        var best: (EngineerArea, Int)?
-        for a in allCases {
-            let n = a.keywords.filter { t.contains($0) }.count
-            if n > (best?.1 ?? 0) { best = (a, n) }
-        }
-        return best?.0
+        let range = NSRange(t.startIndex..., in: t)
+        let scores = allCases.map { a in (a, (patterns[a] ?? []).reduce(0) { $0 + ($1.0.firstMatch(in: t, range: range) != nil ? $1.1 : 0) }) }
+            .sorted { $0.1 > $1.1 }
+        guard let top = scores.first, top.1 >= 2, top.1 - scores[1].1 >= 2 else { return nil }
+        return top.0
     }
 }
 
@@ -148,7 +169,8 @@ struct EngineerProfile: Sendable {
                 guard !all.isEmpty else { continue }
                 let win = Array(rs.suffix(window))
                 let hit = win.filter { $0.areas.contains(area.rawValue) }
-                let last2Clean = rs.count >= 2 && rs.suffix(2).allSatisfy { !$0.areas.contains(area.rawValue) }
+                // Moved past: the latest two reviews raised nothing here, weren't helped, and no finding in the area is still open.
+                let last2Clean = rs.count >= 2 && rs.suffix(2).allSatisfy { !$0.areas.contains(area.rawValue) && !$0.helped } && fs.allSatisfy(\.resolved)
                 let pattern = win.count >= 3 && hit.count >= 3 && hit.count * 5 >= win.count * 3 && Set(hit.map(\.project)).count >= 2 && !last2Clean
                 let improved = !pattern && all.count >= 3 && last2Clean
                 // Trend: the last three reviews against the three before, once there are four to compare.
@@ -218,13 +240,16 @@ final class EngineerStore: @unchecked Sendable {
     static func projectKey(_ p: MentorProject, folder: String) -> String { "\(folder)#\(Int(p.createdAt.timeIntervalSince1970))" }
 
     /// A project's reviews and findings as the profile counts them. Pure: the same record always gives the same rows.
-    static func derive(_ p: MentorProject, folder: String, after reset: Date = .distantPast) -> (reviews: [EngineerReview], findings: [EngineerFinding]) {
+    /// A finding belongs to the round that first raised it, found over every round so that one carried past a reset isn't
+    /// taken for new; rounds dated after `now` (a record the learner didn't make) and findings from before `reset` are
+    /// left out. One language, the project's, files the reviews and their findings alike.
+    static func derive(_ p: MentorProject, folder: String, after reset: Date = .distantPast, now: Date = Date()) -> (reviews: [EngineerReview], findings: [EngineerFinding]) {
         let pk = projectKey(p, folder: folder)
-        let rounds = p.rounds.filter { $0.at > reset }
+        let rounds = p.rounds.filter { $0.at <= now }
         guard !rounds.isEmpty else { return ([], []) }
         var votes: [String: Int] = [:]
-        for f in p.rounds.flatMap(\.findings) { if let l = EngineerLanguage.of(file: f.file) { votes[l, default: 0] += 1 } }
-        let language = votes.max { $0.value < $1.value }?.key ?? EngineerLanguage.of(subject: p.subject) ?? ""
+        for f in rounds.flatMap(\.findings) { if let l = EngineerLanguage.of(file: f.file) { votes[l, default: 0] += 1 } }
+        let language = votes.sorted { ($0.value, $1.key) > ($1.value, $0.key) }.first?.key ?? EngineerLanguage.of(subject: p.subject) ?? ""
         var first: [Int: (round: Int, f: MentorProject.Finding)] = [:]
         var resolvedIn: [Int: Int] = [:], revealed: [Int: Int] = [:]
         for (i, r) in rounds.enumerated() {
@@ -236,17 +261,17 @@ final class EngineerStore: @unchecked Sendable {
         }
         var findings: [EngineerFinding] = []
         var raised = [Set<String>](repeating: [], count: rounds.count)
-        for (id, e) in first.sorted(by: { $0.key < $1.key }) {
+        for (id, e) in first.sorted(by: { $0.key < $1.key }) where rounds[e.round].at > reset {
             guard let a = EngineerArea.parse(e.f.area) ?? EngineerArea.classify(text: e.f.text, concept: e.f.concept) else { continue }
             raised[e.round].insert(a.rawValue)
             // The round after the one that marked it resolved is the one that checked the fix: help it had counts.
             let checked = resolvedIn[id].map { $0 + 1 < rounds.count && rounds[$0 + 1].help != nil } ?? false
             findings.append(EngineerFinding(key: "\(pk)#f\(id)", project: pk, folder: folder, review: "\(pk)#r\(rounds[e.round].number)", finding: id,
-                                            area: a.rawValue, severity: e.f.severity, language: EngineerLanguage.of(file: e.f.file) ?? language, at: rounds[e.round].at,
+                                            area: a.rawValue, severity: e.f.severity, language: language, at: rounds[e.round].at,
                                             file: e.f.file, line: e.f.line, text: String(e.f.text.prefix(240)), resolved: resolvedIn[id] != nil,
                                             aided: resolvedIn[id] != nil && ((revealed[id] ?? 0) > 0 || checked)))
         }
-        let reviews = rounds.enumerated().map { i, r in
+        let reviews = rounds.enumerated().filter { $0.element.at > reset }.map { i, r in
             EngineerReview(key: "\(pk)#r\(r.number)", project: pk, folder: folder, title: p.title, language: language, at: r.at, round: r.number,
                            verdict: r.verdict, areas: raised[i], helped: r.help != nil)
         }
@@ -276,16 +301,25 @@ final class EngineerStore: @unchecked Sendable {
         }
     }
 
-    /// Reads the project records of folders the app knows (each one's `project.json` and `projects/*.json`), once.
-    /// Cheap: a few small JSON files per folder. Returns how many projects it recorded.
+    /// Whether the learner has run the code mentor in this folder: a code-mode lesson in its own `state.sqlite`. A project
+    /// record in any other folder (a cloned repository's `.teacher/`) is not theirs and never seeds the profile.
+    static func ranCodeMentor(_ folder: String) -> Bool {
+        SessionIndex.scan([folder]).contains { $0.conversation.mode == .code }
+    }
+
+    /// Reads the project records of folders the learner ran the code mentor in (each one's `project.json` and
+    /// `projects/*.json`), once per folder: a folder is marked done only when its state directory could be read, so one
+    /// that was unmounted is tried again next time. Cheap: a few small JSON files per folder. Returns projects recorded.
     @discardableResult
-    func backfill(folders: [String], force: Bool = false) -> Int {
-        if !force, (try? db.query("SELECT 1 AS x FROM eng_meta WHERE key='backfilled'"))?.isEmpty == false { return 0 }
+    func backfill(folders: [String], isMentorFolder: (String) -> Bool = EngineerStore.ranCodeMentor) -> Int {
         var seen = Set<String>(), n = 0
         for folder in folders {
             let canon = URL(fileURLWithPath: folder).canonicalPath
             guard seen.insert(canon).inserted else { continue }
+            let mark = "backfilled:" + canon
+            if (try? db.query("SELECT 1 AS x FROM eng_meta WHERE key=?", mark))?.isEmpty == false { continue }
             let state = URL(fileURLWithPath: canon).appendingPathComponent(Workspace.stateDirName)
+            guard (try? FileManager.default.contentsOfDirectory(atPath: state.path)) != nil, isMentorFolder(canon) else { continue }
             var files = [state.appendingPathComponent("project.json")]
             files += ((try? FileManager.default.contentsOfDirectory(atPath: state.appendingPathComponent("projects").path)) ?? [])
                 .filter { $0.hasSuffix(".json") }.sorted().map { state.appendingPathComponent("projects/\($0)") }
@@ -293,8 +327,8 @@ final class EngineerStore: @unchecked Sendable {
                 guard let p = ProjectStore.read(u), !p.rounds.isEmpty else { continue }
                 record(p, folder: canon); n += 1
             }
+            db.run("INSERT OR REPLACE INTO eng_meta(key, value) VALUES(?, ?)", mark, String(Date().timeIntervalSince1970))
         }
-        db.run("INSERT INTO eng_meta(key, value) VALUES('backfilled', ?) ON CONFLICT(key) DO UPDATE SET value=excluded.value", String(Date().timeIntervalSince1970))
         return n
     }
 
