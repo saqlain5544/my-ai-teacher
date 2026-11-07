@@ -107,6 +107,24 @@ final class RuntimeTests: XCTestCase {
         XCTAssertNil(Runtime.registry.supervisor("rt.int"))
     }
 
+    func testGivingUpWhileBootingTellsTheChildrenNotStartedYet() async {
+        let exits = Log()
+        let sup = await Supervisor.start("rt.boot", intensity: Intensity(maxRestarts: 0, period: 10), backoff: .none, children: [
+            ChildSpec(id: "flaky", start: { _ in Proc.spawn("rt.boot.flaky", of: Never.self) { _ in throw Boom() }.proc },
+                      onExit: { r in exits.add("flaky: \(r.isCrash)") }),
+            ChildSpec(id: "slow", start: { _ in
+                try? await Task.sleep(nanoseconds: 400_000_000)   // flaky's give-up lands while this one starts
+                return Proc.spawn("rt.boot.slow", of: Never.self) { ctx in _ = await ctx.receive() }.proc
+            }, onExit: { r in exits.add("slow: \(r.isCrash)") }),
+            ChildSpec(id: "later", start: { _ in Proc.spawn("rt.boot.later", of: Never.self) { ctx in _ = await ctx.receive() }.proc },
+                      onExit: { r in exits.add("later: \(r.isCrash)") }),
+        ])
+        _ = await sup.process.wait()
+        XCTAssertEqual(Set(exits.all), ["flaky: true", "slow: true", "later: true"], "\(exits.all)")
+        XCTAssertNil(Runtime.registry.whereis("rt.boot.later"), "never started")
+        XCTAssertNil(Runtime.registry.whereis("rt.boot.slow"))
+    }
+
     func testChildLimitGivesUpAloneWithBackoff() async {
         let starts = Locked<[Date]>([])
         let exits = Log()

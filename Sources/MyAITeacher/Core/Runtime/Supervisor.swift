@@ -66,6 +66,8 @@ actor Supervisor {
     private var children: [Child] = []
     private var log: [Date] = []
     private var stopping = false
+    /// Specs not started yet while it boots (children start one after another): if it ends first they are still told.
+    private var pending: [ChildSpec] = []
     private(set) var restarts = 0
     /// The supervisor's own process (set while it boots, before anyone else sees the supervisor).
     nonisolated var process: ProcRef<Never> { box.get()! }
@@ -92,7 +94,12 @@ actor Supervisor {
         box.mutate { $0 = ref }
         await ref.proc.trapExits { _, _ in }   // children's exits arrive through monitors
         Runtime.registry.addSupervisor(self)
-        for spec in specs { _ = await startChild(spec) }
+        pending = specs
+        for spec in specs {
+            if pending.isEmpty { break }   // it gave up while booting: the rest were told, and never start
+            pending.removeFirst()
+            _ = await startChild(spec)
+        }
     }
 
     // MARK: Children
@@ -190,6 +197,8 @@ actor Supervisor {
     private func terminateChildren(_ reason: ExitReason) async {
         guard !stopping else { return }
         stopping = true
+        let unstarted = pending; pending = []
+        for spec in unstarted.reversed() { spec.onExit?(reason.isCrash ? reason : .shutdown) }
         for c in children.reversed() {
             if let p = c.proc { p.control.stop(.shutdown, grace: c.spec.shutdownGrace); _ = await p.wait() }
             c.spec.onExit?(reason.isCrash ? reason : .shutdown)
