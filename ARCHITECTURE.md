@@ -386,7 +386,10 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   skip the extension host, this doesn't). It refuses `web_fetch`/`browser` URLs and `web_search` queries holding a secret
   (`Secrets.outbound`), runs the tool with `Secrets.$agentCall` set and the `WriteFence` profile composed with the credential
   deny-reads (`WriteFence.guarded`, over a mentor's write fence), and redacts the result (`Secrets.redacted`; `meta.redacted`
-  lists the kinds and the card says so). `ReadOnlyShell.run` (sub-agents' direct path) redacts and sandboxes itself.
+  lists the kinds and the card says so). `ReadOnlyShell.run` (sub-agents' direct path) sandboxes itself and is redacted at
+  the sub-agent call site (`SubAgent.runTools`). A `write`/`edit` whose new text holds a `[redacted: …]` marker the file didn't
+  have is refused (`Secrets.introducesMarker`): a redacted `read` must not be saved back over the real value. The outbound
+  check reads every string of a `web_fetch`/`web_search`/`browser` input (`urls[]`, steps, typed text).
 * **Environment.** `ProcessRunner.environment()` drops provider `envKeys` and names containing API_KEY, SECRET, TOKEN, PASSWORD
   or CREDENTIAL when `Secrets.agentCall` (allow list: `AppSettings.envAllow`). A caller that passes its own base (hooks) or
   `scrub: false` (MCP servers) is the user's own configuration and keeps the full environment.
@@ -397,8 +400,13 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   Library/Keychains, `keys.json`). `read`/`grep`/`glob`/`ls`/`symbols`/`code`/`source` naming one (or a folder that holds one) ask
   once per lesson in `PermissionExtension` (`credential-read` grant; sub-agents are denied unless the lesson granted it).
   `ReadOnlyShell.allows` is false for a command naming one, so it asks. Commands are covered by `sandbox-exec` deny-read rules
-  (Settings › Tools › Secrets turns it off). Project `.env` files stay readable. A program that itself applies a sandbox
-  (SwiftPM manifests) fails under a nested one: pass its `--disable-sandbox`.
+  (Settings › Tools › Secrets turns it off). Project `.env` files stay readable; only dotenv-shaped secret lines are redacted
+  (`NAME…PASSWORD|SECRET|TOKEN|API_KEY|CREDENTIAL=value`), other contents reach the model. A file tool that names a credential
+  location got there by approval, so `runBounded` runs it without the deny-reads (`rg` would otherwise be refused). The
+  fence is a guard rail, not a hard boundary: the profile is `(allow default)` plus denies, and another process (`open`,
+  `osascript`, a launchd job) is outside it. It breaks git over SSH, gh, docker, aws, and programs that sandbox themselves:
+  `Secrets.shellScript` adds `--disable-sandbox` to `swift build|test|run` when the fence is on and unsets the scrubbed names
+  at the start of a script (`zsh -c` re-sources `~/.zshenv`); `Secrets.hint` explains a nested-sandbox error.
 * **Transcript images.** The page's CSP has no `http(s)` in `img-src`. DOMPurify's `afterSanitizeAttributes` moves any remote
   `<img src>` to `data-remote` (and drops `srcset`, svg `image`/`use` external hrefs); a processor shows “Image from host”; a
   click loads it through `RemoteImageSchemeHandler` (`teacher-remote://img/?k=<per-process key>&u=<https url>`, https only,

@@ -20,7 +20,7 @@ final class SecretsTests: XCTestCase {
 
     func testShapesAreRedactedAndOrdinaryTextIsNot() {
         let leaks = ["sk-proj-abc123DEF456ghi789JKL012", "sk-ant-api03-Zk3x9QmN2pLw8RtY5uVb7", "ghp_" + String(repeating: "a1B2", count: 9),
-                     "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz", "AKIAIOSFODNN7EXAMPLE", "xoxb-1234567890-abcdefghij", "AIza" + String(repeating: "x1", count: 17) + "abc"]
+                     "github_pat_11ABCDEFG0abcdefghijkl_mnopqrstuvwxyz", "AKIAIOSFODNN7EXAMPLE", "xoxb-1234567890-abcdefghij", "AIza" + String(repeating: "x1", count: 17) + "a"]   // 35 characters after the prefix
         for k in leaks {
             let r = Secrets.redact("token is \(k) ok")
             XCTAssertFalse(r.text.contains(k), "\(k) leaked: \(r.text)")
@@ -58,8 +58,11 @@ final class SecretsTests: XCTestCase {
 
     func testAnAgentCallRunsScrubbedAndRedacted() async throws {
         let c = try await ctx()
-        setenv("TEACHER_TEST_API_KEY", "envsecret-value-1234567890", 1)
-        defer { unsetenv("TEACHER_TEST_API_KEY") }
+        // The commands read the app's snapshot of the login shell's environment, not the process's: place it there, and
+        // check it is really visible to an unscrubbed caller before expecting a model-started call not to see it.
+        ShellEnvironment.shared.inject("TEACHER_TEST_API_KEY", "envsecret-value-1234567890")
+        defer { ShellEnvironment.shared.inject("TEACHER_TEST_API_KEY", nil) }
+        XCTAssertEqual(ProcessRunner.environment(scrub: false)["TEACHER_TEST_API_KEY"], "envsecret-value-1234567890")
         let tool = Fake { _ in
             let env = ProcessRunner.environment()
             XCTAssertTrue(Secrets.agentCall, "a model-started call is marked")
@@ -107,6 +110,7 @@ final class SecretsTests: XCTestCase {
 
     func testCommandsCannotReadCredentialFilesButProjectEnvStays() async throws {
         try XCTSkipUnless(WriteFence.available)
+        _ = try XCTUnwrap(AppPaths.testHome, "never touch the real keys file")
         let keys = AppPaths.keys
         try #"{"x":"hunter2-hunter2"}"#.write(to: keys, atomically: true, encoding: .utf8)
         defer { try? FileManager.default.removeItem(at: keys) }

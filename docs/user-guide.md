@@ -534,10 +534,17 @@ Stop the agent any time with ⌘. or Esc twice.
   * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
     replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
   * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.docker/config.json`, Keychains and the app's saved
-    keys: the file tools ask once per lesson, and commands can't read them at all (the macOS sandbox refuses), so
-    `git push` over SSH fails inside the teacher's shell. A switch in **Settings › Tools › Secrets** turns this off.
-    Project `.env` files are not blocked, since test runners need them; their values are redacted from output.
-  * A web address, search or browser address that contains a key is refused.
+    keys: the file tools ask once per lesson, and commands the teacher starts can't read them (the macOS sandbox refuses).
+    **That breaks, inside the teacher's shell:** `git` over SSH, `gh`, `docker` logins, `aws`, anything that needs your
+    Keychain, Homebrew when it reads your credentials, and tools that apply a sandbox of their own (SwiftPM without
+    `--disable-sandbox`; the teacher adds the flag to `swift build`, `swift test` and `swift run` for you). A switch in
+    **Settings › Tools › Secrets** turns the protection off. It is a guard rail, not a wall: a command can still ask
+    another program (`open`, `osascript`) to do what it can't.
+  * What `.env` files get: project `.env` files are **not** blocked, since test runners need them. In what the model
+    reads, only lines shaped like `NAME_WITH_PASSWORD/SECRET/TOKEN/API_KEY/CREDENTIAL=value` (upper-case name, at the start
+    of a line, optional `export`) have the value replaced, plus values that look like keys (`sk-…`, `ghp_…`, …). Every
+    other line of a `.env` (database URLs, usernames, hosts, anything else) **does** reach the model.
+  * A web address, search, browser address or text typed into a page that contains a key is refused.
   * Images in a reply that point to the web show as “Image from host (click to load)”. Nothing loads until you click.
   * An MCP server whose tool list changes after you approved it (a new or rewritten tool) asks you again for that tool.
 * **Telemetry** for Insights is stored locally and can be turned off.
