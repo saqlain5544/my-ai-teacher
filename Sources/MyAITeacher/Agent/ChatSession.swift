@@ -173,7 +173,8 @@ final class ChatSession: ObservableObject, Identifiable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // Context commands act on the lesson itself, not on the model: no turn, no tokens (`/compact` makes one summary call).
-        if let cmd = ContextCommand.parse(trimmed) {
+        // Not for a literal message: a custom command whose body is `/compact …` must not run the built-in.
+        if !literal, let cmd = ContextCommand.parse(trimmed) {
             switch cmd {
             case .compact(let focus):
                 guard !isRunning else { sink?.notice("Wait for the reply to finish, then try /compact again."); return }

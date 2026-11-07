@@ -329,6 +329,17 @@ final class ContextManagementTests: XCTestCase {
         session.holdBusyForTests(false)
     }
 
+    @MainActor func testALiteralMessageIsNeverTheBuiltInContextCommand() {
+        let conv = Conversation(providerID: "x", model: "m")
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        session.holdBusyForTests(true)   // a literal message is not a command, so it goes on to wait for the running reply instead
+        session.send("/context", literal: true)   // what a custom command whose body is `/context` sends
+        XCTAssertFalse(session.showContext, "it is text for the model, not the built-in")
+        session.send("/context")
+        XCTAssertTrue(session.showContext)
+        session.holdBusyForTests(false)
+    }
+
     func testNothingToCompactIsWordedByCause() {
         XCTAssertTrue(ContextCommand.nothingToCompact(messages: 2, turns: 1, tokens: 500).contains("short"))
         let one = ContextCommand.nothingToCompact(messages: 60, turns: 1, tokens: 90_000)
