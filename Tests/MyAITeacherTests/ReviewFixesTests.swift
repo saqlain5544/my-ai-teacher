@@ -124,6 +124,41 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertEqual(open.run, "swift test --enable-code-coverage"); XCTAssertEqual(open.path, "swift test --show-codecov-path")
     }
 
+    // MARK: A folder's own state
+
+    func testAFolderWhoseTeacherStateIsCommittedToGitIsNotTrusted() throws {
+        func git(_ dir: URL, _ args: [String]) throws {
+            let p = Process(); p.executableURL = URL(fileURLWithPath: "/usr/bin/git"); p.currentDirectoryURL = dir
+            p.arguments = ["-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false"] + args
+            p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
+            try p.run(); p.waitUntilExit()
+        }
+        func folder(_ name: String) throws -> URL {
+            let dir = root.appendingPathComponent(name, isDirectory: true)
+            let ws = try Workspace(url: dir)
+            var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+            ws.conversations.save(conv)
+            return dir
+        }
+        let mine = try folder("mine"), forged = try folder("forged")
+        try git(mine, ["init", "-q"])   // a repository, `.teacher` not committed
+        XCTAssertTrue(EngineerStore.ranCodeMentor(mine.path), "the learner's own state in a repository is fine")
+        try git(forged, ["init", "-q"])
+        // The repository's own config tries to run a program on any index-reading command.
+        let marker = root.appendingPathComponent("fsmonitor-ran")
+        let hook = root.appendingPathComponent("fsm.sh")
+        try "#!/bin/sh\ntouch '\(marker.path)'\n".write(to: hook, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: hook.path)
+        try git(forged, ["config", "core.fsmonitor", hook.path])
+        try git(forged, ["add", "-f", ".teacher/state.sqlite"])   // (this unhardened call may run it: the check is for the app's)
+        try? FileManager.default.removeItem(at: marker)
+        XCTAssertFalse(EngineerStore.ranCodeMentor(forged.path), "its state came with the repository")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "and git ran without the repository's fsmonitor")
+        // Not a repository at all: unchanged.
+        let plain = try folder("plain")
+        XCTAssertTrue(EngineerStore.ranCodeMentor(plain.path))
+    }
+
     // MARK: past_lessons
 
     func lesson(_ ws: Workspace, title: String, _ messages: [ChatMessage]) -> Conversation {
