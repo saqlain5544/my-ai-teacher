@@ -529,24 +529,36 @@ approvals, hooks and MCP cover every agent.
   (remembered for a while); the tool then waits 75 s longer for the first stop and, if nobody approved, ends the
   session and says so, naming `sudo DevToolsSecurity -enable` (the app never changes system settings). Programs launch
   stopped at entry, so the wall-time timer (`seconds`, default 20, max 60) covers a loop that never reaches a breakpoint:
-  the program is interrupted where it spins and reported there. Core dumps are not an option (`/cores` is root-only).
+  the program is interrupted where it spins and reported there. Output is bounded the same way: a program's stdout and stderr
+  go to files, and one that writes more than 4 MB is interrupted. Only crashes stop a program (SEGV, BUS, ILL, FPE, ABRT, TRAP,
+  EXC_*); every other signal is delivered to it. `crash` also breaks on `rust_panic` and `rust_begin_unwind`, and an error exit
+  is never reported as "did not crash". Core dumps are not an option (`/cores` is root-only).
   * *Actions*: `run` (breakpoints `file:line` or function, ` if <condition>`, `max_stops` ≤ 50, stops at `main` with none),
     `crash` (run to the crash: the signal in plain words — `DebugWords`, which says what happened and never the fix — the
     faulting frame, locals of the learner's frames up the stack; library frames are hidden, the count shown), and a stateful
     session: `start`, `step`, `next`, `finish`, `continue`, `print` (a variable path is read without running code; other
     expressions are evaluated in the program with a 3 s limit), `frame`, `stop`. One session per lesson (`DebugSessions`): `start`
-    replaces it; Stop (`ChatSession.stop`), a deleted lesson and app quit kill the driver, debugserver and the program
-    (descendants found with `pgrep -P`, SIGKILL, plus the program's pid); a session idle 15 minutes is reaped at the next
-    use; 500 stops at most. A write-fence change since `start` ends the session (the program keeps the fence it started under).
+    replaces it; Stop (`ChatSession.stop`, tested through a real `ChatSession`), a deleted lesson (`AppModel.delete` calls
+    `DebugSessions.end`) and app quit (`killAll`, which waits) kill the driver, debugserver and the program: the program is
+    SIGKILLed and the driver frozen at once, and the tree under it (`pgrep -P`) is walked and killed off the calling thread
+    (a frozen parent keeps its children findable). A session idle 15 minutes is reaped at the next use; 500 stops at most.
+    The program keeps the fence it started under: the session ends only when the current fence protects something it didn't
+    (`WriteFence.covers`: every path now denied was denied then, and what the start opened up is still open), so a build writing
+    `Cargo.lock` doesn't end it; a file created after the start is not counted, which means a running program is not fenced from
+    a learner file saved during the session.
   * *Building*: `build` runs through `ProcessRunner` (the call's `WriteFence` applies; package installs are refused as in
     `bash`), then `program` is the executable; omitted, Cargo's `target/debug/<package>`, SwiftPM's `.build/debug/<product>` or
     `zig-out/bin/*`; not yet built, the project profile's build command runs once. A source file as `program` (c, cpp, rs,
     swift, zig, m) is compiled to a scratch folder with `-g -O0` (Swift in two steps so its object file keeps the debug info;
     Rust packed). A binary whose compile units name no readable source (stripped, `-O2`, `--release`) is reported before
-    anything runs, with the commands that give symbols. Go uses `dlv debug` scripted once (breakpoints, `continue`, `locals`,
-    `stack`), text only; without `dlv` it says what is available instead of pretending.
-  * *Guardrails*: `PermissionExtension` treats `debug` as a `bash`-class command (the same lesson grant; the approval card
-    shows the build command and program), `MentorGuard.commands` includes it so the driver runs under the project's
+    anything runs, with the commands that give symbols. Go is built with `go build -gcflags=all=-N -l`, then run as `dlv exec` scripted once (breakpoints, `continue`, `locals`,
+    `stack`) inside `seconds` (the build is outside it; a timeout returns what was printed), text only; without `dlv` it says what is available instead of pretending.
+  * *Guardrails*: `PermissionExtension` asks for a launch (`run`, `crash`, `start`) and for `print`, which evaluates an expression
+    inside the program, and shows what will run: the build command, program and arguments, every breakpoint with its
+    condition, the standard input, the expression. `step`, `next`, `finish`, `continue`, `frame` and `stop` add no code and are
+    never asked. "Allow for this lesson" grants `debug` alone; a shell grant implies it; only a `build` (a shell command) needs
+    the shell grant, and no command rule is offered. Breakpoints and expressions with a newline or other control character are
+    refused (Go's breakpoints are written into a Delve script), `MentorGuard.commands` includes it so the driver runs under the project's
     `WriteFence` (`sandbox-exec` is inherited by debugserver and the program, so a debugged program can't write what `bash`
     couldn't), hooks see it, and `subAgentVariant` is nil: sub-agents get no debugger. The build string is checked for package
     installs. `print` can call functions in the program, which stays inside that fence.
