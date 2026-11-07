@@ -33,6 +33,9 @@ struct MentorProject: Codable, Sendable, Equatable {
         var severity: String     // must | should | nit
         var text: String
         var concept: String?
+        /// What kind of mistake this is (`EngineerArea` id), when the model said; older findings have none and are
+        /// classified by their words when the engineer profile reads them.
+        var area: String? = nil
         var resolved = false
         /// A hint ladder toward the fix, never the code: a nudge, a targeted hint, the concept or a worked step on
         /// something else. The learner reveals one rung at a time; `revealed` rungs count as help.
@@ -122,6 +125,11 @@ enum ProjectStore {
     private static let enc: JSONEncoder = { let e = JSONEncoder(); e.dateEncodingStrategy = .secondsSince1970; e.outputFormatting = [.prettyPrinted, .sortedKeys]; return e }()
     private static let dec: JSONDecoder = { let d = JSONDecoder(); d.dateDecodingStrategy = .secondsSince1970; return d }()
 
+    /// A project record at any path (an archived one, another folder's): nil when it isn't one.
+    static func read(_ url: URL) -> MentorProject? {
+        guard let d = try? Data(contentsOf: url) else { return nil }
+        return try? dec.decode(MentorProject.self, from: d)
+    }
     static func load(_ ws: Workspace) -> MentorProject? {
         guard let d = try? Data(contentsOf: file(ws)) else { return nil }
         return try? dec.decode(MentorProject.self, from: d)

@@ -6,17 +6,32 @@ import Foundation
 final class CodeMentorExtension: AgentExtension {
     let id = "code-mentor"
 
+    /// Lessons whose idle (no open project) stretch already carried the note: once per stretch, not on every request.
+    private var designNoted: Set<String> = []
+
     func willRequest(_ request: inout LLMRequest, session: ChatSession) {
         guard session.conversation.mode == .code else { return }
         let ws = session.services.workspace
-        guard let p = ProjectStore.load(ws) else { return }
-        Self.inject(Self.stateLine(p, changed: ProjectStore.changedCount(ws)), into: &request)
+        let p = ProjectStore.load(ws)
+        if let p { Self.inject(Self.stateLine(p, changed: ProjectStore.changedCount(ws)), into: &request) }
+        // A project about to be designed gets the note once; it is offered again after a project opens and finishes.
+        let design = p?.isOpen != true ? designNoted.insert(session.conversation.id).inserted : { designNoted.remove(session.conversation.id); return false }()
+        if let note = Self.engineerNote(session.services.study.engineer, project: p, request: request, design: design) { Self.inject(note, key: "engineerNote", into: &request) }
     }
 
-    nonisolated static func inject(_ line: String, into request: inout LLMRequest) {
+    /// What the learner's earlier reviews say, when it helps now: through a lesson's first turn, the first request after
+    /// no project is open (`design`: one is about to be designed) and while a review is open. Hidden and per request,
+    /// never in the frozen prompt; nil is silence.
+    nonisolated static func engineerNote(_ store: EngineerStore, project p: MentorProject?, request: LLMRequest, design: Bool = false) -> String? {
+        let turns = request.messages.filter { $0.role == .user && $0.blocks.contains { $0.kind == .text && $0.meta == nil } }.count
+        guard turns <= 1 || design || p?.openReview != nil else { return nil }
+        return store.profile().note(language: EngineerLanguage.of(subject: p?.subject))
+    }
+
+    nonisolated static func inject(_ line: String, key: String = "projectState", into request: inout LLMRequest) {
         guard let i = request.messages.indices.last, request.messages[i].role == .user else { return }
-        request.messages[i].blocks.removeAll { $0.meta?["projectState"]?.bool == true }
-        request.messages[i].blocks.append(Block(kind: .text, text: line, meta: ["projectState": true]))
+        request.messages[i].blocks.removeAll { $0.meta?[key]?.bool == true }
+        request.messages[i].blocks.append(Block(kind: .text, text: line, meta: [key: true]))
     }
 
     nonisolated static func stateLine(_ p: MentorProject, changed: Int?) -> String {

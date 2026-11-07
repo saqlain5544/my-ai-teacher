@@ -130,7 +130,9 @@ struct LessonPlan: Identifiable, Hashable, Sendable {
 
 final class StudyStore: @unchecked Sendable {
     let db: Database
-    init(db: Database) { self.db = db }
+    /// What the code mentor's reviews say about the learner as an engineer, across projects.
+    let engineer: EngineerStore
+    init(db: Database) { self.db = db; engineer = EngineerStore(db: db) }
 
     // MARK: Cards
     private func card(_ r: Row) -> Flashcard? {

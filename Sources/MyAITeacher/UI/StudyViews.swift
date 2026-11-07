@@ -278,6 +278,7 @@ struct StudyProgressView: View {
                         }.padding(.bottom, 8)
                     }
                 }
+                EngineerProfileView()
                 section("Confidence check") {
                     if calibration.isEmpty {
                         Text("Mark how sure you are on quiz questions: this shows how often you're right at each level.").foregroundStyle(.secondary)

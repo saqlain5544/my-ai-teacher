@@ -524,6 +524,24 @@ approvals, hooks and MCP cover every agent.
   reads numbered line ranges and greps within it. Roots are cached per launch. Core in Code mentor mode, deferred in
   other lessons; the instructions make the installed source the textbook and the projects reimplementations of it.
 
+* **The learner as an engineer** (`Study/EngineerProfile.swift`, `UI/EngineerProfileView.swift`). Project records stay in
+  their folders, so the mentor used to forget that a learner missed empty input in four projects running. `project_review`
+  findings take an optional `area` (`EngineerArea`: error handling, edge cases, testing, naming, design, performance,
+  concurrency, memory, security, tooling); a keyword classifier covers old findings (`Finding.area` is optional, so old
+  records decode) and replies that omit it, and a finding no keyword fits is left out rather than guessed. Recording a
+  round rewrites that project's rows in `eng_reviews` and `eng_findings` (`teacher.sqlite`, never a project folder) whole
+  from its record, in one transaction, so re-recording is idempotent; a one-time backfill (`Runtime.job`) reads the
+  `project.json` and `projects/*.json` of the folders the app knows. No model call anywhere: the profile is computed at
+  read time. Per area and language: reviews in the last five that raised it, findings by severity weight with a 60-day
+  half-life, a trend (last three reviews against the three before), and fixes split into *on their own* and *after hints*
+  (a revealed rung, or help reported in the round that checked it): hinted work is evidence and the profile never feeds
+  mastery. A **pattern** needs three reviews of the last five (60%), in at least two projects, and not clean in the two
+  latest; clean in both after three hits is *moving past*, and says nothing. `CodeMentorExtension` adds an ephemeral
+  `<engineer_profile>` block (about 120 tokens, 480 characters at most, area names and counts only, never finding text)
+  at a lesson's start, when no project is open and while a review is open; no pattern, no block. Progress › "How you work
+  as an engineer" lists patterns with up to three linked findings; the learner can dismiss a pattern (`eng_dismissed`) or
+  reset (`reset_at` keeps older reviews from returning through a backfill).
+
 ## Language mentor
 * **Mode `language`** (`Instructions.mode(.language)`), with `language` and `vocab` as core tools (deferred in every
   other mode, loadable with `load_tools`). `LanguageTool`: profile (target/native/level in the `languages` table),
@@ -739,7 +757,9 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
     ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
     │               skills: conversation-practice, grammar-drills, pronunciation-coaching
     └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, source, glob, grep, code (runtime)
-                       skills: debugging-coaching, code-review-feedback, project-scaffolding
+                       skills: debugging-coaching, code-review-feedback, project-scaffolding,
+                               tdd-coaching, reading-unfamiliar-code, refactoring-safely, performance-investigation,
+                               concurrency-bugs, secure-code-review, system-design-practice, technical-interview-practice
 ```
 
 * **Three sets per node.** `core` tools go with every request; `deferred` ones load at runtime (one short line each in

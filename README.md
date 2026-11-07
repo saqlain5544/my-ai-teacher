@@ -107,6 +107,11 @@ first program to research-level work — by understanding it and building with i
   file and line, `must` / `should` / `nit`, fixed ones struck through, the verdict. Like a demanding senior engineer:
   correctness and the failing tests first, then design, naming, edge cases, complexity, the tests you should add, with
   questions and hints rather than code. A pass with green tests records the project's concept as mastered.
+* **It remembers how you work.** Review findings are tagged by area (error handling, edge cases, testing, naming, design,
+  performance, concurrency, memory, security, tooling) and kept across projects, per language. When the same area shows
+  up in several reviews of several projects, the mentor quietly aims at it: a new project exercises it, a review checks
+  it first. Progress shows the pattern with its evidence; you can dismiss it or reset it. One review never makes a habit,
+  and once you have moved past an area (Progress lists it under "Moving past") the mentor stops raising it.
 * **An engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files, the project
   profile (how your project builds, checks and tests) and an index of the project (definitions, uses and callers,
   imports, search by meaning), so it reads your code precisely and builds its examples against your real toolchain.
