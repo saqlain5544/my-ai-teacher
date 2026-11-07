@@ -405,8 +405,10 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   location got there by approval, so `runBounded` runs it without the deny-reads (`rg` would otherwise be refused). The
   fence is a guard rail, not a hard boundary: the profile is `(allow default)` plus denies, and another process (`open`,
   `osascript`, a launchd job) is outside it. It breaks git over SSH, gh, docker, aws, and programs that sandbox themselves:
-  `Secrets.shellScript` adds `--disable-sandbox` to `swift build|test|run` when the fence is on and unsets the scrubbed names
-  at the start of a script (`zsh -c` re-sources `~/.zshenv`); `Secrets.hint` explains a nested-sandbox error.
+  `ProjectProfile.detect` returns its `swift build`/`swift test` with `--disable-sandbox` when the fence is on (`flagged`;
+  a model-typed command is never rewritten). `Secrets.shellScript` only prepends an `unset` of the scrubbed names on the
+  script's first line (`zsh -c` re-sources `~/.zshenv`); `Secrets.hint` explains a nested-sandbox error on `bash`,
+  `run_tests` and `diagnostics` output.
 * **Transcript images.** The page's CSP has no `http(s)` in `img-src`. DOMPurify's `afterSanitizeAttributes` moves any remote
   `<img src>` to `data-remote` (and drops `srcset`, svg `image`/`use` external hrefs); a processor shows “Image from host”; a
   click loads it through `RemoteImageSchemeHandler` (`teacher-remote://img/?k=<per-process key>&u=<https url>`, https only,

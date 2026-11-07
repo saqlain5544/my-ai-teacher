@@ -103,7 +103,7 @@ extension Tool {
                 return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
             }
         }
-        if let hint = Secrets.hint(for: out.text) { out.text += "\n" + hint }
+        if let hint = Secrets.hint(for: out.text), !out.text.contains(hint) { out.text += "\n" + hint }
         return Secrets.redacted(tool: name, out)
     }
     func summary(_ input: JSON) -> String {

@@ -249,7 +249,21 @@ struct ProjectProfile: Sendable, Equatable {
         cacheLock.withLock { cache = [:] }
     }
 
-    static func detect(_ folder: URL) async -> ProjectProfile {
+    /// The profile with its Swift commands ready to run under the credential fence (`flagged`).
+    static func detect(_ folder: URL) async -> ProjectProfile { await detectCached(folder).flagged(Secrets.fenceActive) }
+
+    /// `swift build` and `swift test` as the profile suggests them: with the fence on, SwiftPM's own manifest sandbox can't
+    /// nest inside it, so they carry `--disable-sandbox`. Only these suggested commands change; what the model types is
+    /// never rewritten.
+    func flagged(_ fenceOn: Bool) -> ProjectProfile {
+        guard fenceOn else { return self }
+        var p = self
+        let f = { (c: String) in c == "swift build" || c == "swift test" ? c + " --disable-sandbox" : c }
+        p.commands.build = commands.build.map(f); p.commands.check = commands.check.map(f); p.commands.test = commands.test.map(f)
+        return p
+    }
+
+    private static func detectCached(_ folder: URL) async -> ProjectProfile {
         let key = folder.standardizedFileURL.path
         let fp = fingerprint(folder)
         let now = Date()

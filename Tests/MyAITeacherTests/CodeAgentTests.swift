@@ -36,6 +36,8 @@ final class CodeAgentTests: XCTestCase {
         try write("Cargo.toml", "[package]"); try write("go.mod", "module x"); try write("build.zig", "")
         try write("Makefile", "build:\n\tswift build\ntest: build\n\tswift test\n.PHONY: build\nCC := clang\n")
         try write("src/a.swift", "let a = 1"); try write("src/b.ts", "export const b = 1"); try write("src/c.ts", ""); try write("src/d.ts", "")
+        Secrets.update { $0.protectCredentials = false }   // this test reads the manifests' own commands; the flag has its own test
+        defer { Secrets.update { $0.protectCredentials = true } }
         let p = await ProjectProfile.detect(dir)
         XCTAssertTrue(p.kinds.contains("Swift package") && p.kinds.contains("npm package (pnpm)") && p.kinds.contains("TypeScript") && p.kinds.contains("Cargo (no lockfile yet)") && p.kinds.contains("Go module") && p.kinds.contains("Zig") && p.kinds.contains("Makefile"), "\(p.kinds)")
         XCTAssertEqual(p.commands.check.first, "swift build")

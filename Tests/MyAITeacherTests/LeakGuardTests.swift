@@ -87,11 +87,11 @@ final class LeakGuardTests: XCTestCase {
         defer { ShellEnvironment.shared.inject("LG_TEST_TOKEN", nil) }
         XCTAssertEqual(Secrets.shellScript("swift test"), "swift test", "outside a model's call nothing changes")
         let script: String = try await Secrets.$agentCall.withValue(true) {
-            try await WriteFence.$profile.withValue("(version 1)\n(allow default)\n") { Secrets.shellScript("swift build && swift test --filter X\nswift build --disable-sandbox") }
+            try await WriteFence.$profile.withValue("(version 1)\n(allow default)\n") { Secrets.shellScript("swift build\nls") }
         }
         XCTAssertTrue(script.hasPrefix("unset "), script)
         XCTAssertTrue(script.contains("LG_TEST_TOKEN"), script)
-        XCTAssertTrue(script.contains("swift build --disable-sandbox && swift test --disable-sandbox --filter X\nswift build --disable-sandbox"), script)
+        XCTAssertTrue(script.hasSuffix("; swift build\nls"), "the model's text is untouched: " + script)
         XCTAssertEqual(script.components(separatedBy: "\n").count, 2, "the unset shares the first line")
         // A shell the model starts through ProcessRunner: a ~/.zshenv that re-exports a secret does not get it through.
         let out = try await Fake { _ in

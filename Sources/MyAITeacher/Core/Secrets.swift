@@ -162,18 +162,17 @@ enum Secrets {
 
     // MARK: Commands
 
+    /// The credential fence is on for the commands the model starts.
+    static var fenceActive: Bool { current.protectCredentials && WriteFence.available }
+
     /// A shell script for a command the model started: the scrubbed names unset first (a `~/.zshenv` re-exports them, since
-    /// `zsh -c` sources it), on the script's first line so line numbers stay; and, when the fence is on, `--disable-sandbox`
-    /// for `swift build|test|run`, whose own sandbox can't nest inside ours.
+    /// `zsh -c` sources it), on the script's first line so line numbers stay. Only names that are plain identifiers are
+    /// listed. Nothing the model wrote is changed.
     static func shellScript(_ script: String) -> String {
         guard agentCall else { return script }
-        var out = script
-        if WriteFence.profile != nil, WriteFence.available {
-            out = out.replacingOccurrences(of: "\\bswift (build|test|run)\\b(?! --disable-sandbox)", with: "swift $1 --disable-sandbox", options: .regularExpression)
-        }
         let c = current
         let names = ShellEnvironment.shared.all.keys.filter { isSecretName($0, c) && !c.envAllow.contains($0) && $0.range(of: "^[A-Za-z_][A-Za-z0-9_]*$", options: .regularExpression) != nil }.sorted()
-        return names.isEmpty ? out : "unset \(names.joined(separator: " ")) 2>/dev/null; " + out
+        return names.isEmpty ? script : "unset \(names.joined(separator: " ")) 2>/dev/null; " + script
     }
 
     /// A hint for the error a nested sandbox gives, appended to the command's output.

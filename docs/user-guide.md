@@ -537,7 +537,10 @@ Stop the agent any time with ⌘. or Esc twice.
     keys: the file tools ask once per lesson, and commands the teacher starts can't read them (the macOS sandbox refuses).
     **That breaks, inside the teacher's shell:** `git` over SSH, `gh`, `docker` logins, `aws`, anything that needs your
     Keychain, Homebrew when it reads your credentials, and tools that apply a sandbox of their own (SwiftPM without
-    `--disable-sandbox`; the teacher adds the flag to `swift build`, `swift test` and `swift run` for you). A switch in
+    `--disable-sandbox`). The `swift build` and `swift test` commands the teacher suggests for a Swift package carry that
+    flag; a command the model types itself is never changed, and if it fails with a sandbox error the output says to add
+    the flag. The trade-off: with the flag, SwiftPM's own manifest and plugin sandbox is off for those builds, while this
+    app's credential sandbox, which allows far more than SwiftPM's, stays on. A switch in
     **Settings › Tools › Secrets** turns the protection off. It is a guard rail, not a wall: a command can still ask
     another program (`open`, `osascript`) to do what it can't.
   * What `.env` files get: project `.env` files are **not** blocked, since test runners need them. In what the model

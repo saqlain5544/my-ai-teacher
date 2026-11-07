@@ -83,6 +83,7 @@ struct RunTestsTool: Tool {
         let r = await ProcessRunner.run(shell, ["-c", command], cwd: cwd, timeout: timeout, onOutput: { progress($0) })
         var out = (r.stdout + (r.stderr.isEmpty ? "" : "\n" + r.stderr)).trimmingCharacters(in: .whitespacesAndNewlines)
         if r.timedOut { out += "\n[timed out after \(Int(timeout)) s]" }
+        if let hint = Secrets.hint(for: out) { out += "\n" + hint }   // the card shows only the tail: the hint goes last
         return Case(name: name, passed: r.exitCode == 0 && !r.timedOut, seconds: Date().timeIntervalSince(t0), output: out, counts: counts(out))
     }
 
