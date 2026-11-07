@@ -1,0 +1,6 @@
+{
+  "name": "study-kit",
+  "version": "1.0.0",
+  "description": "A small example plugin: one skill for worked examples and one command that makes flashcards.",
+  "author": { "name": "My AI Teacher" }
+}

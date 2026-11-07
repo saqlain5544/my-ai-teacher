@@ -1246,6 +1246,59 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | One web_fetch, peak footprint (CLI): 300 KB / 1 MB / 3 MB page | 27 / 69 / 151 MB | **21 / 49 / 96 MB** |
 | App footprint after three 3 MB fetches / conversion time | 219 MB / 538 ms | **153 MB / 352 ms** |
 
+## Trust, custom commands and plugins
+
+What a folder or a plugin supplies as *instructions* (skills, sub-agent definitions, commands, hooks, MCP servers) is
+data until the user approves its exact files. The model is one: a SHA-256 fingerprint, the approval kept in
+`AppSettings` (never in the folder), a change asks again.
+
+* **A folder's own skills, agents and commands** (`ProjectTrust`): `.teacher|.claude|.opencode|.agents/skills`,
+  `.teacher|.claude/agents`, `.teacher|.claude/commands`. `TreeDigest` hashes what reaches a prompt (each `SKILL.md`, agent and command file; at most 400 files, 1 MB each) and only
+  lists the rest of a skill's folder by path and size (`node_modules` and `.git` are left out), so bundled assets can't trip
+  the limit; `.DS_Store` and `._*` never count. Symlinks are followed and their content hashed; the card shows where each
+  leads, and one resolving into a credential location (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, Docker's
+  config, Keychains, the app's keys file) blocks the folder. Too much to hash is `ProjectTrust.State.blocked(reason)`, shown in
+  Settings › Agents and the command notice, never silence. File hashes are cached by path, size and time, and the prompt build
+  warms them off the main actor; `AppSettings.approvedProjectContent[folder]` holds the approved
+  fingerprint. Every seam receives the folder only through `ProjectTrust.approved(folder, settings)`, so unapproved content
+  can't leak: `SystemPrompt.build` (skills), `AgentCatalog.all(settings:folder:)` (the five sites), `CustomCommands`. Until
+  approved, the prompt's `# Skills` section carries one neutral line (`ProjectTrust.awaitingLine`) and nothing else. The
+  prompt is frozen per lesson, so approval mid-lesson takes effect through `SkillTool`: a call that finds no such skill
+  asks (`ProjectTrust.resolve`, an approval card under the call, one question per lesson and fingerprint, a decline holds
+  for the lesson, a sub-agent never asks) and then reads the live files. The prompt itself stays frozen; `ChatSession.contentChangeNote` adds a one-time hidden
+  ephemeral note on the next turn naming what became or stopped being available (an approval, a plugin switched off or updated).
+  Settings › Agents › Skills approves or revokes too.
+* **Custom commands** (`CustomCommands`): Markdown files in `~/.teacher/commands`, `~/.claude/commands` and the folder's
+  `.teacher|.claude/commands` (folder ones under the trust above), front matter `description` and `argument-hint`;
+  `$ARGUMENTS` and `$1`…`$9` expand in one pass (substituted text is never expanded again; arguments a command never
+  mentions are appended). A command's expansion is sent as plain text (`send(_:literal:)`) and never parsed as a command again,
+  so `/loop` whose body is `/loop` can't recurse. They join the `/` menu through `ProjectCommands.lessonSuggestions(current:custom:)` and expand
+  into the message sent (`lessonCommand(_:custom:)`); a built-in's name is never taken, the folder's beats the user's.
+  **Deliberately no `!` shell execution and no `@` file inclusion** (Claude Code's): a command file is text, so
+  installing or approving one can never run anything; the agent reads or runs through its own tools, under the usual approvals.
+* **Plugins** (`Plugins`, `Plugin`, `PluginInstaller`, `UI/PluginsSettings.swift`), Claude Code's layout:
+  `.claude-plugin/plugin.json` plus `skills/`, `agents/`, `commands/`, `hooks/hooks.json`, `.mcp.json`. Installed in
+  `AppPaths.support/plugins/<name>/`; `AppSettings.plugins[name]` is a `PluginRecord` (enabled, approved fingerprint,
+  source, commit). A plugin is **active** only if enabled *and* its fingerprint (SHA-256 over every file) equals the approved
+  one, so a new install and any update are quiet until the user reviews them (`Plugin.review()`: components, hook and MCP
+  commands verbatim). Active plugins merge through the existing seams, tagged with their plugin: `Skills.available(plugins:)`,
+  `AgentCatalog.all(plugins:)`, `HookSet` (`HookCommand.plugin/root`, `CLAUDE_PLUGIN_ROOT`; `HooksExtension.active`),
+  `MCPConfig.entries` (servers named `plugin-server`, `${CLAUDE_PLUGIN_ROOT}` filled in) and `CustomCommands`. A plugin never
+  shadows: a taken name becomes `plugin:name` (agents and servers `plugin-name`). Disabling or removing only stops
+  being "active"; the components vanish from every seam and `MCPHub.stopPlugin` ends its servers. Hooks keep the existing rules
+  (`allow` ignored, never widen permissions) and agents the lesson's grants (they only choose from the type's tools).
+  **Install** is from a local folder (copied file by file: no `.git`, symlinks only if relative and inside) or a git URL
+  (`validateGitURL`: https, ssh, `user@host:path` only; no `ext::`/`fd::`, options or shell characters), cloned shallow with
+  `core.hooksPath=/dev/null`, `protocol.ext.allow=never`, `core.symlinks=false`, no submodules, `GIT_TERMINAL_PROMPT=0`, no
+  global/system git config (no filters), `GIT_ALLOW_PROTOCOL=https:ssh`; the commit is recorded and `.git` removed. Bounds:
+  500 files, 20 MB, 2 MB a file (a clone is also killed past 60 MB while running, `--filter=blob:limit=2m`); every symlink is
+  resolved on the real filesystem (`realpath`) and must land inside the real plugin folder, else (or if dangling) it is rejected,
+  as are special files, bad names and shipped caches (`__pycache__`, `.cache`, `*.pyc`, which are left out of the fingerprint so
+  a plugin's own runtime caches don't un-approve it). The review lists hook and MCP commands first, word for word, with line breaks
+  and control or bidi characters shown (↵, <U+202E>), and a short clamped description last. A plugin's MCP server never takes the
+  name of one the user or the folder has. `/plugin` lists them
+  and opens Settings. No registry, no auto-update. Author's guide: `docs/plugins.md`; example: `examples/plugins/study-kit`.
+
 ## Tool parity with Claude Code
 | Claude Code tool | My AI Teacher | Notes |
 |---|---|---|
@@ -1276,7 +1329,9 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | LSP tool (Claude Code's `LSP`) | `lsp` | the compiler's view through the file's language server (rust-analyzer, gopls, sourcekit-lsp, clangd, TypeScript, zls, pyright/pylsp where installed): definition, references, hover, type definition, implementation, document and workspace symbols, diagnostics, call hierarchy, rename preview (applies nothing); position by `line` + `symbol`; deferred in the code mentor, sub-agents too; the first use of a server in a folder asks the learner (stored in the app), a sub-agent can't ask; supervised, at most 3, idle 10 min |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
 | /compact, /context | `ContextCommand`, `ContextReport` | `/compact [focus]` summarises now (focus to `Compaction.summarise`), says tokens before → after; `/context` opens the lesson info on the breakdown, no model call |
-| /command | `ProjectCommands` | a lesson's own commands only: the follow-ups (`/simpler`, `/quiz`…) and mode switches (`/socratic`…); no project or user command files |
+| /command | `ProjectCommands`, `CustomCommands` | the lesson's follow-ups (`/simpler`, `/quiz`…), mode switches and `/review`; Markdown command files from `~/.teacher|.claude/commands` and the folder's (once approved) with `description`, `argument-hint`, `$ARGUMENTS`, `$1`…`$9`; plugins' commands (`/plugin:name` on a clash). No `!` shell execution or `@` file inclusion, by decision |
+| Skills | `Skills`, `SkillTool`, `ProjectTrust` | `SKILL.md` folders from the app, `~/.teacher|.claude|.config/opencode|.agents`, the folder's (only once approved, by fingerprint) and plugins'; listed in one line each, loaded on demand |
+| Plugins (`.claude-plugin/plugin.json`) | `Plugins`, `PluginInstaller` | skills, agents, commands, hooks and `.mcp.json` from a local folder or a hardened git clone; nothing used until the exact fingerprint is approved; Settings › Plugins, `/plugin`. No marketplace or auto-update |
 | MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every agent; every call asked (per-server "always allow" per folder); supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |

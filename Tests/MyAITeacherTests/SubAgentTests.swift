@@ -182,7 +182,7 @@ final class SubAgentTests: XCTestCase {
         XCTAssertTrue(text.contains("ran-it"), text)
     }
 
-    func testProjectAndAppTypes() async throws {
+    @MainActor func testProjectAndAppTypes() async throws {
         let agents = dir.appendingPathComponent(".teacher/agents")
         try FileManager.default.createDirectory(at: agents, withIntermediateDirectories: true)
         try """
@@ -198,6 +198,9 @@ final class SubAgentTests: XCTestCase {
         You summarise files in one line.
         """.write(to: agents.appendingPathComponent("summariser.md"), atomically: true, encoding: .utf8)
         try "---\nname: explore\ntools: write\n---\nI write.".write(to: agents.appendingPathComponent("explore.md"), atomically: true, encoding: .utf8)
+        // A folder's own agents are used only once the user approved their exact files (ProjectTrust); this is it.
+        AppModel.shared.settings.value.approvedProjectContent[dir.path] = ProjectTrust.fingerprint(dir)
+        defer { AppModel.shared.settings.value.approvedProjectContent[dir.path] = nil }
         var host = FakeHost(folder: dir)
         host.settings.definitions = [AgentDefinition(name: "poet", description: "Writes verse", prompt: "You are a poet.", tools: ["web_search"])]
         let types = AgentCatalog.all(app: host.settings.definitions, folder: dir)

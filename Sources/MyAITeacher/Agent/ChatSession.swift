@@ -168,7 +168,8 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    func send(_ text: String, attachments: [Block] = []) {
+    /// `literal`: the text is a message, never a command (what a custom command expanded to: a body of `/loop` must not run it again).
+    func send(_ text: String, attachments: [Block] = [], literal: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // Context commands act on the lesson itself, not on the model: no turn, no tokens (`/compact` makes one summary call).
@@ -182,9 +183,25 @@ final class ChatSession: ObservableObject, Identifiable {
             return
         }
         // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
-        if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
+        let custom = !literal && trimmed.hasPrefix("/") ? CustomCommands.available(folder: services.workspace.url, settings: settings) : []
+        if !literal, !isRunning, trimmed.hasPrefix("/"), ProjectCommands.lessonCommand(trimmed, custom: custom) == nil, let word = trimmed.dropFirst().split(whereSeparator: \.isWhitespace).first?.lowercased(),
+           ProjectCommands.lessonCommand("/" + word) == nil, ProjectTrust.commandNames(services.workspace.url).contains(word) {
+            // Its file is the folder's, and the folder's commands wait for the user's approval (never sent to the model as typed).
+            switch ProjectTrust.state(services.workspace.url, settings, lesson: id) {
+            case .blocked(let why): sink?.notice("/\(word) is one of this folder's own commands, which can't be used: \(why)")
+            case .approved, .none: break
+            default:
+                sink?.notice("/\(word) is one of this folder's own commands, which waits for your approval: the agent asks the first time it needs a folder skill, or approve it in Settings → Agents.")
+            }
+            if ProjectTrust.state(services.workspace.url, settings, lesson: id) != .approved { return }
+        }
+        if !literal, !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed, custom: custom) {
             switch cmd {
-            case .prompt(let p): send(p, attachments: attachments)
+            case .plugins:
+                let list = Plugins.installed(settings).map { "\($0.name) (\($0.standing == .active ? "on" : $0.standing == .disabled ? "off" : "needs approval"))" }
+                sink?.notice(list.isEmpty ? "No plugins installed. Settings → Plugins installs one from a folder or a git URL." : "Plugins: " + list.joined(separator: ", ") + ". Settings → Plugins manages them.")
+                Plugins.openSettings()
+            case .prompt(let p): send(p, attachments: attachments, literal: true)   // as plain text, never as a command again
             case .mode(let m, let then):
                 setMode(m)
                 sink?.notice("Switched to \(m.title) mode.")
@@ -364,6 +381,9 @@ final class ChatSession: ObservableObject, Identifiable {
         guard let i = messages.lastIndex(where: { $0.role == .user && !$0.isToolResultOnly }) else { return true }
         var m = messages[i]
         let why = await host.willStartTurn(&m, self)
+        if why == nil, let note = await contentChangeNote() {
+            m.blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true]))
+        }
         guard i < messages.count, messages[i].id == m.id else { return true }
         if let why {
             let text = m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
@@ -936,7 +956,25 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Context
 
+    // MARK: What the frozen prompt doesn't know
+
+    /// The system prompt is frozen for the lesson (caching), so an approval, a plugin switched off or an update after it was
+    /// written (also one made while the app was closed) is told once, in a hidden note on the turn's message. Nil when nothing
+    /// changed. The folders are read off the main actor.
+    func contentChangeNote() async -> String? {
+        let now = await ContentScan.usable(node: AgentTree.node(for: conversation.mode), folder: services.workspace.url, settings: settings)
+        defer { conversation.contentSeen = now }
+        guard let before = conversation.contentSeen.map(Set.init), before != Set(now) else { return nil }
+        let added = Set(now).subtracting(before).sorted(), gone = before.subtracting(now).sorted()
+        var note = "[Since your instructions were written, what this folder and the user's plugins supply has changed."
+        if !added.isEmpty { note += " Now available: " + added.joined(separator: ", ") + "." }
+        if !gone.isEmpty { note += " No longer available: " + gone.joined(separator: ", ") + "." }
+        return note + " The Skills list above may be out of date, including any note that folder skills await approval: `skill` is always current.]"
+    }
+
     private func buildSystemPrompt(model: String) async -> String {
+        // The baseline for `contentChangeNote` is what the folder and plugins offer as this prompt is written.
+        conversation.contentSeen = await ContentScan.usable(node: AgentTree.node(for: conversation.mode), folder: services.workspace.url, settings: settings)
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
                                    folder: services.workspace.url)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }

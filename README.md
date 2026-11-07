@@ -176,6 +176,7 @@ Every lesson, in any mode, works in the open folder with the same tools and safe
 * **MCP servers** (stdio or streamable HTTP): add your own in Settings → MCP, or use the project's `.mcp.json`
   (Claude Code's format), which runs nothing until you approve each server once. Their tools load when the agent needs
   them, and every call asks unless you always allow that server in the folder;
+* **plugins** in Claude Code's layout (skills, agents, commands, hooks, MCP) installed from a folder or git URL, used only after you approve their exact files, and your own `/` commands as Markdown files (`docs/plugins.md`); a folder's own skills, agents and commands need the same approval;
 * **hooks** in Claude Code's format (Settings → Hooks, or the project's `.claude/settings.json` once you approve it);
 * a git diff panel with checkpoints.
 

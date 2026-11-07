@@ -167,4 +167,8 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var touchedFiles: [String]?
     /// The model refused a request over an attached image (a text-only model): from then on images travel as a note.
     var imagesUnsupported: Bool?
+    /// The folder and plugin content (skills, agent types, commands) the lesson could use when its prompt was written or it
+    /// last heard of a change (`ChatSession.contentChangeNote`); kept with the lesson so a change made while the app was
+    /// closed is still told. Lessons saved before this decode with nil.
+    var contentSeen: [String]?
 }

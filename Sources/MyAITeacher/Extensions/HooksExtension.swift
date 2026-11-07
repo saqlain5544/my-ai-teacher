@@ -13,6 +13,9 @@ enum HookEvent: String, CaseIterable, Sendable {
 struct HookCommand: Equatable, Sendable {
     var command: String
     var timeout: TimeInterval = HookCommand.defaultTimeout
+    /// A plugin's hook: the plugin and its folder (`CLAUDE_PLUGIN_ROOT` for the command).
+    var plugin: String?
+    var root: String?
     static let defaultTimeout: TimeInterval = 60
 }
 
@@ -69,6 +72,13 @@ struct HookSet: Equatable, Sendable {
         return set
     }
 
+    /// The same hooks, marked as a plugin's.
+    func tagged(plugin: String, root: String) -> HookSet {
+        var s = self
+        for (e, groups) in s.events { s.events[e] = groups.map { g in var g = g; g.commands = g.commands.map { var c = $0; c.plugin = plugin; c.root = root; return c }; return g } }
+        return s
+    }
+
     func merged(_ other: HookSet) -> HookSet {
         var m = self
         for (e, groups) in other.events { m.events[e, default: []] += groups }
@@ -79,7 +89,7 @@ struct HookSet: Equatable, Sendable {
     func commands(_ event: HookEvent, tool: String = "") -> [HookCommand] {
         var seen = Set<String>(), out: [HookCommand] = []
         for g in events[event] ?? [] where !event.matchesTools || Self.matches(g.matcher, tool: tool) {
-            for c in g.commands where seen.insert(c.command).inserted { out.append(c) }
+            for c in g.commands where seen.insert((c.root ?? "") + "\0" + c.command).inserted { out.append(c) }
         }
         return out
     }
@@ -158,6 +168,7 @@ enum HookRunner {
     static func run(_ hook: HookCommand, event: HookEvent, input: JSON, folder: URL) async -> HookOutcome {
         var env = ShellEnvironment.shared.all
         env["CLAUDE_PROJECT_DIR"] = folder.path   // what Claude Code's hooks use to find the project's scripts
+        if let root = hook.root { env["CLAUDE_PLUGIN_ROOT"] = root }   // and a plugin's hooks, their own folder
         let r = await ProcessRunner.run("/bin/sh", ["-c", hook.command], cwd: folder, env: env, stdin: input.compact + "\n",
                                         timeout: hook.timeout, outputLimit: outputLimit)
         if r.timedOut { return HookOutcome(error: "timed out after \(Int(hook.timeout)) s") }
@@ -217,13 +228,16 @@ final class HooksExtension: AgentExtension {
         var userHooks: @MainActor () -> String
         var approved: @MainActor (_ folder: String) -> String?
         var approve: @MainActor (_ folder: String, _ fingerprint: String) -> Void
+        /// Enabled, approved plugins: their hooks run with the user's, under the same rules.
+        var plugins: @MainActor () -> [Plugin] = { [] }
     }
     private let source: Source
     init(source: Source) { self.source = source }
     convenience init(app: AppModel) {
         self.init(source: Source(userHooks: { [unowned app] in app.settings.value.hooks },
                                  approved: { [unowned app] in app.settings.value.approvedHooks[$0] },
-                                 approve: { [unowned app] in app.settings.value.approvedHooks[$0] = $1 }))
+                                 approve: { [unowned app] in app.settings.value.approvedHooks[$0] = $1 },
+                                 plugins: { [unowned app] in Plugins.active(app.settings.value) }))
     }
 
     /// A folder's hooks turned down in a lesson, and those being asked about (lesson id + fingerprint).
@@ -261,6 +275,7 @@ final class HooksExtension: AgentExtension {
         guard Self.covers(session) else { return HookSet() }
         var set = userHooks()
         if let p = project(session), p.trust == .approved { set = set.merged(p.hooks) }
+        set = set.merged(Plugins.hooks(source.plugins()))
         return set
     }
 

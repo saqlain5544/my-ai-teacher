@@ -6,7 +6,7 @@ import CryptoKit
 /// the user's own (Settings → MCP); project servers come from the folder's `.mcp.json` and never start before the user
 /// approves them once (a cloned repository can't run programs by itself).
 struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
-    enum Scope: String, Codable, Sendable { case app, project }
+    enum Scope: String, Codable, Sendable { case app, project, plugin }
     var name: String
     /// "stdio" (the default), "http" (streamable HTTP) or "sse" (the old HTTP+SSE transport, not supported).
     var type = "stdio"
@@ -18,6 +18,8 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
     /// App-level servers only: off keeps it configured but unused.
     var enabled = true
     var scope: Scope = .app
+    /// A plugin's server: the plugin (its name is `plugin-server`).
+    var plugin: String?
 
     var id: String { "\(scope.rawValue):\(name)" }
     var isHTTP: Bool { type == "http" || type == "streamable-http" || (command.isEmpty && !url.isEmpty && type != "sse") }
@@ -59,7 +61,10 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
 
     /// Everything an approval is for: the command line, and the environment it sets (`NODE_OPTIONS` or
     /// `DYLD_INSERT_LIBRARIES` would run other code under an innocent command), or the URL and which headers it sends.
-    var approvalDetail: String {
+    var approvalDetail: String { approvalLines.joined(separator: "\n") }
+
+    /// The parts of `approvalDetail`, one each (a part may itself hold a line break: a reviewer shows it safely).
+    var approvalLines: [String] {
         var lines = [summary]
         if isHTTP || type == "sse" {
             // A literal value may be a secret, so only its name shows; a `${VAR}` template isn't one, and says which of
@@ -70,7 +75,7 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
         } else {
             lines += env.keys.sorted().map { "\($0)=\(env[$0]!)" }
         }
-        return lines.joined(separator: "\n")
+        return lines
     }
 
     /// What "allow for this lesson" and "always allow in this folder" are stored under: a folder's own server by what it
@@ -83,6 +88,14 @@ struct MCPServerConfig: Codable, Sendable, Equatable, Identifiable {
         let canonical: JSON = ["type": .string(isHTTP ? "http" : type), "command": .string(command), "args": .array(args.map { .string($0) }),
                                "env": .object(env.mapValues { .string($0) }), "url": .string(url), "headers": .object(headers.mapValues { .string($0) })]
         return SHA256.hash(data: Data(canonical.sortedCompact.utf8)).prefix(8).map { String(format: "%02x", $0) }.joined()
+    }
+
+    /// A plugin's server with `${CLAUDE_PLUGIN_ROOT}` filled in (Claude Code's variable for the plugin's own folder).
+    func replacingRoot(_ root: String) -> MCPServerConfig {
+        var c = self
+        let r = { (s: String) in s.replacingOccurrences(of: "${CLAUDE_PLUGIN_ROOT}", with: root) }
+        c.command = r(command); c.args = args.map(r); c.env = env.mapValues(r); c.url = r(url); c.headers = headers.mapValues(r)
+        return c
     }
 
     /// With `${VAR}` and `${VAR:-default}` filled in from the user's environment (Claude Code's expansion), and a
@@ -137,7 +150,7 @@ enum MCPConfig {
 
     /// The servers an agent has in `folder`: the user's app-level ones, then the folder's, which win a name clash
     /// (as in Claude Code, project scope over user scope).
-    static func entries(_ folder: URL?, _ settings: AppSettings) -> [Entry] {
+    static func entries(_ folder: URL?, _ settings: AppSettings, pluginRoot: URL = Plugins.root) -> [Entry] {
         var out: [String: Entry] = [:]
         for c in settings.mcpServers where !c.name.isEmpty {
             out[c.name] = Entry(config: c, standing: c.type == "sse" ? .unsupported : c.enabled ? .usable : .disabled)
@@ -151,6 +164,9 @@ enum MCPConfig {
                 out[c.name] = Entry(config: c, standing: standing)
             }
         }
+        // Plugins' servers (their names carry the plugin's): usable because the user approved the plugin's exact files.
+        // A plugin never takes the place of a server the user or the folder has.
+        for c in Plugins.servers(Plugins.active(settings, root: pluginRoot)) where c.type != "sse" && out[c.name] == nil { out[c.name] = Entry(config: c, standing: .usable) }
         return out.values.sorted { $0.config.name < $1.config.name }
     }
 

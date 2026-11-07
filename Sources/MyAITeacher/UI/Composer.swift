@@ -192,7 +192,7 @@ struct Composer: View {
 
     /// Every command this lesson has (read when a `/` is typed).
     private func loadSlashCommands() -> [ProjectCommands.Suggestion] {
-        ProjectCommands.lessonSuggestions(current: session.conversation.mode)
+        ProjectCommands.lessonSuggestions(current: session.conversation.mode, custom: CustomCommands.available(folder: session.services.workspace.url, settings: session.settings))
     }
 
     /// ↑ ↓ move, Tab completes, Return completes (or sends a command already complete), Esc closes.
