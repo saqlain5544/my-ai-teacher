@@ -71,6 +71,13 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   doesn't matter and typos are fine ("deepseek nvidia", "nvdia deepsek", "sonet 5.5"), but version numbers must match.
 * **Context.** Automatic by default: a lesson keeps up to half the model's window (at most 400k tokens) before older
   tool output is trimmed and earlier parts are summarised. You can set a fixed budget in Settings › General.
+  * A summary always carries what the app knows exactly, whatever the model wrote: your todo list, the files changed, the
+    course goal, the project's test command and last result, jobs still running, and the files read last.
+  * `/context` shows where the tokens go (system prompt, tools, memory, messages, tool results, images, reasoning) and
+    names the biggest; `/compact` summarises now, and `/compact keep everything about the parser` says what to keep. The
+    transcript stays whole; the note says how many tokens it saved.
+  * Reading a file again that has not changed, while the first read is still in the conversation, costs a one-line note.
+  * One step's tool results together are capped: the largest keep their start and end and the rest is saved in `.teacher/outputs`.
 * **Plan and check substantial answers** (Settings › General, on by default).
   * A substantial request gets a hidden plan first: what you need, an outline, what to verify with tools, what to research.
   * A reviewer reads the reply before you do. If it finds a real problem (an error, an unchecked claim, a toy example, a
@@ -117,7 +124,8 @@ xattr -dr com.apple.quarantine "/Applications/My AI Teacher.app"
   * In a lesson:
     * the follow-ups: `/simpler`, `/deeper`, `/example`, `/quiz` and `/flashcards`;
     * switching mode: `/socratic`, `/explain`, `/exam`, `/eli5`, `/research`, `/language`, `/code` or `/tutor`. Text after
-      a mode command is sent in the new mode.
+      a mode command is sent in the new mode;
+    * `/context` and `/compact [focus]`: see where the context goes, or summarise now.
 * **Code blocks** have a **Run** button. Python, JavaScript, TypeScript, Swift, C, C++, Go, Rust, Ruby, Java, Zig and
   Bash run on your Mac when the toolchain is installed.
 * **Drawings.** Every mode draws in its replies: diagrams, function plots, charts, exact SVG figures and interactive

@@ -171,6 +171,16 @@ final class ChatSession: ObservableObject, Identifiable {
     func send(_ text: String, attachments: [Block] = []) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
+        // Context commands act on the lesson itself, not on the model: no turn, no tokens (`/compact` makes one summary call).
+        if let cmd = ContextCommand.parse(trimmed) {
+            switch cmd {
+            case .compact(let focus):
+                guard !isRunning else { sink?.notice("Wait for the reply to finish, then try /compact again."); return }
+                compactNow(focus: focus)
+            case .context: showContext = true
+            }
+            return
+        }
         // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
         if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed) {
             switch cmd {
@@ -394,6 +404,7 @@ final class ChatSession: ObservableObject, Identifiable {
         var stats = conversation.stats ?? ConversationStats()
         stats.add(turn, contextTokens: ctx)
         conversation.stats = stats
+        absorbTouchedFiles()
         save()
         ActivityLog.record("turn.end", conv: id, ["ms": ActivityLog.ms(turn.duration), "steps": .number(Double(turn.steps)),
                                                   "tools": .array(turn.tools.map { .string($0.name + ($0.ok ? "" : "!")) }),
@@ -405,11 +416,14 @@ final class ChatSession: ObservableObject, Identifiable {
         if !detached { app.sessionDidFinishTurn(self) }
         // Background reports that came in as the turn ended (past its last step boundary, or with a Stop or an error) would
         // otherwise wait in memory and be lost with the lesson: they join it, and wake the agent unless it was stopped.
-        if !inbox.isEmpty, !discarded {
-            let wake = !turn.cancelled && errorMessage == nil
-            drainInbox()
-            if wake { DispatchQueue.main.async { [weak self] in if let self, !self.isRunning { self.start() } } }
-        }
+        adoptInbox(wake: !turn.cancelled && errorMessage == nil)
+    }
+
+    /// Reports queued while the lesson was busy (a turn, or a `/compact`) join it now, and wake the agent when `wake`.
+    func adoptInbox(wake: Bool) {
+        guard !inbox.isEmpty, !discarded else { return }
+        drainInbox()
+        if wake { DispatchQueue.main.async { [weak self] in if let self, !self.isRunning { self.start() } } }
     }
 
     /// How many times one turn may be sent back to work by `willEndTurn` (a Stop hook that always objects can't loop forever).
@@ -774,6 +788,8 @@ final class ChatSession: ObservableObject, Identifiable {
                 i += 1
             }
         }
+        // Together the step's results may not swamp the context (parallel reads, a sub-agent's long report).
+        results = StepCap.apply(results, limit: StepCap.limit(budget: contextBudget), dir: services.workspace.outputsDir)
         placeholder.blocks = results
         placeholder.createdAt = Date()
         if resultIndex < messages.count {
@@ -870,6 +886,7 @@ final class ChatSession: ObservableObject, Identifiable {
         ctx.agentNode = node
         ctx.codeAgent = conversation.mode == .code
         ctx.checkpointTurn = app.extensions.get(CodeAgentExtension.self)?.currentTurnKey(self)
+        if name == "read" { ctx.liveResults = liveResults() }
         let t0 = Date()
         var result: Block
         do {
@@ -884,7 +901,10 @@ final class ChatSession: ObservableObject, Identifiable {
                 for n in loaded where !cur.contains(n) { cur.append(n) }
                 conversation.loadedTools = cur
             }
-            result = .toolResult(id: callID, name: name, content: spillIfLarge(out.text, name: name), isError: out.isError, images: out.images, meta: .object(meta))
+            let (shown, spilled) = spillIfLarge(out.text, name: name)
+            if spilled { meta["spilled"] = true }
+            result = .toolResult(id: callID, name: name, content: shown, isError: out.isError, images: out.images, meta: .object(meta))
+            if out.isError != true, ["write", "edit"].contains(name), let p = meta["path"]?.string { TouchedFiles.record(conversation: id, path: p) }
         } catch is CancellationError {
             result = .toolResult(id: callID, name: name, content: "Cancelled.", isError: true)
         } catch let e as TimeoutError {
@@ -906,11 +926,11 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     /// Very large tool output is saved to `.teacher/outputs`; the model gets a preview and the path (like Claude Code).
-    private func spillIfLarge(_ text: String, name: String) -> String {
-        guard text.count > 60_000 else { return text }
+    private func spillIfLarge(_ text: String, name: String) -> (String, Bool) {
+        guard text.count > 60_000 else { return (text, false) }
         let url = services.workspace.outputsDir.appendingPathComponent("\(name)-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4)).txt")
         try? Data(text.utf8).write(to: url)
-        return String(text.prefix(20_000)) + "\n\n… [Output was \(text.count) characters. Full output saved to \(url.path) — use `read` with offset/limit or `grep` to inspect it.]"
+        return (String(text.prefix(20_000)) + "\n\n… [Output was \(text.count) characters. Full output saved to \(url.path) — use `read` with offset/limit or `grep` to inspect it.]", true)
     }
 
     // MARK: Context
@@ -927,8 +947,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     private func requestMessages() -> [ChatMessage] {
-        let prepared = ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
-                                             budget: contextBudget - systemTokens)
+        let prepared = ContextPolicy.demoteSqueezedNotes(ContextPolicy.squeeze(ContextPolicy.prepare(messages, conversation: conversation, model: conversation.model),
+                                                                                budget: contextBudget - systemTokens))
         return conversation.imagesUnsupported == true ? ContextPolicy.describeImages(prepared) : prepared
     }
 
@@ -974,21 +994,124 @@ final class ChatSession: ObservableObject, Identifiable {
         guard tokens > budget, messages.count > 8 else { return prepared }
         guard let range = Compaction.summaryRange(messages, compactedThrough: conversation.compactedThrough, budget: budget) else { return prepared }
         setStatus("Summarising earlier parts of the lesson…")
+        guard await summarise(range, focus: nil, client: client, budget: budget) else { return prepared }   // stopped mid-summary: the lesson stays as it was
+        sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
+        return requestMessages()
+    }
+
+    /// Replaces `range` by a summary for requests (the transcript keeps everything) and stores it with the app's own facts.
+    private func summarise(_ range: Range<Int>, focus: String?, client: LLMClient, budget: Int) async -> Bool {
         let sp = Signposts.begin("compaction", "\(messages.count) messages"); defer { Signposts.end("compaction", sp) }
         // The course board is not in the transcript (the app keeps it): the summary carries its state so a lesson resumed
         // from the summary alone, and the reflection pass, still know the focus and what is parked.
         let state = host.summaryContext(self).joined(separator: "\n\n")
         let throughID = messages[range.upperBound - 1].id
         let result = await Compaction.summarise(Array(messages[range]), previous: conversation.compactSummary, state: state,
-                                                client: client, model: conversation.model, sessionID: conversation.id)
+                                                client: client, model: conversation.model, sessionID: conversation.id, focus: focus)
         result.usage.forEach(recordAuxiliary)
-        if result.cancelled { return prepared }   // stopped mid-summary: the lesson stays as it was
-        conversation.compactSummary = result.text
+        if result.cancelled { return false }
+        conversation.compactSummary = contextFacts(state: state).appended(to: result.text, budget: budget)
         conversation.compactedThrough = throughID
         conversation.usage?.input = 0
-        sink?.notice("Earlier parts of this lesson were summarised to keep things fast.")
         save()
-        return requestMessages()
+        return true
+    }
+
+    /// Files written by the lesson's agent and its sub-agents (`TouchedFiles`) join the lesson's persisted list.
+    func absorbTouchedFiles() {
+        let new = TouchedFiles.take(conversation: id).filter { !services.workspace.isStatePath(URL(fileURLWithPath: $0)) }
+        guard !new.isEmpty else { return }
+        var files = (conversation.touchedFiles ?? []).filter { !new.contains($0) }
+        files += new
+        conversation.touchedFiles = Array(files.suffix(300))
+    }
+
+    /// The facts a summary must keep, from what the app holds (see `ContextFacts`).
+    func contextFacts(state: String? = nil) -> ContextFacts {
+        let ws = services.workspace
+        absorbTouchedFiles()
+        var f = ContextFacts()
+        f.goal = MemoryText.clip(state ?? host.summaryContext(self).joined(separator: "\n\n"), 900)
+        f.todos = todos.compactMap { t in t["content"]?.string.map { (t["status"]?.string ?? "pending", $0) } }
+        if let p = ProjectStore.load(ws), p.title != nil || p.testCommand != nil {
+            f.project = (p.title ?? "(untitled)", p.testCommand, p.lastRun.map { r in r.line + (r.failing.isEmpty ? "" : " — failing: " + r.failing.prefix(5).joined(separator: ", ")) })
+        }
+        f.changedFiles = (conversation.touchedFiles ?? []).reversed().map { relative($0, to: ws.url.path) }
+        f.running = BackgroundTasks.snapshot().filter { $0.conversationID == id && $0.state.active }
+            .map { ([$0.handle, $0.kind.rawValue].compactMap { $0 }.joined(separator: " ")) + ": " + MemoryText.clip($0.detail ?? $0.title, 120) }
+        var seen = Set<String>()
+        for m in messages.reversed() {
+            for u in m.toolUses.reversed() where u.name == "read" {
+                guard let p = u.input?["path"]?.string else { continue }
+                let r = relative(resolvePath(p, workspace: ws.url).path, to: ws.url.path)
+                if seen.insert(r).inserted { f.recentReads.append(r) }
+            }
+            if f.recentReads.count >= 12 { break }
+        }
+        return f
+    }
+
+    /// Ids of the tool results the model is sent whole right now: after the compaction point and the microcompaction
+    /// epoch, with the lesson inside its budget (so nothing is squeezed). Empty for a model whose history the API edits
+    /// itself (Claude with replayed thinking), and whenever in doubt: a repeat read then returns the file.
+    private func liveResults() -> Set<String> {
+        ContextPolicy.liveResults(messages, conversation: conversation, model: conversation.model, budget: contextBudget - systemTokens)
+    }
+
+    /// Tokens the next request would hold: system prompt and the prepared history.
+    var contextNow: Int { ContextPolicy.estimateTokens(requestMessages()) + systemTokens }
+
+    /// The breakdown `/context` and the lesson info show: no model call.
+    func contextReport() -> ContextReport {
+        let cut = conversation.compactedThrough.flatMap { t in messages.firstIndex { $0.id == t } }
+        let tools = ToolRegistry.active(settings, loaded: conversation.loadedTools ?? [], lessonID: id, mode: conversation.mode, folder: services.workspace.url)
+        let node = AgentTree.node(for: conversation.mode)
+        var r = ContextReport.build(system: conversation.systemPrompt ?? "", memory: services.memory.coreBlock(),
+                                    deferred: ToolRegistry.deferredIndex(node, settings), tools: tools, prepared: requestMessages(),
+                                    raw: Array(messages[((cut ?? -1) + 1)...]), conversation: conversation, budget: contextBudget,
+                                    window: app.modelInfo(conversation.providerID, conversation.model)?.contextWindow)
+        r.summarisedMessages = cut.map { base + $0 + 1 } ?? 0
+        r.lastCompaction = lastCompaction
+        return r
+    }
+
+    /// Tests: mark the lesson busy as a running turn or `/compact` would, without a model.
+    func holdBusyForTests(_ on: Bool) { isRunning = on }
+    var queuedReports: Int { inbox.count }
+
+    @Published var lastCompaction: String?
+    /// Set by `/context`: the lesson info popover opens on the breakdown.
+    @Published var showContext = false
+
+    /// `/compact [focus]`: summarise now, whatever the budget says. The transcript stays whole.
+    private func compactNow(focus: String?) {
+        guard let provider = app.settings.provider(conversation.providerID) else { return }
+        let key = KeyStore.shared.key(for: provider)
+        guard key != nil || provider.keyOptional else { sink?.notice("No API key for \(provider.name): add one in Settings → Providers."); return }
+        let budget = contextBudget
+        let before = contextNow
+        // Keeps the last few turns verbatim (a tenth of the budget), not the 30% automatic compaction keeps.
+        guard messages.count > 4, let range = Compaction.summaryRange(messages, compactedThrough: conversation.compactedThrough, budget: budget, keep: 0.1) else {
+            sink?.notice(ContextCommand.nothingToCompact(messages: messages.count, turns: ContextPolicy.turnStarts(messages).count, tokens: before))
+            return
+        }
+        let client = provider.client(apiKey: key)
+        isRunning = true
+        beginActivity()
+        setStatus("Summarising the lesson…")
+        runTask = Task { [weak self] in
+            guard let self else { return }
+            let done = await self.summarise(range, focus: focus, client: client, budget: budget)
+            self.isRunning = false
+            self.endActivity()
+            self.setStatus(nil)
+            self.adoptInbox(wake: done)
+            guard done else { self.sink?.notice("Compaction stopped; the lesson is as it was."); return }
+            let after = self.contextNow
+            let line = "Compacted: \(Composer.short(before)) → \(Composer.short(after)) tokens" + (focus.map { " (kept: \($0))" } ?? "") + ". The transcript is unchanged."
+            self.lastCompaction = line
+            self.sink?.notice(line)
+        }
     }
 
     // MARK: Persistence helpers

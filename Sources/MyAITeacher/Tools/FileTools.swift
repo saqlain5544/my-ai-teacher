@@ -52,6 +52,23 @@ final class FileViews: @unchecked Sendable {
         return was == now ? .current : .changed
     }
 
+    /// The last `read` of each file and range: the file's stamp then, and the tool call whose result holds the content.
+    private var reads: [String: [String: (stamp: Stamp, call: String)]] = [:]
+    func recordRead(_ url: URL, range: String, stamp: Stamp?, call: String, agent: String) {
+        guard let stamp else { return }
+        lock.lock(); defer { lock.unlock() }
+        if reads[agent]?.count ?? 0 > Self.perAgent { reads[agent] = nil }
+        reads[agent, default: [:]][url.standardizedFileURL.path + "#" + range] = (stamp, call)
+    }
+    /// The call whose result still holds this read: same range, file unchanged since, and the result among `live` (the
+    /// ids the model will be sent intact: not stubbed by microcompaction, not summarised away). Nil when in doubt.
+    func unchangedRead(_ url: URL, range: String, agent: String, live: Set<String>) -> String? {
+        guard let now = Self.stamp(url) else { return nil }
+        lock.lock(); let was = reads[agent]?[url.standardizedFileURL.path + "#" + range]; lock.unlock()
+        guard let was, was.stamp == now, live.contains(was.call) else { return nil }
+        return was.call
+    }
+
     /// True the first time `url` is mentioned to this agent (a subfolder's instructions ride on one read only).
     private var mentioned: [String: Set<String>] = [:]
     func firstMention(_ url: URL, agent: String) -> Bool {
@@ -63,6 +80,7 @@ final class FileViews: @unchecked Sendable {
     func forget(agent: String) {
         lock.lock(); defer { lock.unlock() }
         for k in Array(seen.keys) where k == agent || k.hasPrefix(agent + "/") { seen[k] = nil; order[k] = nil }
+        for k in Array(reads.keys) where k == agent || k.hasPrefix(agent + "/") { reads[k] = nil }
         for k in Array(mentioned.keys) where k == agent || k.hasPrefix(agent + "/") { mentioned[k] = nil }
     }
 
@@ -119,6 +137,13 @@ struct ReadTool: Tool {
             }
             return ToolOutput(text: truncateMiddle(text, max: 100_000))
         }
+        // Stamped before the content is read, so a file saved in between reads as changed next time, never as unchanged.
+        let stamp = FileViews.stamp(url)
+        let rangeKey = "\(max(1, input["offset"]?.int ?? 1)):\(max(1, input["limit"]?.int ?? 2000))"
+        if let live = ctx.liveResults, let call = FileViews.shared.unchangedRead(url, range: rangeKey, agent: FileViews.agent(ctx), live: live) {
+            return ToolOutput(text: "Unchanged since you read it: \(url.path) (same range) has not changed, and that result is still in this conversation above. Use it; nothing was sent again.",
+                              meta: .object(["sameAs": .string(call), "path": .string(url.path)]))
+        }
         let data = try Data(contentsOf: url)
         if data.prefix(8000).contains(0) { return .error("\(url.lastPathComponent) appears to be a binary file (\(data.count) bytes).") }
         let content = String(decoding: data, as: UTF8.self)
@@ -144,6 +169,7 @@ struct ReadTool: Tool {
         }
         if shown < lines.count { out += "\n(\(lines.count - shown) more lines — use offset=\(shown + 1) to continue)" }
         FileViews.shared.saw(url, agent: FileViews.agent(ctx))
+        FileViews.shared.recordRead(url, range: rangeKey, stamp: stamp, call: ctx.toolCallID, agent: FileViews.agent(ctx))
         // A subfolder's own CLAUDE.md / AGENTS.md, the first time the agent works there.
         if ctx.codeAgent {
             for f in InstructionFiles.nested(for: url, workspace: ctx.workspace) where f != url && FileViews.shared.firstMention(f, agent: FileViews.agent(ctx)) {

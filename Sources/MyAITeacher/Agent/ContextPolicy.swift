@@ -73,7 +73,7 @@ enum ContextPolicy {
         let sp = Signposts.begin("context", "\(stored.count) messages"); defer { Signposts.end("context", sp) }
         // The compaction points name stored messages (the one before a cut may be an empty, failed reply that requests
         // leave out), so both are resolved against the stored list before anything is dropped.
-        var msgs = stored
+        var msgs = expandRepeats(stored, conversation: c)
         // Tier 3: summary replaces the compacted prefix.
         if let through = c.compactedThrough, let summary = c.compactSummary, let cut = msgs.firstIndex(where: { $0.id == through }) {
             let head = ChatMessage(role: .user, blocks: [.text("<lesson_summary>\nEarlier part of this lesson, summarised:\n\n\(summary)\n</lesson_summary>")])
@@ -104,6 +104,70 @@ enum ContextPolicy {
         }
         if !keepThinking { dropOldCaptures(&msgs) }
         return mergeConsecutiveUserTurns(msgs)
+    }
+
+    /// A repeat `read` of an unchanged file answers "unchanged" and points at the earlier result (`sameAs`). That only
+    /// works while the earlier result reaches the model intact: once microcompaction stubs it or the summary replaces it,
+    /// the note would leave the model with neither. So here, before either tier, a note whose earlier result is no longer
+    /// intact (or is not loaded) becomes the file itself, from the stored transcript, or an instruction to read it again.
+    static func expandRepeats(_ stored: [ChatMessage], conversation c: Conversation) -> [ChatMessage] {
+        guard stored.contains(where: { $0.blocks.contains { $0.kind == .toolResult && $0.meta?["sameAs"] != nil } }) else { return stored }
+        let cut = c.compactedThrough.flatMap { t in stored.firstIndex { $0.id == t } } ?? -1
+        let trim = c.trimmedThrough.flatMap { t in stored.firstIndex { $0.id == t } } ?? -1
+        let intactFrom = max(cut, trim) + 1
+        var at: [String: (i: Int, j: Int)] = [:]
+        for (i, m) in stored.enumerated() where m.role == .user {
+            for (j, b) in m.blocks.enumerated() where b.kind == .toolResult { if let id = b.id { at[id] = (i, j) } }
+        }
+        var out = stored
+        for i in out.indices where i > cut {
+            for j in out[i].blocks.indices {
+                guard out[i].blocks[j].kind == .toolResult, let ref = out[i].blocks[j].meta?["sameAs"]?.string else { continue }
+                if let t = at[ref], t.i >= intactFrom, t.i < i { continue }
+                var meta = out[i].blocks[j].meta?.object ?? [:]; meta["sameAs"] = nil
+                out[i].blocks[j].meta = .object(meta)
+                if let t = at[ref], t.i < i, let full = stored[t.i].blocks[t.j].text, stored[t.i].blocks[t.j].meta?["sameAs"] == nil {
+                    out[i].blocks[j].text = full
+                } else {
+                    out[i].blocks[j].text = "The file is unchanged since you read it, but that earlier result is no longer in this conversation: `read` it again if you need it."
+                }
+            }
+        }
+        return out
+    }
+
+    /// Ids of the tool results a request sends whole (none for Claude with replayed thinking, whose history the API edits itself): after the compaction point and the microcompaction epoch, and only
+    /// while the lesson fits `budget` (past it the last-resort squeeze may cut anything). Cut or failed results are not
+    /// among them. What a repeat `read` may point back to.
+    static func liveResults(_ msgs: [ChatMessage], conversation c: Conversation, model: String, budget: Int) -> Set<String> {
+        // The request, not the stored lesson: a compacted lesson's history is long but its request is small. Over budget the
+        // squeeze may cut anything.
+        guard !AnthropicClient.isAdaptiveClaude(model), estimateTokens(prepare(msgs, conversation: c, model: model)) <= budget else { return [] }
+        let from = max(c.compactedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1,
+                       c.trimmedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1) + 1
+        var ids = Set<String>()
+        for m in msgs[from...] where m.role == .user {
+            for b in m.blocks where b.kind == .toolResult && b.isError != true && b.meta?["running"] == nil && b.meta?["sameAs"] == nil
+                && b.meta?["stepCapped"] == nil { if let i = b.id { ids.insert(i) } }
+        }
+        return ids
+    }
+
+    /// The squeeze cuts the biggest results to head and tail; a note pointing at one of them would leave the model with a
+    /// fragment. Such a note says to read the file again instead.
+    static func demoteSqueezedNotes(_ msgs: [ChatMessage]) -> [ChatMessage] {
+        guard msgs.contains(where: { $0.blocks.contains { $0.meta?["sameAs"] != nil } }) else { return msgs }
+        var cut = Set<String>()
+        for m in msgs { for b in m.blocks where b.kind == .toolResult && b.text?.contains("characters trimmed to fit the context") == true { if let i = b.id { cut.insert(i) } } }
+        guard !cut.isEmpty else { return msgs }
+        var out = msgs
+        for i in out.indices { for j in out[i].blocks.indices {
+            guard let ref = out[i].blocks[j].meta?["sameAs"]?.string, cut.contains(ref) else { continue }
+            var meta = out[i].blocks[j].meta?.object ?? [:]; meta["sameAs"] = nil
+            out[i].blocks[j].meta = .object(meta)
+            out[i].blocks[j].text = "The file is unchanged since you read it, but that earlier result was cut to fit the context: `read` it again if you need it."
+        } }
+        return out
     }
 
     /// Screenshots of the browser and the Mac go stale at once: requests carry only the latest `capturesKept` (a long
