@@ -1021,18 +1021,26 @@ data until the user approves its exact files. The model is one: a SHA-256 finger
 `AppSettings` (never in the folder), a change asks again.
 
 * **A folder's own skills, agents and commands** (`ProjectTrust`): `.teacher|.claude|.opencode|.agents/skills`,
-  `.teacher|.claude/agents`, `.teacher|.claude/commands`. `TreeDigest` hashes every file under them (symlinks are followed
-  and their content hashed; at most 400 files, 1 MB each); `AppSettings.approvedProjectContent[folder]` holds the approved
+  `.teacher|.claude/agents`, `.teacher|.claude/commands`. `TreeDigest` hashes what reaches a prompt (each `SKILL.md`, agent and command file; at most 400 files, 1 MB each) and only
+  lists the rest of a skill's folder by path and size (`node_modules` and `.git` are left out), so bundled assets can't trip
+  the limit; `.DS_Store` and `._*` never count. Symlinks are followed and their content hashed; the card shows where each
+  leads, and one resolving into a credential location (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, Docker's
+  config, Keychains, the app's keys file) blocks the folder. Too much to hash is `ProjectTrust.State.blocked(reason)`, shown in
+  Settings › Agents and the command notice, never silence. File hashes are cached by path, size and time, and the prompt build
+  warms them off the main actor; `AppSettings.approvedProjectContent[folder]` holds the approved
   fingerprint. Every seam receives the folder only through `ProjectTrust.approved(folder, settings)`, so unapproved content
   can't leak: `SystemPrompt.build` (skills), `AgentCatalog.all(settings:folder:)` (the five sites), `CustomCommands`. Until
   approved, the prompt's `# Skills` section carries one neutral line (`ProjectTrust.awaitingLine`) and nothing else. The
   prompt is frozen per lesson, so approval mid-lesson takes effect through `SkillTool`: a call that finds no such skill
   asks (`ProjectTrust.resolve`, an approval card under the call, one question per lesson and fingerprint, a decline holds
-  for the lesson, a sub-agent never asks) and then reads the live files. Settings › Agents › Skills approves or revokes too.
+  for the lesson, a sub-agent never asks) and then reads the live files. The prompt itself stays frozen; `ChatSession.contentChangeNote` adds a one-time hidden
+  ephemeral note on the next turn naming what became or stopped being available (an approval, a plugin switched off or updated).
+  Settings › Agents › Skills approves or revokes too.
 * **Custom commands** (`CustomCommands`): Markdown files in `~/.teacher/commands`, `~/.claude/commands` and the folder's
   `.teacher|.claude/commands` (folder ones under the trust above), front matter `description` and `argument-hint`;
   `$ARGUMENTS` and `$1`…`$9` expand in one pass (substituted text is never expanded again; arguments a command never
-  mentions are appended). They join the `/` menu through `ProjectCommands.lessonSuggestions(current:custom:)` and expand
+  mentions are appended). A command's expansion is sent as plain text (`send(_:literal:)`) and never parsed as a command again,
+  so `/loop` whose body is `/loop` can't recurse. They join the `/` menu through `ProjectCommands.lessonSuggestions(current:custom:)` and expand
   into the message sent (`lessonCommand(_:custom:)`); a built-in's name is never taken, the folder's beats the user's.
   **Deliberately no `!` shell execution and no `@` file inclusion** (Claude Code's): a command file is text, so
   installing or approving one can never run anything; the agent reads or runs through its own tools, under the usual approvals.
@@ -1051,7 +1059,12 @@ data until the user approves its exact files. The model is one: a SHA-256 finger
   (`validateGitURL`: https, ssh, `user@host:path` only; no `ext::`/`fd::`, options or shell characters), cloned shallow with
   `core.hooksPath=/dev/null`, `protocol.ext.allow=never`, `core.symlinks=false`, no submodules, `GIT_TERMINAL_PROMPT=0`, no
   global/system git config (no filters), `GIT_ALLOW_PROTOCOL=https:ssh`; the commit is recorded and `.git` removed. Bounds:
-  500 files, 20 MB, 2 MB a file; symlinks leaving the folder, special files and bad names are rejected. `/plugin` lists them
+  500 files, 20 MB, 2 MB a file (a clone is also killed past 60 MB while running, `--filter=blob:limit=2m`); every symlink is
+  resolved on the real filesystem (`realpath`) and must land inside the real plugin folder, else (or if dangling) it is rejected,
+  as are special files, bad names and shipped caches (`__pycache__`, `.cache`, `*.pyc`, which are left out of the fingerprint so
+  a plugin's own runtime caches don't un-approve it). The review lists hook and MCP commands first, word for word, with line breaks
+  and control or bidi characters shown (↵, <U+202E>), and a short clamped description last. A plugin's MCP server never takes the
+  name of one the user or the folder has. `/plugin` lists them
   and opens Settings. No registry, no auto-update. Author's guide: `docs/plugins.md`; example: `examples/plugins/study-kit`.
 
 ## Tool parity with Claude Code

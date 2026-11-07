@@ -56,6 +56,8 @@ struct AgentsSettings: View {
                         Spacer()
                         Button("Revoke") { settings.value.approvedProjectContent[folder.path] = nil }.controlSize(.small)
                     }
+                case .blocked(let why):
+                    Label("This folder's skills, agents and commands can't be used: \(why)", systemImage: "xmark.shield").font(.caption).foregroundStyle(.red)
                 case .unasked, .declined:
                     HStack {
                         Label("This folder has skills, agents or commands of its own. They stay out of the model's instructions until you approve them.", systemImage: "exclamationmark.shield").font(.caption)
@@ -90,10 +92,10 @@ struct AgentsSettings: View {
 
     /// Shows what the folder supplies and records the approval for those exact files.
     private func approveFolder(_ folder: URL) {
-        guard let l = ProjectTrust.listing(folder) else { return }
+        guard let l = ProjectTrust.listing(folder), l.blocked == nil else { return }
         let alert = NSAlert()
         alert.messageText = "Use the skills, agents and commands in this folder?"
-        alert.informativeText = ProjectTrust.detail(folder, files: l.files)
+        alert.informativeText = ProjectTrust.detail(folder, listing: l)
         alert.addButton(withTitle: "Use this folder's")
         alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn { settings.value.approvedProjectContent[folder.path] = l.fingerprint }

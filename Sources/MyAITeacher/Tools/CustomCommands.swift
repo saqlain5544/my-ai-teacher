@@ -42,7 +42,7 @@ enum CustomCommands {
 
     /// Names a command file can't take: the built-in `/` commands.
     static var reserved: Set<String> {
-        Set(ProjectCommands.quickPrompts.map(\.name) + ProjectCommands.modeCommands.map(\.name) + ["review", "plugin"])
+        Set(ProjectCommands.quickPrompts.map(\.name) + ProjectCommands.modeCommands.map(\.name) + ["review", "plugin", "plugins"])
     }
 
     /// A command file: front matter, then the body. The name is the file's.

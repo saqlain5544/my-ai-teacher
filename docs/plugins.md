@@ -42,8 +42,10 @@ recorded). Installing uses nothing. The user is shown everything the plugin cont
 for word, and approves its **fingerprint**: a SHA-256 over every file. Change any file, in an update or on disk, and the
 plugin is quiet until it is approved again. Turning a plugin off, or removing it, takes all of it away at once.
 
-Limits: at most 500 files, 20 MB in all, 2 MB a file. A symlink must be relative and stay inside the folder; sockets and
-devices are refused; `.git` is not kept. There is no registry and no automatic update: **Update** fetches again from
+Limits: at most 500 files, 20 MB in all, 2 MB a file. Every symlink is resolved on the real filesystem and must end inside the folder (a chain such as `a -> ..`
+then `b -> a/..` is caught); sockets and devices are refused; `.git` is not kept. Caches (`__pycache__`, `.cache`, `*.pyc`)
+can't be shipped; ones your plugin makes while running are ignored by the fingerprint, as are `.DS_Store` and `._*` files.
+The review lists what would run first, word for word, so keep hook commands short and plain. There is no registry and no automatic update: **Update** fetches again from
 the recorded source and asks again if anything changed.
 
 ## Testing yours

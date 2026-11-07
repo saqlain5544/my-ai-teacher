@@ -79,6 +79,8 @@ final class ChatSession: ObservableObject, Identifiable {
     }
     private var runTask: Task<Void, Never>?
     private var pendingModeNote: String?
+    /// What the prompt's lesson-time view of folder and plugin content was (`contentChangeNote`).
+    private var contentSeen: Set<String>?
     private var turn = TurnMetrics()
     /// The app let go of this lesson (its folder was closed): a turn still finishing writes to its own folder's
     /// database but no longer reports to the app, so it can't reappear in another folder's sidebar.
@@ -168,24 +170,30 @@ final class ChatSession: ObservableObject, Identifiable {
         save()
     }
 
-    func send(_ text: String, attachments: [Block] = []) {
+    /// `literal`: the text is a message, never a command (what a custom command expanded to: a body of `/loop` must not run it again).
+    func send(_ text: String, attachments: [Block] = [], literal: Bool = false) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // A teaching lesson's commands: a follow-up sends its prompt; a mode name switches mode (and sends what follows).
-        let custom = trimmed.hasPrefix("/") ? CustomCommands.available(folder: services.workspace.url, settings: settings) : []
-        if !isRunning, trimmed.hasPrefix("/"), ProjectCommands.lessonCommand(trimmed, custom: custom) == nil, let word = trimmed.dropFirst().split(whereSeparator: \.isWhitespace).first?.lowercased(),
-           ProjectTrust.state(services.workspace.url, settings, lesson: id) != .approved, ProjectTrust.commandNames(services.workspace.url).contains(word) {
+        let custom = !literal && trimmed.hasPrefix("/") ? CustomCommands.available(folder: services.workspace.url, settings: settings) : []
+        if !literal, !isRunning, trimmed.hasPrefix("/"), ProjectCommands.lessonCommand(trimmed, custom: custom) == nil, let word = trimmed.dropFirst().split(whereSeparator: \.isWhitespace).first?.lowercased(),
+           ProjectCommands.lessonCommand("/" + word) == nil, ProjectTrust.commandNames(services.workspace.url).contains(word) {
             // Its file is the folder's, and the folder's commands wait for the user's approval (never sent to the model as typed).
-            sink?.notice("/\(word) is one of this folder's own commands, which waits for your approval: the agent asks the first time it needs a folder skill, or approve it in Settings → Agents.")
-            return
+            switch ProjectTrust.state(services.workspace.url, settings, lesson: id) {
+            case .blocked(let why): sink?.notice("/\(word) is one of this folder's own commands, which can't be used: \(why)")
+            case .approved, .none: break
+            default:
+                sink?.notice("/\(word) is one of this folder's own commands, which waits for your approval: the agent asks the first time it needs a folder skill, or approve it in Settings → Agents.")
+            }
+            if ProjectTrust.state(services.workspace.url, settings, lesson: id) != .approved { return }
         }
-        if !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed, custom: custom) {
+        if !literal, !isRunning, let cmd = ProjectCommands.lessonCommand(trimmed, custom: custom) {
             switch cmd {
             case .plugins:
                 let list = Plugins.installed(settings).map { "\($0.name) (\($0.standing == .active ? "on" : $0.standing == .disabled ? "off" : "needs approval"))" }
                 sink?.notice(list.isEmpty ? "No plugins installed. Settings → Plugins installs one from a folder or a git URL." : "Plugins: " + list.joined(separator: ", ") + ". Settings → Plugins manages them.")
                 Plugins.openSettings()
-            case .prompt(let p): send(p, attachments: attachments)
+            case .prompt(let p): send(p, attachments: attachments, literal: true)   // as plain text, never as a command again
             case .mode(let m, let then):
                 setMode(m)
                 sink?.notice("Switched to \(m.title) mode.")
@@ -197,6 +205,7 @@ final class ChatSession: ObservableObject, Identifiable {
         trimWindow()
         var blocks: [Block] = []
         if let note = pendingModeNote { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])); pendingModeNote = nil }
+        if let note = contentChangeNote() { blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true])) }
         blocks += attachments
         if !trimmed.isEmpty { blocks.append(.text(trimmed)) }
         var msg = ChatMessage(role: .user, blocks: blocks)
@@ -926,7 +935,34 @@ final class ChatSession: ObservableObject, Identifiable {
 
     // MARK: Context
 
+    // MARK: What the frozen prompt doesn't know
+
+    /// What the lesson can use that comes from a folder or a plugin: skills, agent types and commands, by name.
+    private func usableContent() -> Set<String> {
+        let folder = services.workspace.url
+        var out = Set(Skills.available(node: AgentTree.node(for: conversation.mode), folder: ProjectTrust.approved(folder, settings), plugins: Plugins.active(settings))
+            .filter { !$0.hidden && $0.source != .app("root") }.map { "skill " + $0.name })
+        out.formUnion(AgentCatalog.all(settings: settings, folder: folder).filter { $0.source == .project || $0.source == .plugin }.map { "agent " + $0.name })
+        out.formUnion(CustomCommands.available(folder: folder, settings: settings).map { "command /" + $0.name })
+        return out
+    }
+
+    /// The system prompt is frozen for the lesson (caching), so an approval, a plugin switched off or an update after it was
+    /// written is told once, in a hidden note on the next turn. Nil when nothing changed.
+    func contentChangeNote() -> String? {
+        let now = usableContent()
+        defer { contentSeen = now }
+        guard let before = contentSeen, before != now else { return nil }
+        let added = now.subtracting(before).sorted(), gone = before.subtracting(now).sorted()
+        var note = "[Since your instructions were written, what this folder and the user's plugins supply has changed."
+        if !added.isEmpty { note += " Now available: " + added.joined(separator: ", ") + "." }
+        if !gone.isEmpty { note += " No longer available: " + gone.joined(separator: ", ") + "." }
+        return note + " The Skills list above may be out of date, including any note that folder skills await approval: `skill` is always current.]"
+    }
+
     private func buildSystemPrompt(model: String) async -> String {
+        await ProjectTrust.warm(services.workspace.url)
+        defer { contentSeen = usableContent() }
         var s = SystemPrompt.build(settings: settings, mode: conversation.mode, coreMemory: services.memory.coreBlock(), model: model, lessonID: conversation.id,
                                    folder: services.workspace.url)
         for section in host.systemPromptSections(self) { s += "\n\n" + section }

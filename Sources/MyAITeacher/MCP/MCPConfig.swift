@@ -147,7 +147,7 @@ enum MCPConfig {
 
     /// The servers an agent has in `folder`: the user's app-level ones, then the folder's, which win a name clash
     /// (as in Claude Code, project scope over user scope).
-    static func entries(_ folder: URL?, _ settings: AppSettings) -> [Entry] {
+    static func entries(_ folder: URL?, _ settings: AppSettings, pluginRoot: URL = Plugins.root) -> [Entry] {
         var out: [String: Entry] = [:]
         for c in settings.mcpServers where !c.name.isEmpty {
             out[c.name] = Entry(config: c, standing: c.type == "sse" ? .unsupported : c.enabled ? .usable : .disabled)
@@ -162,7 +162,8 @@ enum MCPConfig {
             }
         }
         // Plugins' servers (their names carry the plugin's): usable because the user approved the plugin's exact files.
-        for c in Plugins.servers(Plugins.active(settings)) where c.type != "sse" { out[c.name] = Entry(config: c, standing: .usable) }
+        // A plugin never takes the place of a server the user or the folder has.
+        for c in Plugins.servers(Plugins.active(settings, root: pluginRoot)) where c.type != "sse" && out[c.name] == nil { out[c.name] = Entry(config: c, standing: .usable) }
         return out.values.sorted { $0.config.name < $1.config.name }
     }
 

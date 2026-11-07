@@ -157,7 +157,11 @@ agents: [code-mentor]       # optional: code-mentor, language-mentor, teacher; d
   folder's hooks: a cloned repository can't put its own instructions in front of the model. Until then the agent is told
   only that this folder has some waiting; the first time it needs a folder skill (or in **Settings › Agents › Skills**)
   a card lists the files and asks once. The approval is for those exact files: change one and you're asked again. This
-  covers the folder's `.teacher/agents`, `.claude/agents` and `commands` folders too.
+  covers the folder's `.teacher/agents`, `.claude/agents` and `commands` folders too. The files read into the model
+  (`SKILL.md`, agent and command files) are the fingerprint; a skill's scripts and assets are only listed. A symlink there
+  is allowed and its content is part of the approval, but the card shows where it leads and a link into `~/.ssh`, `~/.aws`
+  and similar credential places is refused; a folder with too many files says so in Settings › Agents rather than going
+  quiet. If you approve, or switch a plugin off, mid-lesson, the agent gets a short note on your next message.
 * A skill written for a coding agent (`agents: [code-agent]`) goes to the code mentor.
 * `disable-model-invocation: true` keeps a skill out of the agent's list.
 * **Settings › Agents › Skills** lists every agent's skills and where each comes from, and opens your skills folder.

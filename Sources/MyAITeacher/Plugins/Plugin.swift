@@ -81,21 +81,47 @@ struct Plugin: Sendable, Identifiable {
             .filter { $0.pathExtension.lowercased() == "md" }.sorted { $0.path < $1.path }
     }
 
-    /// What the user reviews before approving: where it is from, every component, the hook and MCP commands verbatim,
-    /// and the fingerprint the approval binds to.
-    func review() -> String {
+    /// Text for a review, made harmless to read: a line break shows as ↵ (a command can't fake a row or push the rest off
+    /// screen), other control characters and bidirectional marks as <U+XXXX> (a right-to-left override can't reorder what
+    /// follows), and a long text is cut with a note of how much.
+    static func visible(_ text: String, max: Int = 2_000) -> String {
+        var out = ""
+        for u in text.unicodeScalars {
+            switch u.value {
+            case 0x0A, 0x2028, 0x2029: out += "↵"
+            case 0x0D: out += "↵"
+            case 0x09: out += " "
+            case 0x00...0x1F, 0x7F...0x9F, 0x200B...0x200F, 0x202A...0x202E, 0x2060...0x2064, 0x2066...0x2069, 0xFEFF:
+                out += String(format: "<U+%04X>", u.value)
+            default: out.unicodeScalars.append(u)
+            }
+        }
+        return out.count > max ? String(out.prefix(max)) + "… (\(out.count - max) more characters not shown)" : out
+    }
+
+    /// What the user reviews before approving. What would run comes first, word for word (hook and MCP commands, with line
+    /// breaks and invisible characters made visible); then the components; the plugin's own description, which it
+    /// writes itself, comes last and short. `taken`: names of servers the user or the folder already has.
+    func review(taken: Set<String> = []) -> String {
         let c = contents()
-        var s = "\(name)\(version.isEmpty ? "" : " " + version)" + (author.isEmpty ? "" : " by \(author)") + "\n"
-        if !description.isEmpty { s += description + "\n" }
-        s += "From: \(record.source.isEmpty ? "(unknown)" : record.source)" + (record.commit.map { " @ \($0.prefix(12))" } ?? "") + "\n"
-        s += "\(files.count) files · fingerprint \(fingerprint.prefix(16))\n"
-        if !c.skills.isEmpty { s += "\nSkills (their instructions go to the model when used): " + c.skills.map(\.name).joined(separator: ", ") }
-        if !c.agents.isEmpty { s += "\nAgents (sub-agent types, within the lesson's access): " + c.agents.map(\.name).joined(separator: ", ") }
-        if !c.commands.isEmpty { s += "\nCommands (text only): " + c.commands.map { "/" + $0.name }.joined(separator: ", ") }
-        if !c.hooks.isEmpty { s += "\n\nHooks (shell commands that run as you at each matching step):\n" + c.hooks.lines.joined(separator: "\n") }
-        for p in c.hookProblems { s += "\n  (hooks.json: \(p))" }
-        if !c.servers.isEmpty { s += "\n\nMCP servers (programs that run as you when the agent uses them):\n" + c.servers.map { "\($0.name): " + $0.approvalDetail.replacingOccurrences(of: "\n", with: "\n    ") }.joined(separator: "\n") }
-        if c.isEmpty { s += "\nNo skills, agents, commands, hooks or MCP servers." }
+        var s = ""
+        if !c.hooks.isEmpty { s += "HOOKS: shell commands that run as you at each matching step\n" + c.hooks.lines.map { "  " + Self.visible($0) }.joined(separator: "\n") + "\n\n" }
+        for p in c.hookProblems { s += "  (hooks.json: \(Self.visible(p, max: 200)))\n" }
+        if !c.servers.isEmpty {
+            s += "MCP SERVERS: programs that run as you when the agent uses them\n"
+            s += c.servers.map { sv in
+                (taken.contains(sv.name) ? "  \(Self.visible(sv.name, max: 100)) (not used: you or this folder already have a server by that name)\n" : "  \(Self.visible(sv.name, max: 100))\n")
+                    + sv.approvalDetail.split(separator: "\n", omittingEmptySubsequences: false).map { "    " + Self.visible(String($0)) }.joined(separator: "\n")
+            }.joined(separator: "\n") + "\n\n"
+        }
+        if !c.skills.isEmpty { s += "Skills (their instructions go to the model when used): " + c.skills.map(\.name).joined(separator: ", ") + "\n" }
+        if !c.agents.isEmpty { s += "Agents (sub-agent types, within the lesson's access): " + c.agents.map(\.name).joined(separator: ", ") + "\n" }
+        if !c.commands.isEmpty { s += "Commands (text only): " + c.commands.map { "/" + $0.name }.joined(separator: ", ") + "\n" }
+        if c.isEmpty { s += "No skills, agents, commands, hooks or MCP servers.\n" }
+        s += "\n\(Self.visible(name, max: 64))\(version.isEmpty ? "" : " " + Self.visible(version, max: 32))" + (author.isEmpty ? "" : " by \(Self.visible(author, max: 80))") + "\n"
+        if !description.isEmpty { s += Self.visible(description, max: 300) + "\n" }
+        s += "From: \(record.source.isEmpty ? "(unknown)" : Self.visible(record.source, max: 300))" + (record.commit.map { " @ \(Self.visible(String($0.prefix(12)), max: 12))" } ?? "") + "\n"
+        s += "\(files.count) files · fingerprint \(fingerprint.prefix(16))"
         return s
     }
 }

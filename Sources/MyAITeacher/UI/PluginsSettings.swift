@@ -35,7 +35,7 @@ struct PluginsSettings: View {
         }
         .formStyle(.grouped)
         .sheet(item: $reviewing) { p in
-            PluginReview(plugin: p) { reviewing = nil; approve(p) } cancel: { reviewing = nil }
+            PluginReview(plugin: p, taken: takenServers()) { reviewing = nil; approve(p) } cancel: { reviewing = nil }
         }
     }
 
@@ -60,11 +60,16 @@ struct PluginsSettings: View {
             if !p.description.isEmpty { Text(p.description).font(.caption).foregroundStyle(.secondary) }
             if case .broken(let why) = p.standing { Text("Can't be used: \(why).").font(.caption).foregroundStyle(.red) }
             if expanded.contains(p.name) {
-                Text(p.review()).font(.caption.monospaced()).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
+                Text(p.review(taken: takenServers())).font(.caption.monospaced()).textSelection(.enabled).fixedSize(horizontal: false, vertical: true)
                     .padding(6).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             }
         }
         .padding(.vertical, 2)
+    }
+
+    /// Servers the user or this folder already has: a plugin's server by the same name is never used.
+    private func takenServers() -> Set<String> {
+        Set(settings.value.mcpServers.map(\.name) + MCPConfig.project(AppModel.shared.workspace.url).servers.map(\.name))
     }
 
     private func color(_ s: Plugin.Standing) -> Color {
@@ -121,6 +126,7 @@ struct PluginsSettings: View {
 /// What approving a plugin means: everything it contains, the commands it would run, verbatim.
 private struct PluginReview: View {
     let plugin: Plugin
+    let taken: Set<String>
     let approve: () -> Void
     let cancel: () -> Void
 
@@ -130,7 +136,7 @@ private struct PluginReview: View {
             Text("Approving lets this plugin's skills and agents reach the model, its commands appear in the / menu, and its hooks and MCP servers run as you. The approval is for exactly these files: an update that changes one asks again.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             ScrollView {
-                Text(plugin.review()).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                Text(plugin.review(taken: taken)).font(.caption.monospaced()).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(8).background(.quaternary.opacity(0.5), in: RoundedRectangle(cornerRadius: 6))
             HStack {
