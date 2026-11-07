@@ -56,7 +56,7 @@ enum AgentTree {
                   core: ["run_tests", "project_tests", "project_review", "trace", "symbols", "diagnostics", "bash"],
                   // The project is its long-term state (a board beside it was a second plan that drifted); no language lessons.
                   drops: ["lesson_plan", "language", "vocab"],
-                  deferred: ["glob", "grep", "bench", "source"],
+                  deferred: ["glob", "grep", "bench", "source", "lsp"],
                   components: ["layout", "tree", "trace", "annotate", "predict"],
                   guide: Guides.codeMentor),
     ]

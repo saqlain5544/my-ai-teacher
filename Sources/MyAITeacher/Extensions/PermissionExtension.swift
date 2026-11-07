@@ -59,6 +59,7 @@ final class PermissionExtension: AgentExtension {
                 }
             }
         }
+        if tool.name == "lsp", let gate = lspGate(input, ws: ws, conv: conv) { return gate }
         switch tool.risk {
         case .readOnly, .network, .interactive, .control:   // .control: sites and apps are gated by ComputerUseExtension
             return .allow
@@ -146,6 +147,34 @@ final class PermissionExtension: AgentExtension {
                 case "grant_full": self?.app.setAccess(.full, for: ws); return .allow
                 default: return .deny("The learner declined.")
                 }
+            }
+        }
+    }
+
+    /// `lsp`: a language server runs the project's code while it analyses it (rust-analyzer's build scripts and proc macros,
+    /// gopls's `go list`), so the first use of a server in a folder asks, once per folder and server (kept in the app's
+    /// settings), or for this lesson. nil: no server to ask about (the tool explains). A decline holds for the lesson.
+    private func lspGate(_ input: JSON, ws: Workspace, conv: String) -> ToolDecision? {
+        let folder = LSPTool.canonical(ws.url)
+        guard let (spec, exe) = LSPTool.server(for: input, folder: folder) else { return nil }
+        if app.interactions.isGranted(LSPHub.declined(spec.id), conversationID: conv) {
+            return .deny("The learner declined starting \(spec.title) in this folder. Use `symbols`, `code` and `grep` instead.")
+        }
+        if (app.settings.value.lspApproved[folder.path] ?? []).contains(spec.id) || app.interactions.isGranted(LSPHub.grant(spec.id), conversationID: conv)
+            || LSPHub.shared.processApproved(spec.id, folder: folder) { return .allow }
+        return .ask(LSPHub.approvalRequest(spec, executable: exe, ws: ws)) { [weak self] choice in
+            switch choice {
+            case "folder":
+                if let self {
+                    var ids = self.app.settings.value.lspApproved[folder.path] ?? []
+                    if !ids.contains(spec.id) { ids.append(spec.id) }
+                    self.app.settings.value.lspApproved[folder.path] = ids
+                }
+                return .allow
+            case "lesson": self?.app.interactions.grant(LSPHub.grant(spec.id), conversationID: conv); return .allow
+            default:
+                self?.app.interactions.grant(LSPHub.declined(spec.id), conversationID: conv)
+                return .deny("The learner declined starting \(spec.title) in this folder. Use `symbols`, `code` and `grep` instead.")
             }
         }
     }

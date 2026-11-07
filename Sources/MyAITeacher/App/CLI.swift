@@ -28,6 +28,7 @@ enum CLI {
         if let toolName = opt("--tool") {
             guard let tool = ToolRegistry.byName[toolName] else { print("unknown tool"); return 2 }
             let input = JSON.parse(args.last ?? "{}") ?? .object([:])
+            if args.contains("--approve-lsp") { LSPHub.shared.approveForProcess(folder: LSPTool.canonical(ws.url)) }   // this run only; written nowhere
             let interactions = await MainActor.run { InteractionCenter() }
             let ctx = ToolContext(conversationID: "cli", workspace: ws.url, services: services, interactions: interactions,
                                   toolCallID: "cli", client: client, model: model, progress: { FileHandle.standardError.write(Data($0.utf8)) })

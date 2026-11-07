@@ -5,12 +5,12 @@ import Foundation
 /// consolidation, embedding warm-up, compaction, maintenance). Each with its times: when it was asked for, when it began
 /// (and so how long it waited), how long it has run or took, and how it ended.
 struct BackgroundTask: Identifiable, Sendable, Equatable {
-    enum Kind: String, Sendable { case shell, server, agent, mcp, app
+    enum Kind: String, Sendable { case shell, server, agent, mcp, lsp, app
         var title: String {
-            switch self { case .shell: "Command"; case .server: "Server"; case .agent: "Sub-agent"; case .mcp: "MCP server"; case .app: "App job" }
+            switch self { case .shell: "Command"; case .server: "Server"; case .agent: "Sub-agent"; case .mcp: "MCP server"; case .lsp: "Language server"; case .app: "App job" }
         }
         var symbol: String {
-            switch self { case .shell: "terminal"; case .server: "server.rack"; case .agent: "person.2"; case .mcp: "puzzlepiece.extension"; case .app: "gearshape.2" }
+            switch self { case .shell: "terminal"; case .server: "server.rack"; case .agent: "person.2"; case .mcp: "puzzlepiece.extension"; case .lsp: "chevron.left.forwardslash.chevron.right"; case .app: "gearshape.2" }
         }
     }
     enum State: String, Sendable { case queued, running, done, failed, stopped
@@ -105,6 +105,15 @@ enum BackgroundTasks {
                                       detail: (s.tools.map { "\($0.count) tools · " } ?? "") + i.folder.lastPathComponent,
                                       startedAt: s.startedAt, state: state, pid: s.pid.map(Int.init), restarts: s.restarts, note: s.lastError))
         }
+        for i in LSPHub.shared.all {
+            let s = i.status
+            let state: BackgroundTask.State = switch s.phase {
+            case .idle: .stopped; case .starting, .restarting: .queued; case .ready: .running; case .failed: .failed; case .stopped: .stopped
+            }
+            out.append(BackgroundTask(id: "lsp:\(i.folder.path):\(i.spec.id)", kind: .lsp, title: s.server,
+                                      detail: i.folder.lastPathComponent + (s.activity.map { " · " + $0 } ?? ""),
+                                      startedAt: s.startedAt, state: state, pid: s.pid.map(Int.init), restarts: s.restarts, note: s.lastError))
+        }
         out += AppJobs.shared.list()
         let running = out.filter { $0.state.active }.sorted { ($0.startedAt ?? .distantFuture) < ($1.startedAt ?? .distantFuture) }
         let ended = out.filter { !$0.state.active }.sorted { ($0.endedAt ?? .distantPast) > ($1.endedAt ?? .distantPast) }
@@ -129,6 +138,8 @@ enum BackgroundTasks {
             SubAgentCenter.shared.runs.first { "agent:" + $0.id == t.id }?.stop()
         case .mcp:
             if let i = MCPHub.shared.all.first(where: { "mcp:\($0.folder.path):\($0.config.name)" == t.id }) { Task { await i.stop() } }
+        case .lsp:
+            if let i = LSPHub.shared.all.first(where: { "lsp:\($0.folder.path):\($0.spec.id)" == t.id }) { Task { await i.stop() } }
         case .app: break
         }
         ActivityLog.record("task.stop", conv: t.conversationID, ["kind": .string(t.kind.rawValue), "title": .string(t.title)])
