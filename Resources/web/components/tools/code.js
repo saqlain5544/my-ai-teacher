@@ -30,7 +30,12 @@
       const i = input(n), m = meta(n);
       const at = i.file ? i.file + (i.line ? ':' + i.line : '') : (i.query || i.language || '');
       let s = [(i.action || '').replace(/_/g, ' '), i.symbol || '', at].filter(Boolean).join(' ');
-      if (n.props.status === 'done' && m.count != null) s += ' · ' + m.count + (m.errors != null ? (m.errors === 1 ? ' error' : ' errors') : '');
+      if (n.props.status === 'done' && m.count != null) {
+        if (m.errors != null) {   // diagnostics: errors and warnings as they are, not one count under one word
+          const e = m.errors || 0, w = m.warnings || 0, pl = (k, word) => k + ' ' + word + (k === 1 ? '' : 's');
+          s += ' · ' + (e || w ? [e && pl(e, 'error'), w && pl(w, 'warning')].filter(Boolean).join(', ') : m.count ? 'only hints' : 'clean');
+        } else s += ' · ' + m.count;
+      }
       if (m.indexing) s += ' · still indexing';
       return s;
     },
