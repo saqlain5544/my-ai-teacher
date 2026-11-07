@@ -8,6 +8,8 @@ final class ShellJob: @unchecked Sendable {
     let command: String
     let title: String
     let conversationID: String
+    /// The folder it runs in (the sandbox hint asks whether a mentor project's fence is on there).
+    let cwd: URL
     let started = Date()
     let pid: pid_t
 
@@ -40,6 +42,7 @@ final class ShellJob: @unchecked Sendable {
         self.command = command
         self.title = title
         self.conversationID = conversationID
+        self.cwd = cwd
         var fds: [Int32] = [0, 0]
         guard pipe(&fds) == 0 else { throw ToolError("Couldn't create a pipe for the command.") }
         var fa: posix_spawn_file_actions_t?
@@ -261,6 +264,7 @@ final class ShellJobs: @unchecked Sendable {
     static func finishedMessage(_ job: ShellJob, handle: String) -> ChatMessage {
         var out = Secrets.redact(job.readNew()).text   // delivered to the model without passing runBounded
         if out.count > 12_000 { out = truncateMiddle(out, max: 12_000) }
+        if let hint = Secrets.hint(for: out, folder: job.cwd), !out.contains(hint) { out += "\n" + hint }   // a background build can fail on the nested sandbox too
         if out.isEmpty { out = "(nothing new since you last looked)" }
         let code = job.exitCode ?? -1, secs = job.seconds
         let text = "<background-task id=\"\(handle)\" command=\"\(job.command.replacingOccurrences(of: "\"", with: "'").prefix(200))\" exit=\"\(code)\" seconds=\"\(secs)\">\n\(out)\n</background-task>"

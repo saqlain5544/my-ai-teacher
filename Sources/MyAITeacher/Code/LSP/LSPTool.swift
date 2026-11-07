@@ -115,7 +115,10 @@ struct LSPTool: Tool {
         let needsFile = action != "workspace_symbols"
         if needsFile && url == nil && !(action == "diagnostics") { return .error("`file` is required for \(action).") }
         let lang = LSPServers.languageID(spec, ext: ext)
-        let instance = hub.instance(spec, executable: exe, folder: folder, fence: Self.fence(for: ctx.services.workspace))
+        // Captured here, in the call the model started: the supervisor runs the server in a detached task that has neither the
+        // scrubbed environment nor the credential deny rules (and again on every restart). Always guarded, even when a path
+        // the learner approved made `runBounded` drop the deny-reads for this call: the server outlives the call.
+        let instance = hub.instance(spec, executable: exe, folder: folder, fence: Self.guardedFence(for: ctx.services.workspace, server: spec), env: ProcessRunner.environment())
         let fmt = LSPFormat(folder: folder, limit: limit)
         let t0 = Date()
         do {
@@ -145,6 +148,12 @@ struct LSPTool: Tool {
     static func fence(for ws: Workspace) -> String? {
         guard ProjectStore.load(ws)?.isOpen == true else { return nil }
         return MentorGuard.fence(ws)
+    }
+
+    /// What the server is spawned under: `fence(for:)` composed with the credential deny rules (`WriteFence.guarded`, nil when
+    /// the learner turned that protection off or there is no `sandbox-exec`).
+    static func guardedFence(for ws: Workspace, server: LSPServerSpec) -> String? {
+        server.sandboxable ? WriteFence.guarded(fence(for: ws)) : nil
     }
 
     /// Absolute path with symlinks resolved (/tmp → /private/tmp), so what the server sends back matches.

@@ -198,8 +198,11 @@ final class DebugSessions: @unchecked Sendable {
     static let shared = DebugSessions()
     private let lock = NSLock()
     private var byConversation: [String: DebugSession] = [:]
-    /// A session nobody has touched for this long ends the next time any debugging starts (nothing runs a timer for it).
+    /// A session nobody has touched for this long ends: a timer checks while any session is open (and a debug call does too).
     static let idleSeconds: TimeInterval = 15 * 60
+    var idle: TimeInterval = DebugSessions.idleSeconds
+    var reapEvery: TimeInterval = 60
+    private var timer: DispatchSourceTimer?
 
     init() {
         NotificationCenter.default.addObserver(forName: NSNotification.Name("NSApplicationWillTerminateNotification"), object: nil, queue: nil) { _ in
@@ -209,21 +212,47 @@ final class DebugSessions: @unchecked Sendable {
 
     func session(_ conv: String) -> DebugSession? { lock.withLock { byConversation[conv] } }
     /// Registers `s` and returns the session it replaced, if any.
-    func set(_ s: DebugSession) -> DebugSession? { lock.withLock { let old = byConversation[s.conversationID]; byConversation[s.conversationID] = s; return old } }
-    func remove(_ s: DebugSession) { lock.withLock { if byConversation[s.conversationID] === s { byConversation[s.conversationID] = nil } } }
+    func set(_ s: DebugSession) -> DebugSession? {
+        let old = lock.withLock { () -> DebugSession? in let old = byConversation[s.conversationID]; byConversation[s.conversationID] = s; return old }
+        watch()
+        return old
+    }
+    var all: [DebugSession] { lock.withLock { Array(byConversation.values) } }
+
+    /// With the lock held: the timer goes when the last session does (checked under the lock `set` takes, so a new one isn't missed).
+    private func unwatchIfEmpty() {
+        if byConversation.isEmpty { timer?.cancel(); timer = nil }
+    }
+
+    /// Checks for idle sessions on a timer while any is open; the timer ends itself when none is.
+    private func watch() {
+        lock.withLock {
+            guard timer == nil else { return }
+            let t = DispatchSource.makeTimerSource(queue: .global(qos: .utility))
+            t.schedule(deadline: .now() + reapEvery, repeating: reapEvery)
+            t.setEventHandler { [weak self] in
+                guard let self else { return }
+                self.reapIdle()
+                self.lock.withLock { self.unwatchIfEmpty() }
+            }
+            timer = t
+            t.resume()
+        }
+    }
+    func remove(_ s: DebugSession) { lock.withLock { if byConversation[s.conversationID] === s { byConversation[s.conversationID] = nil }; unwatchIfEmpty() } }
     var count: Int { lock.withLock { byConversation.count } }
 
     /// Stop, a deleted lesson: the program and its debugger end now.
     func end(_ conv: String) {
-        guard let s = lock.withLock({ byConversation.removeValue(forKey: conv) }) else { return }
+        guard let s = lock.withLock({ () -> DebugSession? in let v = byConversation.removeValue(forKey: conv); unwatchIfEmpty(); return v }) else { return }
         s.killNow()
     }
     func reapIdle() {
-        let old = lock.withLock { byConversation.values.filter { Date().timeIntervalSince($0.lastUsed) > Self.idleSeconds && !$0.busy } }
+        let old = lock.withLock { byConversation.values.filter { Date().timeIntervalSince($0.lastUsed) > idle && !$0.busy } }
         for s in old { remove(s); s.killNow() }
     }
     func killAll() {
-        let all = lock.withLock { let v = Array(byConversation.values); byConversation = [:]; return v }
+        let all = lock.withLock { () -> [DebugSession] in let v = Array(byConversation.values); byConversation = [:]; unwatchIfEmpty(); return v }
         for s in all { s.killNow(wait: true) }
     }
 }

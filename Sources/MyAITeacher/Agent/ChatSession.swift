@@ -173,7 +173,8 @@ final class ChatSession: ObservableObject, Identifiable {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !(trimmed.isEmpty && attachments.isEmpty) else { return }
         // Context commands act on the lesson itself, not on the model: no turn, no tokens (`/compact` makes one summary call).
-        if let cmd = ContextCommand.parse(trimmed) {
+        // Not for a literal message: a custom command whose body is `/compact …` must not run the built-in.
+        if !literal, let cmd = ContextCommand.parse(trimmed) {
             switch cmd {
             case .compact(let focus):
                 guard !isRunning else { sink?.notice("Wait for the reply to finish, then try /compact again."); return }
@@ -241,7 +242,7 @@ final class ChatSession: ObservableObject, Identifiable {
 
     func stop() {
         runTask?.cancel()
-        DebugSessions.shared.end(id)   // a stopped turn leaves no program held at a breakpoint
+        if !compacting { DebugSessions.shared.end(id) }   // a stopped turn leaves no program held at a breakpoint; stopping a /compact is not a turn
         app.interactions.cancelAll(conversationID: id)
     }
 
@@ -387,8 +388,10 @@ final class ChatSession: ObservableObject, Identifiable {
         if why == nil, let note = await contentChangeNote() {
             m.blocks.append(Block(kind: .text, text: "<context>\n\(note)\n</context>", meta: ["hidden": true, "ephemeral": true]))
         }
-        guard i < messages.count, messages[i].id == m.id else { return true }
+        // The message was edited or removed while the hooks and the scan ran: its note is gone, so what it told is not yet told.
+        guard i < messages.count, messages[i].id == m.id else { pendingContentSeen = nil; return true }
         if let why {
+            pendingContentSeen = nil
             let text = m.blocks.filter { $0.kind == .text && $0.meta?["hidden"]?.bool != true }.compactMap(\.text).joined(separator: "\n\n")
             truncate(after: i - 1)
             draft = [text, draft].filter { !$0.isEmpty }.joined(separator: "\n\n")
@@ -396,6 +399,7 @@ final class ChatSession: ObservableObject, Identifiable {
             return false
         }
         if m.blocks != messages[i].blocks { messages[i] = m; persist(i); sink?.upsert(m) }
+        commitContentSeen()   // the note is in the lesson now
         return true
     }
 
@@ -964,15 +968,27 @@ final class ChatSession: ObservableObject, Identifiable {
     /// The system prompt is frozen for the lesson (caching), so an approval, a plugin switched off or an update after it was
     /// written (also one made while the app was closed) is told once, in a hidden note on the turn's message. Nil when nothing
     /// changed. The folders are read off the main actor.
+    /// The baseline moves to what the note told only when the message carrying it is in the lesson (`commitContentSeen`): a message
+    /// the learner edited meanwhile loses its note, and the next turn tells it again. Without a system prompt yet there is nothing
+    /// to be out of date (the prompt written next sets the baseline).
     func contentChangeNote() async -> String? {
+        guard conversation.systemPrompt != nil else { return nil }
         let now = await ContentScan.usable(node: AgentTree.node(for: conversation.mode), folder: services.workspace.url, settings: settings)
-        defer { conversation.contentSeen = now }
-        guard let before = conversation.contentSeen.map(Set.init), before != Set(now) else { return nil }
+        pendingContentSeen = nil
+        guard let before = conversation.contentSeen.map(Set.init) else { conversation.contentSeen = now; return nil }   // an older lesson: the first look is the baseline
+        guard before != Set(now) else { return nil }
+        pendingContentSeen = now
         let added = Set(now).subtracting(before).sorted(), gone = before.subtracting(now).sorted()
         var note = "[Since your instructions were written, what this folder and the user's plugins supply has changed."
         if !added.isEmpty { note += " Now available: " + added.joined(separator: ", ") + "." }
         if !gone.isEmpty { note += " No longer available: " + gone.joined(separator: ", ") + "." }
         return note + " The Skills list above may be out of date, including any note that folder skills await approval: `skill` is always current.]"
+    }
+
+    /// What the last `contentChangeNote` told, not yet recorded as seen.
+    private var pendingContentSeen: [String]?
+    func commitContentSeen() {
+        if let seen = pendingContentSeen { conversation.contentSeen = seen; pendingContentSeen = nil }
     }
 
     private func buildSystemPrompt(model: String) async -> String {
@@ -1118,7 +1134,9 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     /// Tests: mark the lesson busy as a running turn or `/compact` would, without a model.
-    func holdBusyForTests(_ on: Bool) { isRunning = on }
+    func holdBusyForTests(_ on: Bool, compacting: Bool = false) { isRunning = on; self.compacting = on && compacting }
+    /// True while `/compact` (not a turn) is what is running: Stop then ends the summary, not a debugging session the lesson holds.
+    private(set) var compacting = false
     var queuedReports: Int { inbox.count }
 
     @Published var lastCompaction: String?
@@ -1139,12 +1157,14 @@ final class ChatSession: ObservableObject, Identifiable {
         }
         let client = provider.client(apiKey: key)
         isRunning = true
+        compacting = true
         beginActivity()
         setStatus("Summarising the lesson…")
         runTask = Task { [weak self] in
             guard let self else { return }
             let done = await self.summarise(range, focus: focus, client: client, budget: budget)
             self.isRunning = false
+            self.compacting = false
             self.endActivity()
             self.setStatus(nil)
             self.adoptInbox(wake: done)

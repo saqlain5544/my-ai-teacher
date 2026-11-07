@@ -148,7 +148,7 @@ enum ContextPolicy {
         var ids = Set<String>()
         for m in msgs[from...] where m.role == .user {
             for b in m.blocks where b.kind == .toolResult && b.isError != true && b.meta?["running"] == nil && b.meta?["sameAs"] == nil
-                && b.meta?["stepCapped"] == nil { if let i = b.id { ids.insert(i) } }
+                && b.meta?["stepCapped"] == nil && b.meta?["spilled"] == nil { if let i = b.id { ids.insert(i) } }   // a spilled result keeps only a preview
         }
         return ids
     }

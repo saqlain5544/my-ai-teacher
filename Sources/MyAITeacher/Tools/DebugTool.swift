@@ -206,6 +206,10 @@ struct DebugTool: Tool {
         }
     }
 
+    /// Why a session whose protection grew was ended: the write fence (a project opened, tests locked, a learner file the program could
+    /// write) or the credential rules (Settings › Tools › Secrets, “Commands can't read credential folders”, turned on meanwhile).
+    static let fenceEndedMessage = "The lesson's protection now covers more than this session started under (a project was opened, the tests were locked, a learner file existed that the program could write, or “Commands can't read credential folders” in Settings › Tools › Secrets was turned on), so it was ended: a debugged program keeps the protection it started with. `start` again."
+
     private final class Holder: @unchecked Sendable { var session: DebugSession? }
 
     // MARK: Starting
@@ -303,7 +307,7 @@ struct DebugTool: Tool {
         }
         if !WriteFence.covers(started: s.fence, current: WriteFence.profile ?? "", since: s.started) {
             DebugSessions.shared.remove(s); s.killNow()
-            return .error("The lesson's write protection now covers more than this session started under (a project was opened, the tests were locked, or a learner file existed that the program could write), so it was ended: a debugged program keeps the protection it started with. `start` again.")
+            return .error(Self.fenceEndedMessage)
         }
         if s.exited { DebugSessions.shared.remove(s); await s.end(); return .error("The program has already exited. `start` again.") }
         if s.stops >= 500 { DebugSessions.shared.remove(s); await s.end(); return .error("The session reached its 500-stop limit and was ended.") }

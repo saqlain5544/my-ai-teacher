@@ -42,9 +42,7 @@ enum TreeDigest {
     /// Where a link may never lead in a folder's own content: credentials, which a command file linked to would send to the model.
     nonisolated(unsafe) static var credentialRoots: [String] = defaultCredentialRoots()
     static func defaultCredentialRoots() -> [String] {
-        let home = NSHomeDirectory()
-        let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains", ".kube", ".npmrc", ".git-credentials", ".config/gcloud"]
-        return (rel.map { home + "/" + $0 } + [AppPaths.keys.path]).map(resolved)
+        Secrets.credentialPaths.map(resolved)   // the one list: the read gate, the deny rules and this check cannot drift apart
     }
 
     /// The path with every symlink resolved (a part that doesn't exist yet is kept as is).

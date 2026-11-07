@@ -78,6 +78,10 @@ final class LSPTests: XCTestCase {
             try:
                 open(p["path"], "w").write("changed"); send({"jsonrpc": "2.0", "id": m["id"], "result": "wrote"})
             except Exception as e: send({"jsonrpc": "2.0", "id": m["id"], "result": "denied: %s" % e})
+        elif meth == "test/env": send({"jsonrpc": "2.0", "id": m["id"], "result": os.environ.get(p["name"], "")})
+        elif meth == "test/read":
+            try: send({"jsonrpc": "2.0", "id": m["id"], "result": "read " + str(len(open(p["path"]).read()))})
+            except Exception as e: send({"jsonrpc": "2.0", "id": m["id"], "result": "denied: %s" % e})
         elif meth == "test/flood":
             for i in range(250):
                 send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics", "params": {"uri": "file:///flood/f%d.fk" % i, "diagnostics": []}})
@@ -355,6 +359,52 @@ final class LSPTests: XCTestCase {
         var missing = spec(); missing = LSPServerSpec(id: "nope", title: "Nope LS", binaries: ["definitely-not-installed-ls"], args: [], languages: ["fk": "fake"], extraDirs: [], install: "brew install nope-ls")
         let r = try await LSPTool(hub: LSPHub(specs: [missing])).run(["action": "hover", "file": "x.fk", "line": 1, "symbol": "x"], try await ctx())
         XCTAssertTrue(r.isError && r.text.contains("brew install nope-ls") && r.text.contains("never installs"), r.text)
+    }
+
+    /// The supervisor starts the server in a detached task (no `Secrets.agentCall`, no task-local fence), so the scrubbed
+    /// environment and the guarded profile are captured in the tool call and kept for every restart.
+    func testTheServerGetsTheScrubbedEnvironmentAndCredentialDenyRulesCapturedInTheCall() async throws {
+        try XCTSkipUnless(WriteFence.available, "no sandbox-exec")
+        ShellEnvironment.shared.inject("LSP_TEST_API_KEY", "lsp-secret-value-1234567890")
+        defer { ShellEnvironment.shared.inject("LSP_TEST_API_KEY", nil) }
+        _ = try write("x.fk", "def foo\n")
+        let hub = LSPHub(specs: [spec()], backoff: Backoff(initial: 0.1, max: 0.2))
+        hub.approveForProcess(folder: dir)
+        defer { Task { for i in hub.all { await i.stop() } } }
+        let c = try await ctx()
+        let r = try await LSPTool(hub: hub).runBounded(["action": "hover", "file": "x.fk", "line": 1, "symbol": "foo"], c)
+        XCTAssertFalse(r.isError, r.text)
+        let inst = try XCTUnwrap(hub.existing("fake", folder: LSPTool.canonical(dir)))
+        XCTAssertNil(inst.env["LSP_TEST_API_KEY"], "the secret variable never reaches the server")
+        XCTAssertEqual(inst.fence, WriteFence.guarded(nil), "the credential deny rules are on the profile")
+        XCTAssertTrue(inst.fence?.contains("deny file-read*") == true)
+        func secret() async throws -> String { try await inst.perform { try await $0.request("test/env", ["name": "LSP_TEST_API_KEY"], timeout: 10).string ?? "?" } }
+        let first = try await secret()
+        XCTAssertEqual(first, "", "not in the running server's environment")
+        // After a crash the supervisor starts it again in a task with neither: the same environment and profile.
+        _ = try? await inst.perform { try await $0.request("test/crash", timeout: 5) }
+        for _ in 0..<80 where inst.status.restarts == 0 { try await Task.sleep(nanoseconds: 50_000_000) }
+        XCTAssertGreaterThanOrEqual(inst.status.restarts, 1, "it restarted")
+        let again = try await secret()
+        XCTAssertEqual(again, "", "the restart is scrubbed too")
+        // A changed profile (credential protection toggled, a project opened) replaces the instance.
+        let other = hub.instance(spec(), executable: "/usr/bin/python3", folder: LSPTool.canonical(dir), fence: nil)
+        XCTAssertFalse(other === inst)
+        await other.stop()
+    }
+
+    @MainActor func testSourceKitLSPCannotRunSandboxedSoItGetsNoProfileButAStatedLimit() throws {
+        let sk = try XCTUnwrap(LSPServers.spec(id: "sourcekit-lsp"))
+        XCTAssertFalse(sk.sandboxable)
+        let ws = try Workspace(url: dir)
+        XCTAssertNil(LSPTool.guardedFence(for: ws, server: sk))
+        XCTAssertEqual(LSPTool.guardedFence(for: ws, server: try XCTUnwrap(LSPServers.spec(id: "gopls"))), WriteFence.guarded(nil))
+        let text = LSPHub.unsandboxedNote(sk)
+        XCTAssertTrue(text.contains("cannot run inside the macOS sandbox") && text.contains("without your API keys"), text)
+        XCTAssertTrue(LSPHub.approvalRequest(sk, executable: "/usr/bin/sourcekit-lsp", ws: ws).detail.contains(text), "the approval card states the limit")
+        let gopls = try XCTUnwrap(LSPServers.spec(id: "gopls"))
+        XCTAssertFalse(LSPHub.approvalRequest(gopls, executable: "/x/gopls", ws: ws).detail.contains("cannot run inside the macOS sandbox"))
+        for t in ["lsp"] { XCTAssertNotNil(Secrets.credentialPathNamed(by: t, ["action": "diagnostics", "file": "~/.ssh/config"], workspace: dir), "lsp's `file` is a path argument") }
     }
 
     func testAServerThatIsntApprovedDoesNotStartAndASubAgentIsToldWhy() async throws {
@@ -686,7 +736,7 @@ final class LSPRealServerTests: XCTestCase {
         let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
         let ctx = ToolContext(conversationID: "R", workspace: dir, services: services, interactions: await MainActor.run { InteractionCenter() }, toolCallID: "c",
                               client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
-        return try await LSPTool(hub: hub).run(input, ctx)
+        return try await LSPTool(hub: hub).runBounded(input, ctx)   // as the app calls it: scrubbed environment, credential deny rules
     }
     func hub(_ id: String) throws -> LSPHub {
         let spec = try XCTUnwrap(LSPServers.spec(id: id))
@@ -703,6 +753,7 @@ final class LSPRealServerTests: XCTestCase {
         try write("main.go", "package main\n\ntype Shape interface{ Area() float64 }\n\ntype Rect struct{ W, H float64 }\n\nfunc (r Rect) Area() float64 { return r.W * r.H }\n\nfunc total(s []Shape) float64 {\n\tt := 0.0\n\tfor _, x := range s {\n\t\tt += x.Area()\n\t}\n\treturn t\n}\n")
         let refs = try await run(h, ["action": "references", "file": "main.go", "line": 9, "symbol": "total"])
         XCTAssertFalse(refs.isError, refs.text); XCTAssertTrue(refs.text.contains("main.go:9  func total"), refs.text)
+        XCTAssertEqual(h.all.first?.fence, WriteFence.guarded(nil), "gopls runs under the credential deny rules")
         let impl = try await run(h, ["action": "implementation", "file": "main.go", "line": 3, "symbol": "Area"])
         XCTAssertTrue(impl.text.contains("main.go:7  func (r Rect) Area"), impl.text)
         let type = try await run(h, ["action": "type_definition", "file": "main.go", "line": 11, "symbol": "x"])
@@ -724,6 +775,7 @@ final class LSPRealServerTests: XCTestCase {
         try write("main.c", "#include \"util.h\"\nint main(void) {\n  return twice(21);\n}\n")
         let def = try await run(h, ["action": "definition", "file": "main.c", "line": 3, "symbol": "twice"])
         XCTAssertFalse(def.isError, def.text); XCTAssertTrue(def.text.contains("util.h:1") || def.text.contains("util.c:2"), def.text)
+        XCTAssertEqual(h.all.first?.fence, WriteFence.guarded(nil), "clangd runs under the credential deny rules")
         let refs = try await run(h, ["action": "references", "file": "main.c", "line": 3, "symbol": "twice"])
         XCTAssertTrue(refs.text.contains("main.c:3"), refs.text)
         try write("err.c", "int f(void) { return undefined_name; }\n")
@@ -738,6 +790,8 @@ final class LSPRealServerTests: XCTestCase {
         try write("Sources/Demo/main.swift", "func total(_ s: [Shape]) -> Double { s.reduce(0) { $0 + $1.area() } }\nprint(total([Rect()]))\n")
         let def = try await run(h, ["action": "definition", "file": "Sources/Demo/main.swift", "line": 2, "symbol": "total"])
         XCTAssertFalse(def.isError, def.text); XCTAssertTrue(def.text.contains("main.swift:1"), def.text)
+        XCTAssertNil(h.all.first?.fence, "sourcekit-lsp aborts (\"Service is invalid\") under any sandbox profile, so it runs without one")
+        XCTAssertNil(h.all.first?.env.keys.first { Secrets.isSecretName($0) && !Secrets.current.envAllow.contains($0) }, "but with the scrubbed environment")
         let syms = try await run(h, ["action": "document_symbols", "file": "Sources/Demo/Shapes.swift"])
         XCTAssertTrue(syms.text.contains("Rect") && syms.text.contains("area"), syms.text)
         try write("Sources/Demo/Bad.swift", "let x: Int = \"no\"\n")

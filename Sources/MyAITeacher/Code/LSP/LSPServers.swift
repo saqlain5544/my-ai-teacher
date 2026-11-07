@@ -18,6 +18,10 @@ struct LSPServerSpec: Sendable {
     var executable: String? = nil
     /// Files that mark the project's root for this server (shown when none is found: the server needs them).
     var markers: [String] = []
+    /// Whether it can run inside `sandbox-exec`. sourcekit-lsp cannot: its sourcekitd service aborts ("Service is invalid")
+    /// under any profile, even `(allow default)` (measured), so it runs with the scrubbed environment but without the
+    /// project's write fence or the credential deny rules; the approval text and the docs say so.
+    var sandboxable = true
 }
 
 enum LSPServers {
@@ -27,7 +31,7 @@ enum LSPServers {
         LSPServerSpec(id: "gopls", title: "gopls", binaries: ["gopls"], args: [], languages: ["go": "go"],
                       extraDirs: ["~/go/bin", "/usr/local/go/bin", "/opt/homebrew/bin"], install: "go install golang.org/x/tools/gopls@latest", markers: ["go.mod"]),
         LSPServerSpec(id: "sourcekit-lsp", title: "sourcekit-lsp", binaries: ["sourcekit-lsp"], args: [], languages: ["swift": "swift"],
-                      extraDirs: ["/usr/bin"], install: "install Xcode or the Swift toolchain (swift.org)", markers: ["Package.swift"]),
+                      extraDirs: ["/usr/bin"], install: "install Xcode or the Swift toolchain (swift.org)", markers: ["Package.swift"], sandboxable: false),
         LSPServerSpec(id: "typescript-language-server", title: "typescript-language-server", binaries: ["typescript-language-server"], args: ["--stdio"],
                       languages: ["ts": "typescript", "tsx": "typescriptreact", "js": "javascript", "jsx": "javascriptreact", "mjs": "javascript", "cjs": "javascript"],
                       extraDirs: ["~/.lsp-servers/bin", "/opt/homebrew/bin", "/usr/local/bin"], install: "npm install -g typescript-language-server typescript",

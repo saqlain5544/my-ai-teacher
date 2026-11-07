@@ -303,8 +303,30 @@ final class EngineerStore: @unchecked Sendable {
 
     /// Whether the learner has run the code mentor in this folder: a code-mode lesson in its own `state.sqlite`. A project
     /// record in any other folder (a cloned repository's `.teacher/`) is not theirs and never seeds the profile.
+    /// A cloned repository can carry its own `.teacher/state.sqlite` with a code-mode lesson in it, so a folder whose `.teacher`
+    /// git tracks is not trusted: `.teacher/.gitignore` keeps `state.sqlite` out, while `tests/` and `mentor/` are meant to be committed.
     static func ranCodeMentor(_ folder: String) -> Bool {
-        SessionIndex.scan([folder]).contains { $0.conversation.mode == .code }
+        guard !stateIsTracked(folder) else { return false }
+        return SessionIndex.scan([folder]).contains { $0.conversation.mode == .code }
+    }
+
+    /// Whether git tracks the folder's `.teacher/state.sqlite`. git runs with nothing a repository's config could start
+    /// (no fsmonitor, hooks, external diff or pager, no user or system config) and without taking the index lock.
+    static func stateIsTracked(_ folder: String) -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: Worktree.git)
+        p.arguments = Worktree.safe + ["--no-optional-locks", "--no-pager", "--literal-pathspecs", "-C", folder, "ls-files", "-z", "--", Workspace.stateDirName + "/state.sqlite"]
+        var env = ProcessInfo.processInfo.environment
+        env["GIT_CONFIG_GLOBAL"] = "/dev/null"; env["GIT_CONFIG_NOSYSTEM"] = "1"; env["GIT_TERMINAL_PROMPT"] = "0"
+        for k in env.keys where k.hasPrefix("GIT_DIR") || k == "GIT_WORK_TREE" || k == "GIT_INDEX_FILE" { env[k] = nil }
+        p.environment = env
+        let out = Pipe(); p.standardOutput = out; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+        guard (try? p.run()) != nil else { return false }
+        let killer = DispatchWorkItem { if p.isRunning { p.terminate() } }
+        DispatchQueue.global().asyncAfter(deadline: .now() + 10, execute: killer)
+        let data = out.fileHandleForReading.readDataToEndOfFile()
+        p.waitUntilExit(); killer.cancel()
+        return p.terminationStatus == 0 && !data.isEmpty
     }
 
     /// Reads the project records of folders the learner ran the code mentor in (each one's `project.json` and

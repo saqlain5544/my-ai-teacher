@@ -64,11 +64,10 @@ final class LeakGuardTests: XCTestCase {
         let c = try await ctx(dir)
         let f = dir.appendingPathComponent("config.txt")
         try "name = x\nkey = real-value\n".write(to: f, atomically: true, encoding: .utf8)
-        // Nothing was read yet: a new text that mentions the marker is simply text.
+        // A new file that mentions the marker is simply text.
         let free = try await WriteTool().runBounded(["path": "redaction-notes.md", "content": "Secrets show as [redacted: API key].\n"], c)
         XCTAssertFalse(free.isError, free.text)
-        // After a read of this file came back redacted, the marker may not be saved back.
-        Secrets.noteRedactedRead(agent: FileViews.agent(c), path: f)
+        // An existing file whose text lacks the marker may not get it, whatever was read before (no read history is kept).
         let w = try await WriteTool().runBounded(["path": "config.txt", "content": "name = x\nkey = [redacted: API key]\n"], c)
         XCTAssertTrue(w.isError && w.text.hasPrefix("Refused"), w.text)
         let e = try await EditTool().runBounded(["path": "config.txt", "edits": [["old_string": "real-value", "new_string": "[redacted: API key]"]]], c)

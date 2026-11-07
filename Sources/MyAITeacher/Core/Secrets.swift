@@ -164,15 +164,14 @@ enum Secrets {
         return nil
     }
 
-    /// Paths a `read`/`grep` of which came back redacted, per agent: ("agent\npath"). A `write`/`edit` of such a path that
-    /// puts a `[redacted: …]` marker in is refused, since the model would save the marker over the real value.
-    nonisolated(unsafe) private static let redactedReads = Locked(Set<String>())
-    static func noteRedactedRead(agent: String, path: URL) { redactedReads.mutate { _ = $0.insert(agent + "\n" + path.standardizedFileURL.path) } }
-
-    static func introducesMarker(tool: String, _ input: JSON, workspace: URL, agent: String) -> String? {
+    /// A `write`/`edit` of an existing file that puts in a `[redacted: …]` marker the file's current content doesn't hold is
+    /// refused, whatever was read before: the model would save the marker over the real value, and a value it saw through
+    /// `bash` (`cat`, `head`: not redacted by shape alone) or another agent's read gets the same protection. A file that is
+    /// new, or that already holds the marker (documentation about it), is fine.
+    static func introducesMarker(tool: String, _ input: JSON, workspace: URL) -> String? {
         guard tool == "write" || tool == "edit", let path = input["path"]?.string else { return nil }
         let url = resolvePath(path, workspace: workspace)
-        guard redactedReads.get().contains(agent + "\n" + url.standardizedFileURL.path) else { return nil }
+        guard FileManager.default.fileExists(atPath: url.path) else { return nil }
         var news = [input["content"]?.string, input["new_string"]?.string].compactMap { $0 }
         news += (input["edits"]?.array ?? []).compactMap { $0["new_string"]?.string }
         let marker = try! NSRegularExpression(pattern: "\\[redacted: [^\\]\\n]+\\]")
@@ -183,7 +182,7 @@ enum Secrets {
         guard !incoming.isEmpty else { return nil }
         let existing = (try? String(contentsOf: url, encoding: .utf8)).map(markers) ?? []
         guard !incoming.subtracting(existing).isEmpty else { return nil }
-        return "Refused: you read \(url.path) and values in it were replaced by `[redacted: …]` markers; the new text still holds one. Saving it would destroy the real value. Edit around those lines and leave them as they are. (A new file that only mentions the marker is fine.)"
+        return "Refused: \(url.path) exists and its text doesn't hold the `[redacted: …]` marker the new text does. A marker stands for a value that was hidden from you; saving it would destroy the real value. Edit around those lines and leave them as they are. (A new file that only mentions the marker is fine.)"
     }
 
     // MARK: Commands
@@ -202,9 +201,14 @@ enum Secrets {
     }
 
     /// A hint for the error a nested sandbox gives, appended to the command's output.
-    static func hint(for output: String) -> String? {
+    /// The wording follows which fence is on: the credential rules (a Settings switch turns them off), a code-mentor project's
+    /// write fence in `folder` (no switch), or both (the switch alone would not help). With neither known, the mentor's.
+    static func hint(for output: String, folder: URL? = nil) -> String? {
         guard output.contains("sandbox_apply: Operation not permitted") || output.contains("sandbox-exec: sandbox_apply") else { return nil }
-        let toggle = current.protectCredentials
+        let credentials = fenceActive, mentor = folder.map(ProjectProfile.mentorFenceOpen) ?? false
+        let toggle = credentials && mentor
+            ? "the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets, but the code mentor's write fence is on for this folder too, so the tool has to run without its own sandbox either way"
+            : credentials
             ? "otherwise the learner can turn off “Commands can't read credential folders” in Settings › Tools › Secrets"
             : "the code mentor's write fence is on for this command, so the tool has to run without its own sandbox"
         return "[Hint: this command runs inside a sandbox the app set up, and a tool that sandboxes itself can't nest in it. For SwiftPM pass `--disable-sandbox`; \(toggle).]"
@@ -215,9 +219,12 @@ enum Secrets {
     static let home = FileManager.default.homeDirectoryForCurrentUser.path
     /// Directories and files whose contents are credentials: the usual places under the home folder, and the app's own
     /// keys file and settings (MCP tokens live in them).
+    /// The one list: the read gate, the deny rules, `ReadOnlyShell`, `namesCredential` and `TreeDigest`'s link check all read
+    /// it. Under the home folder, whole trees and single files.
+    static let credentialFolders = [".ssh", ".aws", ".gnupg", ".config/gh", ".config/gcloud", ".kube", "Library/Keychains"]
+    static let credentialFiles = [".netrc", ".docker/config.json", ".npmrc", ".git-credentials"]
     static var credentialPaths: [String] {
-        let rel = [".ssh", ".aws", ".gnupg", ".netrc", ".config/gh", ".docker/config.json", "Library/Keychains"]
-        return rel.map { home + "/" + $0 } + [AppPaths.keys.path, AppPaths.settings.path]
+        (credentialFolders + credentialFiles).map { home + "/" + $0 } + [AppPaths.keys.path, AppPaths.settings.path]
     }
 
     /// Whether `url` is, or is inside, a credential location (case-insensitively: the disk is; and through symlinks).
@@ -240,13 +247,15 @@ enum Secrets {
     /// `..` after a wildcard (`*/../../.ssh`) is asked about whatever it reaches. A search that starts above a credential
     /// folder (grep, glob, symbols, code) is asked about too; `ls` of the home folder is not.
     static func credentialPathNamed(by tool: String, _ input: JSON, workspace: URL) -> String? {
-        guard ["read", "grep", "glob", "ls", "symbols", "code", "source"].contains(tool) else { return nil }
+        // Every tool that takes a path to read: `lsp` names its file in `file`. (`debug`'s `program` and the test tools' paths
+        // are run, not read, under the credential deny rules.)
+        guard ["read", "grep", "glob", "ls", "symbols", "code", "source", "lsp"].contains(tool) else { return nil }
         let ws = workspace.standardizedFileURL
         let walks = ["grep", "glob", "symbols", "code"].contains(tool)
         func hit(_ u: URL) -> Bool { isCredentialPath(u) || (walks && containsCredentialPath(u) && u.path != ws.path) }
         var candidates: [(raw: String, base: URL)] = []
         var baseDir = ws
-        for k in ["path", "file_path", "dir", "directory", "root"] {
+        for k in ["path", "file_path", "file", "dir", "directory", "root"] {
             guard let s = input[k]?.string, !s.isEmpty else { continue }
             candidates.append((s, ws))
             if tool == "glob", k == "path" { baseDir = resolvePath(s, workspace: ws) }
@@ -267,7 +276,8 @@ enum Secrets {
 
     /// A word in a command that names a credential location (for `ReadOnlyShell`, whose commands never ask).
     static func namesCredential(_ command: String) -> Bool {
-        let hints = ["/.ssh", "/.aws", "/.gnupg", "/.netrc", "/.config/gh", "/.docker/config", "/Keychains", AppPaths.keys.path, AppPaths.settings.path, ".ssh/", ".aws/", ".gnupg/", ".netrc"]
+        let hints = (credentialFolders + credentialFiles).map { "/" + $0 } + credentialFolders.map { $0 + "/" } + credentialFiles
+            + ["/.docker/config", "/Keychains", AppPaths.keys.path, AppPaths.settings.path]
         return hints.contains { command.contains($0) }
     }
 }
@@ -283,20 +293,24 @@ extension WriteFence {
     /// The rules, built once: paths the kernel sees (`real`).
     static let denyReads: String = {
         let home = Secrets.home
-        let dirs = [".ssh", ".aws", ".gnupg", ".config/gh", "Library/Keychains"].map { real(URL(fileURLWithPath: home + "/" + $0)) }
-        let files = [".netrc", ".docker/config.json"].map { real(URL(fileURLWithPath: home + "/" + $0)) } + [real(AppPaths.keys), real(AppPaths.settings)]
+        let dirs = Secrets.credentialFolders.map { real(URL(fileURLWithPath: home + "/" + $0)) }
+        let files = Secrets.credentialFiles.map { real(URL(fileURLWithPath: home + "/" + $0)) } + [real(AppPaths.keys), real(AppPaths.settings)]
         let parents = [home, home + "/.config", home + "/.docker", home + "/Library", AppPaths.support.path, AppPaths.support.deletingLastPathComponent().path].map { real(URL(fileURLWithPath: $0)) }
-        return denyRules(dirs: dirs, files: files, parents: parents)
+        // Approved plugin files live here and are read by the app as the learner approved them: a command may read them, not change them.
+        return denyRules(dirs: dirs, files: files, parents: parents, writeOnly: [real(Plugins.root)])
     }()
 
     /// Read and write refusals for `dirs` (whole trees) and `files`, and refusal to move or delete the `parents` that hold
     /// them (`mv ~/.config /tmp/c` would carry `gh` away from its rule). Writing includes renaming, unlinking and linking
     /// the credential paths themselves, so `mv ~/.ssh /tmp/s && cat /tmp/s/id_rsa` fails. A write the learner approved goes
     /// through the file tools, which run in the app and are not under this profile.
-    static func denyRules(dirs: [String], files: [String], parents: [String]) -> String {
+    /// `writeOnly` trees (the approved plugins) can be read but not written, renamed or deleted.
+    static func denyRules(dirs: [String], files: [String], parents: [String], writeOnly: [String] = []) -> String {
         func lit(_ s: String) -> String { "\"" + s.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"") + "\"" }
         let paths = dirs.map { "(subpath \(lit($0)))" } + files.map { "(literal \(lit($0)))" }
-        return "(deny file-read* file-write* " + paths.joined(separator: " ") + ")\n"
+        // (An empty filter list would deny everything.)
+        return (paths.isEmpty ? "" : "(deny file-read* file-write* " + paths.joined(separator: " ") + ")\n")
+            + (writeOnly.isEmpty ? "" : "(deny file-write* " + writeOnly.map { "(subpath \(lit($0)))" }.joined(separator: " ") + ")\n")
             + "(deny file-write-unlink " + parents.map { "(literal \(lit($0)))" }.joined(separator: " ") + ")\n"
     }
 }

@@ -5,12 +5,12 @@ import Foundation
 /// consolidation, embedding warm-up, compaction, maintenance). Each with its times: when it was asked for, when it began
 /// (and so how long it waited), how long it has run or took, and how it ended.
 struct BackgroundTask: Identifiable, Sendable, Equatable {
-    enum Kind: String, Sendable { case shell, server, agent, mcp, lsp, app
+    enum Kind: String, Sendable { case shell, server, agent, mcp, lsp, debug, app
         var title: String {
-            switch self { case .shell: "Command"; case .server: "Server"; case .agent: "Sub-agent"; case .mcp: "MCP server"; case .lsp: "Language server"; case .app: "App job" }
+            switch self { case .shell: "Command"; case .server: "Server"; case .agent: "Sub-agent"; case .mcp: "MCP server"; case .lsp: "Language server"; case .debug: "Debugger"; case .app: "App job" }
         }
         var symbol: String {
-            switch self { case .shell: "terminal"; case .server: "server.rack"; case .agent: "person.2"; case .mcp: "puzzlepiece.extension"; case .lsp: "chevron.left.forwardslash.chevron.right"; case .app: "gearshape.2" }
+            switch self { case .shell: "terminal"; case .server: "server.rack"; case .agent: "person.2"; case .mcp: "puzzlepiece.extension"; case .lsp: "chevron.left.forwardslash.chevron.right"; case .debug: "ladybug"; case .app: "gearshape.2" }
         }
     }
     enum State: String, Sendable { case queued, running, done, failed, stopped
@@ -114,6 +114,14 @@ enum BackgroundTasks {
                                       detail: i.folder.lastPathComponent + (s.activity.map { " · " + $0 } ?? ""),
                                       startedAt: s.startedAt, state: state, pid: s.pid.map(Int.init), restarts: s.restarts, note: s.lastError))
         }
+        // An open debugging session holds a program stopped at a breakpoint (and lldb): visible, with the lesson it belongs to.
+        for s in DebugSessions.shared.all {
+            let live = !s.exited && s.proc.isRunning
+            out.append(BackgroundTask(id: "debug:" + s.conversationID, kind: .debug, title: "Debugging " + s.program,
+                                      detail: "\(s.stops) stop\(s.stops == 1 ? "" : "s")" + (s.lastKind.isEmpty ? "" : " · " + s.lastKind),
+                                      conversationID: s.conversationID, startedAt: s.started, state: live ? .running : .stopped,
+                                      pid: s.proc.inferior > 0 ? Int(s.proc.inferior) : nil))
+        }
         out += AppJobs.shared.list()
         let running = out.filter { $0.state.active }.sorted { ($0.startedAt ?? .distantFuture) < ($1.startedAt ?? .distantFuture) }
         let ended = out.filter { !$0.state.active }.sorted { ($0.endedAt ?? .distantPast) > ($1.endedAt ?? .distantPast) }
@@ -140,6 +148,8 @@ enum BackgroundTasks {
             if let i = MCPHub.shared.all.first(where: { "mcp:\($0.folder.path):\($0.config.name)" == t.id }) { Task { await i.stop() } }
         case .lsp:
             if let i = LSPHub.shared.all.first(where: { "lsp:\($0.folder.path):\($0.spec.id)" == t.id }) { Task { await i.stop() } }
+        case .debug:
+            if let c = t.conversationID { DebugSessions.shared.end(c) }
         case .app: break
         }
         ActivityLog.record("task.stop", conv: t.conversationID, ["kind": .string(t.kind.rawValue), "title": .string(t.title)])

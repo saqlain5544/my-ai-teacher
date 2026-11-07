@@ -193,9 +193,12 @@ enum Coverage {
         case .swift:
             guard need("swift", "swift") else { return r }
             r.tool = "swift test --enable-code-coverage"
-            let out = await sh(cmd.replacingOccurrences(of: "swift test", with: "swift test --enable-code-coverage", options: [], range: cmd.range(of: "swift test")))
+            let commands = swiftCommands(cmd, fenced: WriteFence.profile != nil && WriteFence.available)
+            let out = await sh(commands.run)
             r.output = String(out.combined.suffix(1500))
-            let path = (await sh("swift test --show-codecov-path")).stdout.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
+            let located = await sh(commands.path)
+            if located.exitCode != 0 { r.output += "\n" + String(located.combined.suffix(600)) }
+            let path = located.stdout.split(separator: "\n").last.map(String.init)?.trimmingCharacters(in: .whitespaces) ?? ""
             guard !path.isEmpty, let data = FileManager.default.contents(atPath: path) else { r.note = "swift test produced no coverage JSON (the tests may not build)."; return r }
             r.files = llvmJSON(data, root: rootPath)
         case .rust:
@@ -245,8 +248,28 @@ enum Coverage {
         return r
     }
 
+    /// The swift test run with coverage, and the command that prints where its JSON went. While a fence is active (the credential
+    /// rules or a mentor project's write fence) SwiftPM's own manifest sandbox can't nest in it, so both carry `--disable-sandbox`
+    /// (a command that has it already keeps its one).
+    static func swiftCommands(_ cmd: String, fenced: Bool) -> (run: String, path: String) {
+        let flag = fenced ? " --disable-sandbox" : ""
+        let own = cmd.contains("--disable-sandbox") ? "" : flag
+        let run = cmd.range(of: "swift test").map { cmd.replacingCharacters(in: $0, with: "swift test --enable-code-coverage" + own) } ?? cmd
+        return (run, "swift test --show-codecov-path" + flag)
+    }
+
+    /// Why a run reported nothing: the sandbox hint when the output has that error, else the end of the output.
+    static func cause(_ output: String, folder: URL? = nil) -> String {
+        let tail = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !tail.isEmpty else { return "" }
+        return "\n" + (Secrets.hint(for: tail, folder: folder).map { "\($0)\n" } ?? "") + "Output (end):\n" + String(tail.suffix(800))
+    }
+
     static func render(_ r: Report, ws: Workspace? = nil) -> String {
-        if let n = r.note, r.files.isEmpty { return n }
+        if let n = r.note, r.files.isEmpty {
+            // The notes that already quote the output (no coverage for the source files) are not given it twice.
+            return r.output.isEmpty || n.contains(r.output) ? n : n + cause(r.output, folder: ws?.url)
+        }
         let n = "\(r.files.count) source file\(r.files.count == 1 ? "" : "s")"
         var s = r.exact ? "Coverage by \(r.tool): \(String(format: "%.0f", r.percent))% of the lines in \(n) ran (tests excluded).\n"
             : "Coverage by \(r.tool): the \(n) average \(String(format: "%.0f", r.percent))% each (the runner prints percentages per file, not line counts; tests excluded).\n"

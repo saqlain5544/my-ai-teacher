@@ -28,7 +28,8 @@ Resources/drawing/ The drawing set's references (`draw`), one file per kind, by 
 * **Folders.** The teacher works inside a loaded folder. Its state lives in `<folder>/.teacher/`
   (`state.sqlite` = lessons + folder memory, `outputs/`, `attachments/`). Learner‑wide state (profile memory,
   flashcards, mastery, plans, usage) lives in `~/Library/Application Support/MyAITeacher/teacher.sqlite`.
-* **Access.** Reading is allowed anywhere (except the credential locations, see "Secrets"). Every folder starts **read‑only**; the learner grants **write** or **full**
+* **Access.** Reading is allowed anywhere except the credential locations (one list, `Secrets.credentialPaths`; the file tools
+  ask once per lesson whatever the folder's grant, commands are refused them by the OS, see "Secrets"). Every folder starts **read‑only**; the learner grants **write** or **full**
   per folder (Settings → Tools, the sidebar folder menu, or an approval card). Grants are stored in the app's settings,
   never in the folder. Writes outside the folder are always asked. Tools never write into `.teacher/`.
 * **Cache‑stable prompts.** The system prompt is built once per lesson and frozen (prompt caching + thinking
@@ -43,16 +44,18 @@ Resources/drawing/ The drawing set's references (`draw`), one file per kind, by 
   `transaction` (a lesson message and its blob references, a lesson delete); transactions nest as savepoints. A row id comes from `db.insert(…)` (statement and id under one lock), never a
   separate `lastInsertRowID` read.
 * **Tool gates compose.** Every extension's `shouldRun` is consulted in registration order: a deny ends it, and an
-  approval the learner gives moves on to the next gate (an approval for one gate never skips another).
+  approval the learner gives moves on to the next gate (an approval for one gate never skips another). The credential-read
+  gate is one of them: a folder's write or full grant never stands in for it.
 * **One HTTP session.** All model streams share `SSEClient`'s `URLSession` (per-task delegates), so steps and parallel
   sub-agents reuse the provider's warm connection instead of a new TLS handshake per request.
-* **Quick questions** live in `~/.teacher/no-dir-conversations` (full access by default, no folder prompt).
+* **Quick questions** live in `~/.teacher/no-dir-conversations` (full access by default, no folder prompt; the credential
+  locations still ask, and commands still run under the credential rules).
 * **Python** (`run_code` python and `math`/SymPy) follows Settings → Python: run without asking (default), ask, or off.
   Package installs (pip/uv/conda/brew/npm -g, also from inside code) are always refused.
 
 ## Context and cost
 Every request = fixed prefix (system prompt + tool schemas) + history prepared by `ContextPolicy` (all O(n)):
-1. **Deferred tools.** An agent's core tools are always sent (a tutor's 14); the rarely used ones (a tutor's 14, per
+1. **Deferred tools.** An agent's core tools are always sent (a tutor's 14); the rarely used ones (a tutor's 16, per
    `AgentTree`) are listed by one line each and loaded with
    `load_tools` (or automatically on first direct call). Tool order only ever grows, so the cached prefix holds.
 2. **Old reasoning** is not resent (except Claude adaptive thinking, which must replay).
@@ -61,12 +64,11 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
 4. **Summary compaction** only if still over budget; keeps ~30% of the budget verbatim, counted in tokens (script-aware).
    `compactIfNeeded` returns the request-ready history, so a step prepares it once. Token estimates are cached per
    message (id + size), so the two or three estimates a step makes don't rescan a long lesson.
+5. **Budget** = min(Settings → Context budget, half the model's context window from provider metadata).
 6. **Sub-agents** stub tool results older than their last 4 steps inside the current brief too (a research run has one
    brief), except when signed thinking is in the history; they keep thinking signatures so reasoning replays with tool calls.
-5. **Budget** = min(Settings → Context budget, half the model's context window from provider metadata).
-
 7. **The summary keeps what the app knows.** `ContextFacts` is appended to every summary after the model's text, under
-   "Kept by the app": the course state (goal), the todo list, the mentor project's test command and last result, files
+   "Kept by the app": the course state (goal; left out when the summariser was given it, since it is in the summary's text), the todo list, the mentor project's test command and last result, files
    written or edited this lesson (`Conversation.touchedFiles`, newest first), background jobs of this lesson, the files
    read last. It is cut by whole lines to 4% of the budget (200–1,200 tokens), holds no clocks, and is built once per
    compaction and stored with the summary, so the prefix is byte-stable until the next one. A rolling summary strips the
@@ -77,9 +79,11 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
    and reports tokens before → after; a short lesson says there is nothing to compact. `/context` counts, with the budget's
    own estimate, the system prompt, memory, deferred-tool list, tool definitions, then messages, tool results, images and
    reasoning of the next request, what microcompaction saves, the summary, the cache hit rate, and names the biggest.
+   A custom command whose body is `/compact …` or `/context` is a message, not the built-in (`send(literal:)`). Stop during
+   `/compact` ends the summary and leaves the lesson's debugging session alone (it is not a turn).
 9. **Repeat reads.** `read` of the same range of an unchanged file (`FileViews` stamp, taken before the read) returns a
    one-line note with `meta.sameAs` = the earlier call, only when that result is in `ContextPolicy.liveResults` (after the
-   compaction point and the trim epoch, the request-ready history (not the stored lesson) inside its budget, not cut by `StepCap`; never for adaptive Claude, whose
+   compaction point and the trim epoch, the request-ready history (not the stored lesson) inside its budget, not cut by `StepCap`, not spilled to a file (only a preview stayed); never for adaptive Claude, whose
    history the API edits, nor sub-agents, which pass no live set). The epoch can still jump past the earlier result later,
    so `ContextPolicy.expandRepeats` runs first in `prepare` (and `demoteSqueezedNotes` after the squeeze turns a note whose target was cut into "read it again"): a note whose earlier result is stubbed or summarised becomes
    the file again from the stored transcript, or says to read it again when that is paged out. The model never holds a
@@ -418,8 +422,10 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   (`Secrets.outbound`), runs the tool with `Secrets.$agentCall` set and the `WriteFence` profile composed with the credential
   deny-reads (`WriteFence.guarded`, over a mentor's write fence), and redacts the result (`Secrets.redacted`; `meta.redacted`
   lists the kinds and the card says so). `ReadOnlyShell.run` (sub-agents' direct path) sandboxes itself and is redacted at
-  the sub-agent call site (`SubAgent.runTools`). A `write`/`edit` whose new text holds a `[redacted: …]` marker the file didn't
-  have is refused (`Secrets.introducesMarker`): a redacted `read` must not be saved back over the real value. The outbound
+  the sub-agent call site (`SubAgent.runTools`). A `write`/`edit` of an existing file whose new text holds a `[redacted: …]` marker
+  the file's current content doesn't is refused (`Secrets.introducesMarker`, whatever was read before: no read history is kept,
+  so a value seen through `bash` is covered too): a redacted `read` must not be saved back over the real value; a new file may
+  mention the marker. The outbound
   check reads every string of a `web_fetch`/`web_search`/`browser` input (`urls[]`, steps, typed text).
 * **Environment.** `ProcessRunner.environment()` drops provider `envKeys` and names containing API_KEY, SECRET, TOKEN, PASSWORD
   or CREDENTIAL when `Secrets.agentCall` (allow list: `AppSettings.envAllow`). A caller that passes its own base (hooks) or
@@ -427,8 +433,13 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
 * **Detection** (`Secrets.redact`): exact matches on saved keys (`KeyStore` mirrors them) and secret-named environment
   values (≥ 10 characters, no whitespace), plus shapes (`sk-` with a digit, `gh[pousr]_`, `github_pat_`, `AKIA`/`ASIA`, `xox?-`,
   `AIza`, `nvapi-`, PEM private key blocks). Also applied to every activity-log line and the plain log.
-* **Credential files.** `Secrets.credentialPaths` (~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.docker/config.json,
-  Library/Keychains, `keys.json`). `read`/`grep`/`glob`/`ls`/`symbols`/`code`/`source` naming one (or a folder that holds one) ask
+* **Credential files.** `Secrets.credentialPaths` is the one list (the read gate, the deny rules, `ReadOnlyShell`,
+  `namesCredential` and `TreeDigest`'s link check all read it): ~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh,
+  ~/.config/gcloud, ~/.kube, ~/.npmrc, ~/.git-credentials, ~/.docker/config.json, Library/Keychains, `keys.json`, `settings.json`.
+  So in an agent's commands npm auth (private registries, publishing), kubectl, gcloud and git's credential store stop working
+  (Settings › Tools › Secrets and the user guide say so). The approved plugin files (`Plugins.root`) are write-denied to
+  commands, with no read deny: the app's own install and update are not under the profile. A file tool naming `file` (`lsp`)
+  is checked like the others. `read`/`grep`/`glob`/`ls`/`symbols`/`code`/`source`/`lsp` naming one (or a folder that holds one) ask
   once per lesson in `PermissionExtension` (`credential-read` grant; sub-agents are denied unless the lesson granted it).
   `ReadOnlyShell.allows` is false for a command naming one, so it asks. Commands are covered by `sandbox-exec` deny-read rules
   (Settings › Tools › Secrets turns it off). Project `.env` files stay readable; only dotenv-shaped secret lines are redacted
@@ -439,10 +450,14 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   location got there by approval, so `runBounded` runs it without the deny-reads (`rg` would otherwise be refused). The
   fence is a guard rail, not a hard boundary: the profile is `(allow default)` plus denies, and another process (`open`,
   `osascript`, a launchd job) is outside it. It breaks git over SSH, gh, docker, aws, and programs that sandbox themselves:
-  `ProjectProfile.detect` returns its `swift build`/`swift test` with `--disable-sandbox` when the fence is on (`flagged`;
-  a model-typed command is never rewritten). `Secrets.shellScript` only prepends an `unset` of the scrubbed names on the
-  script's first line (`zsh -c` re-sources `~/.zshenv`); `Secrets.hint` explains a nested-sandbox error on `bash`,
-  `run_tests` and `diagnostics` output.
+  `ProjectProfile.detect` returns its `swift build`/`swift test` with `--disable-sandbox` when either fence is on (the credential
+  rules, or a code-mentor project open in the folder; `flagged`; a model-typed command is never rewritten, `coverage` adds the
+  flag to its own Swift run and codecov-path call under a fence). `Secrets.shellScript` only prepends an `unset` of the scrubbed
+  names on the script's first line (`zsh -c` re-sources `~/.zshenv`); `Secrets.hint` explains a nested-sandbox error on `bash`,
+  `run_tests`, `diagnostics`, `coverage` and a background job's report, worded by which fence is on (the Settings switch, the
+  mentor's write fence, or both: then the switch alone would not help). `past_lessons` redacts a snippet before its match
+  markers go in and shows no result of `read`/`grep`/`glob`/`ls`/`source`/`symbols`/`code`/`lsp` (`[result omitted]`): a
+  read approved in one lesson is not replayed to another lesson or a sub-agent.
 * **Transcript images.** The page's CSP has no `http(s)` in `img-src`. DOMPurify's `afterSanitizeAttributes` moves any remote
   `<img src>` to `data-remote` (and drops `srcset`, svg `image`/`use` external hrefs); a processor shows “Image from host”; a
   click loads it through `RemoteImageSchemeHandler` (`teacher-remote://img/?k=<per-process key>&u=<https url>`, https only,
@@ -553,7 +568,12 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
   `WriteFence` (`Core/WriteFence.swift`): a `sandbox-exec` profile, set as a task-local around the call, that
   `ProcessRunner` and `ShellJob` start their programs under. It denies writing each learner file and anything under
   `.teacher/` but `mentor/` (and `tests/` while unlocked); everything else stays writable, so every toolchain's build
-  output works (`cc -o runner`, `javac -d classes`, `cargo`'s target/…). A refused write gets a note to the mentor.
+  output works (`cc -o runner`, `javac -d classes`, `cargo`'s target/…). A refused write gets a note to the mentor, and a
+  line in the project's guard log, only when the "Operation not permitted" line names a path the fence guards
+  (`MentorGuard.fencedRefusal`): a credential refusal or a nested sandbox's error (`Secrets.hint`) says the same words and is
+  neither. Engineer-profile backfill (`EngineerStore.ranCodeMentor`) trusts a folder's own `state.sqlite` only when git doesn't
+  track its `.teacher` (checked with hardened git: no fsmonitor, hooks, external diff or user config), since a cloned repository
+  can ship a forged one. `coverage` with no files appends the sandbox hint or the end of the run's output to its note.
   `task` starts only read-only types. What the guard stops is logged on the project.
   *Removed after measurement (2026-10-25):* a regex detector that withheld "solution code" from replies, tool inputs,
   tool output and thinking. It recognised function definitions in 10 of 24 languages tried, withheld the original
@@ -637,7 +657,7 @@ Secrets and data leaving the Mac, with the choke points that make each rule one 
     replaces it; Stop (`ChatSession.stop`, tested through a real `ChatSession`), a deleted lesson (`AppModel.delete` calls
     `DebugSessions.end`) and app quit (`killAll`, which waits) kill the driver, debugserver and the program: the program is
     SIGKILLed and the driver frozen at once, and the tree under it (`pgrep -P`) is walked and killed off the calling thread
-    (a frozen parent keeps its children findable). A session idle 15 minutes is reaped at the next use; 500 stops at most.
+    (a frozen parent keeps its children findable). A session idle 15 minutes is reaped by a timer each minute; 500 stops at most.
     The program keeps the fence it started under: the session ends only when the current fence protects something it didn't
     (`WriteFence.covers`: every path now denied was denied then, and what the start opened up is still open), so a build writing
     `Cargo.lock` doesn't end it; a file created after the start is not counted, which means a running program is not fenced from
@@ -904,7 +924,7 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
     ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
     ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
     │               skills: conversation-practice, grammar-drills, pronunciation-coaching
-    └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, mutate, coverage, source, lsp, glob, grep, code (runtime)
+    └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, mutate, coverage, source, lsp, debug, glob, grep, code (runtime)
                        skills: debugging-coaching, code-review-feedback, project-scaffolding,
                                tdd-coaching, reading-unfamiliar-code, refactoring-safely, performance-investigation,
                                concurrency-bugs, secure-code-review, system-design-practice, technical-interview-practice
@@ -1038,6 +1058,11 @@ result opens with a notice that it is data, not instructions.
   this lesson"; a refusal is not remembered). `subAgentVariant` is a folder-only tool without the `scope` property that
   ignores it if given: sub-agents work through untrusted pages and files. No built-in sub-agent type lists
   `past_lessons`; only a custom agent (`tools: past_lessons`) gets it, in that form. 
+* **What it shows of secrets.** A search snippet is redacted from its text *without* the match markers (a marker inside a key,
+  `sk-«ant»-api03…`, hid it from the shapes) and the matched words are marked again (`PastLessons.safeSnippet`); `scrub` redacts
+  too. `read` shows no result of `read`, `grep`, `glob`, `ls`, `source`, `symbols`, `code` or `lsp` (`[result omitted]`): a credential
+  read the learner approved in lesson A would otherwise be replayed in lesson B or to a sub-agent with no gate. Commands, paths
+  and failed-run heads stay, as in the index; `read` marks a file tool's successful result `[result omitted]`.
 * **Sessions page.** The query is debounced (300 ms) in a `.task(id:)` (query and the All / Working / This folder picker),
   searches the folders the picker allows (Working keeps only lessons running or waiting) off the main actor
   and is cancelled by the next keystroke; a hit opens its lesson (the transcript has no hook to reveal one message).
@@ -1055,6 +1080,9 @@ result opens with a notice that it is data, not instructions.
 * `Supervisor`: children by `ChildSpec` (permanent / transient / temporary), one-for-one or rest-for-one, restart
   intensity (more than N restarts in T s: it stops every child and crashes itself, for its parent to decide), per-child
   limits (one flaky job gives up alone), exponential backoff. Supervisors nest; children are linked to their supervisor.
+  The contract: once a supervisor's process has ended, none of its children is alive. A child whose `start` is still in flight
+  when it gives up or is stopped is awaited, then stopped and awaited (`starting` tasks, taken by `terminateChildren`), not just
+  told to stop; children not yet started are told and never start.
 * `Registry`: processes by pid and name, supervisors by name, restart counts; `Runtime.metrics` (process count, mailbox
   depth, restarts) shows in the Agents panel's footer and `{"action":"runtime"}`; the debug report carries it too.
 * The tree, started on first use: root → `services` (permanent: `telemetry.flush`, which replaced a GCD timer; a hung
@@ -1144,10 +1172,18 @@ file's language instead.
   proxy exits 1 forever). At most 3 run: a start beyond that stops the one unused longest. 10 idle minutes stop one
   (it starts again on the next use); `applicationWillTerminate` → `LSPHub.shutdownNow`. The Tasks panel lists them
   (`BackgroundTask.Kind.lsp`, with what they are indexing) and Stop works.
-* **Fence and Stop.** While a learner's project is open the server is spawned through `WriteFence.wrap` with
-  `MentorGuard.fence(ws)`, the profile the mentor's own commands get (`LSPTool.fence(for:)`, decided from the folder, so
-  a sub-agent's call is fenced too), so its build scripts, `cargo check` or `go list` can't change the learner's files or the
-  locked tests. A different profile (project passed, tests unlocked) replaces the instance: the old one stops (`fenced`) and
+* **Fence and Stop.** The server is spawned through `WriteFence.wrap` with `WriteFence.guarded(MentorGuard.fence(ws))` while
+  a learner's project is open (`LSPTool.fence(for:)`, decided from the folder, so a sub-agent's call is fenced too), and with the
+  credential deny rules alone otherwise (`LSPTool.guardedFence`): its build scripts, `cargo check` or `go list` can't change the
+  learner's files or the locked tests, or read `~/.ssh`, `~/.aws` and the rest of `Secrets.credentialPaths`. The scrubbed
+  environment and that profile are captured in the tool call that creates the instance and stored on `LSPInstance`: a
+  supervisor's child runs in a detached task with no `Secrets.agentCall` and no task-local fence, and a restart runs there
+  again. **sourcekit-lsp is the exception**: its sourcekitd service aborts ("Service is invalid", signal 6) under any `sandbox-exec`
+  profile, even `(allow default)` (measured; SwiftPM's manifest sandbox cannot nest either), so `LSPServerSpec.sandboxable` is
+  false and it runs with the scrubbed environment but without the credential deny rules and without the mentor's write fence.
+  Its approval card says so (`LSPHub.unsandboxedNote`), and so does the user guide. gopls and clangd run under the profile
+  (`LSPRealServerTests` call the tool through `runBounded`). A different profile (project passed, tests unlocked, the credential
+  setting changed) replaces the instance: the old one stops (`fenced`) and
   the next use starts one under the new. Why a server stopped is kept (`StopReason`: user, evicted, idle, fenced): Stop in the
   Tasks panel fails the call in flight with a clear message and the row stays stopped; only an idle stop is started again
   for a call that was waiting. The child is known from launch (`starting`), so quitting during a 90-s initialise still ends it.
@@ -1164,7 +1200,7 @@ file's language instead.
   the lesson). `LSPTool.run` checks the same approval itself, because sub-agents' calls skip the extension host: a
   sub-agent, or a headless run without the gate, gets an error saying so instead of starting anything. `--approve-lsp` on
   `--cli --tool lsp` approves for that process only and writes nothing. The child's environment is
-  `ProcessRunner.environment()`, as the shell's. Hover text, diagnostics and symbol names come from the project's code: data,
+  `ProcessRunner.environment()` taken in the tool call, as the shell's (scrubbed of secrets). Hover text, diagnostics and symbol names come from the project's code: data,
   never instructions (the tool says so, as the app guide does for all output).
 * **The tool.** Actions `definition`, `references`, `hover`, `type_definition`, `implementation`, `document_symbols`,
   `workspace_symbols`, `diagnostics`, `incoming_calls`, `outgoing_calls`, `rename_preview` (the edits as `- old / + new`
@@ -1191,11 +1227,14 @@ Tasks page, and the side panel's Tasks tab, which shows the open lesson's tasks 
 * `SubAgentCenter.runs`: sub-agents, with type, model, steps, tokens and restarts;
 * `MCPHub.all`: MCP servers, with phase, start, PID, restarts and the last error;
 * `LSPHub.all`: language servers (kind `lsp`), the same and what they are indexing;
+* `DebugSessions.all`: a lesson's open debugging session (kind `debug`, id `debug:<lesson>`): the program held at a breakpoint
+  and lldb. Stop ends it; the lesson's running work in the summary's kept facts names it; a timer (60 s while any is open)
+  ends one idle for 15 minutes, so an abandoned session needs no further `debug` call to be reaped;
 * `AppJobs`: the app's own `Runtime.job` and `Runtime.call` work. The wrappers record when a job was asked for, when it
   started (so the time it waited) and how it ended; the last 40 finished are kept.
 
 Running tasks come first, oldest first; then the 50 most recent finished. `BackgroundTasks.stop` stops a command, a
-sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` drives the sidebar's badge, checked every
+sub-agent, an MCP server, a language server or a debugging session and logs it (`task.stop`). `AppModel.runningTasks` drives the sidebar's badge, checked every
 2 s.
 
 ## Activity log and background wake-ups
@@ -1298,7 +1337,7 @@ data until the user approves its exact files. The model is one: a SHA-256 finger
   `.teacher|.claude/agents`, `.teacher|.claude/commands`. `TreeDigest` hashes what reaches a prompt (each `SKILL.md`, agent and command file; at most 400 files, 1 MB each) and only
   lists the rest of a skill's folder by path and size (`node_modules` and `.git` are left out), so bundled assets can't trip
   the limit; `.DS_Store` and `._*` never count. Symlinks are followed and their content hashed; the card shows where each
-  leads, and one resolving into a credential location (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, Docker's
+  leads, and one resolving into a credential location (`~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.kube`, `~/.npmrc`, `~/.git-credentials`, `~/.config/gcloud`, Docker's
   config, Keychains, the app's keys file) blocks the folder. Too much to hash is `ProjectTrust.State.blocked(reason)`, shown in
   Settings › Agents and the command notice, never silence. File hashes are cached by path, size and time, and the prompt build
   warms them off the main actor; `AppSettings.approvedProjectContent[folder]` holds the approved
@@ -1309,6 +1348,8 @@ data until the user approves its exact files. The model is one: a SHA-256 finger
   asks (`ProjectTrust.resolve`, an approval card under the call, one question per lesson and fingerprint, a decline holds
   for the lesson, a sub-agent never asks) and then reads the live files. The prompt itself stays frozen; `ChatSession.contentChangeNote` adds a one-time hidden
   ephemeral note on the next turn naming what became or stopped being available (an approval, a plugin switched off or updated).
+  What it told is recorded as seen only once the message carrying it is in the lesson (`commitContentSeen`), so editing that
+  message doesn't lose the note; a lesson with no system prompt yet gets none (the prompt written next is the baseline).
   Settings › Agents › Skills approves or revokes too.
 * **Custom commands** (`CustomCommands`): Markdown files in `~/.teacher/commands`, `~/.claude/commands` and the folder's
   `.teacher|.claude/commands` (folder ones under the trust above), front matter `description` and `argument-hint`;

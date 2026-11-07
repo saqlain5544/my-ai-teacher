@@ -250,7 +250,12 @@ struct ProjectProfile: Sendable, Equatable {
     }
 
     /// The profile with its Swift commands ready to run under the credential fence (`flagged`).
-    static func detect(_ folder: URL) async -> ProjectProfile { await detectCached(folder).flagged(Secrets.fenceActive) }
+    static func detect(_ folder: URL) async -> ProjectProfile { await detectCached(folder).flagged(Secrets.fenceActive || mentorFenceOpen(folder)) }
+
+    /// Whether the code mentor's write fence is on in `folder` (a project is open there): its commands run inside a sandbox too.
+    static func mentorFenceOpen(_ folder: URL) -> Bool {
+        WriteFence.available && ProjectStore.read(folder.appendingPathComponent(Workspace.stateDirName).appendingPathComponent("project.json"))?.isOpen == true
+    }
 
     /// `swift build` and `swift test` as the profile suggests them: with the fence on, SwiftPM's own manifest sandbox can't
     /// nest inside it, so they carry `--disable-sandbox`. Only these suggested commands change; what the model types is

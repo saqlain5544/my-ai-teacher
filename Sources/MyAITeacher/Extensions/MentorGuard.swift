@@ -120,11 +120,58 @@ final class MentorGuard: AgentExtension {
     }
 
     func didRun(_ call: Block, result: inout Block, session: ChatSession) {
-        guard let id = call.id, fenced.remove(id) != nil, let t = result.text,
-              t.range(of: "operation not permitted", options: .caseInsensitive) != nil else { return }
+        guard let id = call.id, fenced.remove(id) != nil, let t = result.text else { return }
         let ws = session.services.workspace
+        // A credential folder's refusal or a nested sandbox's ("sandbox_apply: Operation not permitted", `Secrets.hint`) says
+        // the same words as the fence's and must not be blamed on it or logged.
+        guard Secrets.hint(for: t) == nil, Self.fencedRefusal(in: t, ws: ws) != nil else { return }
         result.text = t + "\n[The app's write fence refused a write: the learner's files, the project's tests and its record can't be changed by your commands. Teach toward the change instead; scratch files go in .teacher/mentor/ or a new file.]"
         log(ws, "refused", "a command's write into the project (\(call.name ?? "command"))")
+    }
+
+    /// The fenced path an "Operation not permitted" line names, or nil: a learner's file or the folder holding it (absolute,
+    /// relative to the project, `./`-prefixed, or by its name when a command ran from a subfolder), or something under
+    /// `.teacher` other than the mentor's own folder (and the tests while unlocked, which the fence opens).
+    nonisolated static func fencedRefusal(in text: String, ws: Workspace) -> String? {
+        let lines = text.split(whereSeparator: \.isNewline).map(String.init).filter { $0.range(of: "operation not permitted", options: .caseInsensitive) != nil }
+        guard !lines.isEmpty else { return nil }
+        let p = ProjectStore.load(ws)
+        let mine = Set(p?.mentorFiles ?? [])
+        let unlocked = p.map { $0.testsUnlockedAt != nil || ProjectStore.testsAreDraft(ws, $0) } ?? false
+        let root = ws.url.standardizedFileURL.path, real = WriteFence.real(ws.url)
+        let files = ProjectStore.projectFiles(ws).filter { !mine.contains($0) }
+        let state = [root + "/.teacher", real + "/.teacher"], open = [ws.mentorDir.path, WriteFence.real(ws.mentorDir)] + (unlocked ? [ws.testsDir.path, WriteFence.real(ws.testsDir)] : [])
+        for line in lines {
+            for f in files where line.contains(root + "/" + f) || line.contains(real + "/" + f) || mentions(line, f) || mentions(line, "./" + f) || mentions(line, (f as NSString).lastPathComponent) { return f }
+            for s in state where line.contains(s) {
+                // `.teacher/mentor/...` is writable; the rest of `.teacher` is the record.
+                if !open.contains(where: { line.contains($0) }) { return s }
+            }
+            if line.contains(".teacher/"), !line.contains(".teacher/mentor"), !(unlocked && line.contains(".teacher/tests")) { return ".teacher" }
+            if mentions(line, ".teacher") { return ".teacher" }
+            // A folder that holds fenced files: named in full, so `src` in another word doesn't count.
+            for f in files {
+                var d = (f as NSString).deletingLastPathComponent
+                while !d.isEmpty && d != "." {
+                    if line.contains(root + "/" + d) || line.contains(real + "/" + d) || mentions(line, d) || mentions(line, "./" + d) { return d }
+                    d = (d as NSString).deletingLastPathComponent
+                }
+            }
+        }
+        return nil
+    }
+
+    /// `name` as a whole relative path in `line` (a tool's message: `touch: src/a.py: Operation not permitted`), not the tail of
+    /// another path (`~/.ssh/a.py`) or the middle of a word.
+    private nonisolated static func mentions(_ line: String, _ name: String) -> Bool {
+        var from = line.startIndex
+        while let r = line.range(of: name, range: from..<line.endIndex) {
+            let before = r.lowerBound == line.startIndex ? nil : line[line.index(before: r.lowerBound)]
+            let after = r.upperBound == line.endIndex ? nil : line[r.upperBound]
+            if before.map({ " :'\"`(".contains($0) }) ?? true, after.map({ !($0.isLetter || $0.isNumber || "_-.".contains($0)) }) ?? true { return true }
+            from = r.upperBound
+        }
+        return false
     }
 
     nonisolated static func relative(_ url: URL, _ ws: Workspace) -> String {

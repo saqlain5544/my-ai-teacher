@@ -420,7 +420,7 @@ showed me" and the teacher can search the real transcript of your earlier lesson
 folder. If the answer may be in a lesson from another folder it asks once, for that lesson, before it looks there;
 sub-agents never search other folders. The search only reads: it never opens a folder you haven't worked in, and
 nothing is changed. Commands the teacher ran and the first lines of a failed run are searchable; pages and files it
-only read are not.
+only read are not, and reading an old lesson shows that a file was read, not what it said.
 
 The **All Sessions** page searches the text of every lesson in every folder as you type (the title filter still works):
 matches appear under **In the conversations** with the matching words in bold, and a click opens that lesson.
@@ -503,6 +503,11 @@ the app is now a separate project, a Rust command-line tool at `~/coding-agent`.
   * **It asks first.** A language server can run a project's code while it analyses it (rust-analyzer runs build scripts
     and macros, gopls runs `go list`), so the first use of a server in a folder asks you: allow in this folder, allow for
     this lesson, or don't. Allow it only for code you trust. A sub-agent can't ask; it tells the mentor to.
+  * **What protects you.** Like the teacher's commands, a language server starts without your API keys and other secret
+    environment variables, and (unless you turned the protection off in **Settings › Tools › Secrets**) can't read your
+    credential folders; with a code-mentor project open it can't change your files or the locked tests either. **sourcekit-lsp
+    is the exception**: it crashes inside the macOS sandbox, so it runs without the credential-folder and project write
+    protection (it still gets no secret environment variables). Its approval card says so.
   * **Memory-hungry, so lazy.** A server starts only when it's needed, at most three run at once, and one unused for 10
     minutes stops. They appear in the Tasks panel (with what they are indexing), where Stop works, and they end with the
     app. While a big project indexes, the answer says "still indexing" and may be partial; ask again a little later.
@@ -614,9 +619,9 @@ Stop the agent any time with ⌘. or Esc twice.
     in **Settings › Tools › Secrets**. Hooks and MCP servers you set up yourself keep the full environment.
   * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
     replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
-  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.docker/config.json`, Keychains and the app's saved
+  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.config/gcloud`, `~/.kube`, `~/.npmrc`, `~/.git-credentials`, `~/.docker/config.json`, Keychains and the app's saved
     keys: the file tools ask once per lesson, and commands the teacher starts can't read them (the macOS sandbox refuses).
-    **That breaks, inside the teacher's shell:** `git` over SSH, `gh`, `docker` logins, `aws`, anything that needs your
+    **That breaks, inside the teacher's shell:** `git` over SSH and git's credential store, `gh`, `docker` logins, `aws`, `gcloud`, `kubectl`, npm auth (private registries, publishing), anything that needs your
     Keychain, Homebrew when it reads your credentials, and tools that apply a sandbox of their own (SwiftPM without
     `--disable-sandbox`). The `swift build` and `swift test` commands the teacher suggests for a Swift package carry that
     flag; a command the model types itself is never changed, and if it fails with a sandbox error the output says to add

@@ -271,7 +271,8 @@ final class ContextManagementTests: XCTestCase {
         let blocks: [Block] = [.toolResult(id: "ok", name: "read", content: "x"), .toolResult(id: "bad", name: "read", content: "x", isError: true),
                                .toolResult(id: "run", name: "read", content: "", meta: ["running": true]),
                                .toolResult(id: "note", name: "read", content: "n", meta: ["sameAs": "ok"]),
-                               .toolResult(id: "cap", name: "grep", content: "x", meta: ["stepCapped": true])]
+                               .toolResult(id: "cap", name: "grep", content: "x", meta: ["stepCapped": true]),
+                               .toolResult(id: "spill", name: "read", content: "preview… saved to .teacher/outputs/x.txt", meta: ["spilled": true])]   // only a preview was kept
         let msgs = [ChatMessage(role: .user, blocks: [.text("go")]), ChatMessage(role: .user, blocks: blocks)]
         let c = Conversation(providerID: "x", model: "m")
         XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 10_000), ["ok"])
@@ -325,6 +326,17 @@ final class ContextManagementTests: XCTestCase {
         XCTAssertFalse(session.showContext)
         session.send("/context")
         XCTAssertTrue(session.showContext, "free and read-only: no reason to wait")
+        session.holdBusyForTests(false)
+    }
+
+    @MainActor func testALiteralMessageIsNeverTheBuiltInContextCommand() {
+        let conv = Conversation(providerID: "x", model: "m")
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        session.holdBusyForTests(true)   // a literal message is not a command, so it goes on to wait for the running reply instead
+        session.send("/context", literal: true)   // what a custom command whose body is `/context` sends
+        XCTAssertFalse(session.showContext, "it is text for the model, not the built-in")
+        session.send("/context")
+        XCTAssertTrue(session.showContext)
         session.holdBusyForTests(false)
     }
 

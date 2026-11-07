@@ -152,7 +152,7 @@ enum PastLessons {
             let weight = 0.6 + 0.4 * pow(0.5, age / halfLifeDays)
             let role = r.string("role") == "user" ? (r.string("k0") == "toolResult" ? "tool" : "learner") : "teacher"
             hits.append((Hit(folder: folder, conversationID: cid, messageID: mid, seq: r.int("seq") ?? 0, title: r.string("title") ?? "Lesson",
-                             mode: r.string("mode") ?? "tutor", role: role, date: at, snippet: scrub(snippet), score: -(r.double("score") ?? 0) * weight), -(r.double("score") ?? 0) * weight))
+                             mode: r.string("mode") ?? "tutor", role: role, date: at, snippet: safeSnippet(snippet, terms: terms), score: -(r.double("score") ?? 0) * weight), -(r.double("score") ?? 0) * weight))
         }
         var perConv: [String: Int] = [:]
         var out: [Hit] = []
@@ -306,9 +306,34 @@ enum PastLessons {
 
     // MARK: Text going to a model or the screen
 
-    /// Long runs of base64-like characters and data URLs never leave the database.
+    /// An index snippet (the matched words wrapped in « »). A secret is redacted from the text without the markers, because a
+    /// marker inside a key (`sk-«ant»-api03…`) hides it from the shapes; the matched words are then marked again.
+    static func safeSnippet(_ raw: String, terms: [String]) -> String {
+        let snippet = cutEdges(raw)
+        let plain = snippet.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "")
+        let redacted = Secrets.redact(plain)
+        guard !redacted.kinds.isEmpty else { return scrub(snippet) }
+        var out = scrub(redacted.text)
+        for t in terms.sorted(by: { $0.count > $1.count }) {
+            let word = NSRegularExpression.escapedPattern(for: t)
+            out = out.replacingOccurrences(of: "(?<![\\p{L}\\p{N}«])(\(word)[\\p{L}\\p{N}_]*)", with: "«$1»", options: [.regularExpression, .caseInsensitive])
+        }
+        return out
+    }
+
+    /// FTS cuts its window between tokens, and a key is several tokens: the piece left at a cut edge has lost the prefix
+    /// that identifies it, so no shape can catch it. A long unbroken run at a cut edge is dropped rather than guessed at.
+    static func cutEdges(_ s: String) -> String {
+        var words = s.components(separatedBy: " ")
+        func long(_ w: String) -> Bool { w.replacingOccurrences(of: "«", with: "").replacingOccurrences(of: "»", with: "").replacingOccurrences(of: "…", with: "").count >= 12 }
+        if s.hasPrefix("…"), let w = words.first, long(w) { words[0] = "…" }
+        if s.hasSuffix("…"), words.count > 1, let w = words.last, long(w) { words[words.count - 1] = "…" }
+        return words.joined(separator: " ")
+    }
+
+    /// Long runs of base64-like characters and data URLs never leave the database, and a secret in the text is redacted.
     static func scrub(_ s: String) -> String {
-        var t = s
+        var t = Secrets.redact(s).text
         if t.contains("base64,") { t = t.replacingOccurrences(of: #"data:[\w/+.-]+;base64,[A-Za-z0-9+/=]*"#, with: "[data omitted]", options: .regularExpression) }
         if t.count > 160 { t = t.replacingOccurrences(of: #"[A-Za-z0-9+/=_-]{160,}"#, with: "[long data omitted]", options: .regularExpression) }
         return t
