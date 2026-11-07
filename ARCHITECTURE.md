@@ -937,6 +937,13 @@ file's language instead.
   proxy exits 1 forever). At most 3 run: a start beyond that stops the one unused longest. 10 idle minutes stop one
   (it starts again on the next use); `applicationWillTerminate` → `LSPHub.shutdownNow`. The Tasks panel lists them
   (`BackgroundTask.Kind.lsp`, with what they are indexing) and Stop works.
+* **Fence and Stop.** While a learner's project is open the server is spawned through `WriteFence.wrap` with
+  `MentorGuard.fence(ws)`, the profile the mentor's own commands get (`LSPTool.fence(for:)`, decided from the folder, so
+  a sub-agent's call is fenced too), so its build scripts, `cargo check` or `go list` can't change the learner's files or the
+  locked tests. A different profile (project passed, tests unlocked) replaces the instance: the old one stops (`fenced`) and
+  the next use starts one under the new. Why a server stopped is kept (`StopReason`: user, evicted, idle, fenced): Stop in the
+  Tasks panel fails the call in flight with a clear message and the row stays stopped; only an idle stop is started again
+  for a call that was waiting. The child is known from launch (`starting`), so quitting during a 90-s initialise still ends it.
 * **Discovery** (`LSPServers`): extension → ordered candidates; each is found on `ProcessRunner.which` (the login shell's PATH)
   and its usual folders: rust-analyzer (`~/.cargo/bin`), gopls (`~/go/bin`), sourcekit-lsp and clangd (`/usr/bin`),
   typescript-language-server (`~/.lsp-servers/bin`), zls (`/opt/homebrew/bin`), pyright-langserver then pylsp. A `/usr/bin`
@@ -960,7 +967,11 @@ file's language instead.
   to the folder (outside it `~/…`), capped (`limit`, 40 by default). While the server indexes, a call waits at most 20 s
   (`LSPTool.indexWait`) for it to settle, asks anyway and appends "still indexing (n%)" with the partial answer;
   `ContentModified` / `ServerCancelled` are retried. `diagnostics` waits for the server's publish after the sync (an empty
-  first publish is believed only after 1.5 s of quiet and while no progress is in flight).
+  first publish is believed only after 1.5 s of quiet and while no progress is in flight). A file the server already has
+  as it is on disk sends nothing, so a publish it already made stands (no 10-s wait); a publish naming an older document
+  version is dropped; URIs are compared in one spelling (`LSPConnection.normalized`: `( ) + @` differ between servers);
+  files over 2 MB are refused and at most 200 publishes are kept. The permission gate resolves the server off the main
+  actor (`.pending`), because telling a working Xcode shim or rustup proxy from a dangling one runs it.
 * **Tested** against a scripted fake server (framing, server requests, progress, version-matched diagnostics, timeouts,
   crash and restart, idle stop, the limit, the gate) and, skipped when absent, gopls, clangd and sourcekit-lsp on small
   temp projects (`LSPTests`). Measured here: gopls 0.6-1.3 s a question after start, sourcekit-lsp ~4 s for a first
