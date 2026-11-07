@@ -249,6 +249,22 @@ final class SubAgentTests: XCTestCase {
         XCTAssertEqual(lost, 0, "runs whose output was lost or cut")
     }
 
+    /// The same for every other tool that runs a program (bash, run_code, git…): ProcessRunner.
+    func testProcessRunnerNeverLosesOutputThatWasPrinted() async {
+        let lost = await withTaskGroup(of: Int.self) { g in
+            for _ in 0..<12 { g.addTask {
+                var bad = 0
+                for _ in 0..<60 {
+                    let r = await ProcessRunner.run("/bin/sh", ["-c", "echo out; echo err >&2"], timeout: 20)
+                    if r.stdout != "out\n" || r.stderr != "err\n" { bad += 1 }
+                }
+                return bad
+            } }
+            return await g.reduce(0, +)
+        }
+        XCTAssertEqual(lost, 0, "runs whose output was lost or cut")
+    }
+
     func testPolicyAndReadOnlyShell() async {
         for ok in ["git diff HEAD^", "git -C sub log --oneline | head -5", "rg -n 'a|b' src", "grep -o foo x", "find . -name x -type f", "ls -la",
                    "git log -5", "git status -sb", "sort -nr notes.txt", "head -n 3 notes.txt", "git --no-pager show --stat HEAD"] {
