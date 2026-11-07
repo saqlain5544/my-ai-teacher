@@ -268,6 +268,17 @@ final class LSPTests: XCTestCase {
         XCTAssertEqual(inst.status.phase, .ready)
     }
 
+    func testAServerThatCantStartFailsAtOnceWithItsLastWordsAndIsNotRetried() async throws {
+        let bad = LSPServerSpec(id: "bad", title: "Bad LS", binaries: [], args: ["-c", "echo 'Unknown binary' >&2; exit 1"], languages: ["fk": "fake"], extraDirs: [], install: "n/a", executable: "/bin/sh")
+        let hub = LSPHub(specs: [bad])
+        let inst = hub.instance(bad, executable: "/bin/sh", folder: dir)
+        let t0 = Date()
+        do { _ = try await inst.connection(); XCTFail("expected a failure") }
+        catch { XCTAssertTrue(error.localizedDescription.contains("couldn't start") && error.localizedDescription.contains("Unknown binary"), error.localizedDescription) }
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 4, "no restarts with backoff for a server that never worked")
+        XCTAssertEqual(inst.status.phase, .failed); XCTAssertEqual(inst.status.restarts, 0)
+    }
+
     func testAnIdleServerStopsAndStartsAgainOnNextUse() async throws {
         let hub = LSPHub(specs: [spec()], idleSeconds: 0.8)
         let inst = hub.instance(spec(), executable: "/usr/bin/python3", folder: dir)

@@ -73,15 +73,22 @@ enum LSPServers {
     /// `/usr/bin/sourcekit-lsp` and friends are `xcrun` shims that exist even where no toolchain is installed; they say so
     /// when run, so a shim is only trusted once `xcrun` can find the real tool.
     private static func works(_ path: String) -> Bool {
-        guard path.hasPrefix("/usr/bin/") else { return true }
-        let name = (path as NSString).lastPathComponent
-        let cache = shimCache.mutate { c -> Bool? in c[name] }
-        if let cache { return cache }
+        let rustup = path.hasPrefix(NSHomeDirectory() + "/.cargo/bin/")
+        guard path.hasPrefix("/usr/bin/") || rustup else { return true }
+        if let cache = shimCache.mutate({ c -> Bool? in c[path] }) { return cache }
+        // `~/.cargo/bin/rust-analyzer` is a rustup proxy that exists whether or not the component is installed (and then
+        // exits 1); `--version` tells. The Xcode shims in /usr/bin say it through `xcrun --find`.
         let p = Process()
-        p.executableURL = URL(fileURLWithPath: "/usr/bin/xcrun"); p.arguments = ["--find", name]
-        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice
-        let ok = (try? p.run()) != nil && { p.waitUntilExit(); return p.terminationStatus == 0 }()
-        shimCache.mutate { $0[name] = ok }
+        p.executableURL = URL(fileURLWithPath: rustup ? path : "/usr/bin/xcrun")
+        p.arguments = rustup ? ["--version"] : ["--find", (path as NSString).lastPathComponent]
+        p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice; p.standardInput = FileHandle.nullDevice
+        var ok = false
+        if (try? p.run()) != nil {
+            let end = Date().addingTimeInterval(5)
+            while p.isRunning && Date() < end { usleep(20_000) }
+            if p.isRunning { p.terminate() } else { ok = p.terminationStatus == 0 }
+        }
+        shimCache.mutate { $0[path] = ok }
         return ok
     }
     private static let shimCache = Locked<[String: Bool]>([:])

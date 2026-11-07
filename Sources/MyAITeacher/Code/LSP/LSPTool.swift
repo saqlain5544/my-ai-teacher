@@ -7,7 +7,7 @@ struct LSPTool: Tool {
     var subAgentVariant: Tool? { self }
     let name = "lsp"
     let description = """
-    Precise code intelligence from the language server (the compiler's view): use it for questions about real types \
+    The compiler's view of the code, from the language server. Use it for questions about real types \
     where `symbols`/`code`/`grep` guess (same-named symbols, overloads, trait or protocol methods, inferred types, \
     real compile errors). action: definition, references, type_definition, implementation, hover (type and docs) — \
     each of `file`, `line` (1-based) and `symbol` (the identifier on that line; `column` only to pick one of several); \

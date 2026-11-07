@@ -28,6 +28,8 @@ final class LSPInstance: @unchecked Sendable {
         var generation = 0
         var quitting = false
         var idleStop = false
+        /// The first start never got ready (the executable is a dangling shim, the project is broken): not restarted.
+        var startError: String?
         var lastUsed = Date()
         var serverName = ""
     }
@@ -59,7 +61,7 @@ final class LSPInstance: @unchecked Sendable {
     func start() async {
         let go = state.mutate { s -> Bool in
             guard [.idle, .failed, .stopped].contains(s.phase), !s.quitting else { return false }
-            s.phase = .starting; s.lastError = nil; s.restarts = 0; s.generation += 1; s.idleStop = false; s.lastUsed = Date()
+            s.phase = .starting; s.lastError = nil; s.restarts = 0; s.generation += 1; s.idleStop = false; s.startError = nil; s.lastUsed = Date()
             return true
         }
         guard go else { return }
@@ -106,7 +108,13 @@ final class LSPInstance: @unchecked Sendable {
                 log.note("ready: \(name.isEmpty ? spec.title : name)")
             } catch {
                 conn.close()
-                throw error
+                guard attempt == 0 else { throw error }
+                // Give the process a moment to finish its last words on stderr, then fail without retrying: a server that
+                // can't start the first time won't the second (restarts are for servers that were working).
+                try? await Task.sleep(nanoseconds: 200_000_000)
+                let tail = log.text.split(separator: "\n").filter { !$0.contains("] started pid") && !$0.contains("] pid ") }.suffix(3).joined(separator: " ")
+                state.mutate { $0.startError = "\(error.localizedDescription)" + (tail.isEmpty ? "" : " — " + String(tail.prefix(300))) }
+                return
             }
             let why = await conn.waitClosed()
             if Task.isCancelled || state.get().quitting || state.get().idleStop { return }
@@ -120,8 +128,8 @@ final class LSPInstance: @unchecked Sendable {
     private func ended(_ reason: ExitReason) {
         state.mutate { s in
             s.connection = nil
-            s.phase = reason.isCrash ? .failed : .stopped
-            if reason.isCrash { s.lastError = reason.description }
+            s.phase = reason.isCrash || s.startError != nil ? .failed : .stopped
+            if let e = s.startError { s.lastError = e } else if reason.isCrash { s.lastError = reason.description }
         }
         log.note(reason.isCrash ? "gave up: \(reason)" : "stopped")
     }
