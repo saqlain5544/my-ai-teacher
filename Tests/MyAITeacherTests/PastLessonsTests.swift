@@ -93,11 +93,38 @@ final class PastLessonsTests: XCTestCase {
         XCTAssertTrue(MessageIndex.isCurrent(ws.db))
         XCTAssertEqual(rows("zebra"), 0); XCTAssertEqual(rows("benchmarkrun"), 1)
         XCTAssertEqual(ws.conversations.messageCount(c.id), 2, "only the indexed text changed")
-        // Resumes from the cursor after a stop.
-        ws.db.run("DELETE FROM store_meta WHERE key='text_v2'")
-        ws.db.run("INSERT INTO store_meta(key,value) VALUES('text_v2_cursor','999999') ON CONFLICT(key) DO UPDATE SET value=excluded.value")
+    }
+
+    /// A stopped re-index carries on from its cursor: a stale row below it is left alone, one above it is rewritten.
+    func testTheReindexResumesFromItsCursor() throws {
+        let ws = try workspace("cursor")
+        let low = say(.user, "lowrow question", hidden: "stale zebra"), high = say(.user, "highrow question", hidden: "stale okapi")
+        lesson(ws, title: "Cursor", [low, high])
+        for (m, hid) in [(low, "zebra"), (high, "okapi")] {
+            ws.db.run("UPDATE messages SET text=? WHERE id=?", "\(m.blocks[0].text ?? "")\n<context>\nstale \(hid)\n</context>", m.id)
+        }
+        let lowRow = try XCTUnwrap(try ws.db.query("SELECT rowid AS r FROM messages WHERE id=?", low.id).first?.int("r"))
+        ws.db.run("DELETE FROM store_meta")
+        ws.db.run("INSERT INTO store_meta(key,value) VALUES('text_v2_cursor',?)", String(lowRow))
         XCTAssertTrue(MessageIndex.upgrade(ws.db))
+        let text = { (id: String) in try? ws.db.query("SELECT text FROM messages WHERE id=?", id).first?.string("text") }
+        XCTAssertTrue(text(low.id)?.contains("zebra") == true, "below the cursor: not visited")
+        XCTAssertEqual(text(high.id), "highrow question", "above it: rewritten")
         XCTAssertTrue(MessageIndex.isCurrent(ws.db))
+    }
+
+    /// A message the lesson saves while a batch is being re-indexed keeps the text its own save wrote.
+    func testTheReindexNeverOverwritesANewerSave() throws {
+        let ws = try workspace("race")
+        var m = say(.user, "original wording alpha")
+        let c = lesson(ws, title: "Race", [m])
+        ws.db.run("UPDATE messages SET text='stale text' WHERE id=?", m.id)
+        ws.db.run("DELETE FROM store_meta")
+        m.blocks = [.text("edited wording bravo")]
+        XCTAssertTrue(MessageIndex.upgrade(ws.db, afterRead: { ws.conversations.upsert(m, conversationID: c.id, seq: 0) }))
+        XCTAssertEqual(try ws.db.query("SELECT text FROM messages WHERE id=?", m.id).first?.string("text"), "edited wording bravo")
+        XCTAssertEqual(try ws.db.query("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'bravo'").count, 1)
+        XCTAssertEqual(try ws.db.query("SELECT rowid FROM messages_fts WHERE messages_fts MATCH 'alpha'").count, 0)
     }
 
     // MARK: Ranking, filters
@@ -232,7 +259,7 @@ final class PastLessonsTests: XCTestCase {
 
     func testCancellationInterruptsWork() async throws {
         let started = Date()
-        let task = Task { await PastLessons.off(budget: 30) { stop -> Int in
+        let task = Task { await PastLessons.off(budget: 30, fallback: -1) { stop -> Int in
             var n = 0; while !stop.isStopped { Thread.sleep(forTimeInterval: 0.005); n += 1 }; return n } }
         try await Task.sleep(nanoseconds: 100_000_000)
         task.cancel()
@@ -242,7 +269,7 @@ final class PastLessonsTests: XCTestCase {
     }
 
     func testTheBudgetStopsASlowFolder() async {
-        let (_, stop) = await PastLessons.off(budget: 0.15) { stop in while !stop.isStopped { Thread.sleep(forTimeInterval: 0.005) } }
+        let (_, stop) = await PastLessons.off(budget: 0.15, fallback: ()) { stop in while !stop.isStopped { Thread.sleep(forTimeInterval: 0.005) } }
         XCTAssertTrue(stop.timedOut)
     }
 
@@ -259,7 +286,7 @@ final class PastLessonsTests: XCTestCase {
     // MARK: Scale
 
     /// 60,000 messages: a word in nearly every one, a rare one, and a filter. Ranking is bounded to the newest 2,000 matches.
-    func testALargeStoreSearchesQuickly() throws {
+    func bigStore() throws -> Workspace {
         let ws = try workspace("big")
         var base = Conversation(providerID: "x", model: "m"); base.title = "Big"
         let enc = JSONEncoder(); enc.dateEncodingStrategy = .secondsSince1970
@@ -275,6 +302,11 @@ final class PastLessonsTests: XCTestCase {
                 }
             }
         }
+        return ws
+    }
+
+    func testALargeStoreSearchesQuickly() throws {
+        let ws = try bigStore()
         let db = try readOnly(ws)
         var t = Date()
         let common = PastLessons.search(db, folder: "f", query: "lesson example topic", limit: 10)
@@ -295,5 +327,110 @@ final class PastLessonsTests: XCTestCase {
         XCTAssertFalse(PastLessons.scrub("look: \(blob) done").contains("QUJD"))
         XCTAssertEqual(PastLessons.scrub("data:image/png;base64,AAAA ok"), "[data omitted] ok")
         XCTAssertEqual(PastLessons.scrub("plain words and a-hyphenated-thing"), "plain words and a-hyphenated-thing")
+    }
+
+    // MARK: Review fixes
+
+    /// An older date range behind more than 2,000 newer matches is found, and a cut-off search says so.
+    func testAFilterBelowTheCapStillFindsOlderMatches() async throws {
+        let ws = try bigStore()
+        let db = try readOnly(ws)
+        let early = Date(timeIntervalSince1970: 1_700_000_000 + 3 * 200 - 1)   // the first three lessons
+        XCTAssertTrue(PastLessons.search(db, folder: "f", query: "lesson example topic", filter: .init(), limit: 10).allSatisfy { Int($0.conversationID.dropFirst())! >= 290 },
+                      "unfiltered, the newest 2,000 matches are all from the last lessons")
+        let old = PastLessons.search(db, folder: "f", query: "lesson example topic", filter: .init(until: early), limit: 10)
+        XCTAssertFalse(old.isEmpty, "the filter applies before the cap")
+        XCTAssertTrue(old.allSatisfy { Int($0.conversationID.dropFirst())! < 3 })
+        XCTAssertTrue(PastLessons.searchCapped(db, folder: "f", query: "lesson example topic").capped)
+        XCTAssertFalse(PastLessons.searchCapped(db, folder: "f", query: "needleinhaystack").capped)
+        let results = await PastLessons.searchFolders([ws.url.path], query: "lesson example topic", filter: .init(), limit: 5)
+        let text = PastLessonsTool.format(PastLessons.merge(results, limit: 5), query: "lesson example topic", all: false, results: results)
+        XCTAssertTrue(text.contains("only the newest 2000"), text)
+        let none = PastLessonsTool.format([], query: "q", all: false, results: [.init(folder: "x", hits: [], status: .timedOut)])
+        XCTAssertFalse(none.contains("No earlier lesson matches"), "a search that didn't finish never claims there is nothing")
+    }
+
+    func testReadShowsTheFieldThatWasRunNotARandomArgument() throws {
+        let m = ChatMessage(role: .assistant, blocks: [
+            .toolUse(id: "1", name: "bash", input: ["description": "ZZDESCRIPTION", "command": "make test-all", "note": "ZZNOTE"]),
+            .toolUse(id: "2", name: "write", input: ["content": "ZZFILEBODY", "path": "src/app.py"]),
+            .toolUse(id: "3", name: "browser", input: ["text": "ZZTYPED", "action": "type"])])
+        let w = PastLessons.Window(title: "T", mode: "tutor", folder: "/x/y", first: 0, total: 1, messages: [(0, m)])
+        for _ in 0..<5 {
+            let out = PastLessonsTool.format(w, ref: "r", around: nil)
+            XCTAssertTrue(out.contains("[ran bash: make test-all]"), out)
+            XCTAssertTrue(out.contains("[ran write: src/app.py]"), out)
+            XCTAssertTrue(out.contains("[ran browser]"), out)
+            for leak in ["ZZDESCRIPTION", "ZZNOTE", "ZZFILEBODY", "ZZTYPED"] { XCTAssertFalse(out.contains(leak), leak) }
+        }
+    }
+
+    /// No built-in sub-agent type lists the tool; a custom agent that names it gets the folder-only form.
+    func testOnlyACustomAgentGetsTheFolderOnlyTool() {
+        XCTAssertFalse(AgentCatalog.builtIns.contains { ($0.tools ?? []).contains("past_lessons") }, "no built-in type has it")
+        XCTAssertFalse(AgentCatalog.general.contains("past_lessons"))
+        let handed = ToolRegistry.subagentPool.first { $0.name == "past_lessons" } as? PastLessonsTool
+        XCTAssertEqual(handed?.folderOnly, true, "what `tools: past_lessons` in a custom agent resolves to")
+    }
+
+    // MARK: Budget and cancellation that really stop
+
+    /// A kernel call that never returns (a network volume that went away) can't hold the caller past the budget.
+    func testABlockedFolderCostsOnlyTheBudget() async {
+        let t0 = Date()
+        let (r, stop) = await PastLessons.off(budget: 0.2, fallback: "skipped") { _ in Thread.sleep(forTimeInterval: 4); return "late" }
+        XCTAssertEqual(r, "skipped")
+        XCTAssertTrue(stop.timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.5)
+        // And cancelling a call whose work is blocked returns at once.
+        let t1 = Date()
+        let task = Task { await PastLessons.off(budget: 30, fallback: 0) { _ in Thread.sleep(forTimeInterval: 4); return 1 } }
+        try? await Task.sleep(nanoseconds: 100_000_000)
+        task.cancel()
+        let (v, _) = await task.value
+        XCTAssertEqual(v, 0)
+        XCTAssertLessThan(Date().timeIntervalSince(t1), 1.5)
+    }
+
+    func testUnmountedVolumesAreSkipped() throws {
+        XCTAssertFalse(PastLessons.isMounted("/Volumes/definitely-not-mounted-xyz/project"))
+        XCTAssertTrue(PastLessons.isMounted(root.path))
+        let ws = try workspace("mounted")
+        lesson(ws, title: "x", [say(.assistant, "something")])
+        XCTAssertEqual(PastLessons.databases(current: ws.url.path, others: ["/Volumes/definitely-not-mounted-xyz/project"]), [ws.url.path])
+    }
+
+    func testDatabasesAreResolvedOffTheCallingThread() async throws {
+        let ws = try workspace("async")
+        lesson(ws, title: "x", [say(.assistant, "something")])
+        let folders = await PastLessons.databases(current: ws.url.path, others: [ws.url.path, "/nowhere/at/all"], budget: 2)
+        XCTAssertEqual(folders, [ws.url.path])
+    }
+
+    /// `sqlite3_interrupt` reaches a statement that is running: a query that would take a minute ends in a moment.
+    func testInterruptEndsARunningStatement() throws {
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let db = try Database(path: root.appendingPathComponent("slow.sqlite").path)
+        let t0 = Date(), done = DispatchSemaphore(value: 0)
+        let failed = Locked(false)
+        DispatchQueue.global().async {
+            do { _ = try db.query("WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM c WHERE x < 2000000000) SELECT count(*) AS n FROM c") }
+            catch { failed.mutate { $0 = true } }
+            done.signal()
+        }
+        Thread.sleep(forTimeInterval: 0.2)
+        db.interrupt()
+        XCTAssertEqual(done.wait(timeout: .now() + 5), .success, "the statement stopped")
+        XCTAssertTrue(failed.get(), "as an interrupted statement")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 5)
+    }
+
+    /// The budget on a real search: the folder comes back `.timedOut` long before the full search could finish.
+    func testATinyBudgetOnALargeStoreTimesOut() async throws {
+        let ws = try bigStore()
+        let t0 = Date()
+        let r = await PastLessons.searchFolder(ws.url.path, query: "lesson example topic number", filter: .init(), limit: 10, budget: 0.0005)
+        XCTAssertEqual(r.status, .timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.5)
     }
 }

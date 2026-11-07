@@ -63,7 +63,7 @@ struct PastLessonsTool: Tool {
         else { return .error("Dates are YYYY-MM-DD (or `30d` for 30 days ago).") }
         let mode = input["mode"]?.string.flatMap { $0.isEmpty ? nil : $0 }
         if let m = mode, TeachingMode(rawValue: m) == nil { return .error("Unknown mode `\(m)`: one of \(TeachingMode.allCases.map(\.rawValue).joined(separator: ", ")).") }
-        let folders = all ? PastLessons.databases(current: current, others: SessionIndex.known.get()) : [current]
+        let folders = all ? await PastLessons.databases(current: current, others: SessionIndex.known.get(), budget: PastLessons.folderBudget) : [current]
 
         switch action {
         case "search":
@@ -107,13 +107,15 @@ struct PastLessonsTool: Tool {
     static func format(_ hits: [PastLessons.Hit], query: String, all: Bool, results: [PastLessons.FolderResult]) -> String {
         var out = notice + "\n\n"
         let skipped = results.filter { [.unreadable, .timedOut].contains($0.status) }
-        if hits.isEmpty { out += "No earlier lesson matches \"\(query)\"." }
+        let capped = results.contains { $0.capped }
+        if hits.isEmpty { out += skipped.isEmpty && !capped ? "No earlier lesson matches \"\(query)\"." : "Nothing found for \"\(query)\" in what was searched (see below); that is not proof it never came up." }
         else {
             out += "\(hits.count) match\(hits.count == 1 ? "" : "es") for \"\(query)\", best first:\n"
             for (i, h) in hits.enumerated() {
                 out += "\n\(i + 1). “\(h.title)”\(all ? " — \(h.folderName)" : "") · \(day.string(from: h.date)) · \(h.mode) · \(h.role)\n   \(h.snippet)\n   ref: \(h.ref)"
             }
         }
+        if capped { out += "\n\nThis word is common: only the newest \(PastLessons.scored) matching messages were ranked, so older ones may exist. Add more specific words, or `since`/`until` dates, to reach them." }
         if !skipped.isEmpty {
             out += "\n\nNot searched in full: " + skipped.map { "\(folderName($0.folder)) (\($0.status == .timedOut ? "took too long" : "unreadable"))" }.joined(separator: ", ") + "."
         }
@@ -143,7 +145,10 @@ struct PastLessonsTool: Tool {
             for b in m.blocks {
                 switch b.kind {
                 case .toolUse:
-                    let arg = b.input?.object?.values.compactMap(\.string).first ?? ""
+                    // Only a field known to be what the call did (the command, the path, the address): a dictionary's first
+                    // string could be the description or a file's whole content.
+                    let field = MessageIndex.ranTools[b.name ?? ""] ?? ["path", "url", "query"].first { b.input?[$0]?.string != nil }
+                    let arg = field.flatMap { b.input?[$0]?.string } ?? ""
                     lines.append("[ran \(b.name ?? "tool")\(arg.isEmpty ? "" : ": " + PastLessons.scrub(clip(arg, 300)))]")
                 case .toolResult: lines.append("[result\(b.isError == true ? " (error)" : ""): \(PastLessons.scrub(clip((b.text ?? "").replacingOccurrences(of: "\n", with: " "), 240)))]")
                 case .image: lines.append("[image]")

@@ -849,22 +849,29 @@ result opens with a notice that it is data, not instructions.
   they were indexed, and so shown by the sidebar search), thinking, images, or successful tool output (bulky, and the pages and
   files a lesson read are not what was said). Older databases are re-indexed once in the background
   (`MessageIndex.upgrade`, job `lessons.reindex:<db>`: 200 rows a transaction, `store_meta` cursor and `text_v2` marker; a
-  crash resumes). Until a database is marked, a hit on a message with hidden blocks is re-read and its snippet taken
+  crash resumes; each UPDATE is `WHERE data = <what was read>`, so a message saved meanwhile keeps its own text). Until a database is marked, a hit on a message with hidden blocks is re-read and its snippet taken
   from the visible text (or dropped), so nothing hidden surfaces from a database this build has not opened. Snippets and
   `read` output go through `PastLessons.scrub` (base64 and data URLs).
 * **One query per folder.** The `messages_fts` seek that bounds a common word to its newest 2,000 matches (see
-  `ConversationStore.search`) is kept; the ranked 200 are joined to `messages` and `conversations` in the same
+  `ConversationStore.search`) is kept, and the date and mode filters are part of that seek (the cap is on matches that
+  qualify, so an older range behind 2,000 newer matches is still found); when the cap cut results the tool says so, and a
+  search that did not finish never reports "no match". The ranked 200 are joined to `messages` and `conversations` in the same
   statement (`json_extract` for role, title and mode, run only on the survivors; the mode filter is a subquery over
   `conversations`). 60,000 messages: 11 ms for a word in every message.
 * **Other folders.** Each search opens the folder's `state.sqlite` read-only on its own connection and a GCD thread
-  (`PastLessons.off`), never from the main actor. `scope: "all"` reads `SessionIndex.known` (recent folders, the default and the quick
+  (`PastLessons.off`), never from the main actor. Opening a file on a volume that went away blocks in the kernel, where `sqlite3_interrupt` does
+  nothing, so `off` resumes its caller from the budget's timer or from cancellation (first resume wins) and leaves the thread to
+  finish alone; unmounted `/Volumes/…` folders are skipped, and the path checks themselves (`databases(…, budget:)`) run
+  there too, so nothing on the Sessions page waits on a disk. `scope: "all"` reads `SessionIndex.known` (recent folders, the default and the quick
   folder; the app keeps it current) deduplicated by real path, at most 16 databases, 4 at a time, 2.5 s each. Cancelling the task or
   the budget running out calls `Database.interrupt()` (`sqlite3_interrupt`) on the statement in flight. A folder with no
   database is dropped before opening (nothing is created); a corrupt or locked one is skipped and named in the result.
 * **Gates.** The first `scope: "all"` in a lesson asks through `PermissionExtension` (grant `past-lessons-all`, "Allow for
   this lesson"; a refusal is not remembered). `subAgentVariant` is a folder-only tool without the `scope` property that
-  ignores it if given: sub-agents work through untrusted pages and files. 
-* **Sessions page.** The query is debounced (300 ms) in a `.task(id:)`, searches all known folders off the main actor
+  ignores it if given: sub-agents work through untrusted pages and files. No built-in sub-agent type lists
+  `past_lessons`; only a custom agent (`tools: past_lessons`) gets it, in that form. 
+* **Sessions page.** The query is debounced (300 ms) in a `.task(id:)` (query and the All / Working / This folder picker),
+  searches the folders the picker allows (Working keeps only lessons running or waiting) off the main actor
   and is cancelled by the next keystroke; a hit opens its lesson (the transcript has no hook to reveal one message).
 * The agent hears of it in one root-guide clause and a deferred line; `MemoryHub.recall` adds a pointer when a "last
   time" cue brings back an episode. Prompt cost: +233 characters (≈58 tokens) in the system prompt (`--cli --measure
@@ -1075,7 +1082,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every agent; every call asked (per-server "always allow" per folder); supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
 | — (extra) | `math` | SymPy: evaluate/simplify/solve/diff/integrate/limit/series with assignments & tuples |
 | — (extra) | graded `ask_learner`, `flashcards`, `mastery`, `lesson_plan` | graded quizzes, FSRS cards, BKT mastery, the course board |
-| — (extra) | `past_lessons` (search/read/recent) | the real transcript of earlier lessons, deferred on the root node (every agent); see "Past lessons"; sub-agents get a folder-only variant |
+| — (extra) | `past_lessons` (search/read/recent) | the real transcript of earlier lessons, deferred on the root node (every agent); see "Past lessons"; no built-in sub-agent type lists it, a custom agent that names it under `tools:` gets a folder-only variant |
 | — (extra) | `memory` (search/save/update/forget) | learner model: scoped memories + concept graph (ids 12 / f3 / c7) |
 
 ## Measured (Apple Silicon, macOS 27)

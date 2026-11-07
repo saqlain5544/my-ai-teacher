@@ -28,7 +28,7 @@ enum PastLessons {
     }
 
     enum Status: Sendable, Equatable { case ok, missing, unreadable, timedOut }
-    struct FolderResult: Sendable { let folder: String; var hits: [Hit]; var status: Status }
+    struct FolderResult: Sendable { let folder: String; var hits: [Hit]; var status: Status; var capped = false }
 
     /// How many of a query's best matches are scored (a common word over millions of rows stays fast), how many rows come
     /// back to rank with recency, and how many a single lesson may fill.
@@ -57,20 +57,41 @@ enum PastLessons {
         func expire() { let d = lock.withLock { () -> Database? in expired = true; return db }; d?.interrupt() }
     }
 
-    /// Runs blocking `work` off the cooperative pool with a budget; cancelling the calling task interrupts it.
-    static func off<T: Sendable>(budget: TimeInterval, _ work: @escaping @Sendable (Stop) -> T) async -> (T, Stop) {
-        let stop = Stop()
-        return await withTaskCancellationHandler {
+    /// Resumes a continuation once, from whoever gets there first (the work, the budget's timer, cancellation).
+    private final class Once<V: Sendable>: @unchecked Sendable {
+        private let lock = NSLock()
+        private var done = false, cont: CheckedContinuation<V, Never>?, stored: V?
+        func finish(_ v: V) {
+            lock.lock()
+            guard !done else { lock.unlock(); return }
+            done = true
+            if let c = cont { cont = nil; lock.unlock(); c.resume(returning: v) } else { stored = v; lock.unlock() }
+        }
+        func wait(_ c: CheckedContinuation<V, Never>) {
+            lock.lock()
+            if done, let v = stored { stored = nil; lock.unlock(); c.resume(returning: v) } else { cont = c; lock.unlock() }
+        }
+    }
+
+    /// Runs blocking `work` off the cooperative pool with a budget. Past the budget, or when the calling task is
+    /// cancelled, the call returns `fallback` at once and the statement in flight is interrupted. `sqlite3_interrupt` does
+    /// nothing while a kernel call is blocked (opening a file on a network volume that went away), so the caller
+    /// must not wait for `work` to come back: the thread is left to finish on its own, its answer dropped.
+    static func off<T: Sendable>(budget: TimeInterval, fallback: T, _ work: @escaping @Sendable (Stop) -> T) async -> (T, Stop) {
+        let stop = Stop(), once = Once<T>()
+        let value: T = await withTaskCancellationHandler {
             await withCheckedContinuation { c in
+                once.wait(c)
                 DispatchQueue.global(qos: .userInitiated).async {
-                    let timer = DispatchWorkItem { stop.expire() }
+                    let timer = DispatchWorkItem { stop.expire(); once.finish(fallback) }
                     DispatchQueue.global().asyncAfter(deadline: .now() + budget, execute: timer)
                     let r = work(stop)
                     timer.cancel()
-                    c.resume(returning: (r, stop))
+                    once.finish(r)
                 }
             }
-        } onCancel: { stop.cancel() }
+        } onCancel: { stop.cancel(); once.finish(fallback) }
+        return (value, stop)
     }
 
     // MARK: Search
@@ -78,19 +99,29 @@ enum PastLessons {
     /// One folder's matches, best first. `stop` ends it early with whatever was ranked.
     static func search(_ db: Database, folder: String, query: String, filter: Filter = Filter(), limit: Int = 10,
                        now: Date = Date(), stop: Stop? = nil) -> [Hit] {
+        searchCapped(db, folder: folder, query: query, filter: filter, limit: limit, now: now, stop: stop).hits
+    }
+
+    /// `search`, and whether more matches than were ranked exist (only the newest `scored` are).
+    static func searchCapped(_ db: Database, folder: String, query: String, filter: Filter = Filter(), limit: Int = 10,
+                             now: Date = Date(), stop: Stop? = nil) -> (hits: [Hit], capped: Bool) {
         let fts = FTS.query(query)
-        guard !fts.isEmpty, stop?.isStopped != true else { return [] }
+        guard !fts.isEmpty, stop?.isStopped != true else { return ([], false) }
         // Rank only the newest `scored` matches: FTS5 yields matches in rowid order, so find the last of them and rank the
         // range from it (a seek). `rowid IN (subquery)` ran one full-text lookup per rowid — 64 s on 200k messages.
-        let floor = (try? db.query("SELECT rowid AS r FROM messages_fts WHERE messages_fts MATCH ? ORDER BY rowid DESC LIMIT 1 OFFSET \(scored - 1)", fts))?.first?.int("r") ?? 0
-        guard stop?.isStopped != true else { return [] }
-        var inner = "messages_fts.rowid >= ?"
-        var params: [SQLBindable?] = [fts, floor]
-        if let s = filter.since { inner += " AND m0.created_at >= ?"; params.append(s.timeIntervalSince1970) }
-        if let u = filter.until { inner += " AND m0.created_at <= ?"; params.append(u.timeIntervalSince1970) }
+        // The filters (dates, mode) go into that seek too: the cap is on matches that qualify, so an older date range is
+        // searched in its own newest 2,000 rather than found empty behind newer matches.
+        var cond = "", filterParams: [SQLBindable?] = []
+        if let s = filter.since { cond += " AND m0.created_at >= ?"; filterParams.append(s.timeIntervalSince1970) }
+        if let u = filter.until { cond += " AND m0.created_at <= ?"; filterParams.append(u.timeIntervalSince1970) }
         if let mode = filter.mode {   // the lessons of that mode, found once; the conversation rows are parsed here only
-            inner += " AND m0.conversation_id IN (SELECT id FROM conversations WHERE json_extract(data,'$.mode') = ?)"; params.append(mode)
+            cond += " AND m0.conversation_id IN (SELECT id FROM conversations WHERE json_extract(data,'$.mode') = ?)"; filterParams.append(mode)
         }
+        let floorRow = (try? db.query("SELECT messages_fts.rowid AS r FROM messages_fts JOIN messages m0 ON m0.rowid = messages_fts.rowid WHERE messages_fts MATCH ?\(cond) ORDER BY messages_fts.rowid DESC LIMIT 1 OFFSET \(scored - 1)", params: [fts] + filterParams))?.first
+        let floor = floorRow?.int("r") ?? 0, capped = floorRow != nil
+        guard stop?.isStopped != true else { return ([], false) }
+        let inner = "messages_fts.rowid >= ?" + cond
+        var params: [SQLBindable?] = [fts, floor] + filterParams
         params.append(candidates)
         let current = MessageIndex.isCurrent(db)
         // The inner query ranks cheap columns only; the JSON columns (role, title, mode) are read for the few survivors.
@@ -130,7 +161,7 @@ enum PastLessons {
             out.append(h)
             if out.count >= limit { break }
         }
-        return out
+        return (out, capped)
     }
 
     private static func decode(_ d: Data) -> ChatMessage? {
@@ -155,23 +186,37 @@ enum PastLessons {
     /// first, those without a lesson database dropped, at most `maxFolders`.
     static func databases(current: String, others: [String]) -> [String] {
         var seen = Set<String>(), out: [String] = []
-        for f in [current] + others where seen.insert(URL(fileURLWithPath: f).canonicalPath).inserted {
+        for f in [current] + others where isMounted(f) && seen.insert(URL(fileURLWithPath: f).canonicalPath).inserted {
             if FileManager.default.fileExists(atPath: stateFile(f)) { out.append(f) }
             if out.count >= maxFolders { break }
         }
         return out
     }
 
+    /// A folder on an external or network volume that is not mounted is not looked at (a stale mount point can block).
+    static func isMounted(_ folder: String) -> Bool {
+        let parts = URL(fileURLWithPath: folder).standardizedFileURL.pathComponents
+        guard parts.count > 2, parts[1] == "Volumes" else { return true }
+        return FileManager.default.fileExists(atPath: "/Volumes/" + parts[2])
+    }
+
+    /// `databases`, off the calling thread and within a budget: the path checks hit the disk (a network volume that went
+    /// away blocks in the kernel), so the Sessions page and the tool never wait on them. Past the budget only the current folder is used.
+    static func databases(current: String, others: [String], budget: TimeInterval) async -> [String] {
+        await off(budget: budget, fallback: [current]) { _ in databases(current: current, others: others) }.0
+    }
+
     /// One folder, read-only. A database that is gone, locked or not a lesson database is `.missing` / `.unreadable`.
     static func searchFolder(_ folder: String, query: String, filter: Filter, limit: Int, budget: TimeInterval = folderBudget) async -> FolderResult {
-        let (r, stop) = await off(budget: budget) { stop -> FolderResult in
+        let (r, stop) = await off(budget: budget, fallback: FolderResult(folder: folder, hits: [], status: .timedOut)) { stop -> FolderResult in
             let file = stateFile(folder)
-            guard FileManager.default.fileExists(atPath: file) else { return FolderResult(folder: folder, hits: [], status: .missing) }
+            guard isMounted(folder), FileManager.default.fileExists(atPath: file) else { return FolderResult(folder: folder, hits: [], status: .missing) }
             guard let db = try? Database(path: file, readOnly: true) else { return FolderResult(folder: folder, hits: [], status: .unreadable) }
             stop.attach(db)
             // A corrupt file or a different kind of SQLite file fails the first read: skipped, not an error for the others.
             guard (try? db.query("SELECT 1 AS x FROM messages_fts LIMIT 1")) != nil else { return FolderResult(folder: folder, hits: [], status: .unreadable) }
-            return FolderResult(folder: folder, hits: search(db, folder: folder, query: query, filter: filter, limit: limit, stop: stop), status: .ok)
+            let found = searchCapped(db, folder: folder, query: query, filter: filter, limit: limit, stop: stop)
+            return FolderResult(folder: folder, hits: found.hits, status: .ok, capped: found.capped)
         }
         var out = r
         if stop.timedOut, out.status == .ok { out.status = .timedOut }
@@ -210,9 +255,9 @@ enum PastLessons {
     /// Runs `work` on one folder's lesson database, read-only, off the cooperative pool and within the folder budget; nil when
     /// the database is missing, unreadable or the budget ran out.
     static func inFolder<T: Sendable>(_ folder: String, budget: TimeInterval = folderBudget, _ work: @escaping @Sendable (Database) -> T?) async -> T? {
-        let (r, stop) = await off(budget: budget) { stop -> T? in
+        let (r, stop) = await off(budget: budget, fallback: nil) { stop -> T? in
             let file = stateFile(folder)
-            guard FileManager.default.fileExists(atPath: file), let db = try? Database(path: file, readOnly: true) else { return nil }
+            guard isMounted(folder), FileManager.default.fileExists(atPath: file), let db = try? Database(path: file, readOnly: true) else { return nil }
             stop.attach(db)
             return work(db)
         }
