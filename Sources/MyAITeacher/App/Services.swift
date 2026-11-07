@@ -80,6 +80,10 @@ struct AppSettings: Codable, Sendable, Equatable {
     var computerPermissionBuild: String?
     /// How much the activity log keeps (`ActivityLog`): summaries by default.
     var activityLog = ActivityLog.Level.standard
+    /// Environment variables an agent's commands may keep although they look like secrets (`Secrets.scrub`).
+    var envAllow: [String] = []
+    /// Commands the agents start can't read the credential folders (~/.ssh, ~/.aws…): `Secrets`, `WriteFence.guarded`.
+    var protectCredentials = true
 
     init() {}
     init(from decoder: Decoder) throws {
@@ -132,6 +136,8 @@ struct AppSettings: Codable, Sendable, Equatable {
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)
         activityLog = (try? c.decode(ActivityLog.Level.self, forKey: .activityLog)) ?? d.activityLog
         instructions = (try? c.decode([String: String].self, forKey: .instructions)) ?? [:]
+        envAllow = (try? c.decode([String].self, forKey: .envAllow)) ?? []
+        protectCredentials = (try? c.decode(Bool.self, forKey: .protectCredentials)) ?? true
     }
 }
 
@@ -151,7 +157,14 @@ enum PythonPolicy: String, Codable, CaseIterable, Identifiable, Sendable {
 @MainActor
 final class SettingsStore: ObservableObject {
     @Published var value: AppSettings {
-        didSet { if value != oldValue { scheduleSave() } }
+        didSet { if value != oldValue { scheduleSave(); mirror() } }
+    }
+    /// What `Secrets` needs from the settings, readable from any thread.
+    private func mirror() {
+        let allow = Set(value.envAllow), protect = value.protectCredentials, names = Set((ProviderCatalog.presets + value.customProviders).flatMap(\.envKeys))
+        // MCP tokens and headers live in settings.json, which the model could read: their values are matched exactly.
+        let mcp = (value.mcpServers.flatMap { Array($0.env.values) + Array($0.headers.values) }).filter { $0.count >= Secrets.minLength }
+        Secrets.update { $0.envAllow = allow; $0.protectCredentials = protect; $0.providerEnvNames = names; $0.mcpSecrets = mcp }
     }
     private var saveWork: DispatchWorkItem?
 
@@ -161,6 +174,7 @@ final class SettingsStore: ObservableObject {
         } else {
             value = AppSettings()
         }
+        mirror()
     }
 
     private func scheduleSave() {

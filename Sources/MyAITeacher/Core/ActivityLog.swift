@@ -39,7 +39,8 @@ enum ActivityLog {
             var o = fields.filter { if case .null = $0.value { return false }; return true }   // empty fields stay out
             o["t"] = .string(stamps.string(from: now)); o["ev"] = .string(event)
             if let conv { o["conv"] = .string(conv) }
-            write(JSON.object(o).compact, day: days.string(from: now))
+            // Full level keeps whole inputs and results: a key in one must not outlive the lesson in a log file.
+            write(Secrets.redact(json: .object(o)).compact, day: days.string(from: now))
         }
     }
 

@@ -48,6 +48,9 @@ enum SubAgentPolicy {
         if tool.name == "web_fetch", let host = WebFetchTool.localHost(input), !grants.granted.contains(PermissionExtension.localFetch) {
             return .deny("\(host) is on the learner's Mac or local network: fetching from it needs their approval in the lesson, and sub-agents can't ask.")
         }
+        if let path = Secrets.credentialPathNamed(by: tool.name, input, workspace: scope.root), !grants.granted.contains(PermissionExtension.credentialRead) {
+            return .deny("\(path) is where credentials are kept: reading it needs the learner's approval in the lesson, and sub-agents can't ask.")
+        }
         switch tool.risk {
         case .readOnly, .network: return .allow
         case .interactive: return .deny("Sub-agents can't wait for the learner.")
@@ -149,6 +152,7 @@ enum ReadOnlyShell {
         for segment in segments(command) {
             guard let words = tokens(segment), let first = words.first, let rules = programs[first] else { return nil }   // a bare name, no paths
             guard words.allSatisfy({ !$0.contains(where: unsafe.contains) }) else { return nil }
+            guard !Secrets.namesCredential(segment) else { return nil }   // never run unasked: the credential folders are the learner's to open
             var args = words.dropFirst()
             if first == "git" {
                 while let a = args.first, a.hasPrefix("-") {   // global options
@@ -181,16 +185,21 @@ enum ReadOnlyShell {
     /// Runs an allowed pipeline without a shell: each program directly, connected by pipes as a shell would (so a
     /// reader that stops early, like `head`, ends its writer the usual way).
     static func run(_ command: String, cwd: URL, timeout: TimeInterval) async -> ToolOutput {
-        guard let pipeline = parse(command) else { return .error("Not a read-only command this agent may run.") }
-        var env = ShellEnvironment.shared.all
+        guard let pipeline = parse(command) else {
+            if Secrets.namesCredential(command) { return .error("That command names a credential location (~/.ssh, ~/.aws, ~/.gnupg, the app's keys…), which a read-only agent may not open. Ask the teacher; the learner decides.") }
+            return .error("Not a read-only command this agent may run.")
+        }
+        var env = Secrets.scrub(ShellEnvironment.shared.all)
         env.merge(["TERM": "dumb", "NO_COLOR": "1", "PAGER": "cat", "GIT_PAGER": "cat"]) { $1 }
         var built: [Process] = []
         for words in pipeline {
             guard let exe = ProcessRunner.which(words[0]) else { return .error("`\(words[0])` isn't installed.") }
             let p = Process()
-            p.executableURL = URL(fileURLWithPath: exe)
-            p.arguments = words[0] == "git"
+            let args = words[0] == "git"
                 ? hardened(Array(words.dropFirst()), filters: await filterDrivers(exe, Array(words.dropFirst()), cwd: cwd)) : Array(words.dropFirst())
+            let (program, argv) = WriteFence.wrap(exe, args, profile: WriteFence.guarded(nil))   // the OS refuses the credential folders
+            p.executableURL = URL(fileURLWithPath: program)
+            p.arguments = argv
             p.currentDirectoryURL = cwd
             p.environment = env
             built.append(p)

@@ -59,6 +59,22 @@ final class PermissionExtension: AgentExtension {
                 }
             }
         }
+        // Reading is open everywhere except where people keep credentials (~/.ssh, ~/.aws…): asked once per lesson. The
+        // gates compose, so an approval here still meets the others. Commands can't be read for paths; the OS fence covers them.
+        if let path = Secrets.credentialPathNamed(by: tool.name, input, workspace: ws.url), !app.interactions.isGranted(Self.credentialRead, conversationID: conv) {
+            return .ask(ApprovalRequest(
+                title: "Allow Teacher to read credentials?",
+                detail: "\(path) holds keys or passwords. What Teacher reads goes to the model provider.",
+                options: [ApprovalOption(id: "once", label: "Allow once"),
+                          ApprovalOption(id: "lesson", label: "Allow for this lesson"),
+                          ApprovalOption(id: "deny", label: "Deny", style: .primary)])) { [weak self] choice in
+                switch choice {
+                case "once": return .allow
+                case "lesson": self?.app.interactions.grant(Self.credentialRead, conversationID: conv); return .allow
+                default: return .deny("The learner declined: that is where credentials are kept.")
+                }
+            }
+        }
         // Other folders' lessons are the learner's words from elsewhere, and a search sends what it finds to the model: asked once per lesson.
         if tool.name == "past_lessons", input["scope"]?.string == "all", !app.interactions.isGranted(Self.otherFolders, conversationID: conv) {
             return .ask(ApprovalRequest(
@@ -219,8 +235,22 @@ final class PermissionExtension: AgentExtension {
     /// this folder.
     private func mcpGate(_ tool: MCPTool, _ input: JSON, ws: Workspace, conv: String) -> ToolDecision {
         let key = tool.config.grantKey, grant = "mcp:" + key
-        if app.interactions.isGranted(grant, conversationID: conv) || (app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []).contains(key) { return .allow }
         let args = input.object?.isEmpty == false ? input.pretty : "(no arguments)"
+        // A tool the server added or rewrote since it was last listed isn't covered by an earlier "allow this server":
+        // the learner sees the call again, once, and that version is then the approved one.
+        if MCPHub.shared.isChanged(tool.config, tool: tool.info.name) {
+            let config = tool.config, name = tool.info.name
+            return .ask(ApprovalRequest(
+                title: "“\(name)” from the MCP server “\(tool.server)” is new or has changed",
+                detail: "The server's tool list changed since you last used it, so earlier approvals don't cover this tool.\n\n" + String(args.prefix(3800)),
+                options: [ApprovalOption(id: "once", label: "Allow, and trust this version", style: .primary),
+                          ApprovalOption(id: "deny", label: "Deny", style: .danger)])) { choice in
+                guard choice == "once" else { return .deny("The user declined this changed \(config.name) tool.") }
+                MCPHub.shared.acknowledge(config, tool: name)
+                return .allow
+            }
+        }
+        if app.interactions.isGranted(grant, conversationID: conv) || (app.settings.value.mcpAlwaysAllow[ws.url.path] ?? []).contains(key) { return .allow }
         return .ask(ApprovalRequest(
             title: "Allow Teacher to use “\(tool.info.name)” from the MCP server “\(tool.server)”?",
             detail: String(args.prefix(4000)) + (tool.readOnly ? "\n\nThe server marks this tool read-only." : ""),
@@ -262,6 +292,8 @@ final class PermissionExtension: AgentExtension {
 
     /// The lesson grant for `web_fetch` on this Mac or the local network.
     nonisolated static let localFetch = "local-fetch"
+    /// The lesson grant for reading the credential folders.
+    nonisolated static let credentialRead = "credential-read"
     nonisolated static let otherFolders = "past-lessons-all"
 
     /// The tools that run a snippet of the model's code: one lesson grant covers them all.

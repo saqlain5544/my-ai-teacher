@@ -180,7 +180,8 @@ enum HookRunner {
     /// UserPromptSubmit, context for the agent. Exit 2: blocks, with stderr as the reason. Any other exit: an error the
     /// user sees, and the work goes on. A hook never approves a call: "allow" leaves it to the permission gate.
     static func outcome(_ event: HookEvent, exit: Int32, stdout: String, stderr: String) -> HookOutcome {
-        let out = stdout.trimmingCharacters(in: .whitespacesAndNewlines), err = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        // What a hook prints goes to the model: a key it echoed is redacted first.
+        let out = Secrets.redact(stdout).text.trimmingCharacters(in: .whitespacesAndNewlines), err = Secrets.redact(stderr).text.trimmingCharacters(in: .whitespacesAndNewlines)
         let clip = { (s: String) in truncateMiddle(s, max: contextLimit) }
         switch exit {
         case 0:

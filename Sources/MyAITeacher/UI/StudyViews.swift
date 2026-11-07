@@ -15,6 +15,7 @@ struct CardFaceView: NSViewRepresentable {
         let config = WKWebViewConfiguration()
         config.websiteDataStore = .nonPersistent()
         config.userContentController.add(WeakHandler(context.coordinator), name: "bridge")
+        RemoteImageSchemeHandler.install(in: config)   // the page's placeholder for a remote image loads through it
         let web = ClickThroughWebView(frame: .zero, configuration: config)
         web.setValue(false, forKey: "drawsBackground")
         context.coordinator.web = web

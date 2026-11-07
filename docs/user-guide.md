@@ -608,6 +608,32 @@ Stop the agent any time with ⌘. or Esc twice.
   model and per tool, run `"/Applications/My AI Teacher.app/Contents/MacOS/MyAITeacher" --log-summary [YYYY-MM-DD]`.
 * **Network traffic.** Messages go only to the provider you choose. Web search and fetching are keyless (searches go to
   DuckDuckGo and Bing, paper searches to OpenAlex).
+* **Your secrets stay on this Mac.** What the teacher reads and runs goes to the model, so:
+  * Commands the teacher starts get your shell environment **without** the provider keys and anything named like
+    `API_KEY`, `APIKEY`, `SECRET`, `TOKEN`, `PASSWORD`, `PASSWD` or `CREDENTIAL`. Name the variables a command may keep (say `GITHUB_TOKEN`)
+    in **Settings › Tools › Secrets**. Hooks and MCP servers you set up yourself keep the full environment.
+  * A key, token or private key in a tool's output (your saved keys, `sk-…`, `ghp_…`, `AKIA…`, `xoxb-…`, PEM blocks) is
+    replaced by `[redacted: …]` before the model sees it, and the tool card says so. The activity log is redacted too.
+  * `~/.ssh`, `~/.aws`, `~/.gnupg`, `~/.netrc`, `~/.config/gh`, `~/.docker/config.json`, Keychains and the app's saved
+    keys: the file tools ask once per lesson, and commands the teacher starts can't read them (the macOS sandbox refuses).
+    **That breaks, inside the teacher's shell:** `git` over SSH, `gh`, `docker` logins, `aws`, anything that needs your
+    Keychain, Homebrew when it reads your credentials, and tools that apply a sandbox of their own (SwiftPM without
+    `--disable-sandbox`). The `swift build` and `swift test` commands the teacher suggests for a Swift package carry that
+    flag; a command the model types itself is never changed, and if it fails with a sandbox error the output says to add
+    the flag. The trade-off: with the flag, SwiftPM's own manifest and plugin sandbox is off for those builds, while this
+    app's credential sandbox, which allows far more than SwiftPM's, stays on. A switch in
+    **Settings › Tools › Secrets** turns the protection off. It is a guard rail, not a wall: a command can still ask
+    another program (`open`, `osascript`) to do what it can't.
+  * What `.env` files get: project `.env` files are **not** blocked, since test runners need them. In what the model reads,
+    only lines shaped like `NAME_WITH_PASSWORD/SECRET/TOKEN/API_KEY/CREDENTIAL=value` (upper-case name, no spaces around
+    the `=`, a value of at least 8 characters that is not just digits or a short plain word) have the value replaced, plus
+    values that look like keys (`sk-…`, `ghp_…`, …). Every other line of a `.env` (database URLs, usernames, hosts, a
+    short or word-like password) **does** reach the model.
+  * The app's own `settings.json` (MCP server tokens and headers) is treated like the saved keys: the file tools ask, commands
+    can't read it, and those values are redacted.
+  * A web address, search, browser address or text typed into a page that contains a key is refused.
+  * Images in a reply that point to the web show as “Image from host (click to load)”. Nothing loads until you click.
+  * An MCP server whose tool list changes after you approved it (a new or rewritten tool) asks you again for that tool.
 * **Telemetry** for Insights is stored locally and can be turned off.
 * **Backups.** Copy the files above.
 * **Starting over.** Use **Forget everything** in Memory, or delete `teacher.sqlite` with the app closed.

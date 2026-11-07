@@ -336,7 +336,10 @@ final class ChatSession: ObservableObject, Identifiable {
     }
 
     /// A background sub-agent finished: the teacher reads its report at the next step, or in a new turn if the lesson is idle.
-    func deliver(_ report: ChatMessage) {
+    func deliver(_ original: ChatMessage) {
+        // Background output and sub-agent reports reach the model without passing `Tool.runBounded`.
+        var report = original
+        for i in report.blocks.indices { if let t = report.blocks[i].text { report.blocks[i].text = Secrets.redact(t).text } }
         let b = report.blocks.first
         ActivityLog.record("background.report", conv: id, ["handle": b?.meta?["handle"] ?? b?.meta?["backgroundTask"] ?? .null,
                                                            "title": b?.meta?["title"] ?? .null, "woke": .bool(!isRunning),

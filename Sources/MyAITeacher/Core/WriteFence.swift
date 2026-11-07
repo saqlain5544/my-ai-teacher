@@ -12,8 +12,8 @@ enum WriteFence {
     static let available: Bool = FileManager.default.isExecutableFile(atPath: sandboxExec)
 
     /// The program to start, under the current fence if there is one.
-    static func wrap(_ executable: String, _ args: [String]) -> (String, [String]) {
-        guard let profile, available else { return (executable, args) }
+    static func wrap(_ executable: String, _ args: [String], profile given: String? = WriteFence.profile) -> (String, [String]) {
+        guard let profile = given, available else { return (executable, args) }
         return (sandboxExec, ["-p", profile, executable] + args)
     }
 

@@ -53,10 +53,10 @@ struct BashTool: Tool {
             return out
         }
         let cwdFile = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-cwd-\(UUID().uuidString)")
-        let script = "trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)"
+        let script = Secrets.shellScript("trap 'pwd > \(cwdFile.path.shellQuoted)' EXIT\n\(command)")
         let shell = ShellEnvironment.shared.get("SHELL").flatMap { $0.hasSuffix("zsh") || $0.hasSuffix("bash") ? $0 : nil } ?? "/bin/zsh"
         let job = try ShellJob(command: command, title: input["description"]?.string ?? String(command.prefix(80)), conversationID: ctx.conversationID,
-                               shell: shell, script: script, cwd: cwd, env: ProcessRunner.environment())
+                               shell: shell, script: script, cwd: cwd, env: ProcessRunner.environment(scrub: Secrets.agentCall))
         job.onOutput = ctx.progress
         ShellJobs.shared.waitingOn(ctx.toolCallID, job)
         let outcome = await job.wait(timeout: timeout, mode: input["background"]?.bool == true ? .background : .auto)

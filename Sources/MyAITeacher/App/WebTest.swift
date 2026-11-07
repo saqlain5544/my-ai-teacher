@@ -48,6 +48,7 @@ final class WebTest: NSObject, WKNavigationDelegate, WKScriptMessageHandler {
         config.userContentController.add(self, name: "bridge")
         config.setURLSchemeHandler(TeacherLibSchemeHandler(), forURLScheme: TeacherLibSchemeHandler.scheme)
         config.setURLSchemeHandler(BlobSchemeHandler(), forURLScheme: BlobSchemeHandler.scheme)
+        RemoteImageSchemeHandler.install(in: config)
         config.userContentController.addUserScript(WKUserScript(source: TranscriptView.logBridge, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         web = WKWebView(frame: NSRect(x: 0, y: 0, width: 900, height: 1400), configuration: config)
         web.navigationDelegate = self

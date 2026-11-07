@@ -221,6 +221,28 @@ struct AddProviderSheet: View {
     }
 }
 
+/// The names a command may keep, edited as text and committed on return or when the field loses focus (committing on every
+/// keystroke erased the comma being typed).
+struct EnvAllowField: View {
+    @EnvironmentObject var settings: SettingsStore
+    @State private var text = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        TextField("e.g. GITHUB_TOKEN, NPM_TOKEN", text: $text)
+            .textFieldStyle(.roundedBorder).font(.body.monospaced())
+            .focused($focused)
+            .onAppear { text = settings.value.envAllow.joined(separator: ", ") }
+            .onSubmit(commit)
+            .onChange(of: focused) { _, now in if !now { commit() } }
+    }
+    private func commit() {
+        let names = text.split(whereSeparator: { ", \n".contains($0) }).map(String.init).filter { !$0.isEmpty }
+        if names != settings.value.envAllow { settings.value.envAllow = names }
+        text = names.joined(separator: ", ")
+    }
+}
+
 struct ToolsSettings: View {
     @EnvironmentObject var settings: SettingsStore
     var body: some View {
@@ -272,6 +294,17 @@ struct ToolsSettings: View {
                     Button("Show") { AppModel.shared.reveal(settings.defaultFolder) }
                 }
                 Text("Used when no other folder is open.").font(.caption).foregroundStyle(.secondary)
+            }
+            Section("Secrets") {
+                Toggle("Commands can't read credential folders", isOn: $settings.value.protectCredentials)
+                Text("~/.ssh, ~/.aws, ~/.gnupg, ~/.netrc, ~/.config/gh, ~/.docker/config.json, Keychains and this app's saved keys are refused to every command an agent starts. This breaks, in the agent's shell: git over SSH, gh, docker logins, aws, Keychain access, Homebrew credentials, and tools that sandbox themselves (SwiftPM gets --disable-sandbox added). It is a guard rail, not a wall. Reading them with the file tools asks first.")
+                    .font(.caption).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Environment variables commands may keep").font(.callout)
+                    EnvAllowField()
+                    Text("Provider keys and any variable named like API_KEY, APIKEY, SECRET, TOKEN, PASSWORD, PASSWD or CREDENTIAL are removed from the environment of commands the agents start. Hooks and MCP servers you set up keep the full environment.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
             Section("Enabled tools") {
                 ForEach(ToolRegistry.all, id: \.name) { t in

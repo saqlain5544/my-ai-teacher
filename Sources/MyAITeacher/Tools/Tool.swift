@@ -87,13 +87,43 @@ extension Tool {
         case .execute: 330      // processes carry their own (shorter) timeouts; this is the backstop
         }
     }
-    /// Runs the tool under its timeout.
+    /// Runs the tool under its timeout. The one place every model-started call passes through (the lesson's loop and the
+    /// sub-agents' alike), so the learner's secrets are held back here: a URL or query that carries one is refused, the
+    /// commands it starts run without the secret environment and without reading the credential folders, and a secret
+    /// in the result is redacted before the model sees it (`meta.redacted` tells the card).
     func runBounded(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         let sp = Signposts.begin("tool", name); defer { Signposts.end("tool", sp) }
         let input = ToolArgs.coerce(input, schema: schema)   // "[…]" strings for arrays, "3" for numbers…
-        guard let limit = timeout(input) else { return try await run(input, ctx) }
+        if let refused = Secrets.outbound(tool: name, input) ?? Secrets.introducesMarker(tool: name, input, workspace: ctx.workspace, agent: FileViews.agent(ctx)) { return .error(refused) }
         let tool = self
-        return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+        // A file tool that names a credential location got here only because the learner (or the lesson's grant) allowed
+        // it, so its own program (rg, grep) runs without the deny-read rules; no other call does.
+        let approved = Secrets.credentialPathNamed(by: name, input, workspace: ctx.workspace) != nil
+        let fence = approved ? WriteFence.profile : WriteFence.guarded(WriteFence.profile)
+        var out: ToolOutput
+        do {
+            out = try await Secrets.$agentCall.withValue(true) {
+                try await WriteFence.$profile.withValue(fence) {
+                    guard let limit = tool.timeout(input) else { return try await tool.run(input, ctx) }
+                    return try await withDeadline(seconds: limit) { try await tool.run(input, ctx) }
+                }
+            }
+        } catch is CancellationError {
+            throw CancellationError()
+        } catch let e as TimeoutError {
+            throw e
+        } catch {
+            // An error message can echo what it was given (an MCP server repeating a key): the model reads it, so it is redacted.
+            let message = error.localizedDescription, r = Secrets.redact(message)
+            if r.kinds.isEmpty { throw error }
+            throw ToolError(r.text)
+        }
+        if let hint = Secrets.hint(for: out.text), !out.text.contains(hint) { out.text += "\n" + hint }
+        let result = Secrets.redacted(tool: name, out)
+        if (name == "read" || name == "grep"), result.meta?["redacted"] != nil, let p = input["path"]?.string ?? input["file_path"]?.string {
+            Secrets.noteRedactedRead(agent: FileViews.agent(ctx), path: resolvePath(p, workspace: ctx.workspace))
+        }
+        return result
     }
     func summary(_ input: JSON) -> String {
         for k in ["command", "path", "file_path", "query", "url", "pattern", "title", "question", "concept", "action"] {
@@ -159,6 +189,9 @@ enum ProcessRunner {
                     stdin: String? = nil, timeout: TimeInterval = 120, outputLimit: Int = 2_000_000,
                     onOutput: (@Sendable (String) -> Void)? = nil) async -> ProcessResult {
         let p = Process()
+        var args = args
+        // A shell the model asked for: scrubbed names unset inside it too (zsh -c re-sources ~/.zshenv).
+        if Secrets.agentCall, args.count == 2, args[0] == "-c", ["zsh", "bash", "sh"].contains((executable as NSString).lastPathComponent) { args[1] = Secrets.shellScript(args[1]) }
         let (exe, argv) = WriteFence.wrap(executable, args)
         p.executableURL = URL(fileURLWithPath: exe)
         p.arguments = argv
@@ -260,8 +293,11 @@ enum ProcessRunner {
     }
 
     /// The learner's shell environment, made for output read by a model: no colours, pagers or prompts.
-    static func environment(_ base: [String: String]? = nil) -> [String: String] {
+    /// Inside a tool call the model started, the login shell's variables come without the learner's secrets
+    /// (`Secrets.scrub`); a caller that passes its own `base` (hooks) or `scrub: false` (MCP servers) gets what it asks for.
+    static func environment(_ base: [String: String]? = nil, scrub: Bool? = nil) -> [String: String] {
         var e = base ?? ShellEnvironment.shared.all
+        if scrub ?? (base == nil && Secrets.agentCall) { e = Secrets.scrub(e) }
         e["TERM"] = "dumb"
         e["NO_COLOR"] = "1"
         e["FORCE_COLOR"] = "0"
