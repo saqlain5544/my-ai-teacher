@@ -103,6 +103,27 @@ final class ReviewFixesTests: XCTestCase {
         XCTAssertFalse(mentor.text.contains("write fence"), "the mentor's own folder is writable, so this wasn't the fence")
     }
 
+    @MainActor func testADebugSessionEndedByTheFenceGrowingNamesTheCredentialSetting() async throws {
+        try XCTSkipUnless(WriteFence.available, "no sandbox-exec")
+        let driver = root.appendingPathComponent("idle2.py")
+        try "import time\ntime.sleep(120)\n".write(to: driver, atomically: true, encoding: .utf8)
+        let ws = try Workspace(url: root.appendingPathComponent("df", isDirectory: true))
+        let services = Services(global: GlobalStore(db: try Database(path: root.appendingPathComponent("gf.sqlite").path)), workspace: ws)
+        let cfg = ProviderConfig(id: "x", name: "x", api: .openai, baseURL: "http://127.0.0.1:1", envKeys: [], defaultModel: "m")
+        let ctx = ToolContext(conversationID: "FENCE", workspace: ws.url, services: services, interactions: InteractionCenter(), toolCallID: "c",
+                              client: cfg.client(apiKey: nil), model: "m", progress: { _ in })
+        let proc = try DebugProcess(driver: driver, lldbPython: "", cwd: root)
+        let session = DebugSession(conversationID: "FENCE", proc: proc, tmp: root.appendingPathComponent("tmp-f"), program: "./demo", fence: "")   // started with no protection
+        _ = DebugSessions.shared.set(session)
+        defer { DebugSessions.shared.killAll() }
+        let saved = Secrets.current.protectCredentials
+        defer { Secrets.update { $0.protectCredentials = saved } }
+        Secrets.update { $0.protectCredentials = true }
+        let out = try await WriteFence.$profile.withValue(WriteFence.guarded(nil)) { try await DebugTool().run(["action": "step"], ctx) }
+        XCTAssertTrue(out.isError && out.text.contains("Commands can't read credential folders"), out.text)
+        XCTAssertNil(DebugSessions.shared.session("FENCE"), "and it ended")
+    }
+
     // MARK: The sandbox hint
 
     func testTheHintFollowsWhichFenceIsOnAndSwiftCommandsAreFlaggedForEither() async throws {
