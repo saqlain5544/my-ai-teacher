@@ -22,7 +22,7 @@ enum StepCap {
             guard let i = big.max(by: { (out[$0].text?.count ?? 0) < (out[$1].text?.count ?? 0) }), let text = out[i].text else { break }
             let n = text.count
             var note = "\n\n[… \(n - head - tail) characters left out: this step's tool results were too large together."
-            if text.contains("Full output saved to") {
+            if out[i].meta?["spilled"]?.bool == true {
                 note += " The full output is saved at the path given at the end.]\n\n"
             } else {
                 let url = dir.appendingPathComponent("\(out[i].name ?? "tool")-step-\(Int(Date().timeIntervalSince1970))-\(UUID().uuidString.prefix(4)).txt")

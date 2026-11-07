@@ -79,19 +79,22 @@ Every request = fixed prefix (system prompt + tool schemas) + history prepared b
    reasoning of the next request, what microcompaction saves, the summary, the cache hit rate, and names the biggest.
 9. **Repeat reads.** `read` of the same range of an unchanged file (`FileViews` stamp, taken before the read) returns a
    one-line note with `meta.sameAs` = the earlier call, only when that result is in `ContextPolicy.liveResults` (after the
-   compaction point and the trim epoch, lesson inside its budget, not cut by `StepCap`; never for adaptive Claude, whose
+   compaction point and the trim epoch, the request-ready history (not the stored lesson) inside its budget, not cut by `StepCap`; never for adaptive Claude, whose
    history the API edits, nor sub-agents, which pass no live set). The epoch can still jump past the earlier result later,
-   so `ContextPolicy.expandRepeats` runs first in `prepare`: a note whose earlier result is stubbed or summarised becomes
+   so `ContextPolicy.expandRepeats` runs first in `prepare` (and `demoteSqueezedNotes` after the squeeze turns a note whose target was cut into "read it again"): a note whose earlier result is stubbed or summarised becomes
    the file again from the stored transcript, or says to read it again when that is paged out. The model never holds a
    pointer to content it no longer has.
 10. **One step is bounded.** `StepCap`: a step's tool results (parallel tools, a sub-agent's report) may add about a sixth
    of the budget (40k–160k characters); the largest keep 5k head + 1.5k tail and the full text goes to `.teacher/outputs`
    with its path. Results under 12k characters are never cut.
 
-| Scripted 30-turn lesson (4 files read every turn, 3 parallel 45k-char greps, budget 24k tokens; `ContextManagementTests`) | Before | After |
-|---|---|---|
-| Tokens sent over all requests | 8.00M | **3.52M** (−56%) |
-| Fixed prefix (`--cli --measure --no-memory`) | ~6.4k tok | ~6.4k tok (unchanged) |
+| Scripted 30-turn lesson (4 files read every turn, 3 parallel 45k-char greps, budget 24k tokens; `ContextManagementTests`) | Tokens sent over all requests |
+|---|---|
+| Before | 8.00M |
+| Repeat reads only | 8.00M (−0%: the greps alone put the request over budget, so no earlier result is trusted) |
+| Step cap only | 3.55M (−56%) |
+| Both | **3.52M (−57%)**: the cap is nearly all of it; repeat reads add about one point on top, more in a lesson of reads and small outputs |
+| Fixed prefix (`--cli --measure --no-memory`) | ~6.4k tok, unchanged |
 
 Model metadata (context window, max output, reasoning, vision, tools, free/pricing) comes from each provider's
 `/models` (OpenRouter, Anthropic, Gemini, Groq, Mistral, OpenAI-compatible shapes), cached on disk for 24 h. It sets

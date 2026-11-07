@@ -136,11 +136,13 @@ enum ContextPolicy {
         return out
     }
 
-    /// Ids of the tool results a request sends whole: after the compaction point and the microcompaction epoch, and only
+    /// Ids of the tool results a request sends whole (none for Claude with replayed thinking, whose history the API edits itself): after the compaction point and the microcompaction epoch, and only
     /// while the lesson fits `budget` (past it the last-resort squeeze may cut anything). Cut or failed results are not
     /// among them. What a repeat `read` may point back to.
-    static func liveResults(_ msgs: [ChatMessage], conversation c: Conversation, budget: Int) -> Set<String> {
-        guard estimateTokens(msgs) <= budget else { return [] }
+    static func liveResults(_ msgs: [ChatMessage], conversation c: Conversation, model: String, budget: Int) -> Set<String> {
+        // The request, not the stored lesson: a compacted lesson's history is long but its request is small. Over budget the
+        // squeeze may cut anything.
+        guard !AnthropicClient.isAdaptiveClaude(model), estimateTokens(prepare(msgs, conversation: c, model: model)) <= budget else { return [] }
         let from = max(c.compactedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1,
                        c.trimmedThrough.flatMap { t in msgs.firstIndex { $0.id == t } } ?? -1) + 1
         var ids = Set<String>()
@@ -149,6 +151,23 @@ enum ContextPolicy {
                 && b.meta?["stepCapped"] == nil { if let i = b.id { ids.insert(i) } }
         }
         return ids
+    }
+
+    /// The squeeze cuts the biggest results to head and tail; a note pointing at one of them would leave the model with a
+    /// fragment. Such a note says to read the file again instead.
+    static func demoteSqueezedNotes(_ msgs: [ChatMessage]) -> [ChatMessage] {
+        guard msgs.contains(where: { $0.blocks.contains { $0.meta?["sameAs"] != nil } }) else { return msgs }
+        var cut = Set<String>()
+        for m in msgs { for b in m.blocks where b.kind == .toolResult && b.text?.contains("characters trimmed to fit the context") == true { if let i = b.id { cut.insert(i) } } }
+        guard !cut.isEmpty else { return msgs }
+        var out = msgs
+        for i in out.indices { for j in out[i].blocks.indices {
+            guard let ref = out[i].blocks[j].meta?["sameAs"]?.string, cut.contains(ref) else { continue }
+            var meta = out[i].blocks[j].meta?.object ?? [:]; meta["sameAs"] = nil
+            out[i].blocks[j].meta = .object(meta)
+            out[i].blocks[j].text = "The file is unchanged since you read it, but that earlier result was cut to fit the context: `read` it again if you need it."
+        } }
+        return out
     }
 
     /// Screenshots of the browser and the Mac go stale at once: requests carry only the latest `capturesKept` (a long

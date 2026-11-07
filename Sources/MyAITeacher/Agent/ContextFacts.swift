@@ -70,3 +70,13 @@ struct ContextFacts: Sendable {
         return section.isEmpty ? base : base + "\n\n" + section
     }
 }
+
+/// Files written or edited since the lesson last looked, by its agent and its sub-agents (which have no handle on the
+/// lesson): they record here by conversation id, the lesson collects them when it builds a summary's facts.
+enum TouchedFiles {
+    private static let pending = Locked<[String: [String]]>([:])
+    static func record(conversation: String, path: String) {
+        pending.mutate { $0[conversation, default: []].removeAll { $0 == path }; $0[conversation, default: []].append(path) }
+    }
+    static func take(conversation: String) -> [String] { pending.mutate { $0.removeValue(forKey: conversation) ?? [] } }
+}

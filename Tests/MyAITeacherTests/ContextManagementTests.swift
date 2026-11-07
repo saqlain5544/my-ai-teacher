@@ -158,10 +158,10 @@ final class ContextManagementTests: XCTestCase {
         let msgs = (0..<6).flatMap { n in [ChatMessage(role: .user, blocks: [.text("q\(n)")]),
                                           ChatMessage(role: .user, blocks: [.toolResult(id: "t\(n)", name: "read", content: "x")])] }
         var c = Conversation(providerID: "x", model: "m")
-        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, budget: 10_000).count, 6)
+        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 10_000).count, 6)
         c.trimmedThrough = msgs[3].id
-        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, budget: 10_000), ["t2", "t3", "t4", "t5"])
-        XCTAssertTrue(ContextPolicy.liveResults(msgs, conversation: c, budget: 1).isEmpty, "over budget the squeeze may cut anything")
+        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 10_000), ["t2", "t3", "t4", "t5"])
+        XCTAssertTrue(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 1).isEmpty, "over budget the squeeze may cut anything")
     }
 
     // MARK: Bounding a step
@@ -187,11 +187,11 @@ final class ContextManagementTests: XCTestCase {
     /// sent over the lesson, and whether the model ever lost a file's content to a "unchanged" note.
     @MainActor func testScriptedLongLessonSendsLessAndNeverLosesAFile() async throws {
         let budget = 24_000
-        func run(new: Bool) async throws -> (sent: Int, notes: Int) {
+        func run(dedupe: Bool, cap: Bool) async throws -> (sent: Int, notes: Int) {
             for i in 0..<4 { try String(repeating: "line \(i) of file\n", count: 400).write(to: dir.appendingPathComponent("f\(i).txt"), atomically: true, encoding: .utf8) }
             var msgs: [ChatMessage] = [], c = Conversation(providerID: "x", model: "m")
             var sent = 0, notes = 0, call = 0
-            let tag = new ? "new" : "old"
+            let tag = "d\(dedupe)c\(cap)"
             func request() throws {
                 if ContextPolicy.estimateTokens(msgs) > budget * 7 / 10, let next = ContextPolicy.nextTrimPoint(msgs, current: c.trimmedThrough) { c.trimmedThrough = next }
                 let prepared = ContextPolicy.prepare(msgs, conversation: c, model: "m")
@@ -215,7 +215,7 @@ final class ContextManagementTests: XCTestCase {
                     call += 1
                     let id = "\(tag)\(call)"
                     uses.append(.toolUse(id: id, name: "read", input: ["path": .string("f\(i).txt")]))
-                    let live = new ? ContextPolicy.liveResults(msgs, conversation: c, budget: budget) : nil
+                    let live = dedupe ? ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: budget) : nil
                     var cx = ctx(id, live: live); cx.shellID = "agent-\(tag)"
                     let out = try await ReadTool().run(["path": .string("f\(i).txt")], cx)
                     results.append(.toolResult(id: id, name: "read", content: out.text, meta: out.meta))
@@ -225,7 +225,7 @@ final class ContextManagementTests: XCTestCase {
                     uses.append(.toolUse(id: "\(tag)\(call)", name: "grep", input: ["pattern": .string("p\(i)")]))
                     results.append(.toolResult(id: "\(tag)\(call)", name: "grep", content: String(repeating: "src/file.swift:12: match here\n", count: 1_600)))
                 }
-                if new { results = StepCap.apply(results, limit: StepCap.limit(budget: budget), dir: dir.appendingPathComponent("outputs")) }
+                if cap { results = StepCap.apply(results, limit: StepCap.limit(budget: budget), dir: dir.appendingPathComponent("outputs")) }
                 msgs.append(ChatMessage(role: .assistant, blocks: uses))
                 msgs.append(ChatMessage(role: .user, blocks: results))
                 try request()
@@ -233,10 +233,105 @@ final class ContextManagementTests: XCTestCase {
             }
             return (sent, notes)
         }
-        let before = try await run(new: false)
-        let after = try await run(new: true)
-        print("SCRIPTED LESSON tokens sent over 30 turns: before \(before.sent), after \(after.sent) (\(100 - after.sent * 100 / before.sent)% less); notes sent: \(after.notes)")
+        let before = try await run(dedupe: false, cap: false), reads = try await run(dedupe: true, cap: false)
+        let capOnly = try await run(dedupe: false, cap: true), after = try await run(dedupe: true, cap: true)
+        func less(_ x: Int) -> Int { 100 - x * 100 / before.sent }
+        print("SCRIPTED LESSON tokens sent over 30 turns: before \(before.sent); repeat reads only \(reads.sent) (-\(less(reads.sent))%); step cap only \(capOnly.sent) (-\(less(capOnly.sent))%); both \(after.sent) (-\(less(after.sent))%); notes sent: \(after.notes)")
         XCTAssertLessThan(after.sent, before.sent * 8 / 10)
         XCTAssertGreaterThan(after.notes, 0)
+    }
+
+    // MARK: Review fixes
+
+    @MainActor func testAReportDeliveredDuringACompactionIsAdoptedNotLost() {
+        let conv = Conversation(providerID: "x", model: "m")
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        session.holdBusyForTests(true)   // a /compact (or a turn) is running
+        session.deliver(ChatMessage(role: .user, blocks: [Block(kind: .text, text: "report from B1", meta: ["backgroundTask": "B1"])]))
+        XCTAssertEqual(session.queuedReports, 1)
+        XCTAssertTrue(session.messages.isEmpty)
+        session.holdBusyForTests(false)
+        session.adoptInbox(wake: false)
+        XCTAssertEqual(session.queuedReports, 0)
+        XCTAssertEqual(session.messages.count, 1, "the report joins the lesson when the compaction ends")
+    }
+
+    func testRepeatReadStaysLiveInACompactedLessonWhoseStoredHistoryIsOverBudget() {
+        let old = (0..<20).flatMap { n in [ChatMessage(role: .user, blocks: [.text("old \(n)")]),
+                                          ChatMessage(role: .user, blocks: [.toolResult(id: "o\(n)", name: "read", content: String(repeating: "x", count: 20_000))])] }
+        let recent = [ChatMessage(role: .user, blocks: [.text("now")]), ChatMessage(role: .user, blocks: [.toolResult(id: "fresh", name: "read", content: "small")])]
+        var c = Conversation(providerID: "x", model: "m")
+        c.compactedThrough = old.last!.id; c.compactSummary = "summary"
+        let msgs = old + recent
+        XCTAssertGreaterThan(ContextPolicy.estimateTokens(msgs), 20_000, "the stored lesson is over the budget")
+        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 20_000), ["fresh"], "the request is small, so the note is allowed")
+    }
+
+    func testLiveResultsLeaveOutFailedRunningNotesCappedAndAdaptiveClaude() {
+        let blocks: [Block] = [.toolResult(id: "ok", name: "read", content: "x"), .toolResult(id: "bad", name: "read", content: "x", isError: true),
+                               .toolResult(id: "run", name: "read", content: "", meta: ["running": true]),
+                               .toolResult(id: "note", name: "read", content: "n", meta: ["sameAs": "ok"]),
+                               .toolResult(id: "cap", name: "grep", content: "x", meta: ["stepCapped": true])]
+        let msgs = [ChatMessage(role: .user, blocks: [.text("go")]), ChatMessage(role: .user, blocks: blocks)]
+        let c = Conversation(providerID: "x", model: "m")
+        XCTAssertEqual(ContextPolicy.liveResults(msgs, conversation: c, model: "m", budget: 10_000), ["ok"])
+        XCTAssertTrue(ContextPolicy.liveResults(msgs, conversation: c, model: "claude-sonnet-5-5", budget: 10_000).isEmpty)
+    }
+
+    func testANoteIsDemotedWhenTheSqueezeCutItsTarget() {
+        let file = (0..<3000).map { "let value\($0) = \($0)" }.joined(separator: "\n")
+        let msgs = [ChatMessage(role: .user, blocks: [.text("go")]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "r0", name: "read", content: file)]),
+                    ChatMessage(role: .user, blocks: [.text("again")]),
+                    ChatMessage(role: .user, blocks: [.toolResult(id: "r1", name: "read", content: "Unchanged since you read it", meta: ["sameAs": "r0"])])]
+        let squeezed = ContextPolicy.squeeze(msgs, budget: 3_000)
+        XCTAssertTrue(squeezed[1].blocks[0].text!.contains("trimmed to fit the context"))
+        let out = ContextPolicy.demoteSqueezedNotes(squeezed)
+        XCTAssertNil(out[3].blocks[0].meta?["sameAs"])
+        XCTAssertTrue(out[3].blocks[0].text!.contains("read"), "told to read the file again")
+        XCTAssertFalse(out[3].blocks[0].text!.hasPrefix("Unchanged"))
+        // Not squeezed: the note stays.
+        XCTAssertEqual(ContextPolicy.demoteSqueezedNotes(msgs)[3].blocks[0].meta?["sameAs"]?.string, "r0")
+    }
+
+    @MainActor func testFilesASubAgentChangedReachTheSummaryFacts() {
+        let conv = Conversation(providerID: "x", model: "m")
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        TouchedFiles.record(conversation: session.id, path: dir.appendingPathComponent("Sources/A.swift").path)   // what SubAgent records
+        TouchedFiles.record(conversation: "other-lesson", path: "/elsewhere/B.swift")
+        let f = session.contextFacts(state: "")
+        XCTAssertEqual(f.changedFiles, ["Sources/A.swift"])
+        XCTAssertEqual(session.conversation.touchedFiles?.count, 1)
+        XCTAssertEqual(TouchedFiles.take(conversation: "other-lesson"), ["/elsewhere/B.swift"], "another lesson's files are its own")
+    }
+
+    func testAResultThatQuotesTheSpillPhraseIsStillSpilledByTheCap() throws {
+        let quoting = "Full output saved to /nowhere/x.txt\n" + String(repeating: "page text line\n", count: 4_000)
+        let out = StepCap.apply([.toolResult(id: "w", name: "web_fetch", content: quoting)], limit: 20_000, dir: dir.appendingPathComponent("outputs"))
+        let text = out[0].text!
+        let path = text.components(separatedBy: "Full output saved to ").last!.components(separatedBy: ":")[0]
+        XCTAssertTrue(FileManager.default.fileExists(atPath: path), "a real copy exists where the note says")
+        XCTAssertNotEqual(path, "/nowhere/x.txt")
+        // A result the app itself spilled is marked, and gets no second copy.
+        let spilled = Block.toolResult(id: "b", name: "bash", content: String(repeating: "y", count: 30_000) + "\n… [Full output saved to /real.txt — use read]", meta: ["spilled": true])
+        XCTAssertTrue(StepCap.apply([spilled], limit: 20_000, dir: dir.appendingPathComponent("o2"))[0].text!.contains("saved at the path given at the end"))
+    }
+
+    @MainActor func testContextShowsWhileAReplyRunsButCompactWaits() {
+        let conv = Conversation(providerID: "x", model: "m")
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        session.holdBusyForTests(true)
+        session.send("/compact")
+        XCTAssertFalse(session.showContext)
+        session.send("/context")
+        XCTAssertTrue(session.showContext, "free and read-only: no reason to wait")
+        session.holdBusyForTests(false)
+    }
+
+    func testNothingToCompactIsWordedByCause() {
+        XCTAssertTrue(ContextCommand.nothingToCompact(messages: 2, turns: 1, tokens: 500).contains("short"))
+        let one = ContextCommand.nothingToCompact(messages: 60, turns: 1, tokens: 90_000)
+        XCTAssertTrue(one.contains("one long turn")); XCTAssertFalse(one.contains("short"))
+        XCTAssertTrue(ContextCommand.nothingToCompact(messages: 60, turns: 5, tokens: 9_000).contains("already summarised"))
     }
 }

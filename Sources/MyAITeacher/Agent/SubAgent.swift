@@ -964,6 +964,11 @@ enum SubAgent {
                                                                  "summary": .string(String(tool.summary(input).prefix(200))),
                                                                  "input": ActivityLog.level == .full ? input : .null,
                                                                  "result_chars": .number(Double(block.text?.count ?? 0)), "result": ActivityLog.text(block.text)])
+            // Files it changed in the lesson's own folder join the lesson's summary facts (not a worktree copy's).
+            if ["write", "edit"].contains(name), block.isError != true, let p = block.meta?["path"]?.string {
+                let home = ctx.workspace.standardizedFileURL.path
+                if URL(fileURLWithPath: p).standardizedFileURL.path.hasPrefix(home + "/") { TouchedFiles.record(conversation: ctx.conversationID, path: p) }
+            }
             var kept = block
             _ = kept.spill(into: ctx.services.conversations.blobs)   // a screenshot lives on disk; the transcript holds its reference
             return (kept, ToolMetric(name: name, duration: Date().timeIntervalSince(t0), ok: !(block.isError ?? false)))

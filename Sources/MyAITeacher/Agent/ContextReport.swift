@@ -6,6 +6,14 @@ enum ContextCommand: Equatable {
 
     var name: String { if case .compact = self { "compact" } else { "context" } }
 
+    /// Why `/compact` has nothing to do, by cause.
+    static func nothingToCompact(messages: Int, turns: Int, tokens: Int) -> String {
+        let size = "about \(Composer.short(tokens)) tokens"
+        if messages <= 4 { return "Nothing to compact yet: this lesson is short (\(size))." }
+        if turns <= 1 { return "Nothing to cut at: this lesson is one long turn (\(size)), and a summary can only replace earlier learner turns." }
+        return "Nothing new to compact: everything before your last few messages is already summarised (\(size) now)."
+    }
+
     static func parse(_ text: String) -> ContextCommand? {
         let t = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard t.hasPrefix("/") else { return nil }
