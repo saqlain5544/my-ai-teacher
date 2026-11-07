@@ -24,6 +24,19 @@
     summary: n => (input(n).path ? 'outline of ' + input(n).path : 'definitions of ' + (input(n).query || '')) + (meta(n).count != null ? ' · ' + meta(n).count : ''),
     body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });
 
+  // The language server's answer (the compiler's view): what was asked, how many results, and whether the server was still indexing.
+  R.defineTool({ name: 'lsp', icon: 'target', tone: 'blue', title: 'Language server',
+    summary: n => {
+      const i = input(n), m = meta(n);
+      const at = i.file ? i.file + (i.line ? ':' + i.line : '') : (i.query || i.language || '');
+      let s = [(i.action || '').replace(/_/g, ' '), i.symbol || '', at].filter(Boolean).join(' ');
+      if (n.props.status === 'done' && m.count != null) s += ' · ' + m.count + (m.errors != null ? (m.errors === 1 ? ' error' : ' errors') : '');
+      if (m.indexing) s += ' · still indexing';
+      return s;
+    },
+    open: n => n.props.status === 'error' || (meta(n).errors || 0) > 0,
+    body: (n, ctx) => n.props.output ? ctx.pre(n.props.output) : '' });
+
   // Plan mode's plan, for the user's approval: always open, rendered as Markdown under the Approve / Keep planning buttons.
   R.defineTool({ name: 'exit_plan_mode', icon: 'list-checks', tone: 'blue', title: 'Plan',
     summary: n => { const m = meta(n); return n.props.status === 'running' ? 'waiting for your approval' : m.planApproved ? 'approved' : n.props.status === 'done' ? 'kept planning' : ''; },

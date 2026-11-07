@@ -2196,6 +2196,14 @@
     ok(!$('.turn-undo'), 'no undo when nothing changed');
   });
 
+  test('lsp card: what was asked, the count, indexing, and the answer in the body', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'ls1', name: 'lsp', input: { action: 'references', file: 'main.go', line: 9, symbol: 'Area' } }]);
+    const r1 = R('ls1', 'lsp', '2 references to `Area`:\nmain.go:9  func (r Rect) Area() float64\nmain.go:14  t += s.Area()', { meta: { count: 2, files: 1, server: 'gopls', indexing: true } });
+    T.status('', false); T.reset([U('who uses Area?'), a1, r1, A('Two places.')]);
+    const c = $('[data-tool-id="ls1"]'); ok(c, 'lsp card');
+    ok(/references Area main\.go:9/.test(c.textContent) && /2/.test(c.textContent) && /still indexing/.test(c.textContent), c.textContent.slice(0, 160));
+  });
+
 
   // ───────────── Drawing references ─────────────
   // Every example in Resources/drawing (the harness injects them from `Drawing`) draws as documented, in light and dark:
