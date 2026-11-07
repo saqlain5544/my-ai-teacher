@@ -854,8 +854,8 @@ The app's footprint must not grow with how much the learner has done: data lives
   flush is ended by its watchdog and restarted, without queuing another tick behind the stuck one), `jobs` (one per name:
   `memory.reflect:<lesson>`, `memory.consolidate`, `embeddings.warmup` (on a GCD thread, not the cooperative pool),
   `worktrees.prune`, and `lesson.compact#n` via `Runtime.call`, which retries a failed summary call with backoff before
-  the digest fallback), `agents` (sub-agent runs), `mcp` (MCP servers, one child per folder and server, each with its
-  own OS process). Root never gives up; it restarts a supervisor that did, with backoff.
+  the digest fallback), `agents` (sub-agent runs), `mcp` (MCP servers and language servers, one child per folder and
+  server, each with its own OS process). Root never gives up; it restarts a supervisor that did, with backoff.
 * Watchdogs measure silence, not running time: a job's work gets a heartbeat (`Runtime.Job.beat`, `call`'s `beat`), and
   a model client wrapped in `BeatingClient` beats on every streamed event — so a long summary or reflection is never cut
   off mid-answer and billed twice; only one that goes quiet is ended (compaction 120 s, reflection 180 s).
@@ -911,12 +911,68 @@ definition for the test questions, such as "ask the user to approve running a sh
 **Why grep stays.** Exact text (error messages, strings, config keys) is what an index can't rank, and models are
 trained to reach for it. `grep` stays as that.
 
+### The compiler's view: language servers (`Code/LSP/`)
+The index and `symbols` are fast guesses (regular expressions, names): same-named symbols blur, there are no types and no
+real errors. The `lsp` tool (deferred on the `code-mentor` node, sub-agents get it too) asks the language server for the
+file's language instead.
+* **Client** (`LSPClient.swift`): `LSPStdioTransport` spawns the server (`posix_spawn` in its own process group, only
+  fds 0-2, stderr in an `MCPLog`) and `LSPFraming` parses `Content-Length` frames (any other header ignored, length in bytes,
+  a message without one ends the link). `LSPConnection` is JSON-RPC 2.0 as `MCPConnection` is: responses matched by id,
+  `timeout` → `$/cancelRequest`, cancellation likewise, every waiting call failed when the link ends. It answers the server's
+  own requests (`workspace/configuration` with a null per item, `client/registerCapability`, `window/workDoneProgress/create`,
+  `workspace/workspaceFolders`; `workspace/applyEdit` is refused: a server never changes files), tracks `$/progress` tokens
+  and rust-analyzer's `experimental/serverStatus` (`activity`, `awaitIdle`), and keeps `publishDiagnostics` per file.
+  `shutdown` → `exit` → close stdin → SIGTERM → SIGKILL.
+* **Documents follow the disk.** Before every answer the file asked about is read and compared with what the server holds:
+  new → `didOpen` (+ `didSave`, which is what makes rust-analyzer run `cargo check`); different → `didChange` (full text,
+  next version) + `didSave`. Every other open document is checked by file stamp (`FileViews.stamp`) and re-sent or closed
+  when deleted; 40 stay open at most. A file created after the server started is announced with
+  `workspace/didChangeWatchedFiles` (sourcekit-lsp otherwise doesn't know it belongs to the package). So `write` and `edit`
+  need no hook, and nothing trusts remembered state.
+* **Supervision** (`LSPInstance` / `LSPHub`): one per folder and server, a transient child of Runtime › `mcp` (the
+  supervisor of the app's external servers; ids `lsp:<server>@<folder>#n.g`), started by the first call that needs it,
+  never because a lesson opened. A link that ends by itself is a crash: restart with backoff (3 in 60 s, 1 → 8 s), and
+  `perform` waits through the restart and asks the question once more on the new link (documents are re-opened lazily). A
+  first start that never gets ready fails at once with the server's last stderr lines and is not retried (a dangling rustup
+  proxy exits 1 forever). At most 3 run: a start beyond that stops the one unused longest. 10 idle minutes stop one
+  (it starts again on the next use); `applicationWillTerminate` → `LSPHub.shutdownNow`. The Tasks panel lists them
+  (`BackgroundTask.Kind.lsp`, with what they are indexing) and Stop works.
+* **Discovery** (`LSPServers`): extension → ordered candidates; each is found on `ProcessRunner.which` (the login shell's PATH)
+  and its usual folders: rust-analyzer (`~/.cargo/bin`), gopls (`~/go/bin`), sourcekit-lsp and clangd (`/usr/bin`),
+  typescript-language-server (`~/.lsp-servers/bin`), zls (`/opt/homebrew/bin`), pyright-langserver then pylsp. A `/usr/bin`
+  Xcode shim or a `~/.cargo/bin` rustup proxy counts only if it works (`xcrun --find`, `--version`). No server: the error
+  names the install command for the learner and says `code` and `symbols` still work; the app never installs anything.
+* **Security.** A language server runs project code (rust-analyzer: build scripts and proc macros; gopls: `go list`;
+  clangd and the TypeScript server: the project's configuration and plugins), so a cloned repository could get code
+  execution just because the mentor looked at it. The first use of a server in a folder is therefore a question
+  (`PermissionExtension.lspGate`, before the risk switch, chained like the other gates): allow in this folder
+  (`AppSettings.lspApproved[folder]`, in the app, never in the folder), allow for this lesson, or no (the decline holds for
+  the lesson). `LSPTool.run` checks the same approval itself, because sub-agents' calls skip the extension host: a
+  sub-agent, or a headless run without the gate, gets an error saying so instead of starting anything. `--approve-lsp` on
+  `--cli --tool lsp` approves for that process only and writes nothing. The child's environment is
+  `ProcessRunner.environment()`, as the shell's. Hover text, diagnostics and symbol names come from the project's code: data,
+  never instructions (the tool says so, as the app guide does for all output).
+* **The tool.** Actions `definition`, `references`, `hover`, `type_definition`, `implementation`, `document_symbols`,
+  `workspace_symbols`, `diagnostics`, `incoming_calls`, `outgoing_calls`, `rename_preview` (the edits as `- old / + new`
+  lines; nothing is applied). Arguments are `file`, `line` and `symbol`: `LSPPosition.resolve` finds the whole-word symbol on
+  the line (UTF-16 columns; `column` only picks among several; a qualified `a::b` puts the cursor on `b`; a line off by up to
+  five finds the nearest line that has it and says so). Results are `path:line  source line`, sorted, de-duplicated, relative
+  to the folder (outside it `~/…`), capped (`limit`, 40 by default). While the server indexes, a call waits at most 20 s
+  (`LSPTool.indexWait`) for it to settle, asks anyway and appends "still indexing (n%)" with the partial answer;
+  `ContentModified` / `ServerCancelled` are retried. `diagnostics` waits for the server's publish after the sync (an empty
+  first publish is believed only after 1.5 s of quiet and while no progress is in flight).
+* **Tested** against a scripted fake server (framing, server requests, progress, version-matched diagnostics, timeouts,
+  crash and restart, idle stop, the limit, the gate) and, skipped when absent, gopls, clangd and sourcekit-lsp on small
+  temp projects (`LSPTests`). Measured here: gopls 0.6-1.3 s a question after start, sourcekit-lsp ~4 s for a first
+  diagnostic, clangd ~2 s.
+
 ## Background tasks panel
 `BackgroundTasks.snapshot()` gathers every background task into one list each second for `TasksView` (the sidebar's
 Tasks page, and the side panel's Tasks tab, which shows the open lesson's tasks by default):
 * `ShellJobs.all()`: commands and servers, with start and end, exit code, PID and URL;
 * `SubAgentCenter.runs`: sub-agents, with type, model, steps, tokens and restarts;
 * `MCPHub.all`: MCP servers, with phase, start, PID, restarts and the last error;
+* `LSPHub.all`: language servers (kind `lsp`), the same and what they are indexing;
 * `AppJobs`: the app's own `Runtime.job` and `Runtime.call` work. The wrappers record when a job was asked for, when it
   started (so the time it waited) and how it ended; the last 40 finished are kept.
 
@@ -1038,6 +1094,7 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
+| LSP tool (Claude Code's `LSP`) | `lsp` | the compiler's view through the file's language server (rust-analyzer, gopls, sourcekit-lsp, clangd, TypeScript, zls, pyright/pylsp where installed): definition, references, hover, type definition, implementation, document and workspace symbols, diagnostics, call hierarchy, rename preview (applies nothing); position by `line` + `symbol`; deferred in the code mentor, sub-agents too; the first use of a server in a folder asks the learner (stored in the app), a sub-agent can't ask; supervised, at most 3, idle 10 min |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |
 | /command | `ProjectCommands` | a lesson's own commands only: the follow-ups (`/simpler`, `/quiz`…) and mode switches (`/socratic`…); no project or user command files |
 | MCP (`mcp__server__tool`, `.mcp.json`) | `MCPHub`, `MCPTool` | stdio and streamable HTTP; app-level servers (Settings → MCP) and the project's `.mcp.json`, which needs the user's approval of each server's exact config; deferred, one line per tool, `load_tools` by tool or server; every agent; every call asked (per-server "always allow" per folder); supervised (restart on crash, end with the app), stderr in Settings. Not yet: resources, prompts, OAuth, sub-agents, the old SSE transport |
