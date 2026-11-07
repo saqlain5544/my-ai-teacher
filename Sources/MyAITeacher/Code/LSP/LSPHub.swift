@@ -15,13 +15,21 @@ final class LSPInstance: @unchecked Sendable {
         var server: String
         var activity: String?
     }
+    /// Why a server ended when it wasn't a crash: the learner pressed Stop, it made room for another, it sat idle, or the
+    /// folder's write fence changed under it. Only idle is started again by a call that was waiting on it.
+    enum StopReason: String, Sendable { case user, evicted, idle, fenced }
     let spec: LSPServerSpec
     let executable: String
+    /// The `WriteFence` profile it runs under (the code mentor's, while a project is open); nil: unfenced.
+    let fence: String?
     let folder: URL
     let log = MCPLog()
     private struct State {
         var phase: Phase = .idle
         var connection: LSPConnection?
+        /// From just after launch, before `initialize` answers: what quitting must end.
+        var starting: LSPConnection?
+        var stopReason: StopReason?
         var restarts = 0
         var lastError: String?
         var startedAt: Date?
@@ -40,16 +48,16 @@ final class LSPInstance: @unchecked Sendable {
     private let backoff: Backoff
     let idleSeconds: TimeInterval
 
-    init(spec: LSPServerSpec, executable: String, folder: URL, hub: LSPHub?, idleSeconds: TimeInterval = LSPHub.idleSeconds,
+    init(spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil, hub: LSPHub?, idleSeconds: TimeInterval = LSPHub.idleSeconds,
          backoff: Backoff = Backoff(initial: 1, max: 8)) {
-        self.spec = spec; self.executable = executable; self.folder = folder; self.hub = hub
+        self.spec = spec; self.executable = executable; self.folder = folder; self.fence = fence; self.hub = hub
         self.idleSeconds = idleSeconds; self.backoff = backoff
     }
 
     var status: Status {
         let s = state.get()
         let a = s.connection?.activity
-        return Status(phase: s.phase, pid: s.connection.map { $0.transport.pid }.flatMap { $0 > 0 ? $0 : nil }, restarts: s.restarts,
+        return Status(phase: s.phase, pid: (s.connection ?? s.starting).map { $0.transport.pid }.flatMap { $0 > 0 ? $0 : nil }, restarts: s.restarts,
                       lastError: s.lastError, startedAt: s.startedAt, lastUsed: s.lastUsed, server: s.serverName.isEmpty ? spec.title : s.serverName,
                       activity: a.map { $0.title + ($0.percentage.map { " \($0)%" } ?? "") })
     }
@@ -61,7 +69,7 @@ final class LSPInstance: @unchecked Sendable {
     func start() async {
         let go = state.mutate { s -> Bool in
             guard [.idle, .failed, .stopped].contains(s.phase), !s.quitting else { return false }
-            s.phase = .starting; s.lastError = nil; s.restarts = 0; s.generation += 1; s.idleStop = false; s.startError = nil; s.lastUsed = Date()
+            s.phase = .starting; s.lastError = nil; s.restarts = 0; s.generation += 1; s.idleStop = false; s.startError = nil; s.stopReason = nil; s.lastUsed = Date()
             return true
         }
         guard go else { return }
@@ -84,8 +92,13 @@ final class LSPInstance: @unchecked Sendable {
         }
         var env = ProcessRunner.environment()
         env["MYAITEACHER_LSP"] = "1"
-        let transport = LSPStdioTransport(executable: executable, args: spec.args, env: env, cwd: folder, log: log)
+        // Under the mentor's write fence while a project is open: build scripts, `cargo check` or `go list` run by the server
+        // can't change the learner's files or the locked tests. (Set here, not inherited: this runs in the supervisor's task.)
+        let (exe, args) = WriteFence.$profile.withValue(fence) { WriteFence.wrap(executable, spec.args) }
+        let transport = LSPStdioTransport(executable: exe, args: args, env: env, cwd: folder, log: log)
         let conn = LSPConnection(transport: transport, root: folder)
+        if state.get().quitting { return }
+        state.mutate { $0.starting = conn }
         let idle = Task { [weak self] in
             while !Task.isCancelled {
                 try? await Task.sleep(nanoseconds: UInt64(max(0.05, min(15, (self?.idleSeconds ?? 600) / 4)) * 1e9))
@@ -93,7 +106,7 @@ final class LSPInstance: @unchecked Sendable {
                 let s = self.state.get()
                 if s.phase == .ready, Date().timeIntervalSince(s.lastUsed) > self.idleSeconds {
                     self.log.note("idle for \(Int(self.idleSeconds)) s: stopping")
-                    self.state.mutate { $0.idleStop = true }
+                    self.state.mutate { $0.idleStop = true; $0.stopReason = .idle }
                     await conn.shutdown()
                     return
                 }
@@ -103,8 +116,9 @@ final class LSPInstance: @unchecked Sendable {
         try await withTaskCancellationHandler {
             do {
                 try conn.start()
+                if state.get().quitting { conn.terminateNow(); return }   // the app quit while this was launching
                 let name = try await conn.initialize(timeout: 90)
-                state.mutate { $0.connection = conn; $0.phase = .ready; $0.lastError = nil; $0.startedAt = Date(); if !name.isEmpty { $0.serverName = name } }
+                state.mutate { $0.connection = conn; $0.starting = nil; $0.phase = .ready; $0.lastError = nil; $0.startedAt = Date(); if !name.isEmpty { $0.serverName = name } }
                 log.note("ready: \(name.isEmpty ? spec.title : name)")
             } catch {
                 conn.close()
@@ -127,7 +141,7 @@ final class LSPInstance: @unchecked Sendable {
 
     private func ended(_ reason: ExitReason) {
         state.mutate { s in
-            s.connection = nil
+            s.connection = nil; s.starting = nil
             s.phase = reason.isCrash || s.startError != nil ? .failed : .stopped
             if let e = s.startError { s.lastError = e } else if reason.isCrash { s.lastError = reason.description }
         }
@@ -146,8 +160,9 @@ final class LSPInstance: @unchecked Sendable {
             let s = state.get()
             if s.phase == .ready, let c = s.connection, c.closedReason == nil { return c }
             if s.phase == .failed || s.phase == .stopped {
-                // A stop that raced the start (idle timeout, evicted for room): start again once.
-                if s.phase == .stopped, !s.quitting, s.lastError == nil, deadline.timeIntervalSinceNow > 5 { await start(); continue }
+                // An idle stop that raced this call: start again. Any other stop (Stop pressed, made room, fence changed) is final.
+                if s.phase == .stopped, !s.quitting, s.stopReason == .idle, deadline.timeIntervalSinceNow > 5 { await start(); continue }
+                if s.phase == .stopped, let why = s.stopReason, why != .idle { throw LSPError(Self.stopMessage(why, spec.title)) }
                 throw LSPError("The \(spec.title) language server couldn't start: \(s.lastError ?? "it stopped"). Its log is in the Tasks panel's server entry.")
             }
             try await Task.sleep(nanoseconds: 50_000_000)
@@ -159,19 +174,31 @@ final class LSPInstance: @unchecked Sendable {
     func perform<T>(_ body: (LSPConnection) async throws -> T) async throws -> T {
         do { return try await body(try await connection()) }
         catch let e as LSPError where e.isClosed {
+            // Stopped on purpose: say so; starting it again would undo the Stop.
+            if let why = state.get().stopReason, why != .idle { throw LSPError(Self.stopMessage(why, spec.title)) }
             log.note("call interrupted (\(e.message)); trying once more")
             return try await body(try await connection())
         }
     }
 
-    func stop() async {
+    static func stopMessage(_ why: StopReason, _ title: String) -> String {
+        switch why {
+        case .user: "The \(title) language server was stopped (Stop in the Tasks panel) while this was running. Ask again to start it."
+        case .evicted: "The \(title) language server was stopped to make room for another (at most \(LSPHub.maxRunning) run at once). Ask again."
+        case .fenced: "The \(title) language server was restarted because the project's write protection changed. Ask again."
+        case .idle: "The \(title) language server was stopped after sitting idle."
+        }
+    }
+
+    func stop(_ reason: StopReason = .user) async {
         let id = childID, running = ![.idle, .stopped, .failed].contains(state.get().phase)
         guard running else { return }
+        state.mutate { $0.stopReason = reason }
         await Runtime.supervisor("mcp")?.terminate(id)
     }
 
     func terminateNow() {
-        let c = state.mutate { s -> LSPConnection? in s.quitting = true; return s.connection }
+        let c = state.mutate { s -> LSPConnection? in s.quitting = true; return s.connection ?? s.starting }
         c?.terminateNow()
     }
 }
@@ -197,12 +224,14 @@ final class LSPHub: @unchecked Sendable {
 
     private static func key(_ folder: URL, _ id: String) -> String { folder.standardizedFileURL.path + "\n" + id }
 
-    func instance(_ spec: LSPServerSpec, executable: String, folder: URL) -> LSPInstance {
+    /// The instance for `folder` and `spec`. A different `fence` (a project opened, passed, or its tests unlocked) replaces
+    /// it: the running server was started under the old protection, so it is stopped and the next use starts one under the new.
+    func instance(_ spec: LSPServerSpec, executable: String, folder: URL, fence: String? = nil) -> LSPInstance {
         let k = Self.key(folder, spec.id)
         return instances.mutate { all in
-            if let i = all[k], i.executable == executable { return i }
-            if let old = all[k] { Task { await old.stop() } }
-            let i = LSPInstance(spec: spec, executable: executable, folder: folder, hub: self, idleSeconds: idleSeconds, backoff: backoff)
+            if let i = all[k], i.executable == executable, i.fence == fence { return i }
+            if let old = all[k] { Task { await old.stop(.fenced) } }
+            let i = LSPInstance(spec: spec, executable: executable, folder: folder, fence: fence, hub: self, idleSeconds: idleSeconds, backoff: backoff)
             all[k] = i
             return i
         }
@@ -216,7 +245,7 @@ final class LSPHub: @unchecked Sendable {
         guard others.count >= maxRunning else { return }
         for i in others.prefix(others.count - maxRunning + 1) {
             i.log.note("stopped to make room for \(instance.spec.title)")
-            await i.stop()
+            await i.stop(.evicted)
         }
     }
 
