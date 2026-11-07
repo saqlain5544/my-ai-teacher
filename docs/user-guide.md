@@ -249,6 +249,15 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
     every function's variables (what just changed is lit; names that share one object carry the same badge), and the
     output so far. Use Back/Next, the slider, or ← → when the card has focus. It steps into your own files too, so the
     mentor can walk you through your function with a real call. For other languages the mentor can write a stepper by hand.
+  * **A debugger for compiled programs.** For C, C++, Rust, Swift and Zig the mentor can run your program under lldb
+    and show the same stepper: your source, the line about to run, every function's variables and the call stack, at
+    each breakpoint or step (`next`, `step`, `finish`, `print`). When a program crashes it shows the signal in plain
+    words (a null pointer, a stack overflow, a bad address), the line, and the variables up your own call stack. It
+    asks what you expect first. The program must be built with debug symbols (`clang -g -O0`, `cargo build`,
+    `swift build`); if it isn't, the mentor tells you the command. The program runs under the same protection and
+    approval as a shell command: it can't write your files while a project is open. With Developer Mode off, macOS asks
+    an administrator to approve the debugger once in a while; to stop that, run `sudo DevToolsSecurity -enable` in
+    Terminal. Go uses Delve (`dlv`) when it is installed.
   * **Timings.** "Is a list slower than a set?" The mentor times both as the input grows and shows the curves with the
     growth each one fits (O(1), O(n), O(n log n)…); switch to a log scale to compare slopes.
   * **Growth.** Ask how code scales and the mentor times it at sizes up to a limit you can set (`scale`). Before the curve

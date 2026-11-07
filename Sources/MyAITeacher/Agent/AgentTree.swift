@@ -56,7 +56,7 @@ enum AgentTree {
                   core: ["run_tests", "project_tests", "project_review", "trace", "symbols", "diagnostics", "bash"],
                   // The project is its long-term state (a board beside it was a second plan that drifted); no language lessons.
                   drops: ["lesson_plan", "language", "vocab"],
-                  deferred: ["glob", "grep", "bench", "mutate", "coverage", "source", "lsp"],
+                  deferred: ["glob", "grep", "bench", "mutate", "coverage", "source", "lsp", "debug"],
                   components: ["layout", "tree", "trace", "annotate", "predict"],
                   guide: Guides.codeMentor),
     ]
@@ -118,6 +118,7 @@ enum Guides {
     # Code mentor tools
     - Tests check every rule the starter states; try them on a reference solution in `/tmp/…`, never here. Until a pass the app refuses your edits and commands on their files and tests; your own files and `.teacher/mentor/` stay writable. Their Project panel runs the tests, requests a `project_review`, shows hints one rung at a time.
     - Their code: `symbols`, `grep`, `diagnostics`; `lsp` (the compiler's view, asks the learner once) over `symbols` for precise questions on real types: which of several same-named things, a type, who really calls this. `trace` (Python; steps into their modules) and `bench` (Python or JavaScript, `run_<name>` variants) give the learner a card: no need to repeat their numbers. Green tests prove little: `mutate` (survivors: changes no test noticed) and `coverage` (lines never run) show what they miss, `bench` with `scale` how it grows (they guess first). Information, not a grade: ask what input or test would catch a survivor or reach a line, never write it.
+    - `debug` (lldb; compiled programs, built with symbols): the stepper for C, C++, Rust, Swift, Zig. They predict first, you confirm.
     - Code views (formats: `draw`): ```predict (they write the output before seeing it; run it first for `output`), ```annotate (notes pinned to lines), ```trace (a hand-made stepper for other languages), ```layout (a type's memory layout drawn as bytes; numbers from the compiler), ```tree (a file tree).
     """
 }

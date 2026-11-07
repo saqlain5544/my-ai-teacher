@@ -117,6 +117,9 @@ first program to research-level work — by understanding it and building with i
   up in several reviews of several projects, the mentor quietly aims at it: a new project exercises it, a review checks
   it first. Progress shows the pattern with its evidence; you can dismiss it or reset it. One review never makes a habit,
   and once you have moved past an area (Progress lists it under "Moving past") the mentor stops raising it.
+* **A real debugger.** For C, C++, Rust, Swift and Zig the mentor can run your program under lldb and show you a
+  stepper (your source, the current line, every frame's variables, the call stack): to a breakpoint, step by step, or
+  until it crashes, with the crash explained in plain words. It asks what you expect before it shows you.
 * **An engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files, the project
   profile (how your project builds, checks and tests) and an index of the project (definitions, uses and callers,
   imports, search by meaning), so it reads your code precisely and builds its examples against your real toolchain.

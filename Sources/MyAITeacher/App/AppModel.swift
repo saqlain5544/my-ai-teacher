@@ -329,6 +329,7 @@ final class AppModel: ObservableObject {
         sessions[id]?.stop()
         sessions[id]?.detach(deleted: true)
         ShellJobs.shared.stopAll(id)   // its servers and watchers
+        DebugSessions.shared.end(id)   // and a program held by the debugger
         // Its background sub-agents too: they run outside the turn, and would keep calling the model and editing files.
         for r in SubAgentCenter.shared.runs(in: id) where r.isRunning { r.stop() }
         undelivered[id] = nil

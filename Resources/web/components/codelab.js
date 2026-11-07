@@ -158,6 +158,17 @@
       catch (e) { return ctx.pre(n.props.output || e.message); }
     } });
 
+  R.defineTool({ name: 'debug', icon: 'play', tone: 'blue', title: 'Debugger',
+    summary: n => { const m = (n.props.result && n.props.result.meta) || {}; const last = m.steps && m.steps[m.steps.length - 1];
+      return m.steps ? m.steps.length + ' stop' + (m.steps.length === 1 ? '' : 's') + (last && last.exc ? ' · ' + last.exc : '') : 'compiled program'; },
+    open: n => !!(n.props.result && n.props.result.meta && n.props.result.meta.steps),
+    body(n, ctx) {
+      const m = (n.props.result && n.props.result.meta) || null;
+      if (!m || !m.steps) return n.props.output ? ctx.pre(n.props.output) : '';
+      try { return stepper(m, ctx, 'dbg' + ctx.hash(n.props.callId || JSON.stringify(m.files))); }
+      catch (e) { return ctx.pre(n.props.output || e.message); }
+    } });
+
   // ── Annotate ────────────────────────────────────────────────────────────
   /** "3", 3, "3-5", [3, 5], "3,7" → the line numbers a note covers. */
   function range(v) {
