@@ -266,6 +266,7 @@ struct LessonInfoButton: View {
         Button { show.toggle() } label: { Label("Lesson info", systemImage: "info.circle") }
             .help("Lesson stats")
             .popover(isPresented: $show, arrowEdge: .bottom) { LessonInfoView(session: session).frame(width: 340) }
+            .onChange(of: session.showContext) { _, on in if on { show = true; session.showContext = false } }   // `/context`
     }
 }
 
@@ -294,8 +295,27 @@ struct LessonInfoView: View {
                 row("Folder", session.services.workspace.name)
             }
             .font(.callout)
+            contextCard
         }
         .padding(16)
+    }
+
+    /// `/context`: where the next request's tokens go, counted without a model call.
+    private var contextCard: some View {
+        let r = session.contextReport()
+        return VStack(alignment: .leading, spacing: 6) {
+            Divider()
+            Text("Context").font(.subheadline.weight(.semibold))
+            Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 4) {
+                ForEach(r.fixed + r.history, id: \.name) { p in
+                    row(p.name, Composer.short(p.tokens) + (r.total > 0 ? "  (\(p.tokens * 100 / r.total)%)" : ""))
+                }
+            }
+            ForEach(r.lines, id: \.self) { Text($0).font(.caption).foregroundStyle(.secondary) }
+            if let c = r.lastCompaction { Text(c).font(.caption).foregroundStyle(.secondary) }
+            Text("`/compact [focus]` summarises now.").font(.caption2).foregroundStyle(.tertiary)
+        }
+        .font(.callout)
     }
     private func row(_ k: String, _ v: String) -> some View {
         GridRow {

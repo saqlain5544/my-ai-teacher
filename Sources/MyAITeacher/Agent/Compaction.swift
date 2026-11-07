@@ -12,13 +12,13 @@ enum Compaction {
     /// The messages a summary should replace: from just after the previous compaction point to the start of the learner
     /// turn where the verbatim tail (`keepShare` of the budget, in script-aware tokens) begins. Nil when there is nothing
     /// worth summarising.
-    static func summaryRange(_ msgs: [ChatMessage], compactedThrough: String?, budget: Int) -> Range<Int>? {
+    static func summaryRange(_ msgs: [ChatMessage], compactedThrough: String?, budget: Int, keep: Double = keepShare) -> Range<Int>? {
         // Counted in tokens: counting characters (÷4) kept 4× too much of a CJK lesson, so the summary could never bring
         // it back under the budget.
         var keepTokens = 0, cut = msgs.count
         for i in msgs.indices.reversed() {
             keepTokens += ContextPolicy.estimateTokens([msgs[i]])
-            if Double(keepTokens) > Double(budget) * keepShare { cut = i; break }
+            if Double(keepTokens) > Double(budget) * keep { cut = i; break }
         }
         // The verbatim part starts with a learner message, so no tool result is separated from its call.
         while cut < msgs.count && (msgs[cut].role != .user || msgs[cut].isToolResultOnly) { cut += 1 }
@@ -42,7 +42,7 @@ enum Compaction {
     /// `focus`: what the learner asked the summary to keep.
     static func summarise(_ msgs: [ChatMessage], previous: String?, state: String, client: LLMClient, model: String,
                           sessionID: String, focus: String? = nil) async -> Summary {
-        var summary = previous
+        var summary = previous.map(ContextFacts.strip)
         var usage: [Usage] = []
         for chunk in ContextPolicy.chunks(msgs, maxChars: chunkChars) {
             let req = LLMRequest(model: model, system: "You write precise, dense summaries of tutoring sessions.",
@@ -75,8 +75,11 @@ enum Compaction {
         """
         Summarise this part of a tutoring session so the lesson can continue seamlessly. \
         \(previous.map { "Merge with the previous summary:\n\($0)\n\n" } ?? "")
-        Use these headings: Goal / What was covered / Learner's understanding & misconceptions / Tests & results / \
-        Decisions & preferences / Files & artifacts / Course state / Next steps. Be specific (formulas, examples, scores).\
+        Use these headings: Goal / Decisions & why / Open tasks / What was covered / Learner's understanding & misconceptions / \
+        Errors & how they were solved / Tests & status / Files & artifacts / Course state / Next steps. Be specific (formulas, \
+        examples, scores). Copy file paths, commands, identifiers and error messages exactly, never paraphrased: the lesson \
+        continues from this text alone. Keep every misconception the learner showed and whether it is resolved. The app \
+        appends its own exact section (todo list, changed files, running jobs, test result): don't copy those lists.\
         \(state.isEmpty ? "" : "\n\nActive course state from the app (copy it under \"Course state\" verbatim; \"Next steps\" must agree with its Focus and Next):\n" + state)\
         \(focus.flatMap { $0.isEmpty ? nil : "\n\nThe learner asked the summary to keep in particular: " + $0 } ?? "")
 

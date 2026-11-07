@@ -163,6 +163,8 @@ struct Conversation: Codable, Sendable, Identifiable, Hashable {
     var loadedTools: [String]?
     /// Microcompaction epoch: blocks up to this message are trimmed in requests.
     var trimmedThrough: String?
+    /// Files the agent wrote or edited in this lesson, oldest first (absolute paths; the last 300): a summary carries them.
+    var touchedFiles: [String]?
     /// The model refused a request over an attached image (a text-only model): from then on images travel as a note.
     var imagesUnsupported: Bool?
 }

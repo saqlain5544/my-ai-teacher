@@ -55,6 +55,9 @@ struct ToolContext: Sendable {
     var codeAgent = false
     /// The code agent's checkpoint key for this turn: sub-agents working in the lesson's folder back files up under it.
     var checkpointTurn: String? = nil
+    /// The teacher's tool results the model is sent intact right now (set for `read`): a repeat read of an unchanged file
+    /// may answer "unchanged" only when its earlier result is among them. Nil (sub-agents, the CLI): always the file.
+    var liveResults: Set<String>? = nil
 }
 
 protocol Tool: Sendable {

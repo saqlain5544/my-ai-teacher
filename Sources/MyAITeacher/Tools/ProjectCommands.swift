@@ -42,7 +42,9 @@ enum ProjectCommands {
     static func lessonSuggestions(current: TeachingMode) -> [Suggestion] {
         quickPrompts.map { Suggestion(name: $0.name, detail: $0.detail, source: "follow-up") }
             + modeCommands.filter { $0.mode != current }.map { Suggestion(name: $0.name, detail: "Switch to \($0.mode.title) mode", source: "mode") }
-            + [Suggestion(name: "review", detail: "Review the uncommitted changes (or `/review <branch>`) with what they reach", source: "work")]
+            + [Suggestion(name: "review", detail: "Review the uncommitted changes (or `/review <branch>`) with what they reach", source: "work"),
+               Suggestion(name: "compact", detail: "Summarise the lesson now (`/compact keep the parser`)", source: "context"),
+               Suggestion(name: "context", detail: "Where the context goes", source: "context")]
     }
 
     /// A command in the composer's `/` menu.
