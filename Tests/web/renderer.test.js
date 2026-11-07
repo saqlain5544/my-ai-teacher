@@ -1680,6 +1680,41 @@
     ok($('[data-act="bench-log"]', card()).textContent === 'Linear scale', 'log scale on');
   });
 
+  test('bench card with a claim: the learner guesses first, then the curve and the evidence show', async () => {
+    const claim = 'looks like O(n²) (high confidence: 5 sizes over 100×, log-log slope 2.00 ± 0.01, scatter ±2%)';
+    const meta = { sizes: [100, 1000, 10000], series: [{ name: 'pairs', times: [1e-5, 1e-3, 0.1], fit: 'O(n²)', slope: 2, confidence: 'high', claim }] };
+    const a = A([{ kind: 'toolUse', id: 'bn2', name: 'bench', input: { language: 'python', code: '…' } }]);
+    T.reset([U('q'), a, R('bn2', 'bench', 'Timings…', { meta })], {});
+    const card = () => $('[data-tool-id="bn2"]');
+    ok(card().textContent.includes('Before you look') && $$('.bench-svg', card()).length === 0, 'asks first, no curve yet');
+    ok(!card().textContent.includes('looks like'), 'the evidence is hidden until they guess');
+    click($$('[data-act="bench-guess"]', card()).find(b => b.getAttribute('data-guess') === 'O(n)'));
+    ok($$('.bench-svg path', card()).length === 1 && card().textContent.includes('You guessed') && card().textContent.includes('looks like O(n²)'), 'curve, their guess against the measurement, and the evidence');
+  });
+
+  test('bench card: a tied or low-confidence fit never tells the learner they were wrong; a refused fit shows its reason', async () => {
+    const mk = (id, series) => A([{ kind: 'toolUse', id, name: 'bench', input: { language: 'python', code: '…' } }]);
+    const base = { sizes: [100, 1000, 10000], times: [1e-5, 1e-3, 0.1] };
+    const tied = Object.assign({ name: 'sorted', fit: 'O(n log n)', slope: 1.1, confidence: 'medium', claim: 'looks like O(n log n) (medium…; O(n) fits about as well)', alsoFits: ['O(n)'] }, { times: base.times });
+    T.reset([U('q'), mk('bt1'), R('bt1', 'bench', 'Timings…', { meta: { sizes: base.sizes, series: [tied] } })], {});
+    const card = () => $('[data-tool-id="bt1"]');
+    click($$('[data-act="bench-guess"]', card()).find(b => b.getAttribute('data-guess') === 'O(n)'));
+    ok(card().textContent.includes('can\'t separate') && !card().textContent.includes('What in the code makes the work grow like that'), 'a tied guess is not called wrong: ' + card().textContent.slice(0, 260));
+    const refused = { name: 'x', times: [1e-3, null, null], fit: null, slope: null, confidence: 'none', claim: 'too few sizes timed (1 of the 4 a fit needs); no growth claim' };
+    T.reset([U('q'), mk('bt2'), R('bt2', 'bench', 'Timings…', { meta: { sizes: base.sizes, series: [refused] } })], {});
+    ok($('[data-tool-id="bt2"]').textContent.includes('too few sizes timed') && $$('.bench-svg', $('[data-tool-id="bt2"]')).length === 1, 'the reason shows beside the curve, with no guess gate');
+  });
+
+  test('mutation card: survivors name the line, show was/now and ask a question; coverage card lists never-run ranges', async () => {
+    const meta = { score: 0.5, killed: 3, timedOut: 0, survived: 1, invalid: 0, tried: 4, available: 9, survivors: [{ file: 'calc.py', line: 12, function: 'is_adult', kind: '>= → >', was: 'return age >= 18', now: 'return age > 18', status: 'survived' }] };
+    const a = A([{ kind: 'toolUse', id: 'mu1', name: 'mutate', input: {} }, { kind: 'toolUse', id: 'cv1', name: 'coverage', input: {} }]);
+    T.reset([U('q'), a, R('mu1', 'mutate', 'Mutation testing…', { meta }),
+      R('cv1', 'coverage', 'Coverage…', { meta: { tool: 'go test', percent: 60, files: [{ path: 'a.go', percent: 60, covered: 3, total: 5, missing: [[4, 5], [9, 9]] }] } })], {});
+    const mu = $('[data-tool-id="mu1"]'), cv = $('[data-tool-id="cv1"]');
+    ok(mu.textContent.includes('calc.py:12') && mu.textContent.includes('return age > 18') && mu.textContent.includes('what test would notice') && mu.textContent.includes('3 of 4'), 'survivor card: ' + mu.textContent.slice(0, 200));
+    ok(cv.textContent.includes('a.go') && cv.textContent.includes('never run: 4–5, 9') && cv.textContent.includes('60%'), 'coverage card: ' + cv.textContent.slice(0, 200));
+  });
+
   test('tests card: failures open with their output; Run again asks the app and updates in place', async () => {
     const meta = { passed: 1, total: 2, tests: [{ name: '01_push.sh', passed: true, seconds: 0.2, output: 'ok' }, { name: '02_pop.sh', passed: false, seconds: 0.3, output: 'expected 3, got 2', cases: { passed: 0, failed: 1 } }] };
     const a = A([{ kind: 'toolUse', id: 'rt1', name: 'run_tests', input: { filter: 'pop' } }]);

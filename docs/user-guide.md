@@ -251,6 +251,18 @@ In **Code mentor** mode, ask for a project ("I know Python classes; stretch me")
     mentor can walk you through your function with a real call. For other languages the mentor can write a stepper by hand.
   * **Timings.** "Is a list slower than a set?" The mentor times both as the input grows and shows the curves with the
     growth each one fits (O(1), O(n), O(n log n)…); switch to a log scale to compare slopes.
+  * **Growth.** Ask how code scales and the mentor times it at sizes up to a limit you can set (`scale`). Before the curve
+    shows you pick the growth you expect, then the card shows it with its evidence: "looks like O(n²)" with the log-log
+    slope, how many sizes and how wide a range, and a confidence. With too few sizes, too narrow a range or timings too
+    noisy to separate growth classes, it says so instead of guessing.
+  * **How good are your tests?** Green tests prove little. `mutate` makes small changes to your (non-test) code in a
+    scratch copy, one at a time (`<` to `<=`, `==` to `!=`, `+` to `-`, a number off by one, a flipped condition, a dropped
+    return or call) and runs the project's tests on each. A change every test still passes is a *survivor*: something no
+    test noticed. The card lists each with `file:line` and the line before and after, and asks what input would behave
+    differently. Up to 20 mutants by default (60 at most), four at a time, a time limit, Stop works, and your folder is only
+    read. It needs a green suite first. The score is information; it never changes pass, fail or mastery. `coverage` shows
+    which lines the tests never run, using the toolchain's own coverage (Go, SwiftPM, cargo-llvm-cov, node/jest/vitest,
+    Python with coverage.py or the standard library's `trace`); a tool that is not installed is named, never installed.
   * **Annotated code.** A walk-through with numbered notes pinned to the lines; click a note to light its lines.
   * **Predict the output.** Read the code, type what it prints, then **Check**: your lines are compared with what it
     really printed (there's no Run button on these). **Why does it print that?** asks the mentor.

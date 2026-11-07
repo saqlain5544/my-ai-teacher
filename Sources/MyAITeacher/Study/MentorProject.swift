@@ -230,6 +230,27 @@ enum ProjectStore {
         if let d = try? JSONSerialization.data(withJSONObject: manifest, options: [.sortedKeys]) { try? d.write(to: manifestURL(ws), options: .atomic) }
         if load(ws) != nil { mutate(ws) { $0.snapshotAt = Date(); $0.snapshotWhy = why } }
     }
+    /// Every regular file under `dir`, relative to it (hidden folders included: the tests are what is asked for).
+    static func walk(_ dir: URL) -> [String] {
+        guard let e = FileManager.default.enumerator(at: dir, includingPropertiesForKeys: [.isRegularFileKey]) else { return [] }
+        let root = dir.resolvingSymlinksInPath().path
+        var out: [String] = []
+        while let u = e.nextObject() as? URL {
+            let p = u.resolvingSymlinksInPath().path
+            if (try? u.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true, p.hasPrefix(root + "/") { out.append(String(p.dropFirst(root.count + 1))) }
+        }
+        return out.sorted()
+    }
+
+    /// A fingerprint of the project's files and tests as they are now (dates and sizes, no reads): what a stored
+    /// measurement was made on.
+    static func digest(_ ws: Workspace) -> String {
+        let rels = projectFiles(ws).map { ($0, ws.url.appendingPathComponent($0)) } + walk(ws.testsDir).map { (".teacher/tests/" + $0, ws.testsDir.appendingPathComponent($0)) }
+        var h: UInt64 = 5381
+        for (rel, u) in rels { for b in (rel + "|" + stamp(u)).utf8 { h = (h &* 33) &+ UInt64(b) } }
+        return String(h, radix: 16)
+    }
+
     private static func stamp(_ u: URL) -> String {
         let a = (try? FileManager.default.attributesOfItem(atPath: u.path)) ?? [:]
         return "\(((a[.modificationDate] as? Date)?.timeIntervalSince1970 ?? 0))/\((a[.size] as? NSNumber)?.intValue ?? 0)"

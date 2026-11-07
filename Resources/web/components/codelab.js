@@ -277,6 +277,7 @@
   });
 
   // ── bench: timings over input sizes ─────────────────────────────────────
+  const MODELS = ['O(1)', 'O(log n)', 'O(n)', 'O(n log n)', 'O(n²)', 'O(n³)'];
   const COLORS = ['#2f6fec', '#e5484d', '#30a46c', '#f76b15', '#8e4ec6', '#0d9488'];
   const fmtN = v => v >= 1e6 ? (v / 1e6) + 'M' : v >= 1e3 ? (v / 1e3) + 'k' : String(v);
   const fmtT = s => { const ms = s * 1000; return ms >= 100 ? ms.toFixed(0) + ' ms' : ms >= 1 ? ms.toFixed(1) + ' ms' : (ms * 1000).toFixed(ms * 1000 >= 10 ? 0 : 1) + ' µs'; };
@@ -305,17 +306,37 @@
   }
 
   R.defineTool({ name: 'bench', icon: 'activity', tone: 'green', title: 'Timings',
-    summary: n => { const m = (n.props.result && n.props.result.meta) || {}; return (m.series || []).map(s => s.name + (s.fit ? ' ' + s.fit : '')).join(' · ') || (n.props.input && n.props.input.language) || ''; },
+    summary: n => { const m = (n.props.result && n.props.result.meta) || {}; return (m.series || []).map(s => s.name + (s.fit && !s.claim ? ' ' + s.fit : '')).join(' · ') || (n.props.input && n.props.input.language) || ''; },
     open: n => !!(n.props.result && n.props.result.meta && n.props.result.meta.series),
     body(n, ctx) {
       const m = (n.props.result && n.props.result.meta) || null;
       if (!m || !m.series) return n.props.output ? ctx.pre(n.props.output) : '';
       const key = 'bn' + ctx.hash(n.props.callId || JSON.stringify(m));
-      const log = !!S(key, { log: false }).log;
+      const st = S(key, { log: false, guess: null, shown: false });
+      const claimed = m.series.filter(x => x.fit && x.claim);
+      // Attempt first: with a claim to compare against, the curve and the fit wait for the learner's guess (or a skip).
+      if (claimed.length && !st.shown) {
+        return '<div class="bench" data-key="' + key + '"><div class="bench-ask"><b>Before you look: how will ' + ctx.esc(claimed[0].name) + ' grow as n gets bigger?</b>' +
+          '<div class="bench-guess">' + MODELS.map(g => '<button class="btn mini" data-act="bench-guess" data-guess="' + ctx.esc(g) + '">' + ctx.esc(g) + '</button>').join('') +
+          '<button class="btn link" data-act="bench-guess" data-guess="">Just show me</button></div></div></div>';
+      }
+      const log = !!st.log;
+      const verdict = claimed.map(x => '<div class="bench-fit ' + ctx.esc(x.confidence || '') + '">' + ctx.esc(x.claim || '') + '</div>').join('');
+      // Only a firm, untied fit can say the learner was wrong; otherwise the data can't separate the candidates.
+      const c0 = claimed[0] || {}, tied = [c0.fit].concat(c0.alsoFits || []);
+      const you = st.guess && claimed.length ? '<div class="bench-you">You guessed <b>' + ctx.esc(st.guess) + '</b>' + (c0.fit === st.guess ? (c0.confidence === 'low' ? ': the closest fit, though these timings are too rough to be sure.' : ': the measurements agree.')
+        : tied.indexOf(st.guess) >= 0 || c0.confidence === 'low' ? ': the data can\'t separate it from <b>' + ctx.esc(c0.fit) + '</b> (' + ctx.esc(c0.confidence === 'low' ? 'low confidence' : 'they fit about equally') + '). What in the code would make the work grow like each?'
+        : '; the measurements say <b>' + ctx.esc(c0.fit) + '</b>. What in the code makes the work grow like that?') + '</div>' : '';
+      // A refused fit has no claim to hide: show the curve and why nothing is claimed.
+      const refused = m.series.filter(x => !x.fit && x.claim).map(x => '<div class="bench-fit none">' + ctx.esc(x.name) + ': ' + ctx.esc(x.claim) + '</div>').join('');
       return '<div class="bench" data-key="' + key + '"><div class="bench-legend">' + m.series.map((s, i) => '<span><i data-c="' + COLORS[i % COLORS.length] + '"></i>' + ctx.esc(s.name) +
         (s.fit ? ' <b>' + ctx.esc(s.fit) + '</b>' : '') + '</span>').join('') +
-        '<button class="btn link" data-act="bench-log">' + (log ? 'Linear scale' : 'Log scale') + '</button></div>' + benchChart(m, log) + '</div>';
+        '<button class="btn link" data-act="bench-log">' + (log ? 'Linear scale' : 'Log scale') + '</button></div>' + benchChart(m, log) + you + verdict + refused + '</div>';
     } });
+  R.registerAction('bench-guess', (b, e, ctx) => {
+    const box = b.closest('.bench'); const s = S(box.getAttribute('data-key'), { log: false }); s.guess = b.getAttribute('data-guess') || null; s.shown = true;
+    const card = b.closest('[data-tool-id]'); if (card && ctx.refreshCard) ctx.refreshCard(card.getAttribute('data-tool-id'));
+  });
   R.registerAction('bench-log', (b, e, ctx) => {
     const box = b.closest('.bench'); const s = S(box.getAttribute('data-key'), { log: false }); s.log = !s.log;
     const card = b.closest('[data-tool-id]'); if (card && ctx.refreshCard) ctx.refreshCard(card.getAttribute('data-tool-id'));
@@ -392,6 +413,10 @@
     .bench-legend { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; font-size: .86em; margin-bottom: 4px; }
     .bench-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
     .bench-legend .btn { margin-left: auto; }
+    .bench-ask { display: grid; gap: 8px; }
+    .bench-guess { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+    .bench-fit, .bench-you { font-size: .88em; margin-top: 6px; }
+    .bench-fit.low { color: var(--muted); }
     .bench-svg { width: 100%; height: auto; max-height: 300px; }
     .bench-svg .grid { stroke: var(--border); stroke-width: 1; }
     .bench-svg .tick { fill: var(--muted); font-size: 11px; }

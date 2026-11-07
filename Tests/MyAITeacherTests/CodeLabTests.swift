@@ -99,7 +99,7 @@ final class CodeLabTests: XCTestCase {
                                             "code": "def setup(n):\n    return list(range(n))\ndef run_sum(x):\n    sum(x)\ndef run_len(x):\n    len(x)\n"], c)
         XCTAssertFalse(py.isError, py.text)
         XCTAssertEqual(py.meta?["series"]?.array?.compactMap { $0["name"]?.string }, ["sum", "len"])
-        XCTAssertTrue(py.text.contains("Growth: sum ≈"), py.text)
+        XCTAssertTrue(py.text.contains("Growth: sum: ") && py.text.contains("no growth claim"), "three sizes over 4× support no claim: \(py.text)")
         let missing = try await BenchTool().run(["language": "python", "code": "def run(x):\n    pass\n"], c)
         XCTAssertTrue(missing.isError && missing.text.contains("setup(n)"), missing.text)
         // A variant's own input, built outside the timer: the set for run_set, not a set built in every timed call.

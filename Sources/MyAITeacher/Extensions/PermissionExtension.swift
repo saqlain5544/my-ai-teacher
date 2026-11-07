@@ -244,7 +244,7 @@ final class PermissionExtension: AgentExtension {
     nonisolated static func runsTests(_ tool: Tool, _ input: JSON) -> Bool? {
         let action = input["action"]?.string ?? ""
         switch tool.name {
-        case "run_tests": return true
+        case "run_tests", "mutate", "coverage": return true
         case "project_tests": return ["set", "run"].contains(action)
         case "project_review": return action == "start"
         default: return nil

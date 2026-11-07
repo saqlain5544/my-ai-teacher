@@ -547,6 +547,29 @@ approvals, hooks and MCP cover every agent.
   (tests, files changed since the baseline by date and size, open findings) and nudges after tests are written. Code
   mentor mode also gets the coding tools (`symbols`, `diagnostics`, `project_tests`, `project_review` core), syntax
   checks after its writes, per-turn checkpoints of its scaffolding, and the project profile in its prompt.
+* **Proving how good the tests and code are** (`Code/Mutation.swift`, `Tools/MutateTool.swift`, `Tools/CoverageTool.swift`,
+  `CodeLab.assess` in `Tools/CodeLabTools.swift`). Three measurements, all information, none a gate: mutation score never
+  touches a review's pass, a round's verdict or mastery (`project_review` start only quotes a one-line summary of the last run,
+  and only when `ProjectStore.digest` shows the files and tests are as they were).
+  * `mutate`: a scratch copy (`Scratch`, `aiteacher-scratch-*` under the temp folder, swept when older than 3 h; gitignore-aware
+    listing, never `.teacher`, `.git`, `node_modules` (linked, read-only), `target`, `.build`; plus `.teacher/tests`) in as many
+    as four worker copies. `CodeMask` blanks comments, strings, template literals, docstrings, char literals and JS regexes
+    byte for byte across lines, so an operator is only ever found in code; `Mutator` makes one mutant per candidate (spaced
+    `<`/`<=`/`>`/`>=`/`==`/`!=`/`&&`/`||`/`+`/`-`, `and`/`or`, true/false, an integer ±1, a negated `if`/`while`, an early
+    `return` in dynamic languages, a dropped call statement) and `select` spreads them across functions (round-robin, kinds
+    interleaved), the learner's changed lines first (`CodeImpact.parse` of the review diff). The baseline runs first in the copy
+    and must be green. Each mutant runs the registered command (the learner's folder path swapped for the copy's) with a timeout
+    from the baseline (3× + 5 s, 10–120 s) and the whole run a budget (300 s, max 900). Exit 0 survives, a timeout counts as caught,
+    and a failure counts as killed only on positive evidence of a failing test: a build or syntax error is `invalid`, a crash, exit 127/137/139 or a port clash (`EADDRINUSE`) is `errored`, and both are left out of the score. Python runs with `PYTHONDONTWRITEBYTECODE=1` (a `.pyc` keyed on whole-second mtime and size would judge a same-size mutant on its predecessor's code); a mutant starts only with time for its full limit; the digest is taken before the copy; a `node_modules` with links resolving outside it, files the copy left out (listed by reason) and a 50 MB cap are reported, not blamed on the learner. `CodeMask` returns nil for a file it can't read confidently (unterminated string, C++ raw string). It joins
+    `MentorGuard.commands` (the same `WriteFence`) and the `tests` grant (`PermissionExtension.runsTests`). Stop cancels the task
+    group: `ProcessRunner` ends each process tree and the scratch folder goes in a `defer`.
+  * `coverage`: the same scratch copy, the toolchain's own numbers and nothing installed: `go test -coverprofile`, `swift test
+    --enable-code-coverage` (its JSON), `cargo llvm-cov` when installed, node's `--experimental-test-coverage` and jest/vitest/c8
+    tables, coverage.py when importable and otherwise stdlib `trace --count --missing`. Per-file percent, never-run ranges (with
+    the enclosing function from `SymbolsTool.outline`); a missing tool is named in the result.
+  * `bench` growth: `CodeLab.assess` wraps `fit` with evidence (log-log slope ± its standard error, scatter, sizes and span) and a
+    confidence, and refuses a claim under four timed sizes, under a tenfold span, with timings all under 20 µs (except a flat "O(1)",
+    capped at low) or with scatter beyond about ±35%. The card hides the curve until the learner picks a growth class.
 * **Learning a language or library from its source** (`Tools/SourceTool.swift`): `source` resolves a library by name
   to where it lives on this Mac — Zig's std (`zig env`, via `Toolchains`), Rust's std/core/alloc (`rustc --print
   sysroot` + rust-src), Go's GOROOT/src and module cache, Python's stdlib and any importable module (`importlib`;
@@ -787,7 +810,7 @@ root ── files (read, write, batch edit, ls), web, load_tools, skill; sub-age
     ├── tutor · socratic · explain · quiz · exam · eli5 · research   (instructions differ, tools don't)
     ├── language ── language, vocab; listen, gloss, dialogue, conjugation, tones, reading, correction
     │               skills: conversation-practice, grammar-drills, pronunciation-coaching
-    └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, source, glob, grep, code (runtime)
+    └── code-mentor ── run_tests, project_tests, project_review, trace, symbols, diagnostics, bash; bench, mutate, coverage, source, lsp, glob, grep, code (runtime)
                        skills: debugging-coaching, code-review-feedback, project-scaffolding,
                                tdd-coaching, reading-unfamiliar-code, refactoring-safely, performance-investigation,
                                concurrency-bugs, secure-code-review, system-design-practice, technical-interview-practice
@@ -1194,6 +1217,8 @@ sub-agent or an MCP server and logs it (`task.stop`). `AppModel.runningTasks` dr
 | — (extra) | `draw` | the drawing set's formats on demand: a kind's fence format, example and limits; the catalog with no kinds |
 | — (extra) | `run_code` | Python, JS, TS, Swift, C, C++, Go, Rust, Ruby, Bash, Java in a scratch dir |
 | — (extra) | `diagnostics` | the project's check/test/lint command, output parsed to `file:line:col severity message`; syntax checks after every write/edit |
+| — (extra) | `mutate` | mutation testing on a scratch copy: one textual change at a time to non-test code, the registered tests on each; survivors with `file:line`, was/now; bounded (20 default, 60 max, 4 at a time, time budget), cancellable; information, not a gate |
+| — (extra) | `coverage` | never-run lines from the toolchain's own coverage (go, swift, cargo-llvm-cov, node/jest, coverage.py or stdlib trace) in a scratch copy; a missing tool is named, never installed |
 | — (extra) | `symbols` | a file's outline, or where a name is defined (not mentioned), across the folder |
 | LSP tool (Claude Code's `LSP`) | `lsp` | the compiler's view through the file's language server (rust-analyzer, gopls, sourcekit-lsp, clangd, TypeScript, zls, pyright/pylsp where installed): definition, references, hover, type definition, implementation, document and workspace symbols, diagnostics, call hierarchy, rename preview (applies nothing); position by `line` + `symbol`; deferred in the code mentor, sub-agents too; the first use of a server in a folder asks the learner (stored in the app), a sub-agent can't ask; supervised, at most 3, idle 10 min |
 | /rewind | Undo this turn's changes | per-turn checkpoints of every file the agent changed, restored from the transcript, no git needed |

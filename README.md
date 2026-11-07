@@ -97,6 +97,11 @@ first program to research-level work — by understanding it and building with i
   a project comes when you want to build or practise.
 * **A real project in your folder.** The mentor creates the starter files (structure, interfaces, TODOs, never the
   solution) and writes the tests to `.teacher/tests`, versioned with the project, sized to where you are.
+* **Proof that your tests would catch a bug.** `mutate` changes your code one small step at a time in a scratch copy and
+  runs your tests; the changes no test noticed (survivors) come back as `file:line` with the lines before and after and a
+  question, never a ready-made test. `coverage` lists the lines no test runs, from the toolchain's own tooling, and `bench`
+  fits how your code scales ("looks like O(n²)", with the evidence, or a refusal when the timings can't support it) after you
+  guess. Information only: none of it changes a review's verdict.
 * **Your own editor.** There is no built-in editor: use Helix, VS Code, Zed, Xcode, anything. The files are right there
   in the folder; save, then ask the mentor to check. `bash` runs the tests and the mentor reads your changes.
 * **Tests that are proven.** When the mentor registers the project's test command, the app runs the tests on the

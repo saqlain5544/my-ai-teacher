@@ -13,7 +13,7 @@ import Foundation
 @MainActor
 final class MentorGuard: AgentExtension {
     let id = "mentor-guard"
-    static let commands: Set<String> = ["bash", "run_code", "run_tests", "diagnostics", "project_tests", "project_review"]
+    static let commands: Set<String> = ["bash", "run_code", "run_tests", "mutate", "coverage", "diagnostics", "project_tests", "project_review"]
     private var fenced: Set<String> = []
 
     static func guarded(_ session: ChatSession) -> Bool {

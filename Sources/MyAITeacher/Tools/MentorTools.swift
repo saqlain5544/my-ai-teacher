@@ -256,6 +256,7 @@ struct ProjectReviewTool: Tool {
                 s += "\n\nNo project file differs from the baseline: the learner hasn't saved any change yet (or saved in an editor buffer, not to disk). Don't look for their files anywhere else. Tell them that nothing has changed on disk in \(ws.url.lastPathComponent), ask them to save and say which file they worked on, and offer to go through the first failing test together. Don't record a round."
             } else {
                 s += "\n\nNow review: correctness first (the failing tests and why), then design, edge cases, naming, complexity, the tests they should add. Point at lines. Questions and a hint ladder per finding, never the code. Then call `project_review` findings."
+                if let m = Mutation.summaryLine(ws: ws) { s += "\n" + m }   // information for the review, never part of the verdict
             }
             return ToolOutput(text: s, meta: ["changes": .array(changes.map { ["path": .string($0.path), "kind": .string($0.kind), "added": .number(Double($0.added)), "removed": .number(Double($0.removed))] }),
                                             "round": .number(Double(p.rounds.count + 1))])
