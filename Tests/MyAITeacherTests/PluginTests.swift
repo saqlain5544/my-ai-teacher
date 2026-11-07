@@ -482,7 +482,7 @@ final class PluginTests: XCTestCase {
     @MainActor func testWhatChangesAfterThePromptIsFrozenIsToldOnce() async throws {
         try write(proj, ".claude/skills/late/SKILL.md", "---\nname: late\ndescription: Late.\n---\nL")
         let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: proj))
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code; conv.systemPrompt = "frozen"
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         defer { AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil }
         let first = await session.contentChangeNote()
@@ -491,12 +491,23 @@ final class PluginTests: XCTestCase {
         let told = await session.contentChangeNote()
         let note = try XCTUnwrap(told)
         XCTAssertTrue(note.contains("Now available: skill late"), note)
+        // The message that carried the note was edited before the turn committed: nothing was recorded, so the next turn tells it again.
+        let again = await session.contentChangeNote()
+        XCTAssertEqual(again, note, "the baseline moves only when the note is in the lesson")
+        session.commitContentSeen()
         let twice = await session.contentChangeNote()
         XCTAssertNil(twice, "once")
         AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil
         let off = await session.contentChangeNote()
         let gone = try XCTUnwrap(off)
         XCTAssertTrue(gone.contains("No longer available: skill late"))
+        session.commitContentSeen()
+        // No system prompt yet (the first turn of a lesson): nothing to be out of date, and the baseline is not touched.
+        var fresh = Conversation(providerID: "x", model: "m"); fresh.mode = .code; fresh.contentSeen = []
+        let young = ChatSession(conversation: fresh, app: AppModel.shared, services: services)
+        let none = await young.contentChangeNote()
+        XCTAssertNil(none, "skipped without a prompt")
+        XCTAssertEqual(young.conversation.contentSeen, [])
     }
 
     // MARK: Second review
@@ -590,12 +601,13 @@ final class PluginTests: XCTestCase {
         AppModel.shared.settings.value.approvedProjectContent[proj.path] = ProjectTrust.fingerprint(proj)
         defer { AppModel.shared.settings.value.approvedProjectContent[proj.path] = nil }
         let services = Services(global: GlobalStore(db: try Database(path: dir.appendingPathComponent("g.sqlite").path)), workspace: try Workspace(url: proj))
-        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code; conv.systemPrompt = "frozen"
         conv.contentSeen = []   // what an earlier launch's prompt offered
         let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
         let told = await session.contentChangeNote()
         let note = try XCTUnwrap(told)
         XCTAssertTrue(note.contains("Now available: skill news"), note)
+        session.commitContentSeen()   // the turn's message carried it
         let again = await session.contentChangeNote()
         XCTAssertNil(again)
     }
