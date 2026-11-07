@@ -70,7 +70,7 @@ final class DebugToolTests: XCTestCase {
         XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=2, address=0x100003f90)", signo: nil, sp: sp, depth: 3).kind, "bad-address")
         XCTAssertTrue(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=2, address=0x100003f90)", signo: nil, sp: sp, depth: 3).detail.contains("read-only"))
         XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=2, address=0x16f602ff0)", signo: nil, sp: sp, depth: 9).kind, "stack-overflow", "fault at the stack's edge")
-        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=1, address=0x1000)", signo: nil, sp: nil, depth: 3000).kind, "stack-overflow", "a stack thousands of frames deep")
+        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=2, address=0x16e800000)", signo: nil, sp: sp, depth: 3000).kind, "stack-overflow", "a stack thousands of frames deep, the fault below it")
         XCTAssertEqual(DebugWords.crash(desc: "signal SIGABRT", signo: 6, sp: sp, depth: 3).kind, "abort")
         XCTAssertEqual(DebugWords.crash(desc: "EXC_ARITHMETIC (code=1, subcode=0x0)", signo: nil, sp: sp, depth: 3).kind, "arithmetic")
         XCTAssertEqual(DebugWords.crash(desc: "EXC_BREAKPOINT (code=1, subcode=0x1)", signo: nil, sp: sp, depth: 3).kind, "trap")
@@ -103,25 +103,43 @@ final class DebugToolTests: XCTestCase {
     import sys, json, subprocess, time, os
     def send(d): sys.stdout.write('@@DBG@@' + json.dumps(d) + '\n'); sys.stdout.flush()
     child = None
+    mode = ''
+    n_continue = 0
     SRC = "int f(int n) {\n  int s = 0;\n  s += n;\n  return s;\n}\n"
+    def fr(i, fn, l, v):
+        return {'i': i, 'fn': fn, 'l': l, 'user': True, 'f': 'main.c', 'src': 'line of ' + fn, 'v': v, 'vo': list(v)}
     def stop(line, locals_):
         return {'ok': True, 'kind': 'breakpoint', 'bp': 1, 'pid': child.pid, 'out': '', 'err': '', 'depth': 2, 'hidden': 0, 'selected': 0,
-                'frames': [{'i': 0, 'fn': 'f', 'l': line, 'user': True, 'f': 'main.c', 'src': 's += n;', 'v': locals_, 'vo': list(locals_)},
-                           {'i': 1, 'fn': 'main', 'l': 9, 'user': True, 'f': 'main.c', 'src': 'f(3);', 'v': {}, 'vo': []}],
-                'files': {'main.c': SRC}}
+                'frames': [fr(0, 'f', line, locals_), fr(1, 'main', 9, {})], 'files': {'main.c': SRC}}
     send({'ok': True, 'ready': True})
     sys.stderr.write('greeted\n')
     for line in sys.stdin:
         c = json.loads(line)
         if c['cmd'] == 'start':
-            if os.path.basename(c['program']) == 'hang': time.sleep(600)
+            mode = os.path.basename(c['program'])
+            if mode == 'hang': time.sleep(600)
             child = subprocess.Popen(['/bin/sleep', '600'])
             r = stop(3, {'s': {'v': '0', 't': 'int'}, 'n': {'v': '3', 't': 'int'}})
             r['breakpoints'] = [{'spec': b['at'], 'locations': 1, 'id': 1, 'line': 3} for b in c['breakpoints']]
+            if not c['breakpoints'] and mode == 'segv':      # a crash run has no breakpoints: the first stop is the crash
+                r.update({'kind': 'exception', 'desc': 'EXC_BAD_ACCESS (code=1, address=0x0)', 'sp': 6171000000})
+            if not c['breakpoints'] and mode == 'sig':
+                r.update({'kind': 'signal', 'desc': 'signal SIGUSR1', 'signo': 30}); n_continue = 1
         elif c['cmd'] == 'continue':
-            r = {'ok': True, 'exited': 0, 'out': 'done\n', 'err': '', 'pid': child.pid}
+            n_continue += 1
+            if mode == 'sig' and n_continue == 1:
+                r = stop(4, {}); r.update({'kind': 'signal', 'desc': 'signal SIGUSR1', 'signo': 30})
+            elif mode == 'segv':
+                r = stop(4, {}); r.update({'kind': 'exception', 'desc': 'EXC_BAD_ACCESS (code=1, address=0x0)', 'sp': 6171000000})
+            else:
+                r = {'ok': True, 'exited': 0, 'out': 'done\n', 'err': '', 'pid': child.pid}
         elif c['cmd'] == 'next':
             r = stop(4, {'s': {'v': '3', 't': 'int'}, 'n': {'v': '3', 't': 'int'}}); r['kind'] = 'step'
+        elif c['cmd'] == 'frame':
+            i = c['index']
+            r = stop(3, {'s': {'v': '0', 't': 'int'}})
+            r['selected'] = i; r['depth'] = 40
+            r['frames'] = [fr(0, 'f', 3, {'s': {'v': '0', 't': 'int'}})] + ([fr(15, 'deep15', 30, {'depth': {'v': '15', 't': 'int'}})] if i == 15 else [])
         elif c['cmd'] == 'print':
             r = {'ok': True, 'v': '6', 't': 'int', 'expr': c['expr']}
         elif c['cmd'] == 'stop':
@@ -134,7 +152,7 @@ final class DebugToolTests: XCTestCase {
         let f = dir.appendingPathComponent("fake-driver.py")
         try Data(Self.fakeDriver.utf8).write(to: f)
         DebugSupport.driverOverride = f.path
-        for name in ["prog", "hang"] {
+        for name in ["prog", "hang", "sig", "segv"] {
             let p = dir.appendingPathComponent(name)
             try Data("#!/bin/sh\n".utf8).write(to: p)
             try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: p.path)
@@ -277,12 +295,18 @@ final class DebugToolTests: XCTestCase {
             return 0;
         }
         """)
+        let before = Self.buildFolders()
         let r = try await DebugTool().run(["action": "run", "program": "sum.c", "breakpoints": ["sum.c:5 if i == 3"], "max_stops": 5], ctx("R1"))
         XCTAssertFalse(r.isError, r.text)
         XCTAssertTrue(r.text.contains("sum.c:5") && r.text.contains("i=3") && r.text.contains("s=3"), r.text)
         XCTAssertTrue(r.text.contains("exited with status 0") && r.text.contains("10"), r.text)
         XCTAssertEqual(r.meta?["language"]?.string, "c")
         XCTAssertEqual(DebugSessions.shared.count, 0)
+        XCTAssertEqual(Self.buildFolders(), before, "the scratch folder of the single-file build is removed")
+    }
+
+    static func buildFolders() -> Set<String> {
+        Set(((try? FileManager.default.contentsOfDirectory(atPath: FileManager.default.temporaryDirectory.path)) ?? []).filter { $0.hasPrefix("aiteacher-debugbuild-") })
     }
 
     @MainActor func testSteppingThroughACall() async throws {
@@ -359,11 +383,230 @@ final class DebugToolTests: XCTestCase {
     @MainActor func testTheFenceBindsTheDebuggedProgram() async throws {
         try await needLive()
         guard WriteFence.available else { throw XCTSkip("sandbox-exec is not available") }
-        let protected = dir.appendingPathComponent("learner.txt")
-        try Data("mine".utf8).write(to: protected)
-        try writeC("w.c", "#include <stdio.h>\nint main(void) {\n    FILE *f = fopen(\"learner.txt\", \"w\");\n    int ok = f != 0;\n    if (f) { fputs(\"overwritten\", f); fclose(f); }\n    return ok;\n}\n")
+        let protected = dir.appendingPathComponent("learner.txt"), free = dir.appendingPathComponent("free.txt")
+        try Data("mine".utf8).write(to: protected); try Data("mine".utf8).write(to: free)
+        try writeC("w.c", "#include <stdio.h>\nint main(int argc, char **argv) {\n    FILE *f = fopen(argv[1], \"w\");\n    int ok = f != 0;\n    if (f) { fputs(\"overwritten\", f); fclose(f); }\n    return !ok;\n}\n")
         let fence = WriteFence.profile(files: [protected], locked: [], open: [])
-        let r = try await WriteFence.$profile.withValue(fence) { try await DebugTool().run(["action": "run", "program": "w.c", "breakpoints": ["w.c:6"]], ctx("R9")) }
-        XCTAssertEqual(try String(contentsOf: protected, encoding: .utf8), "mine", "the debugged program can't write what bash couldn't: " + r.text)
+        let fenced = try await WriteFence.$profile.withValue(fence) {
+            try await DebugTool().run(["action": "run", "program": "w.c", "args": ["learner.txt"], "breakpoints": ["w.c:6"]], ctx("R9"))
+        }
+        XCTAssertFalse(fenced.isError, fenced.text)
+        XCTAssertTrue(fenced.text.contains("ok=0"), "the program ran and its open failed: " + fenced.text)
+        XCTAssertEqual(try String(contentsOf: protected, encoding: .utf8), "mine", "the debugged program can't write what bash couldn't")
+        // The control: the same program, the same fence, a file the fence doesn't cover.
+        let control = try await WriteFence.$profile.withValue(fence) {
+            try await DebugTool().run(["action": "run", "program": "w.c", "args": ["free.txt"], "breakpoints": ["w.c:6"]], ctx("R10"))
+        }
+        XCTAssertTrue(control.text.contains("ok=1"), control.text)
+        XCTAssertEqual(try String(contentsOf: free, encoding: .utf8), "overwritten", "so the fence, not the program, is what held the first file")
+    }
+
+    // MARK: Review fixes
+
+    func testDeepStacksAndNullAreTold() {
+        let sp: UInt64 = 0x16f603000
+        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=1, address=0x0)", signo: nil, sp: sp, depth: 4000).kind, "null-deref", "a null pointer 4,000 calls deep")
+        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=1, address=0x1000)", signo: nil, sp: sp, depth: 3000).kind, "null-deref")
+        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=2, address=0x16f602ff0)", signo: nil, sp: sp, depth: 4000).kind, "stack-overflow")
+        XCTAssertEqual(DebugWords.crash(desc: "EXC_BAD_ACCESS (code=1, address=0xdeadbeef00)", signo: nil, sp: sp, depth: 4000).kind, "bad-address", "depth alone is not an overflow")
+        XCTAssertEqual(DebugWords.crash(desc: "Rust panic", signo: nil, sp: nil, depth: 0).kind, "panic")
+    }
+
+    func testOnlyRealCrashesAreCrashes() {
+        for crash in ["signal SIGSEGV", "signal SIGABRT", "signal SIGBUS", "signal SIGFPE", "signal SIGILL", "signal SIGTRAP", "EXC_BAD_ACCESS (code=1)"] {
+            XCTAssertTrue(DebugTool.isCrashSignal(crash), crash)
+        }
+        for handled in ["signal SIGUSR1", "signal SIGINT", "signal SIGPIPE", "signal SIGALRM"] { XCTAssertFalse(DebugTool.isCrashSignal(handled), handled) }
+    }
+
+    @MainActor func testTheFrameAskedForIsTheFrameShown() async throws {
+        try useFake()
+        let c = ctx("F1")
+        _ = try await DebugTool().run(["action": "start", "program": "prog"], c)
+        let deep = try await DebugTool().run(["action": "frame", "index": 15], c)
+        XCTAssertTrue(deep.text.contains("Frame 15") && deep.text.contains("deep15") && deep.text.contains("depth=15"), deep.text)
+        XCTAssertFalse(deep.text.components(separatedBy: "call stack")[0].contains("s=0"), "not frame 0's locals under frame 15: " + deep.text)
+        let missing = try await DebugTool().run(["action": "frame", "index": 16], c)
+        XCTAssertTrue(missing.text.contains("frame 16 isn't in the report") && !missing.text.contains("line of f"), missing.text)
+        _ = try await DebugTool().run(["action": "stop"], c)
+    }
+
+    @MainActor func testSignalsAProgramRaisesOnPurposeAreNotCrashes() async throws {
+        try useFake()
+        let r = try await DebugTool().run(["action": "run", "program": "sig", "breakpoints": ["main.c:3"], "max_stops": 5], ctx("G1"))
+        XCTAssertTrue(r.text.contains("SIGUSR1") && r.text.contains("not a crash") && r.text.contains("exited with status 0"), r.text)
+        XCTAssertFalse(r.text.contains("CRASH"), r.text)
+        let crash = try await DebugTool().run(["action": "crash", "program": "segv"], ctx("G2"))
+        XCTAssertTrue(crash.text.contains("CRASH") && crash.text.contains("Null pointer"), crash.text)
+        let sig = try await DebugTool().run(["action": "crash", "program": "sig"], ctx("G3"))
+        XCTAssertTrue(sig.text.contains("SIGUSR1") && sig.text.contains("ran to completion without crashing"), "the handled signal passes, the run goes on: " + sig.text)
+    }
+
+    @MainActor func testKillingASessionNeverWaitsOnTheCaller() async throws {
+        try useFake()
+        _ = try await DebugTool().run(["action": "start", "program": "prog"], ctx("K1"))
+        let session = try XCTUnwrap(DebugSessions.shared.session("K1"))
+        let child = session.proc.inferior
+        let t0 = Date()
+        DebugSessions.shared.end("K1")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 0.1, "no pgrep on the caller's thread")
+        for _ in 0..<40 where alive(child) { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(alive(child))
+    }
+
+    @MainActor func testStopOnTheChatSessionKillsTheProgram() async throws {
+        try useFake()
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let chat = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        _ = try await DebugTool().run(["action": "start", "program": "prog"], ctx(chat.id))
+        let pid = try XCTUnwrap(DebugSessions.shared.session(chat.id)).proc.inferior
+        XCTAssertTrue(alive(pid))
+        chat.stop()   // the Stop button
+        XCTAssertNil(DebugSessions.shared.session(chat.id))
+        for _ in 0..<40 where alive(pid) { try await Task.sleep(for: .milliseconds(50)) }
+        XCTAssertFalse(alive(pid))
+    }
+
+    func testAFenceCoversWhatItStartedWith() throws {
+        let old = dir.appendingPathComponent("old.txt"), fresh = dir.appendingPathComponent("fresh.txt")
+        try Data("a".utf8).write(to: old)
+        let started = WriteFence.profile(files: [old], locked: [], open: [dir.appendingPathComponent("tests")])
+        let since = Date()
+        XCTAssertTrue(WriteFence.covers(started: started, current: started, since: since))
+        XCTAssertTrue(WriteFence.covers(started: started, current: "", since: since), "less to protect now")
+        // A build wrote a file after the session began: not a reason to end it.
+        Thread.sleep(forTimeInterval: 0.05)
+        try Data("b".utf8).write(to: fresh)
+        XCTAssertTrue(WriteFence.covers(started: started, current: WriteFence.profile(files: [old, fresh], locked: [], open: [dir.appendingPathComponent("tests")]), since: since))
+        // A file that already existed and wasn't fenced, a project opened under a program that started unfenced, tests locked since.
+        let existing = dir.appendingPathComponent("existing.txt")
+        try Data("c".utf8).write(to: existing)
+        XCTAssertFalse(WriteFence.covers(started: started, current: WriteFence.profile(files: [old, existing], locked: [], open: [dir.appendingPathComponent("tests")]), since: Date()))
+        XCTAssertFalse(WriteFence.covers(started: "", current: started, since: Date()), "a project opened since")
+        XCTAssertFalse(WriteFence.covers(started: started, current: WriteFence.profile(files: [old], locked: [], open: []), since: since), "the tests were unlocked, are locked now")
+    }
+
+    @MainActor func testASessionSurvivesABuildWritingAFileButNotANewProject() async throws {
+        try useFake()
+        let old = dir.appendingPathComponent("learner.txt")
+        try Data("a".utf8).write(to: old)
+        let fenceAtStart = WriteFence.profile(files: [old], locked: [], open: [])
+        let c = ctx("W1")
+        _ = try await WriteFence.$profile.withValue(fenceAtStart) { try await DebugTool().run(["action": "start", "program": "prog"], c) }
+        try await Task.sleep(for: .milliseconds(60))
+        let lock = dir.appendingPathComponent("Cargo.lock")
+        try Data("x".utf8).write(to: lock)
+        let grown = WriteFence.profile(files: [old, lock], locked: [], open: [])
+        let next = try await WriteFence.$profile.withValue(grown) { try await DebugTool().run(["action": "next"], c) }
+        XCTAssertFalse(next.isError, next.text)
+        // A program that started unfenced doesn't carry on once a project's files are protected.
+        _ = try await DebugTool().run(["action": "stop"], c)
+        _ = try await DebugTool().run(["action": "start", "program": "prog"], c)
+        let denied = try await WriteFence.$profile.withValue(fenceAtStart) { try await DebugTool().run(["action": "next"], c) }
+        XCTAssertTrue(denied.isError && denied.text.contains("write protection"), denied.text)
+        XCTAssertNil(DebugSessions.shared.session("W1"))
+    }
+
+    // MARK: What the learner approves
+
+    @MainActor func testTheApprovalShowsWhatWillRunAndAsksOnlyForNewCode() throws {
+        var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+        let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+        let gate = PermissionExtension(app: AppModel.shared)
+        AppModel.shared.setAccess(.write, for: services.workspace)
+        defer { AppModel.shared.interactions.cancelAll(conversationID: session.id) }
+        let tool = DebugTool()
+        func decide(_ input: JSON) -> ToolDecision { gate.shouldRun(Block.toolUse(id: "d", name: "debug", input: input), tool: tool, session: session) }
+        // A launch shows the program, the arguments, every breakpoint with its condition, the input.
+        guard case .ask(let launch, let resolve) = decide(["action": "run", "program": "a.out", "args": ["-n", "3"],
+                                                            "breakpoints": ["f.c:10 if (int)system(\"touch /tmp/x\")", "main"], "stdin": "hello"])
+        else { return XCTFail("a launch is asked") }
+        for shown in ["a.out -n 3", "f.c:10 if (int)system(\"touch /tmp/x\")", "main", "hello", "inside the program"] { XCTAssertTrue(launch.detail.contains(shown), shown + " in " + launch.detail) }
+        XCTAssertFalse(launch.options.map(\.id).contains("rule"), "no command rule for a debugger launch")
+        // "Allow for this lesson" is the debugger's own grant: it doesn't open the shell.
+        guard case .allow = resolve("lesson") else { return XCTFail("allowed") }
+        XCTAssertTrue(AppModel.shared.interactions.isGranted("debug", conversationID: session.id))
+        XCTAssertFalse(AppModel.shared.interactions.isGranted("bash", conversationID: session.id), "not every later shell command")
+        // Stepping, frames and stop add no code; an expression does, whatever was granted for launching… until the lesson grants it.
+        for quiet in ["step", "next", "finish", "continue", "frame", "stop"] {
+            guard case .allow = decide(["action": .string(quiet)]) else { return XCTFail("\(quiet) is not asked") }
+        }
+        guard case .allow = decide(["action": "print", "expr": "x"]) else { return XCTFail("the lesson grant covers print") }
+        var conv2 = Conversation(providerID: "x", model: "m"); conv2.mode = .code
+        let other = ChatSession(conversation: conv2, app: AppModel.shared, services: services)   // a lesson that granted nothing
+        guard case .ask(let eval, _) = gate.shouldRun(Block.toolUse(id: "d", name: "debug", input: ["action": "print", "expr": "(int)system(\"id\")"]), tool: tool, session: other)
+        else { return XCTFail("print is asked") }
+        XCTAssertTrue(eval.title.contains("evaluate an expression") && eval.detail.contains("(int)system(\"id\")"), eval.title + eval.detail)
+        // A build is a shell command: it needs the shell grant, and a shell grant covers the debugger.
+        guard case .ask(let build, let rb) = gate.shouldRun(Block.toolUse(id: "d", name: "debug", input: ["action": "run", "build": "make", "program": "prog"]), tool: tool, session: other)
+        else { return XCTFail("a build is asked") }
+        XCTAssertTrue(build.detail.contains("Build, in a shell: make"))
+        guard case .allow = rb("lesson") else { return XCTFail("allowed") }
+        XCTAssertTrue(AppModel.shared.interactions.isGranted("bash", conversationID: other.id))
+        guard case .allow = gate.shouldRun(Block.toolUse(id: "d", name: "debug", input: ["action": "print", "expr": "1"]), tool: tool, session: other)
+        else { return XCTFail("a shell grant implies the debugger's") }
+    }
+
+    @MainActor func testNewlinesNeverReachADebuggerScript() async throws {
+        for bad in [["breakpoints": ["main.go:7\ncall os.Exit(1)"]], ["breakpoints": ["f.c:1 if 1\n!rm -rf ~"]], ["expr": "x\rcall system(1)"]] as [JSON] {
+            var input = bad.object ?? [:]; input["action"] = .string(bad["expr"] != nil ? "print" : "run"); input["program"] = "x"
+            let r = try await DebugTool().run(.object(input), ctx("N1"))
+            XCTAssertTrue(r.isError && r.text.contains("control characters"), r.text)
+            var conv = Conversation(providerID: "x", model: "m"); conv.mode = .code
+            let session = ChatSession(conversation: conv, app: AppModel.shared, services: services)
+            guard case .deny = PermissionExtension(app: AppModel.shared).shouldRun(Block.toolUse(id: "d", name: "debug", input: .object(input)), tool: DebugTool(), session: session)
+            else { return XCTFail("the gate refuses it too") }
+        }
+        XCTAssertNil(DebugTool.invalid(["breakpoints": ["main.c:12 if i == 3"], "expr": "a\tb"]), "tabs are fine")
+    }
+
+    @MainActor func testTheFrameChosenIsTheFrameEvaluated() async throws {
+        try await needLive()
+        try writeC("rec.c", "int rec(int n) {\n    int here = n * 10;\n    if (n == 0) return here;\n    return rec(n - 1) + here;\n}\nint main(void) {\n    return rec(20) == 2100 ? 0 : 1;\n}\n")
+        let c = ctx("L1")
+        let started = try await DebugTool().run(["action": "start", "program": "rec.c", "breakpoints": ["rec.c:3 if n == 0"]], c)
+        XCTAssertFalse(started.isError, started.text)
+        let frame = try await DebugTool().run(["action": "frame", "index": 15], c)
+        XCTAssertTrue(frame.text.contains("Frame 15") && frame.text.contains("n=15") && frame.text.contains("here=150"), "frame 15's own locals: " + frame.text)
+        let printed = try await DebugTool().run(["action": "print", "expr": "n"], c)
+        XCTAssertTrue(printed.text.contains("= 15"), "print agrees with the frame shown: " + printed.text)
+        _ = try await DebugTool().run(["action": "stop"], c)
+    }
+
+    @MainActor func testSignalsExitsAndRustPanics() async throws {
+        try await needLive()
+        try writeC("usr1.c", "#include <signal.h>\n#include <stdio.h>\nstatic volatile int got = 0;\nstatic void handler(int s) { got = s; }\nint main(void) {\n    signal(SIGUSR1, handler);\n    raise(SIGUSR1);\n    printf(\"%d\\n\", got);\n    return 0;\n}\n")
+        let handled = try await DebugTool().run(["action": "crash", "program": "usr1.c"], ctx("L2"))
+        XCTAssertTrue(handled.text.contains("ran to completion without crashing") && !handled.text.contains("CRASH"), handled.text)
+        try writeC("exit3.c", "int main(void) { return 3; }\n")
+        let exit3 = try await DebugTool().run(["action": "crash", "program": "exit3.c"], ctx("L3"))
+        XCTAssertTrue(exit3.text.contains("exited with status 3 and no crash signal") && !exit3.text.contains("did not crash"), exit3.text)
+        guard ProcessRunner.which("rustc") != nil else { return }
+        try Data("fn pick(v: &[i32], i: usize) -> i32 {\n    v[i]\n}\nfn main() {\n    let v = vec![1, 2, 3];\n    println!(\"{}\", pick(&v, 7));\n}\n".utf8).write(to: dir.appendingPathComponent("panic.rs"))
+        let panic = try await DebugTool().run(["action": "crash", "program": "panic.rs"], ctx("L4"))
+        XCTAssertTrue(panic.text.contains("Rust panic") && panic.text.contains("panic.rs:2") && panic.text.contains("pick"), "the panic and where it started: " + panic.text)
+    }
+
+    @MainActor func testAProgramThatNeverStopsPrintingIsStopped() async throws {
+        try await needLive()
+        try writeC("flood.c", "#include <stdio.h>\nint main(void) {\n    for (;;) {\n        fputs(\"xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\\n\", stdout);\n        fflush(stdout);\n    }\n}\n")
+        let t0 = Date()
+        let r = try await DebugTool().run(["action": "crash", "program": "flood.c", "seconds": 40], ctx("L5"))
+        XCTAssertTrue(r.text.contains("more than 4 MB of output"), r.text)
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 30)
+        XCTAssertLessThan(r.text.count, 14_100)
+    }
+
+    @MainActor func testGoIsBoundedAndKeepsWhatItPrinted() async throws {
+        try await needLive()
+        try need("go"); try need("dlv")
+        try Data("module example.com/spin\n\ngo 1.22\n".utf8).write(to: dir.appendingPathComponent("go.mod"))
+        try Data("package main\n\nimport (\n\t\"fmt\"\n\t\"time\"\n)\n\nfunc main() {\n\tfmt.Println(\"started\")\n\ttime.Sleep(time.Hour)\n}\n".utf8).write(to: dir.appendingPathComponent("main.go"))
+        let t0 = Date()
+        let r = try await DebugTool().run(["action": "run", "breakpoints": ["main.go:9"], "max_stops": 1, "seconds": 3], ctx("L6"))
+        XCTAssertLessThan(Date().timeIntervalSince(t0), 90, "the build is outside the bound, the run inside it")
+        let r2 = try await DebugTool().run(["action": "crash", "seconds": 3], ctx("L7"))
+        XCTAssertTrue(r2.text.contains("Stopped after 3 s") && r2.text.contains("started"), "partial output survives the timeout: " + r2.text)
+        XCTAssertFalse(r.text.isEmpty)
     }
 }
