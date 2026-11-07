@@ -2196,6 +2196,26 @@
     ok(!$('.turn-undo'), 'no undo when nothing changed');
   });
 
+  test('lsp card: what was asked, the count, indexing, and the answer in the body', () => {
+    const a1 = A([{ kind: 'toolUse', id: 'ls1', name: 'lsp', input: { action: 'references', file: 'main.go', line: 9, symbol: 'Area' } }]);
+    const r1 = R('ls1', 'lsp', '2 references to `Area`:\nmain.go:9  func (r Rect) Area() float64\nmain.go:14  t += s.Area()', { meta: { count: 2, files: 1, server: 'gopls', indexing: true } });
+    T.status('', false); T.reset([U('who uses Area?'), a1, r1, A('Two places.')]);
+    const c = $('[data-tool-id="ls1"]'); ok(c, 'lsp card');
+    ok(/references Area main\.go:9/.test(c.textContent) && /2/.test(c.textContent) && /still indexing/.test(c.textContent), c.textContent.slice(0, 160));
+  });
+
+  test('lsp diagnostics card: warnings are not counted as errors', () => {
+    const mk = (id, text, meta) => [A([{ kind: 'toolUse', id, name: 'lsp', input: { action: 'diagnostics', file: 'a.go' } }]), R(id, 'lsp', text, { meta })];
+    const [a1, r1] = mk('lw1', '0 errors, 1 warning in a.go:\na.go:3:1  warning: unused', { count: 1, errors: 0, warnings: 1 });
+    const [a2, r2] = mk('lw2', '1 error, 2 warnings in a.go:\n…', { count: 3, errors: 1, warnings: 2 });
+    const [a3, r3] = mk('lw3', 'a.go: no problems reported by the server.', { count: 0, errors: 0, warnings: 0 });
+    T.status('', false); T.reset([U('check'), a1, r1, a2, r2, a3, r3, A('Done.')]);
+    const t = id => $('[data-tool-id="' + id + '"]');
+    ok(/1 warning(?!s)/.test(t('lw1').textContent) && !/error/.test(t('lw1').textContent.split('\n')[0]), 'warning-only: ' + t('lw1').textContent.slice(0, 100));
+    ok(/1 error, 2 warnings/.test(t('lw2').textContent), 'mixed: ' + t('lw2').textContent.slice(0, 100));
+    ok(/clean/.test(t('lw3').textContent), 'clean');
+  });
+
 
   // ───────────── Drawing references ─────────────
   // Every example in Resources/drawing (the harness injects them from `Drawing`) draws as documented, in light and dark:

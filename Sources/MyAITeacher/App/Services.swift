@@ -62,6 +62,9 @@ struct AppSettings: Codable, Sendable, Equatable {
     var mcpProjectDecisions: [String: [String: MCPDecision]] = [:]
     /// MCP servers whose tools run without asking, per folder (folder path → server names).
     var mcpAlwaysAllow: [String: [String]] = [:]
+    /// Language servers the user allowed to start in a folder (folder path → server ids: rust-analyzer, gopls…). They run
+    /// project code while analysing it. Stored in the app, never in the folder, so a cloned repo can't approve itself.
+    var lspApproved: [String: [String]] = [:]
     /// The user's own hooks for the agents: Claude Code's `hooks` JSON (event → matchers → shell commands), as typed
     /// in Settings › Hooks (`HooksExtension`).
     var hooks = ""
@@ -116,6 +119,7 @@ struct AppSettings: Codable, Sendable, Equatable {
         mcpServers = (try? c.decode([MCPServerConfig].self, forKey: .mcpServers)) ?? []
         mcpProjectDecisions = (try? c.decode([String: [String: MCPDecision]].self, forKey: .mcpProjectDecisions)) ?? [:]
         mcpAlwaysAllow = (try? c.decode([String: [String]].self, forKey: .mcpAlwaysAllow)) ?? [:]
+        lspApproved = (try? c.decode([String: [String]].self, forKey: .lspApproved)) ?? [:]
         hooks = (try? c.decode(String.self, forKey: .hooks)) ?? ""
         approvedHooks = (try? c.decode([String: String].self, forKey: .approvedHooks)) ?? [:]
         computerPermissionBuild = try? c.decode(String.self, forKey: .computerPermissionBuild)

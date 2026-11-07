@@ -115,6 +115,10 @@ first program to research-level work — by understanding it and building with i
 * **An engineer's tools.** The mentor has `symbols`, `diagnostics`, syntax checks on its own files, the project
   profile (how your project builds, checks and tests) and an index of the project (definitions, uses and callers,
   imports, search by meaning), so it reads your code precisely and builds its examples against your real toolchain.
+  When a question is about real types (which of several same-named things, what type, who really calls this, the
+  compiler's own errors) it asks the file's language server through `lsp` (rust-analyzer, gopls, sourcekit-lsp, clangd,
+  the TypeScript server, zls, pyright; whichever is installed): it asks you once per folder and server, because a
+  language server runs project code while it analyses it.
   It never overwrites a file it hasn't read, or one you changed since it looked, and **Undo this turn's changes**
   under a reply puts back every file it touched, with or without git.
 * **Languages and libraries from their source.** Ask to master Zig's standard library, Rust's `core`, Go's `net/http`,

@@ -451,6 +451,18 @@ the app is now a separate project, a Rust command-line tool at `~/coding-agent`.
 
   `grep` stays for exact text: error messages, strings, config keys. Indexing this app's ~480 source files takes about
   3 seconds the first time; after that only changed files are read again.
+* **The compiler's view (language servers).** For precise questions about real types, the code mentor can ask the
+  language server for the file's language (`lsp`): where something is really defined and used, its type, who calls it,
+  the compiler's errors, and what a rename would change (it only lists the edits). The app uses the servers already on
+  your Mac: rust-analyzer, gopls, sourcekit-lsp, clangd, the TypeScript language server, zls, and pyright or pylsp for
+  Python. It never installs anything; without one for a language, the mentor says which to install and carries on with
+  `code` and `symbols`.
+  * **It asks first.** A language server can run a project's code while it analyses it (rust-analyzer runs build scripts
+    and macros, gopls runs `go list`), so the first use of a server in a folder asks you: allow in this folder, allow for
+    this lesson, or don't. Allow it only for code you trust. A sub-agent can't ask; it tells the mentor to.
+  * **Memory-hungry, so lazy.** A server starts only when it's needed, at most three run at once, and one unused for 10
+    minutes stops. They appear in the Tasks panel (with what they are indexing), where Stop works, and they end with the
+    app. While a big project indexes, the answer says "still indexing" and may be partial; ask again a little later.
 * **MCP servers.** Tools from Model Context Protocol servers, as in Claude Code, for every agent: a program the app
   starts and talks to over its input and output (`npx -y @modelcontextprotocol/server-memory`, `uvx mcp-server-git`…),
   or a URL speaking streamable HTTP. (The old HTTP+SSE transport isn't supported.)

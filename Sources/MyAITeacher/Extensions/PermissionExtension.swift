@@ -70,6 +70,7 @@ final class PermissionExtension: AgentExtension {
                 return .deny("The learner declined searching their other folders. Search this folder's lessons (without scope \"all\").")
             }
         }
+        if tool.name == "lsp", let gate = lspGate(input, ws: ws, conv: conv) { return gate }   // may probe for the binary: off the main actor
         switch tool.risk {
         case .readOnly, .network, .interactive, .control:   // .control: sites and apps are gated by ComputerUseExtension
             return .allow
@@ -157,6 +158,49 @@ final class PermissionExtension: AgentExtension {
                 case "grant_full": self?.app.setAccess(.full, for: ws); return .allow
                 default: return .deny("The learner declined.")
                 }
+            }
+        }
+    }
+
+    /// The hub whose servers `lsp` asks about (tests give their own).
+    var lspHub: LSPHub = .shared
+
+    /// `lsp`: a language server runs the project's code while it analyses it (rust-analyzer's build scripts and proc macros,
+    /// gopls's `go list`), so the first use of a server in a folder asks, once per folder and server (kept in the app's
+    /// settings), or for this lesson. Which server a file needs can mean running `xcrun --find` or a rustup proxy to see
+    /// that it works, so that is decided off the main actor (`.pending`). A decline holds for the lesson. nil: no file or
+    /// language to decide from (the tool explains).
+    private func lspGate(_ input: JSON, ws: Workspace, conv: String) -> ToolDecision? {
+        let hub = lspHub, folder = LSPTool.canonical(ws.url)
+        guard LSPTool.extensionFor(input, folder: folder, hub: hub) != nil else { return nil }
+        return .pending { [weak self] in
+            let found = await withCheckedContinuation { (c: CheckedContinuation<(spec: LSPServerSpec, executable: String)?, Never>) in
+                DispatchQueue.global(qos: .userInitiated).async { c.resume(returning: LSPTool.server(for: input, hub: hub, folder: folder)) }
+            }
+            guard let self, let (spec, exe) = found else { return .allow }
+            return self.lspDecision(spec, exe, ws: ws, folder: folder, conv: conv, hub: hub)
+        }
+    }
+
+    private func lspDecision(_ spec: LSPServerSpec, _ exe: String, ws: Workspace, folder: URL, conv: String, hub: LSPHub) -> ToolDecision {
+        if app.interactions.isGranted(LSPHub.declined(spec.id), conversationID: conv) {
+            return .deny("The learner declined starting \(spec.title) in this folder. Use `symbols`, `code` and `grep` instead.")
+        }
+        if (app.settings.value.lspApproved[folder.path] ?? []).contains(spec.id) || app.interactions.isGranted(LSPHub.grant(spec.id), conversationID: conv)
+            || hub.processApproved(spec.id, folder: folder) { return .allow }
+        return .ask(LSPHub.approvalRequest(spec, executable: exe, ws: ws)) { [weak self] choice in
+            switch choice {
+            case "folder":
+                if let self {
+                    var ids = self.app.settings.value.lspApproved[folder.path] ?? []
+                    if !ids.contains(spec.id) { ids.append(spec.id) }
+                    self.app.settings.value.lspApproved[folder.path] = ids
+                }
+                return .allow
+            case "lesson": self?.app.interactions.grant(LSPHub.grant(spec.id), conversationID: conv); return .allow
+            default:
+                self?.app.interactions.grant(LSPHub.declined(spec.id), conversationID: conv)
+                return .deny("The learner declined starting \(spec.title) in this folder. Use `symbols`, `code` and `grep` instead.")
             }
         }
     }
