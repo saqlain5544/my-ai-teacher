@@ -1375,7 +1375,14 @@
       }
       return inp;
     };
-    eq(type('[data-q-input="0"]', 'abc12x.5').value, '12.5', 'letters never get into a number');
+    eq(type('[data-q-input="0"]', 'abc12q.5').value, '12.5', 'letters never get into a number');
+    const num = typed => { const i = $('[data-q-input="0"]', card()); i.value = ''; return type('[data-q-input="0"]', typed).value; };
+    eq(num('x'), '', 'a lone x or e is not the start of a number'); eq(num('e5'), '5', 'the e was refused');
+    eq(num('12x.5'), '12x', 'x belongs only to 3x10^8: what follows must be 10');
+    eq(num('3x10^8'), '3x10^8', 'scientific notation can still be typed'); eq(num('6.02 x 10^23'), '6.02 x 10^23');
+    eq(num('1e-3'), '1e-3'); eq(num('2^1.5'), '2^1.5'); eq(num('1 1/2'), '1 1/2'); eq(num('2,5'), '2,5'); eq(num('-4'), '-4');
+    eq(num('1/2/'), '1/2', 'one fraction bar'); eq(num('1.2.'), '1.2', 'one decimal point');
+    $('[data-q-input="0"]', card()).value = '';
     eq(type('[data-q-input="1"]', '3.7').value, '3.7', 'a decimal point is kept so the learner sees why it is not a whole number');
     const t = type('[data-q-input="2"]', 'ab');
     eq($('[data-count="2"]', card()).textContent, '2 / 6', 'counter'); eq(t.getAttribute('maxlength'), '6');

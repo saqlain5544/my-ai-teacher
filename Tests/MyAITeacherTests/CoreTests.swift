@@ -82,7 +82,7 @@ final class CoreTests: XCTestCase {
         let t0 = Date()
         let r = HTMLToMarkdown.convert(html: html, baseURL: URL(string: "https://example.com/"))
         let secs = Date().timeIntervalSince(t0)
-        XCTAssertLessThan(secs, 3, "took \(secs)s")
+        XCTAssertLessThan(secs, MachineSpeed.scaled(3), "took \(secs)s")
         XCTAssertTrue(r.markdown.contains("word word"), String(r.markdown.prefix(200)))
         XCTAssertLessThanOrEqual(r.markdown.count, HTMLToMarkdown.maxOutput + 1000)
     }
@@ -238,7 +238,7 @@ final class CoreTests: XCTestCase {
         try store.db.execute("COMMIT")
         let t = Date()
         let hits = store.search("momentum energy")
-        XCTAssertLessThan(Date().timeIntervalSince(t), 1.0)
+        XCTAssertLessThan(Date().timeIntervalSince(t), MachineSpeed.scaled(1.0))
         XCTAssertEqual(hits.first?.id, "L9", "newest matches are the ones ranked")
         XCTAssertEqual(store.search("zebrafish").map(\.id), ["L0"], "a rare word is found anywhere")
     }

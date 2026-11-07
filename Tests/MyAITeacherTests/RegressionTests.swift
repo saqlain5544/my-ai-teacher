@@ -85,8 +85,11 @@ final class RegressionTests: XCTestCase {
         // A stale index (an unpacked archive's usual state) makes `git status` read the file again, through the filter.
         try FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: 1_600_000_000)], ofItemAtPath: repo.appendingPathComponent("a.txt").path)
         XCTAssertTrue(ReadOnlyShell.allows("git status"), "asked of no one")
+        let index = repo.appendingPathComponent(".git/index"), before = try Data(contentsOf: index)
         _ = await ReadOnlyShell.run("git status", cwd: repo, timeout: 30)
         XCTAssertFalse(FileManager.default.fileExists(atPath: marker.path), "the repository's filter program ran without an approval")
+        // The refresh a status does on a stale index would leave the control below with nothing to re-read.
+        XCTAssertEqual(try Data(contentsOf: index), before, "a read-only status wrote the repository's index")
         XCTAssertTrue(ReadOnlyShell.hardened(["log"]).contains("log.showSignature=false"))
         await g("status")   // the same call without the hardening does run it: the test's repository is set up right
         XCTAssertTrue(FileManager.default.fileExists(atPath: marker.path))

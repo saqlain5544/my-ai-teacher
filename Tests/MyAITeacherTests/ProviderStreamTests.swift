@@ -289,7 +289,7 @@ final class ProviderStreamTests: XCTestCase {
         let t0 = Date()
         let ev = await SSEClient.parse(chunks)
         XCTAssertEqual(ev.count, 1); XCTAssertEqual(ev.first?.data.count, 4_000_000)
-        XCTAssertLessThan(Date().timeIntervalSince(t0), 1.0, "linear in bytes")
+        XCTAssertLessThan(Date().timeIntervalSince(t0), MachineSpeed.scaled(1.0), "linear in bytes")
         let cr = await SSEClient.parse([Data("data: a\r\rdata: b\r\r".utf8)])
         XCTAssertEqual(cr.map(\.data), ["a", "b"], "CR-only line endings")
         let split = await SSEClient.parse([Data("data: a\r".utf8), Data("\n\r\ndata: b\n\n".utf8)])

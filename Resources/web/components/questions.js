@@ -500,10 +500,20 @@
     if (note) note.remove();
     return true;
   }
+  // What typing may still become a number. x, e and ^ are allowed only where they can belong to one (3x10^8, 1e3, 2^3):
+  // by characters alone, "12x.5" got in, and so did a lone "x".
+  const PART = '[+\\-]?[\\d,]*(?:\\.\\d*)?';
+  const NUM_PREFIX = new RegExp('^\\s*' + PART + '(?:\\s*/\\s*' + PART + '|\\s+\\d+\\s*/?\\s*' + PART + '|\\s*\\^\\s*' + PART
+    + '|\\s*[eE][+\\-]?\\d*|\\s*[x×X*]\\s*(?:1(?:0(?:\\s*\\^\\s*' + PART + ')?)?)?)?\\s*$');
+  const couldBeNumber = s => { s = normDigits(s); return s.trim() === '' || (/\d|^[\s+\-.,]*$/.test(s) && NUM_PREFIX.test(s)); };
   document.addEventListener('beforeinput', e => {
-    const t = e.target; if (!t || !t.getAttribute || !t.getAttribute('data-numeric') || !e.data) return;
-    if (NUM_CHARS[t.getAttribute('data-numeric')].test(e.data)) e.preventDefault();   // letters never get in
-    NUM_CHARS[t.getAttribute('data-numeric')].lastIndex = 0;
+    const t = e.target, kind = t && t.getAttribute && t.getAttribute('data-numeric'); if (!kind || !e.data) return;
+    const re = NUM_CHARS[kind], bad = re.test(e.data); re.lastIndex = 0;
+    if (bad) { e.preventDefault(); return; }   // letters never get in
+    if (kind === 'num' && typeof t.selectionStart === 'number') {
+      const v = t.value.slice(0, t.selectionStart) + e.data + t.value.slice(t.selectionEnd);
+      if (!couldBeNumber(v)) e.preventDefault();
+    }
   }, true);
   document.addEventListener('focusout', e => {
     const t = e.target; if (!t || !t.hasAttribute || !t.hasAttribute('data-q-input')) return;

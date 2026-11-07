@@ -215,13 +215,22 @@ enum ReadOnlyShell {
             if i > 0 { p.standardInput = links[i - 1].fileHandleForReading }
             p.standardOutput = i < links.count ? links[i].fileHandleForWriting : outPipe.fileHandleForWriting
         }
+        var leaves: [@Sendable () -> Void] = []
         let parentEnds = [outPipe.fileHandleForWriting, errPipe.fileHandleForWriting] + links.flatMap { [$0.fileHandleForReading, $0.fileHandleForWriting] }
+        // A reader is done only at end of file. The last exit alone doesn't say it: a chunk can be read but not yet
+        // appended when the exit handler runs, and was then lost ("(no output)").
+        let closed = DispatchGroup()
         for (pipe, sink) in [(outPipe, out), (errPipe, err)] {
+            closed.enter()
+            let once = Locked(false)
+            let leave = { @Sendable in if once.mutate({ was in defer { was = true }; return !was }) { closed.leave() } }
             pipe.fileHandleForReading.readabilityHandler = { h in
                 let d = h.availableData
-                if d.isEmpty { h.readabilityHandler = nil } else { sink.append(d) }
+                if d.isEmpty { h.readabilityHandler = nil; leave() } else { sink.append(d) }
             }
+            leaves.append { pipe.fileHandleForReading.readabilityHandler = nil; leave() }
         }
+        let stopReading = leaves
         let timedOut = TimeoutFlag()
         let status: Int32 = await withTaskCancellationHandler {
             await withCheckedContinuation { (c: CheckedContinuation<Int32, Never>) in
@@ -229,10 +238,8 @@ enum ReadOnlyShell {
                 for p in procs {
                     p.terminationHandler = { _ in
                         guard left.mutate({ $0 -= 1; return $0 }) == 0 else { return }
-                        for (pipe, sink) in [(outPipe, out), (errPipe, err)] {
-                            pipe.fileHandleForReading.readabilityHandler = nil
-                            sink.append(pipe.fileHandleForReading.readDataToEndOfFile())
-                        }
+                        // A program it started and left running holds the pipes open: give up on them after a moment.
+                        if closed.wait(timeout: .now() + 1.5) == .timedOut { stopReading.forEach { $0() } }
                         c.resume(returning: procs[procs.count - 1].terminationStatus)
                     }
                 }
@@ -240,6 +247,7 @@ enum ReadOnlyShell {
                     do { try p.run() } catch {
                         procs.forEach { if $0.isRunning { $0.terminate() } }
                         left.mutate { $0 = -1 }
+                        stopReading.forEach { $0() }
                         parentEnds.forEach { try? $0.close() }
                         c.resume(returning: -1)
                         return
@@ -259,7 +267,8 @@ enum ReadOnlyShell {
     }
 
     /// git with nothing a repository's config could run: no fsmonitor, hooks, pager, external diff, text conversion,
-    /// signature checks, or the `filters` drivers (which a plain `git status` runs on a stale index).
+    /// signature checks, or the `filters` drivers (which a plain `git status` runs on a stale index). No optional
+    /// locks either: `status` would refresh and rewrite `.git/index`, and a read-only command writes nothing.
     static func hardened(_ args: [String], filters: [String] = []) -> [String] {
         let (head, rest) = globalOptions(args)
         guard let sub = rest.first else { return args }
@@ -268,7 +277,7 @@ enum ReadOnlyShell {
         let rev = sub == "shortlog" && !tail.contains(where: { !$0.hasPrefix("-") }) ? ["HEAD"] : []
         let noFilters = filters.flatMap { f in ["clean", "smudge", "process"].flatMap { ["-c", "filter.\(f).\($0)="] } + ["-c", "filter.\(f).required=false"] }
         return ["-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "diff.external=", "-c", "log.showSignature=false"] + noFilters
-            + ["--no-pager"] + head + [sub] + extra + tail + rev
+            + ["--no-optional-locks", "--no-pager"] + head + [sub] + extra + tail + rev
     }
 
     /// git's options before the subcommand (`-C dir`, `--no-pager`), and the rest.
