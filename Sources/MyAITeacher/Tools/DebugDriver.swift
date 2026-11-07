@@ -20,12 +20,13 @@ enum DebugDriver {
               '/Applications/', '/usr/local/Cellar/')
     TOOLCHAIN = ('/.cargo/registry/', '/.rustup/', '/.cargo/git/', '/.build/checkouts/', '/lib/zig/', '/usr/local/go/', '/.local/zig/')
     MAX_VARS, MAX_KIDS, MAX_STR, MAX_DEPTH, MAX_FRAMES, MAX_USER_FRAMES = 24, 8, 100, 2, 12, 5
+    MAX_OUTPUT = 4000000   # bytes the program may write to stdout and stderr together
 
     dbg = lldb.SBDebugger.Create()
     dbg.SkipLLDBInitFiles(True)
     dbg.SetAsync(False)
     dbg.HandleCommand('settings set target.process.thread.max-backtrace-depth 3000')
-    S = {'target': None, 'process': None, 'timer_fired': False, 'out': None, 'err': None, 'out_off': 0, 'err_off': 0,
+    S = {'target': None, 'process': None, 'timer_fired': False, 'output_limit': False, 'out': None, 'err': None, 'out_off': 0, 'err_off': 0,
          'files': {}, 'refs': {}, 'root': os.path.realpath(os.getcwd()), 'deadline': 0.0, 'src': {}, 'tmp': []}
 
     def clip(s, n=MAX_STR):
@@ -171,6 +172,7 @@ enum DebugDriver {
         reason = th.GetStopReason()
         r['kind'] = {3: 'breakpoint', 5: 'signal', 6: 'exception', 8: 'step', 4: 'watchpoint'}.get(reason, 'other')
         if S['timer_fired']: r['kind'] = 'timeout'
+        if S['output_limit']: r['kind'] = 'outputlimit'
         r['desc'] = clip(th.GetStopDescription(256), 200)
         if reason == lldb.eStopReasonSignal: r['signo'] = th.GetStopReasonDataAtIndex(0)
         if reason == lldb.eStopReasonException:
@@ -191,6 +193,9 @@ enum DebugDriver {
             if not (i == 0 or i == sel or u): continue
             lim = MAX_USER_FRAMES if deep else 3
             frames.append(frame_record(fr, with_locals=(i == sel or (u and user_seen <= lim)), limit=MAX_VARS if i == sel else 12))
+        if not any(f['i'] == sel for f in frames):   # a frame the learner chose, however deep, is never swapped for another
+            fr = th.GetFrameAtIndex(sel)
+            if fr.IsValid(): frames.append(frame_record(fr, with_locals=True))
         r['frames'] = frames; r['hidden'] = max(0, n - len(frames))
         r['sp'] = th.GetFrameAtIndex(0).GetSP(); r['pc'] = th.GetFrameAtIndex(0).GetPC()
         ret = th.GetStopReturnValue() if reason == lldb.eStopReasonPlanComplete else None
@@ -199,14 +204,24 @@ enum DebugDriver {
 
     def resume(fn, seconds):
         """Runs `fn` (a continue or a step) and interrupts the program when the wall time is up."""
-        p = S['process']; S['timer_fired'] = False
+        p = S['process']; S['timer_fired'] = False; S['output_limit'] = False
+        done = threading.Event()
         def fire():
             S['timer_fired'] = True
             try: p.SendAsyncInterrupt()
             except Exception: pass
+        def watch():
+            while not done.wait(0.25):
+                size = sum(os.path.getsize(f) for f in (S['out'], S['err']) if f and os.path.exists(f))
+                if size > MAX_OUTPUT:
+                    S['output_limit'] = True
+                    try: p.SendAsyncInterrupt()
+                    except Exception: pass
+                    return
         t = threading.Timer(max(0.2, seconds), fire); t.daemon = True; t.start()
+        w = threading.Thread(target=watch, daemon=True); w.start()
         try: fn()
-        finally: t.cancel()
+        finally: t.cancel(); done.set()
         if S['timer_fired'] and p.GetState() == lldb.eStateRunning:
             time.sleep(1)
 
@@ -257,6 +272,10 @@ enum DebugDriver {
         if user == 0:
             return {'ok': False, 'nodebug': True, 'compile_units': cus, 'error': 'no debug info'}
         bps = [breakpoint_spec(target, b) for b in c.get('breakpoints', [])]
+        if c.get('panics'):   # Rust panics exit with 101 and no signal: stop where they start
+            for name in ('rust_panic', 'rust_begin_unwind'):
+                b = target.BreakpointCreateByName(name)
+                bps.append({'spec': name, 'locations': b.GetNumLocations(), 'id': b.GetID(), 'panic': True})
         if c.get('entry'):
             b = target.BreakpointCreateByName('main')
             ok = b.GetNumLocations() > 0 and b.GetLocationAtIndex(0).GetAddress().GetLineEntry().IsValid()
@@ -280,9 +299,19 @@ enum DebugDriver {
         if err.Fail() or not S['process'].IsValid():
             S['process'] = None
             return {'ok': False, 'error': 'launch failed: ' + (err.GetCString() or '?'), 'breakpoints': bps}
+        pass_signals()
         resume(S['process'].Continue, c.get('seconds', 20))
         r = report(c.get('deep', False)); r['ok'] = True; r['breakpoints'] = bps
         return r
+
+    def pass_signals():
+        """Only crashes stop the program: SIGUSR1, SIGINT, SIGPIPE and the rest a program raises on purpose are delivered to it."""
+        keep = ('SIGSEGV', 'SIGBUS', 'SIGILL', 'SIGFPE', 'SIGABRT', 'SIGTRAP', 'SIGKILL', 'SIGSTOP')
+        us = S['process'].GetUnixSignals()
+        for i in range(us.GetNumSignals()):
+            n = us.GetSignalAtIndex(i)
+            if us.GetSignalAsCString(n) in keep: continue
+            us.SetShouldStop(n, False); us.SetShouldNotify(n, False); us.SetShouldSuppress(n, False)
 
     def need_process():
         p = S['process']

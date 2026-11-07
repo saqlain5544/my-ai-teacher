@@ -102,8 +102,16 @@ final class PermissionExtension: AgentExtension {
             // One grant per kind of run: diagnostics runs shell commands like bash; the three test tools run the project's
             // tests (asking three times in one lesson for the same suite was the mentor's main friction), and a lesson
             // that may run shell commands may run its tests and code snippets (a live lesson asked for both, minutes apart).
-            let grant = tool.name == "diagnostics" || tool.name == "debug" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : Self.runsSnippets(tool) ? "run_code" : tool.name
-            let impliedByBash = grant == "tests" || grant == "run_code"
+            // The debugger asks once to launch a program or evaluate an expression in it; stepping and the rest of an approved
+            // session add no code. Its grant is its own ("Allow for this lesson" must not allow every later shell command), implied
+            // by a shell grant; only a build command, which is a shell command, needs that one.
+            if tool.name == "debug" {
+                if let bad = DebugTool.invalid(input) { return .deny(bad) }
+                if DebugTool.need(input) == .none { return .allow }
+            }
+            let debugGrant = tool.name == "debug" ? ((input["build"]?.string ?? "").isEmpty ? "debug" : "bash") : nil
+            let grant = debugGrant ?? (tool.name == "diagnostics" ? "bash" : Self.runsTests(tool, input) != nil ? "tests" : Self.runsSnippets(tool) ? "run_code" : tool.name)
+            let impliedByBash = grant == "tests" || grant == "run_code" || grant == "debug"
             if access == .full || app.interactions.isGranted(grant, conversationID: conv)
                 || (impliedByBash && app.interactions.isGranted("bash", conversationID: conv)) { return .allow }
             // The shell command this call runs: bash's, an explicit diagnostics or test command, or the project's test command.
@@ -119,8 +127,8 @@ final class PermissionExtension: AgentExtension {
             if !command.isEmpty, CommandRules.matches(command, app.settings.value.commandRules[ws.url.path] ?? []) { return .allow }
             let rule = command.isEmpty ? nil : CommandRules.prefix(command)
             var detail = tool.name == "bash" ? command : (input["code"]?.string ?? tool.summary(input))
-            var what = tool.name == "bash" ? "run this command" : tool.name == "debug" ? "run your program under a debugger" : "run this \(input["language"]?.string ?? (tool.name == "trace" ? "Python" : "")) code"
-            if tool.name == "debug" { detail = [input["build"]?.string.map { "build: \($0)" }, "program: \(input["program"]?.string ?? "(the project's)") \((input["args"]?.array?.compactMap(\.string) ?? []).joined(separator: " "))"].compactMap { $0 }.joined(separator: "\n") }
+            var what = tool.name == "bash" ? "run this command" : tool.name == "debug" ? (DebugTool.need(input) == .evaluate ? "evaluate an expression inside your program under the debugger" : "run your program under a debugger") : "run this \(input["language"]?.string ?? (tool.name == "trace" ? "Python" : "")) code"
+            if tool.name == "debug" { detail = DebugTool.approvalDetail(input) }
             if grant == "tests" {
                 what = tool.name == "project_review" ? "run your tests for the review" : "run the project's tests"
                 detail = folderRun

@@ -16,6 +16,8 @@ extension DebugTool {
         var notes: [String] = []
         var go = false
         var language = ""
+        /// The scratch folder of a single-file build.
+        var scratch: URL?
     }
 
     static let sourceExtensions: Set<String> = ["c", "cc", "cpp", "cxx", "m", "rs", "swift", "zig"]
@@ -23,6 +25,7 @@ extension DebugTool {
     static func prepare(_ input: JSON, _ ctx: ToolContext) async -> Result<Target, DebugFailure> {
         let ws = ctx.workspace
         var notes: [String] = []
+        var scratch: URL?
         var program = input["program"]?.string?.trimmingCharacters(in: .whitespaces) ?? ""
         let build = input["build"]?.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         let fm = FileManager.default
@@ -43,7 +46,7 @@ extension DebugTool {
         let ext = url.pathExtension.lowercased()
         if sourceExtensions.contains(ext), fm.fileExists(atPath: url.path) {
             switch await compile(url, ext) {
-            case .success(let out): notes.append("Built \(url.lastPathComponent) with debug symbols and no optimisation."); url = out
+            case .success(let out): notes.append("Built \(url.lastPathComponent) with debug symbols and no optimisation."); url = out; scratch = out.deletingLastPathComponent()
             case .failure(let e): return .failure(e)
             }
         } else if !fm.fileExists(atPath: url.path) {
@@ -63,7 +66,7 @@ extension DebugTool {
         var isDir: ObjCBool = false
         if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue { return .failure(.error("\(program) is a folder, not an executable.")) }
         guard fm.isExecutableFile(atPath: url.path) else { return .failure(.error("\(program) isn't an executable file.")) }
-        return .success(Target(path: url.path, display: url.lastPathComponent, notes: notes, language: ext))
+        return .success(Target(path: url.path, display: url.lastPathComponent, notes: notes, language: ext, scratch: scratch))
     }
 
     /// Where the project's debug build puts its program, when a manifest says (Cargo's package, SwiftPM's executable, zig-out).
@@ -102,12 +105,13 @@ extension DebugTool {
         guard let exe = ProcessRunner.which(tool) else { return .failure(.error("`\(tool)` isn't installed on this Mac, so \(source.lastPathComponent) can't be built.")) }
         let r = await ProcessRunner.run(exe, args, cwd: dir, timeout: 180, outputLimit: 400_000)
         if r.exitCode != 0 || !FileManager.default.fileExists(atPath: ext == "swift" ? dir.appendingPathComponent("prog.o").path : out.path) {
+            try? FileManager.default.removeItem(at: dir)
             return .failure(.error("\(source.lastPathComponent) didn't compile (`\(tool) \(args.dropLast(2).joined(separator: " "))`):\n" + truncateMiddle(r.combined, max: 3000)))
         }
         if ext == "swift" {
             // One step would leave the debug info in an object file swiftc deletes; linking the kept one lets lldb find it.
             let link = await ProcessRunner.run(exe, [dir.appendingPathComponent("prog.o").path, "-o", out.path], cwd: dir, timeout: 120, outputLimit: 400_000)
-            if link.exitCode != 0 { return .failure(.error("Linking \(source.lastPathComponent) failed:\n" + truncateMiddle(link.combined, max: 3000))) }
+            if link.exitCode != 0 { try? FileManager.default.removeItem(at: dir); return .failure(.error("Linking \(source.lastPathComponent) failed:\n" + truncateMiddle(link.combined, max: 3000))) }
         }
         if ext == "zig", let d = ProcessRunner.which("dsymutil") { _ = await ProcessRunner.run(d, [out.path], cwd: dir, timeout: 60) }
         return .success(out)
@@ -166,13 +170,21 @@ extension DebugTool {
         if bps.isEmpty && action == "run" { script += "break main.main\n" }
         for _ in 0..<(action == "crash" ? 1 : stops) { script += "continue\nlocals\nstack 8\n" }
         script += "exit\n"
-        let file = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-dlv-\(UUID().uuidString.prefix(8)).init")
+        // Built first, with the optimiser and inlining off, so `seconds` bounds the run and not the compile.
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("aiteacher-dlv-\(UUID().uuidString.prefix(8))")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        guard let go = ProcessRunner.which("go") else { return .error("`go` isn't installed, so the program can't be built for Delve.") }
+        let bin = dir.appendingPathComponent("prog").path
+        let built = await ProcessRunner.run(go, ["build", "-gcflags=all=-N -l", "-o", bin, pkg], cwd: ctx.workspace, timeout: 120, outputLimit: 400_000)
+        if built.exitCode != 0 { return .error("The Go build failed:\n" + truncateMiddle(built.combined, max: 3000)) }
+        let file = dir.appendingPathComponent("script.init")
         try? Data(script.utf8).write(to: file)
-        defer { try? FileManager.default.removeItem(at: file) }
-        var args = ["debug", pkg, "--allow-non-terminal-interactive=true", "--init", file.path]
+        var args = ["exec", bin, "--allow-non-terminal-interactive=true", "--init", file.path]
         if let a = input["args"]?.array?.compactMap(\.string), !a.isEmpty { args += ["--"] + a }
-        let r = await ProcessRunner.run(dlv, args, cwd: ctx.workspace, stdin: input["stdin"]?.string ?? "", timeout: TimeInterval(seconds(input) + 120), outputLimit: 400_000)
-        if r.timedOut { return .error("Delve timed out.") }
-        return ToolOutput(text: "Delve (Go) output:\n" + truncateMiddle(r.combined, max: 9000), isError: r.exitCode != 0 && r.combined.isEmpty)
+        let seconds = seconds(input)
+        let r = await ProcessRunner.run(dlv, args, cwd: ctx.workspace, stdin: input["stdin"]?.string ?? "", timeout: TimeInterval(seconds), outputLimit: 400_000)
+        let note = r.timedOut ? "\n[Stopped after \(seconds) s: the program was still running. What it printed so far is above.]" : ""
+        return ToolOutput(text: "Delve (Go) output:\n" + truncateMiddle(r.combined, max: 9000) + note, isError: r.exitCode != 0 && r.combined.isEmpty && !r.timedOut)
     }
 }

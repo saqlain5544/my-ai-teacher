@@ -85,15 +85,23 @@ final class DebugProcess: @unchecked Sendable {
     }
 
     /// Ends the driver and everything under it at once (Stop, quit, a stuck reply): no graceful goodbye.
-    func killNow() {
+    func killNow(wait: Bool = false) {
         let pid = process.processIdentifier
         guard pid > 0 else { return }
-        var tree = isRunning ? Self.descendants(of: pid) : []
-        if inferior > 0 { tree.append(inferior) }
-        // Deepest first: the program, then debugserver, then lldb's Python.
-        for q in tree + [pid] { kill(q, SIGKILL) }
         output.fileHandleForReading.readabilityHandler = nil
         errors.fileHandleForReading.readabilityHandler = nil
+        // At once and without a subprocess: the program, and the driver frozen so it starts nothing new. Finding what else is under
+        // it (debugserver) takes `pgrep` per level, so that happens off the caller's thread; the driver is killed last, because
+        // its children would otherwise be handed to launchd and could no longer be found.
+        let program = inferior
+        if program > 0 { kill(program, SIGKILL) }
+        if isRunning { kill(pid, SIGSTOP) }
+        let sweep = { @Sendable in
+            for q in Self.descendants(of: pid) { kill(q, SIGKILL) }
+            if program > 0 { kill(program, SIGKILL) }
+            kill(pid, SIGKILL)
+        }
+        if wait { sweep() } else { DispatchQueue.global(qos: .userInitiated).async(execute: sweep) }
     }
 
     /// Asks the driver to kill the program and leave; whatever is left after a second is killed.
@@ -132,20 +140,24 @@ final class DebugSession: @unchecked Sendable {
     let tmp: URL
     let program: String
     let fence: String
+    /// A scratch folder holding a single-file build, removed with the session.
+    let scratch: URL?
+    let started = Date()
+    var lastKind = ""
+    var exitCode = 0
     var lastUsed = Date()
     var busy = false
     var steps: [JSON] = []
     var files: [String: String] = [:]
     var output = ""
-    var errorOutput = ""
     var stops = 0
     var breakpoints: [JSON] = []
     var exited = false
 
     static let stepLimit = 80
 
-    init(conversationID: String, proc: DebugProcess, tmp: URL, program: String, fence: String) {
-        self.conversationID = conversationID; self.proc = proc; self.tmp = tmp; self.program = program; self.fence = fence
+    init(conversationID: String, proc: DebugProcess, tmp: URL, program: String, fence: String, scratch: URL? = nil) {
+        self.conversationID = conversationID; self.proc = proc; self.tmp = tmp; self.program = program; self.fence = fence; self.scratch = scratch
     }
 
     /// One command and its reply. `seconds` is the program's wall-time budget; the driver gets a few more to answer.
@@ -168,11 +180,16 @@ final class DebugSession: @unchecked Sendable {
     /// Ends the driver and the program and removes the scratch folder.
     func end() async {
         await proc.end()
-        try? FileManager.default.removeItem(at: tmp)
+        removeFolders()
     }
-    func killNow() {
-        proc.killNow()
+    /// `wait`: the app is quitting, so the tree is walked and killed before returning.
+    func killNow(wait: Bool = false) {
+        proc.killNow(wait: wait)
+        removeFolders()
+    }
+    private func removeFolders() {
         try? FileManager.default.removeItem(at: tmp)
+        if let scratch { try? FileManager.default.removeItem(at: scratch) }
     }
 }
 
@@ -207,6 +224,6 @@ final class DebugSessions: @unchecked Sendable {
     }
     func killAll() {
         let all = lock.withLock { let v = Array(byConversation.values); byConversation = [:]; return v }
-        for s in all { s.killNow() }
+        for s in all { s.killNow(wait: true) }
     }
 }

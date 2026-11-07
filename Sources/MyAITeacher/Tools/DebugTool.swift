@@ -10,22 +10,24 @@ enum DebugWords {
     static func crash(desc: String, signo: Int?, sp: UInt64?, depth: Int) -> Crash {
         let address = hex(after: "address=", in: desc)
         let upper = desc.uppercased()
-        func near(_ a: UInt64) -> Bool { sp.map { a > $0 ? a - $0 < 0x100000 : $0 - a < 0x100000 } ?? false }
+        func near(_ a: UInt64, within: UInt64 = 0x100000) -> Bool { sp.map { a > $0 ? a - $0 < within : $0 - a < within } ?? false }
         if upper.contains("EXC_BAD_ACCESS") || upper.contains("SIGSEGV") || upper.contains("SIGBUS") {
             let write = desc.contains("code=2") || upper.contains("PROTECTION")
             guard let a = address else {
                 return Crash(kind: "segfault", title: "Segmentation fault: an invalid memory access", detail: "The program read or wrote memory it doesn't own.")
             }
             let hexa = "0x" + String(a, radix: 16)
-            if depth >= 3000 || near(a) {
-                return Crash(kind: "stack-overflow", title: "Stack overflow",
-                             detail: "The program used up its stack (the fault, \(hexa), is at the edge of it)" + (depth >= 3000 ? "; the call stack is at least \(depth) frames deep" : "") +
-                             ". Usually a recursion that never stops, or a huge local array.")
-            }
+            // A null or near-null address is a null pointer however deep the recursion was; the depth only counts as a sign of an
+            // overflow when the fault is also near the stack pointer.
             if a == 0 { return Crash(kind: "null-deref", title: "Null pointer dereference", detail: "The program used a pointer holding 0 (address 0x0) as if it pointed at something.") }
             if a < 0x10000 {
                 return Crash(kind: "null-deref", title: "Null pointer dereference",
                              detail: "The program used a pointer that is almost certainly null: the address \(hexa) is a small offset from 0, which is how reading a field or element of a null pointer looks.")
+            }
+            if near(a) || (depth >= 3000 && near(a, within: 0x1000000)) {
+                return Crash(kind: "stack-overflow", title: "Stack overflow",
+                             detail: "The program used up its stack (the fault, \(hexa), is at the edge of it)" + (depth >= 3000 ? "; the call stack is at least \(depth) frames deep" : "") +
+                             ". Usually a recursion that never stops, or a huge local array.")
             }
             return Crash(kind: "bad-address", title: "Invalid memory access at \(hexa)",
                          detail: write ? "The program wrote to memory that is read-only (a string literal, code, or a freed or unmapped region) at \(hexa)."
@@ -45,6 +47,9 @@ enum DebugWords {
         if upper.contains("SIGABRT") || signo == 6 {
             return Crash(kind: "abort", title: "The program aborted",
                          detail: "It called abort(): a failed assert, an unhandled panic or exception, or the memory allocator finding that the heap was corrupted (a double free, a write past the end of an allocation). The text it printed to stderr usually says which.")
+        }
+        if upper.contains("RUST PANIC") {
+            return Crash(kind: "panic", title: "Rust panic", detail: "The program panicked: a failed unwrap or expect, an index out of bounds, an overflow, a division by zero or an explicit panic!. The message and location are on its stderr; the frames below are where it started.")
         }
         if upper.contains("SIGPIPE") { return Crash(kind: "pipe", title: "Broken pipe", detail: "The program wrote to a pipe or socket nobody is reading.") }
         if upper.contains("EXC_CRASH") { return Crash(kind: "killed", title: "The system terminated the program", detail: desc) }
@@ -140,11 +145,53 @@ struct DebugTool: Tool {
     }
     static func seconds(_ input: JSON) -> Int { min(60, max(1, input["seconds"]?.int ?? 20)) }
 
+    // MARK: Approval
+
+    enum Need { case none, launch, evaluate }
+    /// What a call does beyond what an approved session already allows: `print` evaluates an expression inside the program;
+    /// `run`, `crash` and `start` launch it (breakpoint conditions evaluate there too); stepping, `frame` and `stop` add no code.
+    static func need(_ input: JSON) -> Need {
+        switch (input["action"]?.string ?? "run").lowercased() {
+        case "print": .evaluate
+        case "run", "crash", "start": .launch
+        default: .none
+        }
+    }
+
+    /// Control characters in a breakpoint, a condition or an expression: a newline would be a second command in a debugger
+    /// script (Go's dlv reads the breakpoints from one), and none of them belong in an expression.
+    static func invalid(_ input: JSON) -> String? {
+        var fields = (input["breakpoints"]?.array ?? []).compactMap(\.string).map { ("breakpoint", $0) }
+        for k in ["expr", "expression"] { if let e = input[k]?.string { fields.append(("expression", e)) } }
+        for (what, text) in fields where text.unicodeScalars.contains(where: { ($0.value < 0x20 && $0 != "\t") || $0.value == 0x7f }) {
+            return "A \(what) can't contain a newline or other control characters."
+        }
+        return nil
+    }
+
+    /// Everything that will run, for the approval card: the build command, the program and its input, each breakpoint with its
+    /// condition (evaluated inside the program), the expression to evaluate.
+    static func approvalDetail(_ input: JSON) -> String {
+        var lines: [String] = []
+        if let b = input["build"]?.string, !b.isEmpty { lines.append("Build, in a shell: \(b)") }
+        if need(input) == .evaluate {
+            lines.append("Evaluate inside the debugged program (it can call functions and change its state): \(input["expr"]?.string ?? input["expression"]?.string ?? "")")
+            return lines.joined(separator: "\n")
+        }
+        let args = (input["args"]?.array?.compactMap(\.string) ?? []).joined(separator: " ")
+        lines.append("Run under the debugger: \(input["program"]?.string ?? "(the project's program)")\(args.isEmpty ? "" : " " + args)")
+        let bps = input["breakpoints"]?.array?.compactMap(\.string) ?? []
+        if !bps.isEmpty { lines.append("Breakpoints (a condition is evaluated inside the program):\n" + bps.map { "  " + $0 }.joined(separator: "\n")) }
+        if let s = input["stdin"]?.string, !s.isEmpty { lines.append("Standard input: " + String(s.prefix(300)) + (s.count > 300 ? "…" : "")) }
+        return lines.joined(separator: "\n")
+    }
+
     // MARK: Entry
 
     func run(_ input: JSON, _ ctx: ToolContext) async throws -> ToolOutput {
         DebugSessions.shared.reapIdle()
         let action = (input["action"]?.string ?? "run").lowercased()
+        if let bad = Self.invalid(input) { return .error(bad) }
         switch action {
         case "run", "crash", "start": return try await begin(action, input, ctx)
         case "step", "next", "finish", "continue", "print", "frame": return try await drive(action, input, ctx)
@@ -183,8 +230,8 @@ struct DebugTool: Tool {
         }
         let proc: DebugProcess
         do { proc = try DebugProcess(driver: driver, lldbPython: python, cwd: ctx.workspace) }
-        catch { try? FileManager.default.removeItem(at: tmp); return .error("Couldn't start the debugger: \(error.localizedDescription)") }
-        let session = DebugSession(conversationID: ctx.conversationID, proc: proc, tmp: tmp, program: target.display, fence: WriteFence.profile ?? "")
+        catch { try? FileManager.default.removeItem(at: tmp); target.scratch.map { try? FileManager.default.removeItem(at: $0) }; return .error("Couldn't start the debugger: \(error.localizedDescription)") }
+        let session = DebugSession(conversationID: ctx.conversationID, proc: proc, tmp: tmp, program: target.display, fence: WriteFence.profile ?? "", scratch: target.scratch)
         let holder = Holder(); holder.session = session
         var notes = target.notes
         if action == "start", let old = DebugSessions.shared.set(session) {
@@ -204,7 +251,7 @@ struct DebugTool: Tool {
             let entry = bps.isEmpty && action != "crash"
             var cmd: [String: JSON] = ["cmd": "start", "program": .string(target.path), "cwd": .string(ctx.workspace.path),
                                        "args": .array((input["args"]?.array ?? []).compactMap(\.string).map(JSON.string)),
-                                       "breakpoints": .array(bps), "entry": .bool(entry), "deep": .bool(action == "crash"), "tmp": .string(tmp.path)]
+                                       "breakpoints": .array(bps), "entry": .bool(entry), "deep": .bool(action == "crash"), "panics": .bool(action == "crash"), "tmp": .string(tmp.path)]
             if let s = stdinPath { cmd["stdin"] = .string(s) }
             let started = Date()
             let offMode = await DebugSupport.developerModeOff()
@@ -226,14 +273,14 @@ struct DebugTool: Tool {
                 text += line
                 if over { done = true }
                 if action == "start" || done { break }
-                if action == "crash" && session.stops >= 1 { break }
+                if action == "crash" && session.stops >= 1 && session.lastKind != "handled" { break }
                 if session.stops >= maxStops { text += "\n[Stopped after \(maxStops) stops; the program is still running. Raise max_stops to see more.]"; break }
                 let left = seconds - Date().timeIntervalSince(started)
                 if left < 1 { text += "\n[The \(Int(seconds)) s budget ran out.]"; break }
                 r = await session.request(["cmd": "continue", "deep": .bool(action == "crash")], seconds: left)
                 if r["ok"]?.bool != true { text += "\nError: " + (r["error"]?.string ?? "the debugger failed"); done = true; break }
             }
-            if action == "crash", session.steps.last?["e"]?.string == "end", session.stops == 0 { text = Self.prefixCompleted(text) }
+            if action == "crash", session.steps.last?["e"]?.string == "end", !session.steps.contains(where: { $0["e"]?.string == "exception" }) { text = Self.completed(session.exitCode) + text }
             let meta = Self.card(session)
             if keep && !session.exited && session.proc.isRunning {
                 text += "\n[A debugging session is open: step, next, finish, continue, print, frame, stop.]"
@@ -254,9 +301,9 @@ struct DebugTool: Tool {
         guard let s = DebugSessions.shared.session(ctx.conversationID) else {
             return .error("No debugging session is open. Start one with `start` (program, breakpoints) first.")
         }
-        if s.fence != (WriteFence.profile ?? "") {
+        if !WriteFence.covers(started: s.fence, current: WriteFence.profile ?? "", since: s.started) {
             DebugSessions.shared.remove(s); s.killNow()
-            return .error("The lesson's write protection changed since this session started, so it was ended (a debugged program keeps the protection it started under). `start` again.")
+            return .error("The lesson's write protection now covers more than this session started under (a project was opened, the tests were locked, or a learner file existed that the program could write), so it was ended: a debugged program keeps the protection it started with. `start` again.")
         }
         if s.exited { DebugSessions.shared.remove(s); await s.end(); return .error("The program has already exited. `start` again.") }
         if s.stops >= 500 { DebugSessions.shared.remove(s); await s.end(); return .error("The session reached its 500-stop limit and was ended.") }
@@ -299,7 +346,7 @@ struct DebugTool: Tool {
 
     static func breakpointNotes(_ bps: [JSON]) -> String {
         bps.compactMap { b in
-            guard b["locations"]?.int == 0 else { return nil }
+            guard b["locations"]?.int == 0, b["panic"]?.bool != true else { return nil }
             return "Breakpoint `\(b["spec"]?.string ?? "?")` matched no code (a wrong file or line, or the file has no debug info).\n"
         }.joined()
     }
@@ -308,12 +355,12 @@ struct DebugTool: Tool {
     /// whether the run is over (exited, or crashed).
     static func absorb(_ r: JSON, _ s: DebugSession, crashAnalysis: Bool) -> (String, Bool) {
         let newOut = r["out"]?.string ?? "", newErr = r["err"]?.string ?? ""
-        s.output += newOut; s.errorOutput += newErr
+        s.output += newOut
         if s.output.count > 20_000 { s.output = String(s.output.prefix(20_000)) }
         let o = s.output.utf16.count
         var text = ""
         if let code = r["exited"]?.int {
-            s.exited = true
+            s.exited = true; s.exitCode = code
             let last = s.steps.last
             let top = (last?["s"]?.array?.last)
             var frame: JSON = ["fn": "", "f": top?["f"] ?? last?["f"] ?? "", "l": top?["l"] ?? last?["l"] ?? 1, "v": [:]]
@@ -325,11 +372,12 @@ struct DebugTool: Tool {
         } else if r["running"]?.bool == true {
             text += "The program is still running.\n"
         } else {
-            let kind = r["kind"]?.string ?? "other"
-            s.stops += 1
-            let isCrash = kind == "signal" || kind == "exception"
+            let kind = stopKind(r, s)
+            s.stops += 1; s.lastKind = kind
+            let isCrash = kind == "signal" || kind == "exception" || kind == "panic"
             var crash: DebugWords.Crash?
-            if isCrash {
+            if kind == "panic" { crash = DebugWords.crash(desc: "Rust panic", signo: nil, sp: nil, depth: 0) }
+            else if isCrash {
                 crash = DebugWords.crash(desc: r["desc"]?.string ?? "", signo: r["signo"]?.int, sp: (r["sp"]?.double).map { UInt64($0) }, depth: r["depth"]?.int ?? 0)
             }
             let frames = (r["frames"]?.array ?? [])
@@ -352,9 +400,21 @@ struct DebugTool: Tool {
         }
         if !newOut.isEmpty { text += "Output so far: " + truncateMiddle(newOut, max: 1500).replacingOccurrences(of: "\n", with: "⏎") + "\n" }
         if !newErr.isEmpty { text += "Stderr: " + truncateMiddle(newErr, max: 1500).replacingOccurrences(of: "\n", with: "⏎") + "\n" }
-        let kind = r["kind"]?.string ?? ""
-        let over = r["exited"] != nil || kind == "signal" || kind == "exception" || kind == "timeout"
+        let over = r["exited"] != nil || ["signal", "exception", "panic", "timeout", "outputlimit"].contains(s.lastKind)
         return (text, over)
+    }
+
+    /// The stop's kind: a breakpoint on a Rust panic is a `panic`; a signal that isn't a crash (SIGUSR1, SIGINT, SIGPIPE a program
+    /// raises on purpose) is `handled` and the program carries on.
+    static func stopKind(_ r: JSON, _ s: DebugSession) -> String {
+        let kind = r["kind"]?.string ?? "other"
+        if kind == "breakpoint", let id = r["bp"]?.int, s.breakpoints.contains(where: { $0["id"]?.int == id && $0["panic"]?.bool == true }) { return "panic" }
+        if kind == "signal", !isCrashSignal(r["desc"]?.string ?? "") { return "handled" }
+        return kind
+    }
+    static func isCrashSignal(_ desc: String) -> Bool {
+        let u = desc.uppercased()
+        return u.contains("EXC_") || ["SIGSEGV", "SIGBUS", "SIGILL", "SIGFPE", "SIGABRT", "SIGTRAP"].contains { u.contains($0) }
     }
 
     private static func push(_ step: inout [String: JSON], _ s: DebugSession) {
@@ -367,6 +427,8 @@ struct DebugTool: Tool {
         case "breakpoint": return "Breakpoint hit" + (bpName(r, s).map { " (`\($0)`)" } ?? "")
         case "step": return r["ret"] != nil ? "Returned from the function" : "Stepped"
         case "timeout": return "Still running when the time ran out: stopped here"
+        case "outputlimit": return "Wrote more than 4 MB of output: stopped here"
+        case "handled": return "Signal " + (r["desc"]?.string ?? "") + " (not a crash)"
         default: return ""
         }
     }
@@ -381,7 +443,9 @@ struct DebugTool: Tool {
         case "breakpoint": return "Stop \(s.stops): breakpoint" + (bpName(r, s).map { " `\($0)`" } ?? "")
         case "step": return "Stop \(s.stops): " + (r["ret"] != nil ? "returned" : "stepped")
         case "timeout": return "Stop \(s.stops): the \(s.stops == 1 ? "program" : "program") was still running when the time ran out; stopped where it was"
-        case "signal", "exception": return "Stop \(s.stops): CRASH — \(crash?.title ?? r["desc"]?.string ?? "signal")"
+        case "signal", "exception", "panic": return "Stop \(s.stops): CRASH — \(crash?.title ?? r["desc"]?.string ?? "signal")"
+        case "outputlimit": return "Stop \(s.stops): the program wrote more than 4 MB of output; stopped where it was"
+        case "handled": return "Stop \(s.stops): \(r["desc"]?.string ?? "a signal") (not a crash; the program carries on when you continue)"
         default: return "Stop \(s.stops): \(r["desc"]?.string ?? "stopped")"
         }
     }
@@ -392,7 +456,8 @@ struct DebugTool: Tool {
         let sel = r["selected"]?.int ?? 0
         let user = frames.filter { $0["user"]?.bool == true }
         var out = heading + "\n"
-        let focus = frames.first { $0["i"]?.int == sel } ?? frames.first
+        let focus = frames.first { $0["i"]?.int == sel }
+        if focus == nil { out += "  frame \(sel) isn't in the report (the stack has \(r["depth"]?.int ?? 0) frames).\n" }
         if let f = focus {
             if f["user"]?.bool == true {
                 out += "  \(f["f"]?.string ?? "?"):\(f["l"]?.int ?? 0) in \(f["fn"]?.string ?? "?")" + (f["src"]?.string.map { $0.isEmpty ? "" : "\n  > `\($0)`" } ?? "") + "\n"
@@ -419,7 +484,11 @@ struct DebugTool: Tool {
         return indent + "locals: " + names.map { n in "\(n)=\(v[n]?["v"]?.string ?? "?")" }.joined(separator: ", ") + "\n"
     }
 
-    private static func prefixCompleted(_ text: String) -> String { "The program did not crash.\n" + text }
+    /// A run with no crash: never "did not crash" for an error exit (a Rust panic ends with status 101 and no signal).
+    private static func completed(_ code: Int) -> String {
+        code == 0 ? "The program ran to completion without crashing.\n"
+            : "The program exited with status \(code) and no crash signal: an error exit (a failed check, a panic that was caught, `exit(\(code))`). Its own output and stderr say why.\n"
+    }
 
     // MARK: The card
 
